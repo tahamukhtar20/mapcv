@@ -25,6 +25,7 @@ dependencies = [
 dev = [
     "maturin",
     "pytest",
+    "pytest-httpserver",
     "mypy",
     "ruff"
 ]

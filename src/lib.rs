@@ -3,6 +3,7 @@
 //! This module provides the performance-critical implementations for `mapcv`,
 //! including tile fetching, stitching, and rasterization.
 
+pub mod fetcher;
 pub mod tile_math;
 
 use pyo3::prelude::*;
@@ -26,6 +27,14 @@ struct PyTileIndex {
     z: u8,
 }
 
+#[pymethods]
+impl PyTileIndex {
+    #[new]
+    fn new(x: u32, y: u32, z: u8) -> Self {
+        PyTileIndex { x, y, z }
+    }
+}
+
 impl From<TileIndex> for PyTileIndex {
     fn from(t: TileIndex) -> Self {
         PyTileIndex {
@@ -47,6 +56,19 @@ struct PyBBox {
     east: f64,
     #[pyo3(get)]
     north: f64,
+}
+
+#[pymethods]
+impl PyBBox {
+    #[new]
+    fn new(west: f64, south: f64, east: f64, north: f64) -> Self {
+        PyBBox {
+            west,
+            south,
+            east,
+            north,
+        }
+    }
 }
 
 impl From<BBox> for PyBBox {
@@ -86,6 +108,45 @@ fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::xy_bounds(t).into()
 }
+/// Fetch satellite tiles concurrently from a URL template.
+#[pyfunction]
+#[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient"))]
+fn fetch_tiles(
+    py: Python,
+    tiles: Vec<PyTileIndex>,
+    url_template: String,
+    callback: Option<PyObject>,
+    max_connections: usize,
+    policy: &str,
+) -> PyResult<Vec<(PyTileIndex, PyObject)>> {
+    let rust_tiles: Vec<TileIndex> = tiles
+        .into_iter()
+        .map(|t| TileIndex {
+            x: t.x,
+            y: t.y,
+            z: t.z,
+        })
+        .collect();
+
+    let results = fetcher::fetch_tiles(
+        py,
+        rust_tiles,
+        url_template,
+        callback,
+        max_connections,
+        policy,
+    )?;
+
+    Ok(results
+        .into_iter()
+        .map(|(t, bytes)| {
+            (
+                PyTileIndex::from(t),
+                pyo3::types::PyBytes::new_bound(py, &bytes).into(),
+            )
+        })
+        .collect())
+}
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;
@@ -93,6 +154,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tile, m)?)?;
     m.add_function(wrap_pyfunction!(tiles, m)?)?;
     m.add_function(wrap_pyfunction!(xy_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(fetch_tiles, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

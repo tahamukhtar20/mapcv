@@ -1,3 +1,4 @@
+#![allow(clippy::useless_conversion)]
 //! `MapCV` Rust Core
 //!
 //! This module provides the performance-critical implementations for `mapcv`,
@@ -111,6 +112,7 @@ fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
 /// Fetch satellite tiles concurrently from a URL template.
 #[pyfunction]
 #[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient"))]
+#[allow(clippy::useless_conversion, clippy::question_mark)]
 fn fetch_tiles(
     py: Python,
     tiles: Vec<PyTileIndex>,
@@ -118,7 +120,7 @@ fn fetch_tiles(
     callback: Option<PyObject>,
     max_connections: usize,
     policy: &str,
-) -> PyResult<Vec<(PyTileIndex, PyObject)>> {
+) -> Result<Vec<(PyTileIndex, PyObject)>, PyErr> {
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -147,6 +149,8 @@ fn fetch_tiles(
         })
         .collect())
 }
+
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;

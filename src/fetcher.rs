@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Determines how fetch failures (e.g. 404 Not Found) are handled.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailurePolicy {
     /// Fails the entire fetch operation immediately.
     Strict,
@@ -20,14 +20,17 @@ pub enum FailurePolicy {
     Ignore,
 }
 
-impl FailurePolicy {
-    /// Parse a FailurePolicy from a string.
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl std::str::FromStr for FailurePolicy {
+    type Err = String;
+
+    /// # Errors
+    /// Returns an error if the string is not a valid policy name.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "strict" => Ok(FailurePolicy::Strict),
             "lenient" => Ok(FailurePolicy::Lenient),
             "ignore" => Ok(FailurePolicy::Ignore),
-            _ => Err(format!("Unknown policy: {}", s)),
+            _ => Err(format!("Unknown policy: {s}")),
         }
     }
 }
@@ -49,7 +52,7 @@ async fn fetch_single_tile(
         .replace("{x}", &tile.x.to_string())
         .replace("{y}", &tile.y.to_string());
 
-    let mut retries = 0;
+    let mut retries: u32 = 0;
     loop {
         let resp = client.get(&url).send().await;
         match resp {
@@ -58,7 +61,7 @@ async fn fetch_single_tile(
                 return Ok((tile, Some(bytes.to_vec())));
             }
             Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => match policy {
-                FailurePolicy::Strict => return Err(format!("Tile 404 Not Found: {}", url)),
+                FailurePolicy::Strict => return Err(format!("Tile 404 Not Found: {url}")),
                 FailurePolicy::Lenient | FailurePolicy::Ignore => return Ok((tile, None)),
             },
             Ok(r) => {
@@ -74,19 +77,26 @@ async fn fetch_single_tile(
             Err(e) => {
                 if retries >= 3 {
                     match policy {
-                        FailurePolicy::Strict => return Err(format!("Network error: {}", e)),
+                        FailurePolicy::Strict => return Err(format!("Network error: {e}")),
                         FailurePolicy::Lenient | FailurePolicy::Ignore => return Ok((tile, None)),
                     }
                 }
             }
         }
         retries += 1;
-        tokio::time::sleep(Duration::from_millis(500 * retries as u64)).await;
+        tokio::time::sleep(Duration::from_millis(500 * u64::from(retries))).await;
     }
 }
 
 /// Fetches multiple tiles concurrently.
 /// This spawns a background Tokio runtime and sends progress via a cross-thread channel back to Python.
+///
+/// # Errors
+/// Returns a `PyResult` error if the failure policy is invalid or if the background runtime fails.
+///
+/// # Panics
+/// This function will panic if the internal cross-thread channel mutex is poisoned.
+#[allow(clippy::needless_pass_by_value)]
 pub fn fetch_tiles(
     py: Python,
     tiles: Vec<TileIndex>,
@@ -95,7 +105,9 @@ pub fn fetch_tiles(
     max_connections: usize,
     policy_str: &str,
 ) -> PyResult<Vec<(TileIndex, Vec<u8>)>> {
-    let policy = FailurePolicy::from_str(policy_str).map_err(|e| PyRuntimeError::new_err(e))?;
+    let policy = policy_str
+        .parse::<FailurePolicy>()
+        .map_err(PyRuntimeError::new_err)?;
 
     let (tx, rx) = mpsc::channel();
 
@@ -103,10 +115,7 @@ pub fn fetch_tiles(
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = tx.send(Event::Error(format!(
-                    "Failed to create tokio runtime: {}",
-                    e
-                )));
+                let _ = tx.send(Event::Error(format!("Failed to create tokio runtime: {e}")));
                 return;
             }
         };
@@ -119,12 +128,12 @@ pub fn fetch_tiles(
             {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(Event::Error(format!("Failed to build HTTP client: {}", e)));
+                    let _ = tx.send(Event::Error(format!("Failed to build HTTP client: {e}")));
                     return;
                 }
             };
 
-            let stream = stream::iter(tiles)
+            let mut stream = stream::iter(tiles)
                 .map(|tile| {
                     let client_clone = client.clone();
                     let url_clone = url_template.clone();
@@ -132,7 +141,6 @@ pub fn fetch_tiles(
                 })
                 .buffer_unordered(max_connections);
 
-            let mut stream = stream;
             let mut results = Vec::new();
             let mut completed = 0;
 

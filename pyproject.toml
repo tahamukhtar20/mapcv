@@ -38,7 +38,10 @@ python-source = "src"
 strict = true
 
 [[tool.mypy.overrides]]
-module = "mapcv._mapcv_rs"
+module = [
+    "mapcv._mapcv_rs",
+    "mercantile",
+]
 ignore_missing_imports = true
 
 [tool.ruff]

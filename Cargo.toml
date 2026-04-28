@@ -1,0 +1,20 @@
+[package]
+name = "mapcv_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_mapcv_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22.0", features = ["extension-module"] }
+image = "0.24.9"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+
+[lints.rust]
+missing_docs = "deny"
+
+[lints.clippy]
+pedantic = "deny"

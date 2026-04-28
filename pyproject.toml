@@ -1,0 +1,44 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "mapcv"
+version = "0.1.0"
+description = "A satellite imagery dataset creation tool for segmentation"
+authors = [
+    { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "mercantile",
+    "Pillow",
+    "numpy",
+    "shapely",
+    "pydantic",
+    "typer",
+    "rich",
+    "fastkml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "maturin",
+    "pytest",
+    "mypy",
+    "ruff"
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "mapcv._mapcv_rs"
+python-source = "src"
+
+[tool.mypy]
+strict = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

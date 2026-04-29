@@ -23,11 +23,15 @@ def test_tile() -> None:
         (0.0, 0.0, 0),
         (-122.4194, 37.7749, 14),
         (139.6917, 35.6895, 10),
-        (-43.1729, -22.9068, 5)
+        (-43.1729, -22.9068, 5),
+        (0.0, 90.0, 2),
+        (0.0, -90.0, 2),
+        (200.0, 0.0, 2),
+        (-200.0, 0.0, 2),
     ]
     
     for lng, lat, zoom in lng_lats:
-        m_tile = mercantile.tile(lng, lat, zoom, truncate=False)
+        m_tile = mercantile.tile(lng, lat, zoom, truncate=True)
         r_tile = tile(lng, lat, zoom)
         
         assert m_tile.x == r_tile.x

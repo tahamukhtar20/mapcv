@@ -395,8 +395,9 @@ def test_transform_to_mercator_equator() -> None:
 
 
 def test_transform_to_mercator_cross_validate_rust_xy() -> None:
-    """Python Mercator formula agrees with Rust xy() to < 0.001 m on 1000+ points."""
+    """transform_to_mercator agrees with Rust xy() to < 0.001 m on 1000+ points."""
     import numpy as np
+    from shapely.geometry import Point
 
     rng = np.random.default_rng(42)
     lngs = rng.uniform(-180.0, 180.0, 1000)
@@ -404,11 +405,8 @@ def test_transform_to_mercator_cross_validate_rust_xy() -> None:
 
     for lng, lat in zip(lngs, lats):
         rust_x, rust_y = rust_xy(float(lng), float(lat))
-
-        # Build a degenerate 1-vertex polygon just to invoke transform
-        RE = 6_378_137.0
-        py_x = RE * math.radians(lng)
-        py_y = RE * math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+        proj = transform_to_mercator(Point(float(lng), float(lat)))
+        py_x, py_y = proj.x, proj.y
 
         assert abs(py_x - rust_x) < 1e-3, f"x mismatch at ({lng}, {lat})"
         assert abs(py_y - rust_y) < 1e-3, f"y mismatch at ({lng}, {lat})"

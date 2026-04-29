@@ -14,7 +14,6 @@ _console = Console()
 
 
 def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> str:
-    """Return the URL template to use, resolving built-in source names."""
     if url_template:
         return url_template
     if source:
@@ -32,7 +31,6 @@ def iter_tile_strips(
     zoom: int,
     strip_rows: int,
 ) -> List[List[PyTileIndex]]:
-    """Return tiles grouped into horizontal strips of at most `strip_rows` tile rows."""
     if strip_rows <= 0:
         raise ValueError("strip_rows must be positive")
     target_tiles = tiles(west, south, east, north, [zoom])
@@ -76,18 +74,6 @@ def download_region(
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
 ) -> List[Tuple[PyTileIndex, bytes]]:
-    """Download all tiles covering a bounding box at the given zoom level.
-
-    Uses the Rust fetcher for concurrent HTTP requests with a rich progress bar.
-    Supply either a custom XYZ `url_template` (with ``{z}``, ``{x}``, ``{y}``)
-    or a built-in ``source`` name (``"google_satellite"``, ``"osm"``).
-
-    If ``snap_to_tiles`` is ``True`` the bbox is expanded outward to full tile
-    boundaries before fetching.
-
-    Raises ``RuntimeError`` if the fraction of failed tiles exceeds
-    ``max_failed_ratio`` (default 5 %).
-    """
     template = resolve_url_template(url_template, source)
     if snap_to_tiles:
         snapped = snap_bbox(west, south, east, north, zoom)
@@ -138,14 +124,6 @@ def download_region_strips(
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
 ) -> List[List[Tuple[PyTileIndex, bytes]]]:
-    """Download tiles in horizontal strips of at most `strip_rows` tile rows.
-
-    Tiles that appear in more than one strip (e.g. when stride-based patch
-    sampling creates overlap in M5) are fetched only once and served from an
-    in-memory cache for subsequent strips.
-
-    Returns a list of strip results in row order.
-    """
     template = resolve_url_template(url_template, source)
     if snap_to_tiles:
         snapped = snap_bbox(west, south, east, north, zoom)
@@ -154,14 +132,13 @@ def download_region_strips(
     strips = iter_tile_strips(west, south, east, north, zoom, strip_rows)
     total = sum(len(strip) for strip in strips)
 
-    # (x, y, z) → bytes — shared across strips so overlapping tiles are
-    # fetched only once.
+    # shared across strips so overlapping tiles (stride-based patches) are fetched only once
     tile_cache: Dict[Tuple[int, int, int], bytes] = {}
 
     all_results: List[List[Tuple[PyTileIndex, bytes]]] = []
     total_fetched = 0
     total_failed = 0
-    tiles_done = 0  # absolute progress counter for the progress bar
+    tiles_done = 0
 
     with _make_progress() as progress:
         task_id = progress.add_task("Fetching tiles (strips)...", total=total)
@@ -176,7 +153,6 @@ def download_region_strips(
                 else:
                     to_fetch.append(t)
 
-            # Advance progress for cache hits immediately.
             if cached_results:
                 tiles_done += len(cached_results)
                 progress.update(task_id, completed=tiles_done)
@@ -206,8 +182,7 @@ def download_region_strips(
                 progress.update(task_id, completed=tiles_done)
 
             strip_results = cached_results + fresh
-            # Under 'ignore' policy all tiles return (some as black NoData), so
-            # len(strip) - len(strip_results) would always be 0 and is misleading.
+            # under 'ignore' policy len(strip) - len(strip_results) is always 0 and misleading
             strip_failed = 0 if policy == "ignore" else len(strip) - len(strip_results)
             total_fetched += len(strip_results)
             total_failed += strip_failed

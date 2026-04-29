@@ -11,14 +11,14 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// Determines how fetch failures (e.g. 404 Not Found) are handled.
+/// How tile fetch failures are handled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailurePolicy {
-    /// Fails the entire fetch operation immediately.
+    /// Abort on the first failure.
     Strict,
-    /// Ignores the failed tile and omits it from the result.
+    /// Omit failed tiles from results.
     Lenient,
-    /// Returns a black (`NoData`) 256×256 PNG for any failed tile.
+    /// Return a black 256×256 PNG for failed tiles instead of omitting them.
     Ignore,
 }
 
@@ -37,18 +37,13 @@ impl std::str::FromStr for FailurePolicy {
     }
 }
 
-/// The outcome of a single tile fetch attempt.
 enum TileOutcome {
-    /// Tile fetched successfully with its raw image bytes.
     Success(Vec<u8>),
-    /// Tile failed and is filled with a black (`NoData`) PNG (Ignore policy).
-    /// Still counts as a failure for ratio tracking.
+    /// Black-fill PNG returned by Ignore policy. Still counts toward failed ratio.
     BlackFill(Vec<u8>),
-    /// Tile failed and is omitted from results (Lenient policy).
     Missing,
 }
 
-/// Generate a 256×256 black PNG as a `Vec<u8>`.
 fn black_tile_png() -> Vec<u8> {
     let img = DynamicImage::new_rgb8(256, 256);
     let mut buf = Cursor::new(Vec::new());
@@ -59,7 +54,6 @@ fn black_tile_png() -> Vec<u8> {
 enum Event {
     Progress(usize),
     Error(String),
-    /// Completed results plus the number of tiles that failed (Missing or `BlackFill`).
     Done(Vec<(TileIndex, Vec<u8>)>, usize),
 }
 
@@ -119,14 +113,8 @@ async fn fetch_single_tile(
     }
 }
 
-/// Fetches multiple tiles concurrently.
-///
-/// Spawns a background Tokio runtime and delivers progress events via a
-/// cross-thread channel back to Python.
-///
-/// Returns `(results, failed_count)` where `failed_count` is the number of
-/// tiles that failed after all retries — regardless of whether they were
-/// omitted (Lenient) or filled with black pixels (Ignore).
+/// Returns `(results, failed_count)` where `failed_count` includes both
+/// omitted tiles (Lenient) and black-fill tiles (Ignore).
 ///
 /// # Errors
 /// Returns a `PyResult` error if the policy string is invalid or if the

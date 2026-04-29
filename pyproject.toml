@@ -42,6 +42,10 @@ strict = true
 module = [
     "mapcv._mapcv_rs",
     "mercantile",
+    "fastkml",
+    "fastkml.*",
+    "shapely",
+    "shapely.*",
 ]
 ignore_missing_imports = true
 

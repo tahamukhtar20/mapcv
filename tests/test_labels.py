@@ -10,10 +10,6 @@ from shapely.geometry import MultiPolygon, Polygon
 from mapcv._mapcv_rs import xy as rust_xy
 from mapcv.labels import parse_geojson, parse_kml, transform_to_mercator
 
-# ---------------------------------------------------------------------------
-# KML fixtures
-# ---------------------------------------------------------------------------
-
 _KML_HEADER = b'<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2">'
 _KML_FOOTER = b"</kml>"
 
@@ -197,10 +193,6 @@ POINT_LINE_KML = _kml(
 """
 )
 
-# ---------------------------------------------------------------------------
-# GeoJSON fixtures
-# ---------------------------------------------------------------------------
-
 _SQUARE = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]
 _SQUARE2 = [[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]
 
@@ -259,11 +251,6 @@ POINT_GEOJSON = _fc(
     _feat(_SQUARE),
 )
 
-# ---------------------------------------------------------------------------
-# KML tests
-# ---------------------------------------------------------------------------
-
-
 def test_parse_kml_binary_mode() -> None:
     geoms, class_map = parse_kml(BINARY_KML)
     assert len(geoms) == 1
@@ -278,10 +265,8 @@ def test_parse_kml_multiclass() -> None:
     assert len(geoms) == 3
     assert set(class_map.keys()) == {"residential", "industrial"}
     assert class_map["residential"] != class_map["industrial"]
-    # residential appears first → gets ID 1
     assert class_map["residential"] == 1
     assert class_map["industrial"] == 2
-    # third placemark reuses residential's ID
     assert geoms[2][1] == class_map["residential"]
 
 
@@ -379,16 +364,9 @@ def test_parse_geojson_invalid_type_raises() -> None:
         parse_geojson(data)
 
 
-# ---------------------------------------------------------------------------
-# CRS transform tests
-# ---------------------------------------------------------------------------
-
-
 def test_transform_to_mercator_equator() -> None:
-    """Point at (0, 0) maps to Mercator origin (0, 0)."""
     pt = Polygon([(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)])
     projected = transform_to_mercator(pt)
-    # SW corner should be near (0, 0) in Mercator
     x, y = projected.exterior.coords[0][:2]
     assert abs(x) < 1e-6
     assert abs(y) < 1e-6
@@ -413,7 +391,6 @@ def test_transform_to_mercator_cross_validate_rust_xy() -> None:
 
 
 def test_transform_to_mercator_geometry() -> None:
-    """transform_to_mercator on a Polygon gives correct projected coords."""
     RE = 6_378_137.0
     lng, lat = 45.0, 30.0
     box = Polygon([(lng, lat), (lng + 0.001, lat), (lng + 0.001, lat + 0.001), (lng, lat + 0.001)])

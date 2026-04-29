@@ -13,38 +13,37 @@ const MAX_LNG: f64 = 180.0;
 const MIN_LNG: f64 = -180.0;
 const MAX_ZOOM: u8 = 32;
 
-/// Represents an XYZ tile coordinate.
+/// An XYZ tile coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileIndex {
-    /// X coordinate
+    /// X index.
     pub x: u32,
-    /// Y coordinate
+    /// Y index.
     pub y: u32,
-    /// Zoom level
+    /// Zoom level.
     pub z: u8,
 }
 
 /// An axis-aligned bounding box.
 ///
-/// The coordinate space depends on the API returning or consuming it. Some
-/// functions use geographic longitude/latitude values, while others use
-/// projected coordinates such as Web Mercator meters.
+/// Coordinate space depends on the API: some functions use geographic
+/// longitude/latitude, others use Web Mercator metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
-    /// Western edge
+    /// Western edge.
     pub west: f64,
-    /// Southern edge
+    /// Southern edge.
     pub south: f64,
-    /// Eastern edge
+    /// Eastern edge.
     pub east: f64,
-    /// Northern edge
+    /// Northern edge.
     pub north: f64,
 }
 
 /// Backward-compatible alias for [`Bounds`].
 pub type BBox = Bounds;
 
-/// Convert longitude and latitude to web mercator x, y (in meters).
+/// Convert (lng, lat) to Web Mercator (x, y) in metres.
 #[must_use]
 pub fn xy(lng: f64, lat: f64) -> (f64, f64) {
     let x = RE * lng.to_radians();
@@ -58,7 +57,6 @@ pub fn xy(lng: f64, lat: f64) -> (f64, f64) {
     (x, y)
 }
 
-/// Note: This is an internal helper.
 #[must_use]
 pub(crate) fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
     let x = lng / 360.0 + 0.5;
@@ -67,7 +65,7 @@ pub(crate) fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
     (x, y)
 }
 
-/// Get the tile containing a longitude and latitude.
+/// Get the tile containing a coordinate at the given zoom.
 #[must_use]
 pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     let clamped_lng = lng.clamp(MIN_LNG, MAX_LNG);
@@ -109,7 +107,7 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     }
 }
 
-/// Get the web mercator bounding box of a tile in meters.
+/// Web Mercator bounds of a tile in metres.
 #[must_use]
 pub fn xy_bounds(tile: TileIndex) -> BBox {
     let clamped_zoom = tile.z.min(MAX_ZOOM);
@@ -137,7 +135,7 @@ pub fn xy_bounds(tile: TileIndex) -> BBox {
     }
 }
 
-/// Get the geographic bounding box of a tile in degrees.
+/// Geographic bounds of a tile in degrees.
 #[must_use]
 pub fn bounds(tile: TileIndex) -> BBox {
     let clamped_zoom = tile.z.min(MAX_ZOOM);
@@ -167,7 +165,7 @@ pub fn bounds(tile: TileIndex) -> BBox {
     }
 }
 
-/// Snap a geographic bounding box outward to tile boundaries at the given zoom.
+/// Expand a bbox outward to full tile boundaries at the given zoom.
 #[must_use]
 pub fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> BBox {
     let tiles_vec = tiles(west, south, east, north, &[zoom]);
@@ -224,7 +222,7 @@ fn split_bbox(west: f64, south: f64, east: f64, north: f64) -> Vec<(f64, f64, f6
     bboxes
 }
 
-/// Get the tiles overlapped by a geographic bounding box.
+/// All tiles overlapping a geographic bounding box.
 #[must_use]
 pub fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: &[u8]) -> Vec<TileIndex> {
     let bboxes = split_bbox(west, south, east, north);

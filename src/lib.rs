@@ -13,13 +13,11 @@ pub mod tile_math;
 use pyo3::prelude::*;
 use tile_math::{BBox, TileIndex};
 
-/// A simple test function to ensure Python bindings work.
 #[pyfunction]
 fn hello() -> String {
     String::from("Hello from mapcv Rust core!")
 }
 
-/// The `mapcv` Rust extension module.
 #[pyclass]
 #[derive(Clone)]
 struct PyTileIndex {
@@ -84,19 +82,16 @@ impl From<BBox> for PyBBox {
     }
 }
 
-/// Convert longitude/latitude to Web Mercator meters.
 #[pyfunction]
 fn xy(lng: f64, lat: f64) -> (f64, f64) {
     tile_math::xy(lng, lat)
 }
 
-/// Get the tile containing a longitude and latitude.
 #[pyfunction]
 fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
     tile_math::tile(lng, lat, zoom).into()
 }
 
-/// Get the tiles overlapped by a geographic bounding box.
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
 fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<PyTileIndex> {
@@ -104,21 +99,18 @@ fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<Py
     result.into_iter().map(Into::into).collect()
 }
 
-/// Get the web mercator bounding box of a tile in meters.
 #[pyfunction]
 fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::xy_bounds(t).into()
 }
 
-/// Get the geographic bounding box of a tile in degrees.
 #[pyfunction]
 fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::bounds(t).into()
 }
 
-/// Snap a geographic bounding box outward to tile boundaries at a zoom.
 #[pyfunction]
 fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
     tile_math::snap_bbox(west, south, east, north, zoom).into()
@@ -126,9 +118,8 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
 
 /// Fetch satellite tiles concurrently from a URL template.
 ///
-/// Returns a list of `(PyTileIndex, bytes)` pairs for all successfully fetched
-/// tiles (and, with the `ignore` policy, tiles filled with black `NoData` pixels).
-///
+/// Returns a list of `(PyTileIndex, bytes)` pairs for successfully fetched
+/// tiles (and, with the `ignore` policy, black `NoData`-filled tiles).
 /// Raises `RuntimeError` if the fraction of failed tiles exceeds
 /// `max_failed_ratio`.
 #[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]

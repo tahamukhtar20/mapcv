@@ -107,10 +107,30 @@ fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::xy_bounds(t).into()
 }
-/// Fetch satellite tiles concurrently from a URL template.
+
+/// Get the geographic bounding box of a tile in degrees.
 #[pyfunction]
-#[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient"))]
-#[allow(clippy::useless_conversion, clippy::question_mark)]
+fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
+    let t = TileIndex { x, y, z };
+    tile_math::bounds(t).into()
+}
+
+/// Snap a geographic bounding box outward to tile boundaries at a zoom.
+#[pyfunction]
+fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
+    tile_math::snap_bbox(west, south, east, north, zoom).into()
+}
+
+/// Fetch satellite tiles concurrently from a URL template.
+///
+/// Returns a list of `(PyTileIndex, bytes)` pairs for all successfully fetched
+/// tiles (and, with the `ignore` policy, tiles filled with black `NoData` pixels).
+///
+/// Raises `RuntimeError` if the fraction of failed tiles exceeds
+/// `max_failed_ratio`.
+#[pyfunction]
+#[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05))]
+#[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
 fn fetch_tiles(
     py: Python,
     tiles: Vec<PyTileIndex>,
@@ -118,7 +138,8 @@ fn fetch_tiles(
     callback: Option<PyObject>,
     max_connections: usize,
     policy: &str,
-) -> Result<Vec<(PyTileIndex, PyObject)>, PyErr> {
+    max_failed_ratio: f64,
+) -> PyResult<Vec<(PyTileIndex, PyObject)>> {
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -128,7 +149,9 @@ fn fetch_tiles(
         })
         .collect();
 
-    let results = fetcher::fetch_tiles(
+    let total = rust_tiles.len();
+
+    let (results, failed) = fetcher::fetch_tiles(
         py,
         rust_tiles,
         url_template,
@@ -136,6 +159,14 @@ fn fetch_tiles(
         max_connections,
         policy,
     )?;
+
+    if total > 0 && failed as f64 / total as f64 > max_failed_ratio {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold)",
+            100.0 * failed as f64 / total as f64,
+            100.0 * max_failed_ratio,
+        )));
+    }
 
     Ok(results
         .into_iter()
@@ -147,6 +178,7 @@ fn fetch_tiles(
         })
         .collect())
 }
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;
@@ -154,6 +186,8 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tile, m)?)?;
     m.add_function(wrap_pyfunction!(tiles, m)?)?;
     m.add_function(wrap_pyfunction!(xy_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(snap_bbox, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_tiles, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;

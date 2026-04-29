@@ -137,6 +137,82 @@ pub fn xy_bounds(tile: TileIndex) -> BBox {
     }
 }
 
+/// Get the geographic bounding box of a tile in degrees.
+#[must_use]
+pub fn bounds(tile: TileIndex) -> BBox {
+    let clamped_zoom = tile.z.min(MAX_ZOOM);
+    let max_index = if clamped_zoom == MAX_ZOOM {
+        u32::MAX
+    } else {
+        (1u32 << clamped_zoom) - 1
+    };
+    let x = tile.x.min(max_index);
+    let y = tile.y.min(max_index);
+
+    let z2 = 2f64.powi(i32::from(clamped_zoom));
+    let west = f64::from(x) / z2 * 360.0 - 180.0;
+    let east = f64::from(x + 1) / z2 * 360.0 - 180.0;
+
+    let n = PI - 2.0 * PI * (f64::from(y) / z2);
+    let s = PI - 2.0 * PI * (f64::from(y + 1) / z2);
+
+    let north = n.sinh().atan().to_degrees();
+    let south = s.sinh().atan().to_degrees();
+
+    BBox {
+        west,
+        south,
+        east,
+        north,
+    }
+}
+
+/// Snap a geographic bounding box outward to tile boundaries at the given zoom.
+#[must_use]
+pub fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> BBox {
+    let tiles_vec = tiles(west, south, east, north, &[zoom]);
+    let mut iter = tiles_vec.into_iter();
+    let Some(first) = iter.next() else {
+        return BBox {
+            west: MIN_LNG,
+            south: MIN_LAT,
+            east: MAX_LNG,
+            north: MAX_LAT,
+        };
+    };
+
+    let mut min_x = first.x;
+    let mut min_y = first.y;
+    let mut max_x = first.x;
+    let mut max_y = first.y;
+    let clamped_zoom = first.z;
+
+    for tile in iter {
+        min_x = min_x.min(tile.x);
+        min_y = min_y.min(tile.y);
+        max_x = max_x.max(tile.x);
+        max_y = max_y.max(tile.y);
+    }
+
+    let ul = bounds(TileIndex {
+        x: min_x,
+        y: min_y,
+        z: clamped_zoom,
+    });
+    let lr = bounds(TileIndex {
+        x: max_x,
+        y: max_y,
+        z: clamped_zoom,
+    });
+
+    BBox {
+        west: ul.west,
+        south: lr.south,
+        east: lr.east,
+        north: ul.north,
+    }
+}
+
 fn split_bbox(west: f64, south: f64, east: f64, north: f64) -> Vec<(f64, f64, f64, f64)> {
     let mut bboxes = Vec::new();
     if west > east {

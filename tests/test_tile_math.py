@@ -1,6 +1,6 @@
 import mercantile
 import pytest
-from mapcv._mapcv_rs import xy, tile, tiles, xy_bounds
+from mapcv._mapcv_rs import bounds, snap_bbox, xy, tile, tiles, xy_bounds
 
 def test_xy() -> None:
     lng_lats = [
@@ -95,3 +95,33 @@ def test_xy_bounds_zoom_clamp() -> None:
     assert pytest.approx(m_bounds.right, abs=1e-5) == r_bounds.east
     assert pytest.approx(m_bounds.bottom, abs=1e-5) == r_bounds.south
     assert pytest.approx(m_bounds.top, abs=1e-5) == r_bounds.north
+
+def test_bounds() -> None:
+    tile_indices = [
+        (0, 0, 0),
+        (2621, 6331, 14),
+        (907, 404, 10)
+    ]
+    for x, y, z in tile_indices:
+        m_bounds = mercantile.bounds(x, y, z)
+        r_bounds = bounds(x, y, z)
+        assert pytest.approx(m_bounds.west, abs=1e-6) == r_bounds.west
+        assert pytest.approx(m_bounds.east, abs=1e-6) == r_bounds.east
+        assert pytest.approx(m_bounds.south, abs=1e-6) == r_bounds.south
+        assert pytest.approx(m_bounds.north, abs=1e-6) == r_bounds.north
+
+def test_snap_bbox_matches_tile_bounds() -> None:
+    west, south, east, north = -122.42, 37.77, -122.41, 37.78
+    zoom = 14
+    snapped = snap_bbox(west, south, east, north, zoom)
+    snapped_tiles = tiles(snapped.west, snapped.south, snapped.east, snapped.north, [zoom])
+    min_x = min(t.x for t in snapped_tiles)
+    min_y = min(t.y for t in snapped_tiles)
+    max_x = max(t.x for t in snapped_tiles)
+    max_y = max(t.y for t in snapped_tiles)
+    ul = bounds(min_x, min_y, zoom)
+    lr = bounds(max_x, max_y, zoom)
+    assert pytest.approx(ul.west, abs=1e-6) == snapped.west
+    assert pytest.approx(ul.north, abs=1e-6) == snapped.north
+    assert pytest.approx(lr.east, abs=1e-6) == snapped.east
+    assert pytest.approx(lr.south, abs=1e-6) == snapped.south

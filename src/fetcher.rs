@@ -18,7 +18,7 @@ pub enum FailurePolicy {
     Strict,
     /// Omit failed tiles from results.
     Lenient,
-    /// Return a black 256×256 PNG for failed tiles instead of omitting them.
+    /// Return a black 256x256 PNG for failed tiles instead of omitting them.
     Ignore,
 }
 

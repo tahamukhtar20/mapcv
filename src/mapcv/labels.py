@@ -1,4 +1,4 @@
-"""Label parsing: KML and GeoJSON → shapely geometries with class IDs."""
+"""Label parsing: KML and GeoJSON -> shapely geometries with class IDs."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _to_mercator(
     x: npt.NDArray[np.float64],
     y: npt.NDArray[np.float64],
 ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    # lat ≥ ±90 clamps to ±∞ — matches Rust xy() guard
+    # lat >= +/-90 clamps to +/-inf - matches Rust xy() guard
     mx: npt.NDArray[np.float64] = _RE * np.radians(x)
     raw: npt.NDArray[np.float64] = _RE * np.log(np.tan(pi / 4.0 + np.radians(y) / 2.0))
     my: npt.NDArray[np.float64] = np.where(y >= 90.0, np.inf, np.where(y <= -90.0, -np.inf, raw))

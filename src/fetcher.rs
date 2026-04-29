@@ -147,9 +147,15 @@ pub fn fetch_tiles(
         .parse::<FailurePolicy>()
         .map_err(PyRuntimeError::new_err)?;
 
+    if max_connections == 0 {
+        return Err(PyRuntimeError::new_err(
+            "max_connections must be at least 1",
+        ));
+    }
+
     let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
+    let _ = thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {

@@ -113,8 +113,13 @@ def download_region(
         progress.update(task_id, completed=total)
 
     fetched = len(results)
-    failed = total - fetched
-    _console.print(f"[dim]{fetched}/{total} tiles fetched, {failed} failed[/dim]")
+    if policy == "ignore":
+        _console.print(
+            f"[dim]{fetched}/{total} tiles returned"
+            " (failures are filled with NoData under 'ignore' policy)[/dim]"
+        )
+    else:
+        _console.print(f"[dim]{fetched}/{total} tiles fetched, {total - fetched} failed[/dim]")
 
     return results
 
@@ -201,13 +206,21 @@ def download_region_strips(
                 progress.update(task_id, completed=tiles_done)
 
             strip_results = cached_results + fresh
-            strip_failed = len(strip) - len(strip_results)
+            # Under 'ignore' policy all tiles return (some as black NoData), so
+            # len(strip) - len(strip_results) would always be 0 and is misleading.
+            strip_failed = 0 if policy == "ignore" else len(strip) - len(strip_results)
             total_fetched += len(strip_results)
             total_failed += strip_failed
             all_results.append(strip_results)
 
-    _console.print(
-        f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]"
-    )
+    if policy == "ignore":
+        _console.print(
+            f"[dim]{total_fetched}/{total} tiles returned"
+            " (failures are filled with NoData under 'ignore' policy)[/dim]"
+        )
+    else:
+        _console.print(
+            f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]"
+        )
 
     return all_results

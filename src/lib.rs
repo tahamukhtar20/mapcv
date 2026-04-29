@@ -2,6 +2,9 @@
 //!
 //! This module provides the Rust core for `mapcv`, including tile math
 //! utilities and Python bindings for those operations.
+// PyO3's #[pyfunction] macro generates `PyErr`-to-`PyErr` coercions that
+// clippy::useless_conversion flags. This cannot be suppressed at a narrower
+// scope because the lint fires inside the macro expansion.
 #![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
@@ -128,9 +131,9 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
 ///
 /// Raises `RuntimeError` if the fraction of failed tiles exceeds
 /// `max_failed_ratio`.
+#[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
 #[pyfunction]
 #[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05))]
-#[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
 fn fetch_tiles(
     py: Python,
     tiles: Vec<PyTileIndex>,

@@ -151,10 +151,10 @@ pub fn bounds(tile: TileIndex) -> BBox {
 
     let z2 = 2f64.powi(i32::from(clamped_zoom));
     let west = f64::from(x) / z2 * 360.0 - 180.0;
-    let east = f64::from(x + 1) / z2 * 360.0 - 180.0;
+    let east = (f64::from(x) + 1.0) / z2 * 360.0 - 180.0;
 
     let n = PI - 2.0 * PI * (f64::from(y) / z2);
-    let s = PI - 2.0 * PI * (f64::from(y + 1) / z2);
+    let s = PI - 2.0 * PI * ((f64::from(y) + 1.0) / z2);
 
     let north = n.sinh().atan().to_degrees();
     let south = s.sinh().atan().to_degrees();

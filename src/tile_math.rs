@@ -7,6 +7,10 @@ const RE: f64 = 6_378_137.0;
 const CE: f64 = 2.0 * PI * RE;
 const EPSILON: f64 = 1e-14;
 const LL_EPSILON: f64 = 1e-11;
+const MAX_LAT: f64 = 85.051_129;
+const MIN_LAT: f64 = -85.051_129;
+const MAX_LNG: f64 = 180.0;
+const MIN_LNG: f64 = -180.0;
 
 /// Represents an XYZ tile coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,13 +69,17 @@ pub fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
 /// Get the tile containing a longitude and latitude.
 #[must_use]
 pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
-    let (x, y) = xy_fractional(lng, lat);
+    let clamped_lng = lng.clamp(MIN_LNG, MAX_LNG);
+    let clamped_lat = lat.clamp(MIN_LAT, MAX_LAT);
+    let (x, y) = xy_fractional(clamped_lng, clamped_lat);
 
     let z2 = 1u32 << zoom;
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let xtile = if x >= 1.0 {
         z2 - 1
+    } else if x <= 0.0 {
+        0
     } else {
         (x * f64::from(z2)).floor() as u32
     };
@@ -79,6 +87,8 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let ytile = if y >= 1.0 {
         z2 - 1
+    } else if y <= 0.0 {
+        0
     } else {
         ((y + EPSILON) * f64::from(z2)).floor() as u32
     };
@@ -128,10 +138,10 @@ pub fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: &[u8]) -> Vec<
     let mut result = Vec::new();
 
     for (w, s, e, n) in bboxes {
-        let w_clamped = w.max(-180.0);
-        let s_clamped = s.max(-85.051_129);
-        let e_clamped = e.min(180.0);
-        let n_clamped = n.min(85.051_129);
+        let w_clamped = w.max(MIN_LNG);
+        let s_clamped = s.max(MIN_LAT);
+        let e_clamped = e.min(MAX_LNG);
+        let n_clamped = n.min(MAX_LAT);
 
         for &z in zooms {
             let ul_tile = tile(w_clamped, n_clamped, z);

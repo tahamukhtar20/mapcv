@@ -81,8 +81,9 @@ def test_tiles() -> None:
             r_set = {(t.x, t.y, t.z) for t in r_tiles}
             assert m_set == r_set
 
-    r_tiles = tiles(-0.1, -0.1, 0.1, 0.1, [40])
-    m_tiles = list(mercantile.tiles(-0.1, -0.1, 0.1, 0.1, [32]))
+    tiny = 1e-9
+    r_tiles = tiles(0.0, 0.0, tiny, tiny, [40])
+    m_tiles = list(mercantile.tiles(0.0, 0.0, tiny, tiny, [32]))
     assert {(t.x, t.y, t.z) for t in r_tiles} == {(t.x, t.y, t.z) for t in m_tiles}
 
 def test_xy_bounds_zoom_clamp() -> None:

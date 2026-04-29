@@ -33,9 +33,13 @@ def _to_mercator(
     x: npt.NDArray[np.float64],
     y: npt.NDArray[np.float64],
 ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Vectorized EPSG:4326 (lng, lat) → EPSG:3857 (x, y) in metres."""
+    """Vectorized EPSG:4326 (lng, lat) → EPSG:3857 (x, y) in metres.
+
+    Latitudes ≥ 90° map to +∞ and ≤ −90° to −∞, matching the Rust xy() guard.
+    """
     mx: npt.NDArray[np.float64] = _RE * np.radians(x)
-    my: npt.NDArray[np.float64] = _RE * np.log(np.tan(pi / 4.0 + np.radians(y) / 2.0))
+    raw: npt.NDArray[np.float64] = _RE * np.log(np.tan(pi / 4.0 + np.radians(y) / 2.0))
+    my: npt.NDArray[np.float64] = np.where(y >= 90.0, np.inf, np.where(y <= -90.0, -np.inf, raw))
     return mx, my
 
 

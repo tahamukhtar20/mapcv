@@ -1,7 +1,6 @@
-import time
-from typing import Optional, List, Tuple
+from typing import List, Tuple
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, DownloadColumn
-from mapcv._mapcv_rs import fetch_tiles as fetch_tiles_rs, PyTileIndex, tile, tiles
+from mapcv._mapcv_rs import fetch_tiles as fetch_tiles_rs, PyTileIndex, tiles
 
 def download_region(
     west: float,
@@ -45,4 +44,4 @@ def download_region(
         
         progress.update(task_id, completed=total)
         
-    return results
+    return list(results)

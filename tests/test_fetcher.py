@@ -1,8 +1,8 @@
 import pytest
+from typing import Any
 from mapcv._mapcv_rs import PyTileIndex, fetch_tiles
-from mapcv.downloader import download_region
 
-def test_fetch_tiles_mock(httpserver):
+def test_fetch_tiles_mock(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/2621/6331.png").respond_with_data(b"FAKE_PNG_1")
     httpserver.expect_request("/tile/14/2622/6331.png").respond_with_data(b"FAKE_PNG_2")
     
@@ -26,7 +26,7 @@ def test_fetch_tiles_mock(httpserver):
     assert results_dict[(2621, 6331, 14)] == b"FAKE_PNG_1"
     assert results_dict[(2622, 6331, 14)] == b"FAKE_PNG_2"
 
-def test_fetch_tiles_lenient(httpserver):
+def test_fetch_tiles_lenient(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"FAKE_1")
     httpserver.expect_request("/tile/14/2/1.png").respond_with_data(b"NOT FOUND", status=404)
     
@@ -41,7 +41,7 @@ def test_fetch_tiles_lenient(httpserver):
     assert len(results) == 1
     assert results[0][0].x == 1
 
-def test_fetch_tiles_strict(httpserver):
+def test_fetch_tiles_strict(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"NOT FOUND", status=404)
     
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")

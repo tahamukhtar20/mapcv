@@ -1,7 +1,7 @@
 //! `MapCV` Rust Core
 //!
-//! This module provides the performance-critical implementations for `mapcv`,
-//! including tile fetching, stitching, and rasterization.
+//! This module provides the Rust core for `mapcv`, including tile math
+//! utilities and Python bindings for those operations.
 
 pub mod tile_math;
 

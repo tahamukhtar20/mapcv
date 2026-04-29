@@ -11,6 +11,7 @@ const MAX_LAT: f64 = 85.051_129;
 const MIN_LAT: f64 = -85.051_129;
 const MAX_LNG: f64 = 180.0;
 const MIN_LNG: f64 = -180.0;
+const MAX_ZOOM: u8 = 32;
 
 /// Represents an XYZ tile coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,13 +31,13 @@ pub struct TileIndex {
 /// projected coordinates such as Web Mercator meters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
-    /// West longitude
+    /// Western edge
     pub west: f64,
-    /// South latitude
+    /// Southern edge
     pub south: f64,
-    /// East longitude
+    /// Eastern edge
     pub east: f64,
-    /// North latitude
+    /// Northern edge
     pub north: f64,
 }
 
@@ -59,7 +60,7 @@ pub fn xy(lng: f64, lat: f64) -> (f64, f64) {
 
 /// Note: This is an internal helper.
 #[must_use]
-pub fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
+pub(crate) fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
     let x = lng / 360.0 + 0.5;
     let sinlat = lat.to_radians().sin();
     let y = 0.5 - 0.25 * ((1.0 + sinlat) / (1.0 - sinlat)).ln() / PI;
@@ -71,9 +72,11 @@ pub fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
 pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     let clamped_lng = lng.clamp(MIN_LNG, MAX_LNG);
     let clamped_lat = lat.clamp(MIN_LAT, MAX_LAT);
+    let clamped_zoom = zoom.min(MAX_ZOOM);
     let (x, y) = xy_fractional(clamped_lng, clamped_lat);
 
-    let z2 = 1u32 << zoom;
+    let z2 = 1u64 << clamped_zoom;
+    let z2_f = z2 as f64;
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let xtile = if x >= 1.0 {
@@ -81,7 +84,7 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     } else if x <= 0.0 {
         0
     } else {
-        (x * f64::from(z2)).floor() as u32
+        (x * z2_f).floor() as u64
     };
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -90,13 +93,13 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     } else if y <= 0.0 {
         0
     } else {
-        ((y + EPSILON) * f64::from(z2)).floor() as u32
+        ((y + EPSILON) * z2_f).floor() as u64
     };
 
     TileIndex {
-        x: xtile,
-        y: ytile,
-        z: zoom,
+        x: xtile.min(u64::from(u32::MAX)) as u32,
+        y: ytile.min(u64::from(u32::MAX)) as u32,
+        z: clamped_zoom,
     }
 }
 
@@ -144,8 +147,9 @@ pub fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: &[u8]) -> Vec<
         let n_clamped = n.min(MAX_LAT);
 
         for &z in zooms {
-            let ul_tile = tile(w_clamped, n_clamped, z);
-            let lr_tile = tile(e_clamped - LL_EPSILON, s_clamped + LL_EPSILON, z);
+            let clamped_zoom = z.min(MAX_ZOOM);
+            let ul_tile = tile(w_clamped, n_clamped, clamped_zoom);
+            let lr_tile = tile(e_clamped - LL_EPSILON, s_clamped + LL_EPSILON, clamped_zoom);
 
             for i in ul_tile.x..=lr_tile.x {
                 for j in ul_tile.y..=lr_tile.y {

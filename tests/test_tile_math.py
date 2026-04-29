@@ -38,6 +38,14 @@ def test_tile() -> None:
         assert m_tile.y == r_tile.y
         assert m_tile.z == r_tile.z
 
+    zoom = 40
+    lng, lat = 12.34, 56.78
+    m_tile = mercantile.tile(lng, lat, 32, truncate=False)
+    r_tile = tile(lng, lat, zoom)
+    assert m_tile.x == r_tile.x
+    assert m_tile.y == r_tile.y
+    assert r_tile.z == 32
+
 def test_xy_bounds() -> None:
     tile_indices = [
         (0, 0, 0),

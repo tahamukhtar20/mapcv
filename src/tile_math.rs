@@ -75,30 +75,36 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
     let clamped_zoom = zoom.min(MAX_ZOOM);
     let (x, y) = xy_fractional(clamped_lng, clamped_lat);
 
-    let z2 = 1u64 << clamped_zoom;
-    let z2_f = z2 as f64;
+    let z2_f = 2f64.powi(i32::from(clamped_zoom));
+    let max_index = if clamped_zoom == MAX_ZOOM {
+        u32::MAX
+    } else {
+        (1u32 << clamped_zoom) - 1
+    };
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let xtile = if x >= 1.0 {
-        z2 - 1
+        max_index
     } else if x <= 0.0 {
         0
     } else {
-        (x * z2_f).floor() as u64
+        let clamped = (x * z2_f).floor().min(f64::from(max_index));
+        clamped as u32
     };
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let ytile = if y >= 1.0 {
-        z2 - 1
+        max_index
     } else if y <= 0.0 {
         0
     } else {
-        ((y + EPSILON) * z2_f).floor() as u64
+        let clamped = ((y + EPSILON) * z2_f).floor().min(f64::from(max_index));
+        clamped as u32
     };
 
     TileIndex {
-        x: xtile.min(u64::from(u32::MAX)) as u32,
-        y: ytile.min(u64::from(u32::MAX)) as u32,
+        x: xtile,
+        y: ytile,
         z: clamped_zoom,
     }
 }
@@ -106,13 +112,22 @@ pub fn tile(lng: f64, lat: f64, zoom: u8) -> TileIndex {
 /// Get the web mercator bounding box of a tile in meters.
 #[must_use]
 pub fn xy_bounds(tile: TileIndex) -> BBox {
-    let z2 = f64::powi(2.0, i32::from(tile.z));
+    let clamped_zoom = tile.z.min(MAX_ZOOM);
+    let max_index = if clamped_zoom == MAX_ZOOM {
+        u32::MAX
+    } else {
+        (1u32 << clamped_zoom) - 1
+    };
+    let x = tile.x.min(max_index);
+    let y = tile.y.min(max_index);
+
+    let z2 = 2f64.powi(i32::from(clamped_zoom));
     let tile_size = CE / z2;
 
-    let left = f64::from(tile.x) * tile_size - CE / 2.0;
+    let left = f64::from(x) * tile_size - CE / 2.0;
     let right = left + tile_size;
-    let bottom = CE / 2.0 - f64::from(tile.y + 1) * tile_size;
-    let top = CE / 2.0 - f64::from(tile.y) * tile_size;
+    let bottom = CE / 2.0 - (f64::from(y) + 1.0) * tile_size;
+    let top = CE / 2.0 - f64::from(y) * tile_size;
 
     BBox {
         west: left,
@@ -153,7 +168,11 @@ pub fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: &[u8]) -> Vec<
 
             for i in ul_tile.x..=lr_tile.x {
                 for j in ul_tile.y..=lr_tile.y {
-                    result.push(TileIndex { x: i, y: j, z });
+                    result.push(TileIndex {
+                        x: i,
+                        y: j,
+                        z: clamped_zoom,
+                    });
                 }
             }
         }

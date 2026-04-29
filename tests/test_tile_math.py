@@ -80,3 +80,17 @@ def test_tiles() -> None:
             m_set = {(t.x, t.y, t.z) for t in m_tiles}
             r_set = {(t.x, t.y, t.z) for t in r_tiles}
             assert m_set == r_set
+
+    r_tiles = tiles(-0.1, -0.1, 0.1, 0.1, [40])
+    m_tiles = list(mercantile.tiles(-0.1, -0.1, 0.1, 0.1, [32]))
+    assert {(t.x, t.y, t.z) for t in r_tiles} == {(t.x, t.y, t.z) for t in m_tiles}
+
+def test_xy_bounds_zoom_clamp() -> None:
+    z = 40
+    max_index = (1 << 32) - 1
+    r_bounds = xy_bounds(max_index, max_index, z)
+    m_bounds = mercantile.xy_bounds(max_index, max_index, 32)
+    assert pytest.approx(m_bounds.left, abs=1e-5) == r_bounds.west
+    assert pytest.approx(m_bounds.right, abs=1e-5) == r_bounds.east
+    assert pytest.approx(m_bounds.bottom, abs=1e-5) == r_bounds.south
+    assert pytest.approx(m_bounds.top, abs=1e-5) == r_bounds.north

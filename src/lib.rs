@@ -1,8 +1,8 @@
-#![allow(clippy::useless_conversion)]
 //! `MapCV` Rust Core
 //!
-//! This module provides the performance-critical implementations for `mapcv`,
-//! including tile fetching, stitching, and rasterization.
+//! This module provides the Rust core for `mapcv`, including tile math
+//! utilities and Python bindings for those operations.
+#![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
 pub mod tile_math;
@@ -35,7 +35,6 @@ impl PyTileIndex {
         PyTileIndex { x, y, z }
     }
 }
-
 impl From<TileIndex> for PyTileIndex {
     fn from(t: TileIndex) -> Self {
         PyTileIndex {
@@ -71,7 +70,6 @@ impl PyBBox {
         }
     }
 }
-
 impl From<BBox> for PyBBox {
     fn from(b: BBox) -> Self {
         PyBBox {
@@ -149,8 +147,6 @@ fn fetch_tiles(
         })
         .collect())
 }
-
-
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;

@@ -37,6 +37,9 @@ impl std::str::FromStr for FailurePolicy {
     }
 }
 
+// 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
+const MAX_RETRIES: u32 = 3;
+
 enum TileOutcome {
     Success(Vec<u8>),
     /// Black-fill PNG returned by Ignore policy. Still counts toward failed ratio.
@@ -69,8 +72,6 @@ async fn fetch_single_tile(
         .replace("{x}", &tile.x.to_string())
         .replace("{y}", &tile.y.to_string());
 
-    // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
-    const MAX_RETRIES: u32 = 3;
     let mut retries: u32 = 0;
     loop {
         let resp = client.get(&url).send().await;

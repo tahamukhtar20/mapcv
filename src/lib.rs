@@ -8,8 +8,10 @@
 #![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
+pub mod rasterizer;
 pub mod tile_math;
 
+use numpy::{PyArray2, ToPyArray};
 use pyo3::prelude::*;
 use tile_math::{BBox, TileIndex};
 
@@ -179,6 +181,46 @@ fn fetch_tiles(
         .collect())
 }
 
+/// Burn `(polygon, class_id)` pairs into a uint8 mask of shape `(height, width)`.
+///
+/// `polygons` is a list of `(rings, class_id)` pairs, where `rings` is a list
+/// of rings (exterior first, then holes). Each ring is a list of `(x, y)`
+/// world-coordinate vertices; rings are auto-closed if not already.
+///
+/// `transform` is a 6-tuple `(a, b, c, d, e, f)` mapping pixel `(col, row)` to
+/// world `(x, y)` (rasterio Affine convention).
+///
+/// Polygons are written in order; later polygons overwrite earlier ones
+/// (replace / last-writer-wins). Background pixels are 0.
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::type_complexity,
+    clippy::many_single_char_names
+)]
+#[pyfunction]
+#[pyo3(signature = (polygons, height, width, transform, all_touched=false))]
+fn rasterize(
+    py: Python,
+    polygons: Vec<(Vec<Vec<(f64, f64)>>, u8)>,
+    height: usize,
+    width: usize,
+    transform: (f64, f64, f64, f64, f64, f64),
+    all_touched: bool,
+) -> PyResult<Py<PyArray2<u8>>> {
+    if width == 0 || height == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "width and height must be > 0",
+        ));
+    }
+    let (a, b, c, d, e, f) = transform;
+    let aff = rasterizer::Affine { a, b, c, d, e, f };
+    let buf = rasterizer::rasterize(&polygons, width, height, aff, all_touched)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let arr = numpy::ndarray::Array2::from_shape_vec((height, width), buf)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(arr.to_pyarray_bound(py).unbind())
+}
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;
@@ -189,6 +231,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bounds, m)?)?;
     m.add_function(wrap_pyfunction!(snap_bbox, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(rasterize, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

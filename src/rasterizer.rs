@@ -81,6 +81,25 @@ impl Affine {
 /// implicitly when all rings are merged into one edge list.
 pub type RingSet = Vec<Vec<(f64, f64)>>;
 
+/// Iterate the directed edges of a ring, auto-closing if the ring's last
+/// vertex does not coincide with the first.
+fn ring_edges(ring: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f64, f64))> + '_ {
+    let closing = if ring.len() >= 2 {
+        let first = ring[0];
+        let last = ring[ring.len() - 1];
+        if (first.0 - last.0).abs() > EPS || (first.1 - last.1).abs() > EPS {
+            Some((last, first))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    ring.windows(2)
+        .map(|w| (w[0], w[1]))
+        .chain(closing.into_iter())
+}
+
 /// Burn one polygon (in pixel coords) into the output raster using the
 /// scanline rule: a pixel is filled iff its center is inside the polygon.
 fn fill_scanline(rings: &RingSet, out: &mut [u8], width: usize, height: usize, class_id: u8) {
@@ -97,9 +116,7 @@ fn fill_scanline(rings: &RingSet, out: &mut [u8], width: usize, height: usize, c
         if ring.len() < 2 {
             continue;
         }
-        for window in ring.windows(2) {
-            let (x0, y0) = window[0];
-            let (x1, y1) = window[1];
+        for ((x0, y0), (x1, y1)) in ring_edges(ring) {
             // Skip horizontal edges entirely. They contribute nothing to the
             // scanline parity count and only complicate vertex handling.
             if (y0 - y1).abs() < EPS {
@@ -175,7 +192,9 @@ fn fill_scanline(rings: &RingSet, out: &mut [u8], width: usize, height: usize, c
 }
 
 /// Mark every pixel that an edge segment crosses ("supercover" rasterization).
-/// Used for `all_touched=True`.
+/// Used for `all_touched=True`. Returns early if the segment's bounding box
+/// is fully outside the image: a polygon with vertices far outside the
+/// raster could otherwise burn billions of useless iterations here.
 fn mark_edge_supercover(
     p0: (f64, f64),
     p1: (f64, f64),
@@ -186,6 +205,14 @@ fn mark_edge_supercover(
 ) {
     let (x0, y0) = p0;
     let (x1, y1) = p1;
+    let width_f = width as f64;
+    let height_f = height as f64;
+    if x0.max(x1) < 0.0 || x0.min(x1) >= width_f {
+        return;
+    }
+    if y0.max(y1) < 0.0 || y0.min(y1) >= height_f {
+        return;
+    }
     let dx = x1 - x0;
     let dy = y1 - y0;
     let steps = dx.abs().max(dy.abs()).ceil() as usize + 1;
@@ -196,7 +223,7 @@ fn mark_edge_supercover(
         let y = y0 + t * dy;
         let col = x.floor();
         let row = y.floor();
-        if col >= 0.0 && col < width as f64 && row >= 0.0 && row < height as f64 {
+        if col >= 0.0 && col < width_f && row >= 0.0 && row < height_f {
             let c = col as usize;
             let r = row as usize;
             out[r * width + c] = class_id;
@@ -210,8 +237,8 @@ fn fill_all_touched(rings: &RingSet, out: &mut [u8], width: usize, height: usize
         if ring.len() < 2 {
             continue;
         }
-        for window in ring.windows(2) {
-            mark_edge_supercover(window[0], window[1], out, width, height, class_id);
+        for (p0, p1) in ring_edges(ring) {
+            mark_edge_supercover(p0, p1, out, width, height, class_id);
         }
     }
 }
@@ -238,7 +265,8 @@ fn world_rings_to_pixel(world: &RingSet, inv: &Affine) -> RingSet {
 /// (replace / last-writer-wins).
 ///
 /// # Errors
-/// Returns an error if `transform` is singular.
+/// Returns an error if `transform` is singular or if `width * height`
+/// overflows `usize`.
 ///
 /// # Panics
 /// Does not panic on well-formed input.
@@ -250,7 +278,10 @@ pub fn rasterize(
     all_touched: bool,
 ) -> Result<Vec<u8>, String> {
     let inv = transform.inverse()?;
-    let mut out = vec![0u8; width * height];
+    let buf_len = width
+        .checked_mul(height)
+        .ok_or_else(|| "raster dimensions overflow usize".to_string())?;
+    let mut out = vec![0u8; buf_len];
     for (rings, class_id) in polygons {
         let pixel_rings = world_rings_to_pixel(rings, &inv);
         if all_touched {

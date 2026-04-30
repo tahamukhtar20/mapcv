@@ -132,6 +132,30 @@ def test_polygon_outside_image_is_a_noop() -> None:
     assert (mask == 0).all()
 
 
+def test_far_outside_polygon_all_touched_is_fast_noop() -> None:
+    """all_touched on a polygon at coords ~1e9 must short-circuit, not loop billions of times."""
+    import time
+
+    poly = Polygon([(1e9, 1e9), (1e9 + 10, 1e9), (1e9 + 10, 1e9 + 10), (1e9, 1e9 + 10)])
+    start = time.perf_counter()
+    mask = rasterize([(poly, 1)], (16, 16), IDENTITY, all_touched=True)
+    elapsed = time.perf_counter() - start
+    assert (mask == 0).all()
+    assert elapsed < 0.1, f"all_touched took {elapsed:.3f}s on a far-outside polygon"
+
+
+def test_open_ring_via_rust_binding_is_auto_closed() -> None:
+    """The Rust binding auto-closes rings whose last vertex != first."""
+    from mapcv._mapcv_rs import rasterize as _rs_rasterize
+
+    open_ring = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+    closed_ring = open_ring + [(0.0, 0.0)]
+    mask_open = _rs_rasterize([([open_ring], 1)], 4, 4, IDENTITY, False)
+    mask_closed = _rs_rasterize([([closed_ring], 1)], 4, 4, IDENTITY, False)
+    np.testing.assert_array_equal(mask_open, mask_closed)
+    assert (mask_open == 1).all()
+
+
 def test_partial_overlap_clipped_to_bounds() -> None:
     # Square that extends past the right/bottom edges.
     poly = _square(2, 2, 10)

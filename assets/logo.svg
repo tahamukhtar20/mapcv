@@ -52,7 +52,7 @@
 
   <!-- === Polygon segmentation label === (drawn on top, spans gaps too) -->
   <polygon
-    points="84,33  176,22  221,90  210,185  128,220  44,196  24,114  58,44"
+    points="87,40  172,30  213,92  203,180  127,212  50,190  32,114  63,50"
     fill="#38BDF8"
     fill-opacity="0.07"
     stroke="#38BDF8"
@@ -72,12 +72,12 @@
   </g>
 
   <!-- Polygon vertex dots -->
-  <circle cx="84"  cy="33"  r="3" fill="#38BDF8"/>
-  <circle cx="176" cy="22"  r="3" fill="#38BDF8"/>
-  <circle cx="221" cy="90"  r="3" fill="#38BDF8"/>
-  <circle cx="210" cy="185" r="3" fill="#38BDF8"/>
-  <circle cx="128" cy="220" r="3" fill="#38BDF8"/>
-  <circle cx="44"  cy="196" r="3" fill="#38BDF8"/>
-  <circle cx="24"  cy="114" r="3" fill="#38BDF8"/>
-  <circle cx="58"  cy="44"  r="3" fill="#38BDF8"/>
+  <circle cx="87"  cy="40"  r="3" fill="#38BDF8"/>
+  <circle cx="172" cy="30"  r="3" fill="#38BDF8"/>
+  <circle cx="213" cy="92"  r="3" fill="#38BDF8"/>
+  <circle cx="203" cy="180" r="3" fill="#38BDF8"/>
+  <circle cx="127" cy="212" r="3" fill="#38BDF8"/>
+  <circle cx="50"  cy="190" r="3" fill="#38BDF8"/>
+  <circle cx="32"  cy="114" r="3" fill="#38BDF8"/>
+  <circle cx="63"  cy="50"  r="3" fill="#38BDF8"/>
 </svg>

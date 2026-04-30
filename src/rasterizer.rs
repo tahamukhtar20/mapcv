@@ -169,7 +169,7 @@ fn fill_scanline(rings: &RingSet, out: &mut [u8], width: usize, height: usize, c
         }
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         debug_assert!(
-            xs.len() % 2 == 0,
+            xs.len().is_multiple_of(2),
             "odd intersection count on scanline {row}"
         );
 

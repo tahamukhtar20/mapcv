@@ -82,16 +82,19 @@ impl From<BBox> for PyBBox {
     }
 }
 
+/// Convert (lng, lat) in EPSG:4326 to Web Mercator (x, y) in EPSG:3857.
 #[pyfunction]
 fn xy(lng: f64, lat: f64) -> (f64, f64) {
     tile_math::xy(lng, lat)
 }
 
+/// Return the XYZ tile index for a (lng, lat) point at the given zoom level.
 #[pyfunction]
 fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
     tile_math::tile(lng, lat, zoom).into()
 }
 
+/// Return all XYZ tiles covering the given bounding box at the specified zoom levels.
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
 fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<PyTileIndex> {
@@ -99,18 +102,21 @@ fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<Py
     result.into_iter().map(Into::into).collect()
 }
 
+/// Return the Web Mercator bounding box (EPSG:3857, meters) for an XYZ tile.
 #[pyfunction]
 fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::xy_bounds(t).into()
 }
 
+/// Return the geographic bounding box (EPSG:4326, degrees) for an XYZ tile.
 #[pyfunction]
 fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
     tile_math::bounds(t).into()
 }
 
+/// Expand a bbox outward to the nearest tile boundaries at the given zoom level.
 #[pyfunction]
 fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
     tile_math::snap_bbox(west, south, east, north, zoom).into()

@@ -42,7 +42,6 @@ def test_polygon_with_hole() -> None:
     mask = rasterize([(poly, 1)], (10, 10), IDENTITY)
     # Pixel (5, 5) center is (5.5, 5.5), inside the hole [3, 7) x [3, 7).
     assert mask[5, 5] == 0
-    # Border pixels remain filled.
     assert mask[0, 0] == 1
     assert mask[1, 1] == 1
 
@@ -157,17 +156,11 @@ def test_open_ring_via_rust_binding_is_auto_closed() -> None:
 
 
 def test_partial_overlap_clipped_to_bounds() -> None:
-    # Square that extends past the right/bottom edges.
     poly = _square(2, 2, 10)
     mask = rasterize([(poly, 1)], (4, 4), IDENTITY)
     assert (mask[2:4, 2:4] == 1).all()
     assert (mask[0:2, :] == 0).all()
     assert (mask[:, 0:2] == 0).all()
-
-
-# ---------------------------------------------------------------------------
-# Optional cross-validation against rasterio (skipped if not installed)
-# ---------------------------------------------------------------------------
 
 
 def test_cross_validate_against_rasterio() -> None:

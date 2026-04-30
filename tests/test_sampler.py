@@ -9,11 +9,6 @@ from mapcv import SamplerConfig, sample_patches
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 
 
-# ---------------------------------------------------------------------------
-# Rust anchor generator -- grid
-# ---------------------------------------------------------------------------
-
-
 def test_grid_drop_only_full_patches() -> None:
     anchors = grid_sample_anchors(10, 10, 4, 4, "drop")
     assert len(anchors) == 4  # 2 rows x 2 cols
@@ -60,11 +55,6 @@ def test_grid_zero_stride_raises() -> None:
         grid_sample_anchors(10, 10, 4, 0, "pad")
 
 
-# ---------------------------------------------------------------------------
-# Rust anchor generator -- random
-# ---------------------------------------------------------------------------
-
-
 def test_random_drop_anchors_in_bounds() -> None:
     anchors = random_sample_anchors(100, 100, 32, 50, 42, "drop")
     assert len(anchors) == 50
@@ -100,11 +90,6 @@ def test_random_zero_patch_size_raises() -> None:
         random_sample_anchors(10, 10, 0, 5, 42, "pad")
 
 
-# ---------------------------------------------------------------------------
-# SamplerConfig
-# ---------------------------------------------------------------------------
-
-
 def test_config_default_stride_equals_patch_size() -> None:
     cfg = SamplerConfig(patch_size=64)
     assert cfg.stride == 64
@@ -124,11 +109,6 @@ def test_config_defaults() -> None:
     assert cfg.min_label_ratio == 0.0
 
 
-# ---------------------------------------------------------------------------
-# sample_patches -- extraction and shape
-# ---------------------------------------------------------------------------
-
-
 def _solid_strip(h: int, w: int, c: int = 3, value: int = 128) -> np.ndarray:
     arr = np.full((h, w, c), value, dtype=np.uint8)
     return arr
@@ -138,7 +118,6 @@ def test_basic_grid_shape_3channel() -> None:
     img = _solid_strip(64, 64, 3)
     cfg = SamplerConfig(patch_size=16, edge_strategy="drop")
     patches, masks, meta = sample_patches(img, None, cfg)
-    # 4x4 grid, no mask
     assert patches.shape == (16, 16, 16, 3)
     assert masks is None
     assert len(meta) == 16
@@ -197,11 +176,6 @@ def test_shift_strategy_all_in_bounds() -> None:
         assert not m["padded"]
 
 
-# ---------------------------------------------------------------------------
-# sample_patches -- filters
-# ---------------------------------------------------------------------------
-
-
 def test_max_empty_ratio_filters_black_patches() -> None:
     # Strip with left half all-black and right half non-zero.
     img = np.zeros((8, 16, 3), dtype=np.uint8)
@@ -224,16 +198,11 @@ def test_min_label_ratio_filters_unlabeled_patches() -> None:
 
 
 def test_no_filters_keeps_all_patches() -> None:
-    img = np.zeros((8, 16, 1), dtype=np.uint8)  # fully black
+    img = np.zeros((8, 16, 1), dtype=np.uint8)
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
     patches, _, meta = sample_patches(img, None, cfg)
     # max_empty_ratio=1.0 by default: black patches are not filtered.
     assert len(meta) == 2
-
-
-# ---------------------------------------------------------------------------
-# sample_patches -- random mode
-# ---------------------------------------------------------------------------
 
 
 def test_random_mode_returns_count_patches() -> None:
@@ -250,11 +219,6 @@ def test_random_mode_reproducible() -> None:
     _, _, meta_a = sample_patches(img, None, cfg)
     _, _, meta_b = sample_patches(img, None, cfg)
     assert meta_a == meta_b
-
-
-# ---------------------------------------------------------------------------
-# sample_patches -- edge cases
-# ---------------------------------------------------------------------------
 
 
 def test_empty_result_correct_shape_3channel() -> None:

@@ -47,7 +47,8 @@ enum TileOutcome {
 fn black_tile_png() -> Vec<u8> {
     let img = DynamicImage::new_rgb8(256, 256);
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png).unwrap_or(());
+    img.write_to(&mut buf, ImageFormat::Png)
+        .expect("black tile PNG encoding failed");
     buf.into_inner()
 }
 
@@ -68,6 +69,8 @@ async fn fetch_single_tile(
         .replace("{x}", &tile.x.to_string())
         .replace("{y}", &tile.y.to_string());
 
+    // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
+    const MAX_RETRIES: u32 = 3;
     let mut retries: u32 = 0;
     loop {
         let resp = client.get(&url).send().await;
@@ -83,8 +86,23 @@ async fn fetch_single_tile(
                     return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
                 }
             },
+            // Non-retryable client errors (4xx except 404 above and 429 which may clear).
+            Ok(r)
+                if r.status().is_client_error()
+                    && r.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                match policy {
+                    FailurePolicy::Strict => {
+                        return Err(format!("HTTP {} for URL: {}", r.status(), url))
+                    }
+                    FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
+                    FailurePolicy::Ignore => {
+                        return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
+                    }
+                }
+            }
             Ok(r) => {
-                if retries >= 3 {
+                if retries >= MAX_RETRIES {
                     match policy {
                         FailurePolicy::Strict => {
                             return Err(format!("HTTP {} for URL: {}", r.status(), url))
@@ -97,7 +115,7 @@ async fn fetch_single_tile(
                 }
             }
             Err(e) => {
-                if retries >= 3 {
+                if retries >= MAX_RETRIES {
                     match policy {
                         FailurePolicy::Strict => return Err(format!("Network error: {e}")),
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),

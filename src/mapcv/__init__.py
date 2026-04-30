@@ -17,6 +17,7 @@ from mapcv.labels import (
     parse_kml,
     transform_to_mercator,
 )
+from mapcv.rasterizer import rasterize
 
 __all__ = [
     "URL_TEMPLATES",
@@ -30,6 +31,7 @@ __all__ = [
     "iter_tile_strips",
     "parse_geojson",
     "parse_kml",
+    "rasterize",
     "resolve_url_template",
     "transform_to_mercator",
 ]

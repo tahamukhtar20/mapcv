@@ -18,3 +18,4 @@ Cargo.lock
 *.so
 *.pyd
 *.dylib
+.claude/

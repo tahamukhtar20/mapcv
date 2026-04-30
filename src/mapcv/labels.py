@@ -27,11 +27,15 @@ _POLYGON_TYPES = frozenset({"Polygon", "MultiPolygon"})
 def _to_mercator(
     x: npt.NDArray[np.float64],
     y: npt.NDArray[np.float64],
-) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    z: Optional[npt.NDArray[np.float64]] = None,
+) -> Tuple[npt.NDArray[np.float64], ...]:
     # lat >= +/-90 clamps to +/-inf - matches Rust xy() guard
+    # z is passed by shapely.ops.transform for 3D geometries and returned unchanged
     mx: npt.NDArray[np.float64] = _RE * np.radians(x)
     raw: npt.NDArray[np.float64] = _RE * np.log(np.tan(pi / 4.0 + np.radians(y) / 2.0))
     my: npt.NDArray[np.float64] = np.where(y >= 90.0, np.inf, np.where(y <= -90.0, -np.inf, raw))
+    if z is not None:
+        return mx, my, z
     return mx, my
 
 

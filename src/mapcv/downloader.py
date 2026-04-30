@@ -14,6 +14,7 @@ _console = Console()
 
 
 def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> str:
+    """Return a URL template string from an explicit template or a built-in source name."""
     if url_template:
         return url_template
     if source:
@@ -31,6 +32,7 @@ def iter_tile_strips(
     zoom: int,
     strip_rows: int,
 ) -> List[List[PyTileIndex]]:
+    """Partition the tile grid for a bbox into horizontal strips of strip_rows tile rows each."""
     if strip_rows <= 0:
         raise ValueError("strip_rows must be positive")
     target_tiles = tiles(west, south, east, north, [zoom])
@@ -74,6 +76,13 @@ def download_region(
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
 ) -> List[Tuple[PyTileIndex, bytes]]:
+    """Fetch all tiles for a bbox at the given zoom and return (tile, bytes) pairs.
+
+    policy controls failure handling: "strict" raises on any failure, "lenient"
+    skips failed tiles, "ignore" fills them with black NoData pixels.
+    snap_to_tiles expands the bbox outward to tile boundaries before fetching.
+    Raises RuntimeError if the failed-tile fraction exceeds max_failed_ratio.
+    """
     template = resolve_url_template(url_template, source)
     if snap_to_tiles:
         snapped = snap_bbox(west, south, east, north, zoom)
@@ -124,6 +133,11 @@ def download_region_strips(
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
 ) -> List[List[Tuple[PyTileIndex, bytes]]]:
+    """Fetch tiles for a bbox in horizontal strips, caching tiles shared between strips.
+
+    Returns one inner list per strip; each entry is a (tile, bytes) pair.
+    strip_rows controls how many tile rows form a single strip.
+    """
     template = resolve_url_template(url_template, source)
     if snap_to_tiles:
         snapped = snap_bbox(west, south, east, north, zoom)

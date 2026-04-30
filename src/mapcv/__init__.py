@@ -18,6 +18,7 @@ from mapcv.labels import (
     transform_to_mercator,
 )
 from mapcv.rasterizer import rasterize
+from mapcv.sampler import SamplerConfig, sample_patches
 
 __all__ = [
     "URL_TEMPLATES",
@@ -33,5 +34,7 @@ __all__ = [
     "parse_kml",
     "rasterize",
     "resolve_url_template",
+    "sample_patches",
+    "SamplerConfig",
     "transform_to_mercator",
 ]

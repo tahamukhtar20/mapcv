@@ -9,6 +9,7 @@
 
 pub mod fetcher;
 pub mod rasterizer;
+pub mod sampler;
 pub mod tile_math;
 
 use numpy::{PyArray2, ToPyArray};
@@ -181,6 +182,42 @@ fn fetch_tiles(
         .collect())
 }
 
+/// Generate grid (or sliding-window) patch anchor positions.
+///
+/// Returns a list of `(row, col)` top-left corners for `patch_size x patch_size`
+/// patches sampled with the given `stride` across a `height x width` image.
+/// `edge_strategy` is `"pad"` (default), `"drop"`, or `"shift"`.
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, stride, edge_strategy = "pad"))]
+fn grid_sample_anchors(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    stride: usize,
+    edge_strategy: &str,
+) -> PyResult<Vec<(usize, usize)>> {
+    sampler::grid_anchors(height, width, patch_size, stride, edge_strategy)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Generate random patch anchor positions using a seeded PRNG.
+///
+/// Returns `count` `(row, col)` top-left corners. `edge_strategy` is `"pad"`
+/// (default), `"drop"`, or `"shift"`.
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, count, seed = 42, edge_strategy = "pad"))]
+fn random_sample_anchors(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    count: usize,
+    seed: u64,
+    edge_strategy: &str,
+) -> PyResult<Vec<(usize, usize)>> {
+    sampler::random_anchors(height, width, patch_size, count, seed, edge_strategy)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Burn `(polygon, class_id)` pairs into a uint8 mask of shape `(height, width)`.
 ///
 /// `polygons` is a list of `(rings, class_id)` pairs, where `rings` is a list
@@ -232,6 +269,8 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(snap_bbox, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(rasterize, m)?)?;
+    m.add_function(wrap_pyfunction!(grid_sample_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

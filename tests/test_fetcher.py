@@ -24,6 +24,8 @@ def test_fetch_tiles_mock(httpserver: Any) -> None:
     )
 
     assert len(results) == 2
+    # `completed` is a monotonic counter incremented after each outcome regardless
+    # of which tile finishes first, so [1, 2] is always the order even with buffer_unordered.
     assert progress_updates == [1, 2]
 
     results_dict = {(t.x, t.y, t.z): b for t, b in results}

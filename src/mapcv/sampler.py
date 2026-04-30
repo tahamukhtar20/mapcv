@@ -6,7 +6,7 @@ from typing import List, Literal, Optional, Tuple, TypedDict
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 
@@ -14,15 +14,15 @@ from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 class SamplerConfig(BaseModel):
     """Configuration for patch sampling from an image strip."""
 
-    patch_size: int
-    stride: int = 0
+    patch_size: int = Field(gt=0)
+    stride: int = Field(default=0, ge=0)
     mode: Literal["grid", "random"] = "grid"
     edge_strategy: Literal["pad", "drop", "shift"] = "pad"
     pad_mode: Literal["zero", "reflect"] = "zero"
-    max_empty_ratio: float = 1.0
-    min_label_ratio: float = 0.0
-    random_seed: int = 42
-    random_count: int = 100
+    max_empty_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    min_label_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    random_seed: int = Field(default=42, ge=0)
+    random_count: int = Field(default=100, ge=0)
 
     @model_validator(mode="after")
     def _default_stride(self) -> "SamplerConfig":
@@ -115,7 +115,6 @@ def sample_patches(
     """
     h, w = strip_image.shape[:2]
     ps = config.patch_size
-    eff_stride = config.stride if config.stride > 0 else ps
 
     if config.mode == "random":
         raw_anchors: List[Tuple[int, int]] = list(
@@ -125,7 +124,7 @@ def sample_patches(
         )
     else:
         raw_anchors = list(
-            grid_sample_anchors(h, w, ps, eff_stride, config.edge_strategy)
+            grid_sample_anchors(h, w, ps, config.stride, config.edge_strategy)
         )
 
     img_list: List[npt.NDArray[np.uint8]] = []

@@ -28,3 +28,10 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest --ignore=tests/test_fetcher.py -q
+        language: system
+        types: [python]
+        pass_filenames: false

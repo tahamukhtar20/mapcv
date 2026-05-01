@@ -9,6 +9,7 @@ from mapcv.downloader import (
     download_region_strips,
     iter_tile_strips,
     resolve_url_template,
+    stitch_region,
 )
 from mapcv.labels import (
     ClassMap,
@@ -47,6 +48,7 @@ __all__ = [
     "resolve_url_template",
     "sample_patches",
     "SamplerConfig",
+    "stitch_region",
     "transform_to_mercator",
     "write_patches",
 ]

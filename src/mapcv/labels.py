@@ -78,7 +78,8 @@ def parse_kml(
     for pm in _iter_placemarks(k.features):
         if pm.kml_geometry is None or pm.kml_geometry.geometry is None:
             continue
-        geom: BaseGeometry = pm.kml_geometry.geometry
+        # fastkml returns pygeoif geometries; convert to shapely via __geo_interface__
+        geom: BaseGeometry = shape(pm.kml_geometry.geometry)
         if geom.geom_type not in _POLYGON_TYPES:
             continue
         if label_field is None:

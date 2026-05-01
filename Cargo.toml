@@ -10,10 +10,12 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.22.0", features = ["extension-module"] }
 numpy = "0.22"
+ndarray = "0.15"
 image = "0.24.9"
 reqwest = { version = "0.12" }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+rayon = "1"
 
 [lints.rust]
 missing_docs = "deny"

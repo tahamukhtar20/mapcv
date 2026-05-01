@@ -10,9 +10,10 @@
 pub mod fetcher;
 pub mod rasterizer;
 pub mod sampler;
+pub mod stitcher;
 pub mod tile_math;
 
-use numpy::{PyArray2, ToPyArray};
+use numpy::{IntoPyArray, PyArray2, PyArray3, ToPyArray};
 use pyo3::prelude::*;
 use tile_math::{BBox, TileIndex};
 
@@ -258,6 +259,34 @@ fn rasterize(
     Ok(arr.to_pyarray_bound(py).unbind())
 }
 
+/// Decode and stitch satellite tile bytes into a single `(H, W, 3)` RGB array.
+///
+/// Accepts a list of `(PyTileIndex, bytes)` pairs as returned by `fetch_tiles`.
+/// Returns `(image_array, min_tile_x, min_tile_y)`.
+#[allow(clippy::needless_pass_by_value)]
+#[pyfunction]
+fn stitch_tiles(
+    py: Python,
+    tile_data: Vec<(PyTileIndex, Vec<u8>)>,
+) -> PyResult<(Py<PyArray3<u8>>, u32, u32)> {
+    let raw: Vec<(u32, u32, u8, Vec<u8>)> = tile_data
+        .into_iter()
+        .map(|(t, bytes)| (t.x, t.y, t.z, bytes))
+        .collect();
+    let (canvas, min_x, min_y, h, w) = stitcher::stitch_tiles(&raw);
+    let arr = numpy::ndarray::Array3::from_shape_vec((h, w, 3), canvas)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok((arr.into_pyarray_bound(py).unbind(), min_x, min_y))
+}
+
+/// Compute the affine transform for a stitched tile grid.
+///
+/// Returns `(a, b, c, d, e, f)` mapping pixel `(col, row)` to Mercator `(x, y)` in metres.
+#[pyfunction]
+fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64, f64) {
+    stitcher::tile_transform(min_x, min_y, zoom)
+}
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;
@@ -271,6 +300,8 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rasterize, m)?)?;
     m.add_function(wrap_pyfunction!(grid_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 from rich.console import Console
 from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
-from mapcv._mapcv_rs import PyTileIndex, fetch_tiles as fetch_tiles_rs, snap_bbox, tiles
+from mapcv._mapcv_rs import (
+    PyTileIndex,
+    fetch_tiles as fetch_tiles_rs,
+    snap_bbox,
+    stitch_tiles as stitch_tiles_rs,
+    tile_transform as tile_transform_rs,
+    tiles,
+)
 
 URL_TEMPLATES: Dict[str, str] = {
     "google_satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
     "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "esri_satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
 }
 
 _console = Console()
@@ -119,6 +128,42 @@ def download_region(
         _console.print(f"[dim]{fetched}/{total} tiles fetched, {total - fetched} failed[/dim]")
 
     return results
+
+
+def stitch_region(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    zoom: int,
+    url_template: Optional[str] = None,
+    source: Optional[str] = None,
+    max_connections: int = 16,
+    policy: str = "lenient",
+    max_failed_ratio: float = 0.05,
+) -> Tuple[np.ndarray, Tuple[float, float, float, float, float, float]]:
+    """Fetch tiles, decode in parallel, and return a stitched (H, W, 3) image with its transform.
+
+    Returns ``(image_array, transform)`` where ``transform`` is the
+    ``(a, b, c, d, e, f)`` affine 6-tuple mapping pixel ``(col, row)`` to
+    Web Mercator ``(x, y)`` in metres (rasterio ``Affine`` convention).
+    """
+    tile_data = download_region(
+        west=west,
+        south=south,
+        east=east,
+        north=north,
+        zoom=zoom,
+        url_template=url_template,
+        source=source,
+        max_connections=max_connections,
+        policy=policy,
+        snap_to_tiles=True,
+        max_failed_ratio=max_failed_ratio,
+    )
+    image_array, min_x, min_y = stitch_tiles_rs(tile_data)
+    transform = tile_transform_rs(min_x, min_y, zoom)
+    return image_array, transform
 
 
 def download_region_strips(

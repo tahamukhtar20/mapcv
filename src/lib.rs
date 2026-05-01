@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
+pub mod kml_parser;
 pub mod patch_writer;
 pub mod rasterizer;
 pub mod sampler;
@@ -387,6 +388,29 @@ fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64,
     stitcher::tile_transform(min_x, min_y, zoom)
 }
 
+/// Parse KML bytes and return polygon geometries with class labels.
+///
+/// `label_field` is the `<Data name="...">` field to use for class IDs.
+/// When `None` every polygon gets class 1.
+///
+/// Returns `(polygons, class_map)` where `polygons` is a list of
+/// `(rings, class_id)` pairs (exterior ring first, then holes) and
+/// `class_map` maps class names to integer IDs.
+///
+/// # Errors
+/// Raises `RuntimeError` if the KML is malformed or coordinate parsing fails.
+#[allow(clippy::type_complexity)]
+#[pyfunction]
+#[pyo3(signature = (data, label_field=None))]
+fn parse_kml_rs(
+    data: &[u8],
+    label_field: Option<&str>,
+) -> PyResult<(Vec<(Vec<Vec<Vec<(f64, f64)>>>, u8)>, HashMap<String, u8>)> {
+    let result = kml_parser::parse_kml(data, label_field)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok((result.polygons, result.class_map))
+}
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello, m)?)?;
@@ -403,6 +427,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_kml_rs, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

@@ -16,6 +16,7 @@ reqwest = { version = "0.12" }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 rayon = "1"
+quick-xml = { version = "0.37", features = ["encoding"] }
 
 [lints.rust]
 missing_docs = "deny"

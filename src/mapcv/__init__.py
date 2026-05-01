@@ -19,15 +19,26 @@ from mapcv.labels import (
 )
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import SamplerConfig, sample_patches
+from mapcv.writer import (
+    Manifest,
+    ManifestEntry,
+    WriterConfig,
+    load_or_create_manifest,
+    write_patches,
+)
 
 __all__ = [
     "URL_TEMPLATES",
     "ClassMap",
     "GeomWithClass",
+    "Manifest",
+    "ManifestEntry",
+    "WriterConfig",
     "download_region",
     "download_region_strips",
     "hello",
     "bounds",
+    "load_or_create_manifest",
     "snap_bbox",
     "iter_tile_strips",
     "parse_geojson",
@@ -37,4 +48,5 @@ __all__ = [
     "sample_patches",
     "SamplerConfig",
     "transform_to_mercator",
+    "write_patches",
 ]

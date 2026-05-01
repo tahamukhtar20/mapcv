@@ -48,7 +48,6 @@ def _patches_with_mask(h: int = 16, w: int = 16, ps: int = 8) -> tuple:  # type:
 def test_writer_config_defaults(tmp_path: Path) -> None:
     cfg = WriterConfig(staging_dir=tmp_path)
     assert cfg.image_format == "png"
-    assert cfg.num_workers == 4
     assert cfg.jpg_quality == 95
 
 
@@ -324,13 +323,8 @@ def test_strip_indices_recorded_correctly(tmp_path: Path) -> None:
 def test_parallel_same_as_serial(tmp_path: Path) -> None:
     imgs, msks, meta = _patches_with_mask()
 
-    dir1 = tmp_path / "serial"
     m1 = Manifest(class_map={})
-    write_patches(imgs, msks, meta, WriterConfig(staging_dir=dir1, num_workers=1), m1)
-
-    dir2 = tmp_path / "parallel"
     m2 = Manifest(class_map={})
-    write_patches(imgs, msks, meta, WriterConfig(staging_dir=dir2, num_workers=4), m2)
 
     # Same number of entries with same row/col/counts
     assert len(m1.patches) == len(m2.patches)

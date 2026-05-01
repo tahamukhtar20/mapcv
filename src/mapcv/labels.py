@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import io
 import json
 from math import pi
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import fastkml
-import fastkml.data
-import fastkml.features
 import numpy as np
 import numpy.typing as npt
+from shapely.geometry import MultiPolygon, Polygon as ShapelyPolygon
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+
+from mapcv._mapcv_rs import parse_kml_rs
 
 _RE: float = 6_378_137.0
 
@@ -44,24 +43,6 @@ def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
     return result
 
 
-def _label_from_placemark(pm: Any, label_field: str) -> Optional[str]:
-    ext = pm.extended_data
-    if ext is None:
-        return None
-    for el in ext.elements:
-        if isinstance(el, fastkml.data.Data) and el.name == label_field:
-            return str(el.value) if el.value is not None else None
-    return None
-
-
-def _iter_placemarks(features: Any) -> Iterator[Any]:
-    for feat in features:
-        if isinstance(feat, fastkml.features.Placemark):
-            yield feat
-        elif hasattr(feat, "features"):
-            yield from _iter_placemarks(feat.features)
-
-
 def parse_kml(
     data: bytes,
     label_field: Optional[str] = None,
@@ -71,27 +52,19 @@ def parse_kml(
     Points, lines, and empty placemarks are skipped. If label_field is None
     all polygons get class 1. Returns (geometries, class_map).
     """
-    k: Any = fastkml.KML.parse(io.BytesIO(data), strict=False)
-    class_map: ClassMap = {}
+    raw_polys, raw_class_map = parse_kml_rs(data, label_field)
+    class_map: ClassMap = {k: int(v) for k, v in raw_class_map.items()}
     result: List[GeomWithClass] = []
-
-    for pm in _iter_placemarks(k.features):
-        if pm.kml_geometry is None or pm.kml_geometry.geometry is None:
+    for poly_group, class_id in raw_polys:
+        if class_id == 0:
             continue
-        # fastkml returns pygeoif geometries; convert to shapely via __geo_interface__
-        geom: BaseGeometry = shape(pm.kml_geometry.geometry)
-        if geom.geom_type not in _POLYGON_TYPES:
-            continue
-        if label_field is None:
-            result.append((geom, 1))
+        if len(poly_group) == 1:
+            rings = poly_group[0]
+            geom: BaseGeometry = ShapelyPolygon(rings[0], rings[1:])
         else:
-            label = _label_from_placemark(pm, label_field)
-            if label is None:
-                continue
-            if label not in class_map:
-                class_map[label] = len(class_map) + 1
-            result.append((geom, class_map[label]))
-
+            parts = [ShapelyPolygon(rings[0], rings[1:]) for rings in poly_group]
+            geom = MultiPolygon(parts)
+        result.append((geom, int(class_id)))
     return result, class_map
 
 

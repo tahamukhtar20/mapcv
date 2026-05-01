@@ -8,13 +8,18 @@
 #![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
+pub mod patch_writer;
 pub mod rasterizer;
 pub mod sampler;
 pub mod stitcher;
 pub mod tile_math;
 
-use numpy::{IntoPyArray, PyArray2, PyArray3, ToPyArray};
+use numpy::{
+    IntoPyArray, PyArray2, PyArray3, PyReadonlyArray3, PyReadonlyArray4, PyUntypedArrayMethods,
+    ToPyArray,
+};
 use pyo3::prelude::*;
+use std::collections::HashMap;
 use tile_math::{BBox, TileIndex};
 
 #[pyfunction]
@@ -259,6 +264,101 @@ fn rasterize(
     Ok(arr.to_pyarray_bound(py).unbind())
 }
 
+/// Write image and mask patches to disk in parallel using rayon.
+///
+/// `image_patches` is a `(N, ps, ps, 3)` uint8 array.
+/// `mask_patches`  is an optional `(N, ps, ps)` uint8 array.
+/// `meta`          is a list of `(row, col, padded)` tuples.
+///
+/// Returns a list of `(filename, mask_filename, row, col, padded, strip_index,
+/// class_counts, empty_ratio)` in patch order.
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+#[pyfunction]
+#[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95))]
+fn write_patches_rs(
+    py: Python,
+    image_patches: PyReadonlyArray4<u8>,
+    mask_patches: Option<PyReadonlyArray3<u8>>,
+    meta: Vec<(usize, usize, bool)>,
+    start_idx: usize,
+    strip_index: usize,
+    images_dir: String,
+    masks_dir: String,
+    image_format: &str,
+    jpg_quality: u8,
+) -> PyResult<
+    Vec<(
+        String,
+        Option<String>,
+        usize,
+        usize,
+        bool,
+        usize,
+        HashMap<String, u64>,
+        f64,
+    )>,
+> {
+    let img_data: Vec<u8> = image_patches
+        .as_slice()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+        .to_vec();
+    let shape = image_patches.shape();
+    let (n_patches, patch_size) = (shape[0], shape[1]);
+
+    let (msk_data, has_mask): (Vec<u8>, bool) = match mask_patches {
+        Some(ref m) => (
+            m.as_slice()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+                .to_vec(),
+            true,
+        ),
+        None => (Vec::new(), false),
+    };
+
+    let images_path = std::path::PathBuf::from(images_dir);
+    let masks_path = std::path::PathBuf::from(masks_dir);
+    let fmt = image_format.to_owned();
+
+    let results = py
+        .allow_threads(|| {
+            patch_writer::write_patches(
+                &img_data,
+                &msk_data,
+                has_mask,
+                n_patches,
+                patch_size,
+                &meta,
+                start_idx,
+                strip_index,
+                &images_path,
+                &masks_path,
+                &fmt,
+                jpg_quality,
+            )
+        })
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+    Ok(results
+        .into_iter()
+        .map(|r| {
+            (
+                r.filename,
+                r.mask_filename,
+                r.row,
+                r.col,
+                r.padded,
+                r.strip_index,
+                r.class_counts,
+                r.empty_ratio,
+            )
+        })
+        .collect())
+}
+
 /// Decode and stitch satellite tile bytes into a single `(H, W, 3)` RGB array.
 ///
 /// Accepts a list of `(PyTileIndex, bytes)` pairs as returned by `fetch_tiles`.
@@ -302,6 +402,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     Ok(())

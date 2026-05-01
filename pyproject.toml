@@ -19,6 +19,7 @@ dependencies = [
     "typer",
     "rich",
     "fastkml",
+    "lxml>=6.1.0",
 ]
 
 [project.optional-dependencies]

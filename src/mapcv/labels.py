@@ -71,7 +71,7 @@ def parse_kml(
     Points, lines, and empty placemarks are skipped. If label_field is None
     all polygons get class 1. Returns (geometries, class_map).
     """
-    k: Any = fastkml.KML.parse(io.BytesIO(data))
+    k: Any = fastkml.KML.parse(io.BytesIO(data), strict=False)
     class_map: ClassMap = {}
     result: List[GeomWithClass] = []
 

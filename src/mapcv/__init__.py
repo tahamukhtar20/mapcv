@@ -3,6 +3,7 @@ mapcv - A satellite imagery dataset creation tool for segmentation.
 """
 
 from mapcv._mapcv_rs import bounds, hello, snap_bbox
+from mapcv.config import LabelsConfig, MapcvConfig, RegionConfig, TilesConfig
 from mapcv.downloader import (
     URL_TEMPLATES,
     download_region,
@@ -31,6 +32,10 @@ from mapcv.writer import (
 
 __all__ = [
     "URL_TEMPLATES",
+    "LabelsConfig",
+    "MapcvConfig",
+    "RegionConfig",
+    "TilesConfig",
     "ClassMap",
     "GeomWithClass",
     "Manifest",

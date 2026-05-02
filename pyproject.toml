@@ -18,7 +18,11 @@ dependencies = [
     "pydantic",
     "typer",
     "rich",
+    "pyyaml",
 ]
+
+[project.scripts]
+mapcv = "mapcv.cli:app"
 
 [project.optional-dependencies]
 dev = [
@@ -45,6 +49,7 @@ module = [
     "shapely.*",
     "rasterio",
     "rasterio.*",
+    "yaml",
 ]
 ignore_missing_imports = true
 

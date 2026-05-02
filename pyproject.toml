@@ -19,6 +19,7 @@ dependencies = [
     "typer",
     "rich",
     "pyyaml",
+    "typing_extensions",
 ]
 
 [project.scripts]

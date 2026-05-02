@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Dict, List, Literal, Optional
+
+from typing_extensions import TypedDict
 
 import numpy as np
 import numpy.typing as npt

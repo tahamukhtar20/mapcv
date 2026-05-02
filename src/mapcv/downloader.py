@@ -19,9 +19,17 @@ from mapcv._mapcv_rs import (
 )
 
 URL_TEMPLATES: Dict[str, str] = {
+    # Google
     "google_satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    # OpenStreetMap
     "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    # Esri
     "esri_satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "esri_topo": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    "esri_street": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    # CartoDB
+    "cartodb_positron": "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "cartodb_dark_matter": "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
 }
 
 _console = Console()

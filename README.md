@@ -26,7 +26,7 @@
 
 Creating machine learning datasets from satellite imagery is traditionally a frustrating experience. Wrestling with heavy, notoriously complex GIS libraries like GDAL is a massive pain point for researchers who just want to train models. Furthermore, trying to extract data from platforms like Google Earth Engine (GEE) often forces users into clunky pipelines, such as having to export data to Google Drive first before finally downloading it locally.
 
-Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is different: it is explicitly designed as a **data creation-first** tool. It provides a blazingly fast, end-to-end pipeline written in Python and Rust specifically optimized for fetching map tiles, rasterizing complex labels (KML/GeoJSON), and seamlessly splitting areas into uniform, ML-ready patches. The target audience includes computer vision researchers, data scientists, and ML engineers who need an efficient and reliable way to prepare high-quality satellite datasets for training segmentation models without the traditional GIS headaches.
+Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is different. It is explicitly designed as a **data creation-first** tool. It provides a blazingly fast, end-to-end pipeline written in Python and Rust specifically optimized for fetching map tiles, rasterizing complex labels (KML/GeoJSON), and seamlessly splitting areas into uniform, ML-ready patches. The target audience includes computer vision researchers, data scientists, and ML engineers who need an efficient and reliable way to prepare high-quality satellite datasets for training segmentation models without the traditional GIS headaches.
 
 ## Installation
 

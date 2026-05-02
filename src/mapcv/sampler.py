@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Tuple, TypedDict
+from typing import List, Literal, Optional, Tuple
+
+from typing_extensions import TypedDict
 
 import numpy as np
 import numpy.typing as npt

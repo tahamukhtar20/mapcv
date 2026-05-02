@@ -35,6 +35,12 @@ dev = [
     "mypy",
     "ruff"
 ]
+docs = [
+    "mkdocs-material",
+    "mkdocs-jupyter",
+    "matplotlib",
+    "ipywidgets",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

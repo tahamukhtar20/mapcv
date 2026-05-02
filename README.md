@@ -49,6 +49,8 @@ mapcv init
 ```
 This generates a `mapcv.yaml` file where you can define your bounding box, zoom level, and label files (e.g., `labels.kml`).
 
+> **Warning:** `mapcv` currently only supports tile sources that serve standard **256x256 pixel** map tiles (which is the default for Google Earth Engine, OpenStreetMap, Esri, and most providers). Sources that serve 512x512 tiles (such as **Mapbox High-Res `@2x` endpoints**) or others, are not supported yet, and will result in incorrectly scaled patches.
+
 ### 2. Generate the Dataset
 Fetch the tiles, rasterize the labels, and generate image/mask patches:
 ```bash

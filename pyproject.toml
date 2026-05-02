@@ -40,6 +40,7 @@ python-source = "src"
 
 [tool.mypy]
 strict = true
+exclude = ["tests/generate_golden\\.py"]
 
 [[tool.mypy.overrides]]
 module = [

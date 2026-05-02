@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple, cast
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 from shapely.wkt import loads as wkt_loads
 
@@ -34,7 +35,7 @@ _THIN_DIAGONAL_CASE = 5
 _THIN_DIAGONAL_TOL = 0.01
 
 
-def _run_case(entry: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
+def _run_case(entry: Dict[str, Any]) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
     geom = wkt_loads(entry["wkt"])
     class_id: int = entry["class_id"]
     transform = cast(Tuple[float, float, float, float, float, float], tuple(entry["transform"]))

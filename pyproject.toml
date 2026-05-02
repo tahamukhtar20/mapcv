@@ -18,8 +18,6 @@ dependencies = [
     "pydantic",
     "typer",
     "rich",
-    "fastkml",
-    "lxml>=6.1.0",
 ]
 
 [project.optional-dependencies]
@@ -43,8 +41,6 @@ strict = true
 module = [
     "mapcv._mapcv_rs",
     "mercantile",
-    "fastkml",
-    "fastkml.*",
     "shapely",
     "shapely.*",
     "rasterio",

@@ -6,6 +6,8 @@ build-backend = "maturin"
 name = "mapcv"
 version = "0.1.0"
 description = "A satellite imagery dataset creation tool for segmentation"
+readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
 ]

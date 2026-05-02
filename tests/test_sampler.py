@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 from mapcv import SamplerConfig, sample_patches
@@ -109,7 +110,7 @@ def test_config_defaults() -> None:
     assert cfg.min_label_ratio == 0.0
 
 
-def _solid_strip(h: int, w: int, c: int = 3, value: int = 128) -> np.ndarray:
+def _solid_strip(h: int, w: int, c: int = 3, value: int = 128) -> npt.NDArray[np.uint8]:
     arr = np.full((h, w, c), value, dtype=np.uint8)
     return arr
 

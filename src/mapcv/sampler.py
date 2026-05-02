@@ -146,6 +146,7 @@ def sample_patches(
         meta_list.append(PatchMeta(row=row, col=col, padded=padded))
 
     if not img_list:
+        empty_img: npt.NDArray[np.uint8]
         if strip_image.ndim == 3:
             empty_img = np.zeros((0, ps, ps, strip_image.shape[2]), dtype=np.uint8)
         else:

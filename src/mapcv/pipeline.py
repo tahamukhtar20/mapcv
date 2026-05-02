@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
+import numpy.typing as npt
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
@@ -96,7 +97,7 @@ def run_generate(config: MapcvConfig) -> None:
             image_array, min_x, min_y = stitch_tiles_rs(strip_tile_data)
             transform = tile_transform_rs(min_x, min_y, config.region.zoom)
 
-            mask: Optional[np.ndarray] = None
+            mask: Optional[npt.NDArray[np.uint8]] = None
             if geoms_with_class:
                 h, w = image_array.shape[:2]
                 mask = rasterize(

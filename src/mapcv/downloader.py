@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+import numpy.typing as npt
 from rich.console import Console
 from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
@@ -143,7 +144,7 @@ def stitch_region(
     max_connections: int = 16,
     policy: str = "lenient",
     max_failed_ratio: float = 0.05,
-) -> Tuple[np.ndarray, Tuple[float, float, float, float, float, float]]:
+) -> Tuple[npt.NDArray[np.uint8], Tuple[float, float, float, float, float, float]]:
     """Fetch tiles, decode in parallel, and return a stitched (H, W, 3) image with its transform.
 
     Returns ``(image_array, transform)`` where ``transform`` is the

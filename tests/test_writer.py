@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 from mapcv import SamplerConfig, sample_patches
@@ -22,7 +23,7 @@ from mapcv.writer import (
 # ---------------------------------------------------------------------------
 
 
-def _solid(h: int, w: int, c: int = 3, value: int = 128) -> np.ndarray:
+def _solid(h: int, w: int, c: int = 3, value: int = 128) -> npt.NDArray[np.uint8]:
     return np.full((h, w, c), value, dtype=np.uint8)
 
 

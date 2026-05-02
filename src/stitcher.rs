@@ -1,5 +1,6 @@
-//! Tile stitching: parallel PNG decode → contiguous (H, W, 3) buffer.
+//! Tile stitching: parallel PNG decode -> contiguous (H, W, 3) buffer.
 
+use crate::fetcher::{TILE_PX, TILE_PX_F};
 use crate::tile_math::{xy_bounds, TileIndex};
 use image::io::Reader as ImageReader;
 use rayon::prelude::*;
@@ -25,8 +26,8 @@ pub fn stitch_tiles(tiles: &[(u32, u32, u8, Vec<u8>)]) -> (Vec<u8>, u32, u32, us
     let max_y = tiles.iter().map(|(_, y, _, _)| *y).max().unwrap();
     let n_x = (max_x - min_x + 1) as usize;
     let n_y = (max_y - min_y + 1) as usize;
-    let h = n_y * 256;
-    let w = n_x * 256;
+    let h = n_y * TILE_PX;
+    let w = n_x * TILE_PX;
 
     // Decode all tiles in parallel; each thread produces (tx, ty, rgb_bytes).
     let decoded: Vec<(u32, u32, Vec<u8>)> = tiles
@@ -46,12 +47,12 @@ pub fn stitch_tiles(tiles: &[(u32, u32, u8, Vec<u8>)]) -> (Vec<u8>, u32, u32, us
 
     let mut canvas = vec![0u8; h * w * 3];
     for (tx, ty, pixels) in decoded {
-        let row_offset = (ty - min_y) as usize * 256;
-        let col_offset = (tx - min_x) as usize * 256;
-        for r in 0..256_usize {
-            let src = r * 256 * 3;
+        let row_offset = (ty - min_y) as usize * TILE_PX;
+        let col_offset = (tx - min_x) as usize * TILE_PX;
+        for r in 0..TILE_PX {
+            let src = r * TILE_PX * 3;
             let dst = (row_offset + r) * w * 3 + col_offset * 3;
-            canvas[dst..dst + 256 * 3].copy_from_slice(&pixels[src..src + 256 * 3]);
+            canvas[dst..dst + TILE_PX * 3].copy_from_slice(&pixels[src..src + TILE_PX * 3]);
         }
     }
 
@@ -72,7 +73,7 @@ pub fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, 
     });
     let tile_w = b.east - b.west;
     let tile_h = b.north - b.south;
-    let px = tile_w / 256.0;
-    let py = tile_h / 256.0;
+    let px = tile_w / TILE_PX_F;
+    let py = tile_h / TILE_PX_F;
     (px, 0.0, b.west, 0.0, -py, b.north)
 }

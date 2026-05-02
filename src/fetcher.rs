@@ -40,27 +40,45 @@ impl std::str::FromStr for FailurePolicy {
 // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
 const MAX_RETRIES: u32 = 3;
 
+/// Standard tile pixel dimension used by XYZ tile servers.
+pub(crate) const TILE_PX: usize = 256;
+/// `TILE_PX` as `f64` for use in affine transform calculations.
+pub(crate) const TILE_PX_F: f64 = 256.0;
+
+/// Outcome of a single tile fetch attempt.
 enum TileOutcome {
+    /// Tile fetched successfully; contains the raw PNG bytes.
     Success(Vec<u8>),
-    /// Black-fill PNG returned by Ignore policy. Still counts toward failed ratio.
+    /// Black-fill PNG returned under the Ignore policy; still counts toward the failed ratio.
     BlackFill(Vec<u8>),
+    /// Tile was not found or failed; omitted from results under the Lenient policy.
     Missing,
 }
 
+/// Return a solid-black `TILE_PX x TILE_PX` PNG buffer used as a `NoData` placeholder.
 fn black_tile_png() -> Vec<u8> {
-    let img = DynamicImage::new_rgb8(256, 256);
+    // TILE_PX is 256, well within u32 range.
+    #[allow(clippy::cast_possible_truncation)]
+    let px = TILE_PX as u32;
+    let img = DynamicImage::new_rgb8(px, px);
     let mut buf = Cursor::new(Vec::new());
+    // In-memory cursor; I/O cannot fail here.
     img.write_to(&mut buf, ImageFormat::Png)
         .expect("black tile PNG encoding failed");
     buf.into_inner()
 }
 
+/// Channel messages sent from the async fetch worker back to the Python thread.
 enum Event {
+    /// Number of tiles completed so far (for progress callbacks).
     Progress(usize),
+    /// A fatal error aborted the fetch; contains the message.
     Error(String),
+    /// All tiles processed; contains results and the count of failed tiles.
     Done(Vec<(TileIndex, Vec<u8>)>, usize),
 }
 
+/// Fetch a single tile with retries, applying *policy* on failure.
 async fn fetch_single_tile(
     client: Client,
     tile: TileIndex,

@@ -1,3 +1,5 @@
+"""Tile downloading: fetch, stitch, and strip-partition satellite tiles."""
+
 from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple

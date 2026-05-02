@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional, cast
 
 import typer
 from rich.console import Console
@@ -101,7 +101,7 @@ def split(
             val_ratio=val_ratio,
             labeled_ratios=ratios,
             seed=seed,
-            strategy=strategy,  # type: ignore[arg-type]
+            strategy=cast(Literal["random", "stratified"], strategy),
             sample_limit=sample_limit,
         )
     except Exception as exc:

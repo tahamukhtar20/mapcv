@@ -49,9 +49,11 @@ class Manifest(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
+        """Deserialize a manifest from JSON at *path*."""
         return cls.model_validate_json(path.read_text())
 
     def save(self, path: Path) -> None:
+        """Serialize the manifest to indented JSON at *path*."""
         path.write_text(self.model_dump_json(indent=2))
 
 

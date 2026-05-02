@@ -28,6 +28,7 @@ fn hello() -> String {
     String::from("Hello from mapcv Rust core!")
 }
 
+/// Python-visible XYZ tile index.
 #[pyclass]
 #[derive(Clone)]
 struct PyTileIndex {
@@ -41,6 +42,7 @@ struct PyTileIndex {
 
 #[pymethods]
 impl PyTileIndex {
+    /// Create a new tile index from column *x*, row *y*, and zoom *z*.
     #[new]
     fn new(x: u32, y: u32, z: u8) -> Self {
         PyTileIndex { x, y, z }
@@ -56,6 +58,7 @@ impl From<TileIndex> for PyTileIndex {
     }
 }
 
+/// Python-visible geographic bounding box (WGS-84 degrees).
 #[pyclass]
 #[derive(Clone)]
 struct PyBBox {
@@ -71,6 +74,7 @@ struct PyBBox {
 
 #[pymethods]
 impl PyBBox {
+    /// Create a bounding box from *west*, *south*, *east*, *north* in WGS-84 degrees.
     #[new]
     fn new(west: f64, south: f64, east: f64, north: f64) -> Self {
         PyBBox {

@@ -39,6 +39,7 @@ def _to_mercator(
 
 
 def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
+    """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857)."""
     result: BaseGeometry = shapely_transform(_to_mercator, geom)
     return result
 

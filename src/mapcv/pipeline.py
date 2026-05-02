@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 from rich.console import Console
@@ -49,7 +49,7 @@ def run_generate(config: MapcvConfig) -> None:
     manifest_path = staging / _MANIFEST_FILENAME
 
     geoms_with_class = []
-    class_map: dict[str, int] = {}
+    class_map: Dict[str, int] = {}
     if config.labels is not None:
         _console.print("[bold]Parsing labels...[/bold]")
         data = config.labels.path.read_bytes()

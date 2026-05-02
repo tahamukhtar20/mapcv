@@ -53,12 +53,12 @@ def split_dataset(
     """Write train/val/test split lists derived from *manifest* to *output_dir*.
 
     Produces:
-      ``test.txt``, ``val.txt``, ``train.txt`` — one filename per line.
+      ``test.txt``, ``val.txt``, ``train.txt`` - one filename per line.
       ``<ratio>/labeled.txt`` and ``<ratio>/unlabeled.txt`` for each ratio in
       ``config.labeled_ratios``, where ``<ratio>`` is the integer percentage
       (e.g. ``10``, ``20``, ``30``).
 
-    The split is computed from filenames only — no images are opened.
+    The split is computed from filenames only - no images are opened.
     """
     entries = manifest.patches
     if not entries:

@@ -2,7 +2,7 @@
 //!
 //! Supports `<Polygon>` and `<MultiGeometry>` placemarks. When `label_field`
 //! is `None` every polygon gets class 1. When set, the value is read from
-//! `<ExtendedData><Data name="…"><value>`.
+//! `<ExtendedData><Data name="..."><value>`.
 
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -13,7 +13,7 @@ pub type Ring = Vec<(f64, f64)>;
 /// A single polygon: exterior ring first, then zero or more interior (hole) rings.
 pub type Polygon = Vec<Ring>;
 
-/// Parsed result: list of `(polygon_group, class_id)` and the class-name → id map.
+/// Parsed result: list of `(polygon_group, class_id)` and the class-name -> id map.
 pub struct KmlResult {
     /// `(polygon_group, class_id)` pairs in document order, one entry per `Placemark`.
     /// A group has one polygon for simple placemarks, many for `MultiGeometry`.
@@ -159,6 +159,8 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
     })
 }
 
+/// Resolve a placemark's label string to a class ID, registering new labels in `class_map`.
+/// Returns 1 when no `label_field` is set, 0 when the field is set but the label is absent.
 fn resolve_class(
     label: Option<&str>,
     label_field: Option<&str>,
@@ -177,6 +179,11 @@ fn resolve_class(
     }
 }
 
+/// Parse a KML `<coordinates>` text block (whitespace-separated `lng,lat[,alt]` triples)
+/// and append the resulting `(lng, lat)` pairs to *ring*.
+///
+/// # Errors
+/// Returns an error if any token is missing a coordinate component or cannot be parsed as f64.
 fn parse_coordinates(text: &str, ring: &mut Ring) -> Result<(), String> {
     for token in text.split_whitespace() {
         let mut parts = token.split(',');

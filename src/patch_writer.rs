@@ -111,6 +111,7 @@ pub fn write_patches(
         .collect()
 }
 
+/// Encode *data* (raw RGB bytes) as PNG or JPEG and write to *path*.
 #[allow(clippy::cast_possible_truncation)]
 fn encode_image(
     data: &[u8],
@@ -139,6 +140,7 @@ fn encode_image(
     Ok(())
 }
 
+/// Encode *data* (raw single-channel u8 bytes) as a lossless PNG and write to *path*.
 #[allow(clippy::cast_possible_truncation)]
 fn encode_mask(data: &[u8], patch_size: usize, path: &Path) -> Result<(), String> {
     let ps = patch_size as u32;
@@ -150,14 +152,22 @@ fn encode_mask(data: &[u8], patch_size: usize, path: &Path) -> Result<(), String
     img.write_with_encoder(enc).map_err(|e| e.to_string())
 }
 
+/// Count pixels by class label in *mask*, returning a `class_id -> count` map.
+///
+/// Accumulates counts using raw `u8` keys to avoid per-pixel `String` allocation,
+/// then converts to `String` keys once at the end for the Python boundary.
 fn compute_class_counts(mask: &[u8]) -> HashMap<String, u64> {
-    let mut counts: HashMap<String, u64> = HashMap::new();
+    let mut counts: HashMap<u8, u64> = HashMap::new();
     for &v in mask {
-        *counts.entry(v.to_string()).or_insert(0) += 1;
+        *counts.entry(v).or_insert(0) += 1;
     }
     counts
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
 }
 
+/// Return the fraction of all-black `(0, 0, 0)` pixels in the RGB image patch.
 #[allow(clippy::cast_precision_loss)]
 fn compute_empty_ratio(img: &[u8], patch_size: usize) -> f64 {
     let n_pixels = patch_size * patch_size;

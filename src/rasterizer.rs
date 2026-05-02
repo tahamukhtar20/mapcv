@@ -100,8 +100,11 @@ fn ring_edges(ring: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f64, f6
         .chain(closing.into_iter())
 }
 
-/// Burn one polygon (in pixel coords) into the output raster using the
-/// scanline rule: a pixel is filled iff its center is inside the polygon.
+/// Burn one polygon into *out* using the pixel-center scanline rule.
+///
+/// A pixel at `(col, row)` is filled iff its center `(col+0.5, row+0.5)` lies
+/// strictly inside the polygon. Uses even-odd parity; holes are handled implicitly
+/// when all rings (exterior + interior) are merged into one edge list.
 fn fill_scanline(rings: &RingSet, out: &mut [u8], width: usize, height: usize, class_id: u8) {
     if rings.is_empty() {
         return;
@@ -235,6 +238,8 @@ fn mark_edge_supercover(
     }
 }
 
+/// Burn one polygon into *out* using the `all_touched` rule: runs `fill_scanline`
+/// then additionally marks every pixel that any edge segment crosses.
 fn fill_all_touched(rings: &RingSet, out: &mut [u8], width: usize, height: usize, class_id: u8) {
     fill_scanline(rings, out, width, height, class_id);
     for ring in rings {
@@ -247,6 +252,8 @@ fn fill_all_touched(rings: &RingSet, out: &mut [u8], width: usize, height: usize
     }
 }
 
+/// Convert a polygon's rings from world coordinates to pixel coordinates
+/// using the inverse affine transform *inv*.
 fn world_rings_to_pixel(world: &RingSet, inv: &Affine) -> RingSet {
     world
         .iter()

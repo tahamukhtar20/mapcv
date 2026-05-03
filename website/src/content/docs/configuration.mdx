@@ -106,7 +106,7 @@ Omit to skip splitting. When present, mapcv writes `train.txt`, `val.txt`, and `
 |------------------|-------------|---------------------|-------------|
 | `test_ratio`     | float       | `0.20`             | Fraction of all patches reserved for the test set. |
 | `val_ratio`      | float       | `0.10`             | Fraction of the remaining patches used for validation. |
-| `labeled_ratios` | list[float] | `[0.10, 0.20, 0.30]` | For each ratio, creates a `<ratio>/labeled.txt` and `<ratio>/unlabeled.txt` inside `staging_dir`. For semi-supervised workflows. |
+| `labeled_ratios` | list[float] | `[0.10, 0.20, 0.30]` | For each ratio, creates `<pct>/labeled.txt` and `<pct>/unlabeled.txt` inside `staging_dir`, where `<pct>` is the ratio as an integer percentage (e.g. `10`, `20`, `30`). For semi-supervised workflows. |
 | `seed`           | int         | `42`               | Random seed for reproducible splits. |
 | `strategy`       | str         | `stratified`       | `stratified` preserves class distribution across splits. `random` splits without balancing. |
 | `sample_limit`   | int         | -                  | Cap on total patches used before splitting. Useful for large datasets. |

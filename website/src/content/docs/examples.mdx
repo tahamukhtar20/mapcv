@@ -5,7 +5,7 @@ description: Common mapcv config patterns for real-world use cases.
 
 ## Labeled dataset (KML annotations)
 
-The most common case — download satellite tiles and rasterize KML polygon annotations onto them.
+The most common case is to download satellite tiles and rasterize KML polygon annotations onto them.
 
 ```yaml
 region:
@@ -103,7 +103,7 @@ split:
   strategy: stratified
 ```
 
-This writes `splits/0.05/labeled.txt`, `splits/0.05/unlabeled.txt`, and so on for each ratio.
+This writes `5/labeled.txt`, `5/unlabeled.txt`, `10/labeled.txt`, `10/unlabeled.txt`, and so on for each ratio, directly inside `staging_dir`. The directory name is the ratio as an integer percentage.
 
 ---
 

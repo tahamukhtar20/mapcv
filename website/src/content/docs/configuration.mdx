@@ -1,0 +1,107 @@
+---
+title: Configuration
+description: Full reference for the mapcv YAML config file.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+mapcv is driven by a single YAML config file. Use `mapcv init` to scaffold one with annotations, then edit it before running `mapcv generate`.
+
+---
+
+## `region`
+
+Defines the geographic area to download in WGS-84 coordinates.
+
+| Field   | Type  | Description |
+|---------|-------|-------------|
+| `west`  | float | Western boundary longitude |
+| `south` | float | Southern boundary latitude |
+| `east`  | float | Eastern boundary longitude |
+| `north` | float | Northern boundary latitude |
+| `zoom`  | int   | XYZ tile zoom level. 15 ≈ 4 m/px, 17 ≈ 1.2 m/px, 19 ≈ 0.3 m/px |
+
+---
+
+## `tiles`
+
+Controls how tiles are fetched. Exactly one of `source` or `url_template` is required.
+
+| Field              | Type   | Default   | Description |
+|--------------------|--------|-----------|-------------|
+| `source`           | str    | —         | Built-in source name. Use instead of `url_template`. |
+| `url_template`     | str    | —         | Custom XYZ URL with `{z}`, `{x}`, `{y}` placeholders. Use instead of `source`. |
+| `strip_rows`       | int    | `4`       | Tile rows per horizontal strip. Lower values reduce peak memory. |
+| `max_connections`  | int    | `16`      | Parallel tile fetches. High values may trigger server rate limits. |
+| `policy`           | str    | `lenient` | `strict` aborts on any failure. `lenient` skips failed tiles unless `max_failed_ratio` is exceeded. `ignore` skips all failures silently. |
+| `max_failed_ratio` | float  | `0.05`    | Abort threshold for failed tiles. Only applies when `policy: lenient`. |
+
+**Built-in sources**
+
+| Name                  | Description               |
+|-----------------------|---------------------------|
+| `google_satellite`    | Google Satellite          |
+| `esri_satellite`      | Esri World Imagery        |
+| `esri_topo`           | Esri World Topo Map       |
+| `esri_street`         | Esri World Street Map     |
+| `osm`                 | OpenStreetMap             |
+| `cartodb_positron`    | CartoDB Positron (light)  |
+| `cartodb_dark_matter` | CartoDB Dark Matter       |
+
+<Aside type="caution">
+Most sources serve 256 × 256 px tiles. Sources that serve 512 × 512 px tiles will produce patches at double the expected resolution.
+</Aside>
+
+---
+
+## `labels` (optional)
+
+Omit this section entirely for image-only (unlabeled) datasets.
+
+| Field         | Type   | Default | Description |
+|---------------|--------|---------|-------------|
+| `path`        | str    | —       | Path to a `.kml` or `.geojson` annotation file. |
+| `label_field` | str    | `null`  | Property name used as the class label. IDs are assigned by encounter order starting at 1. `null` assigns class 1 to all polygons. |
+| `all_touched` | bool   | `false` | Include all pixels the polygon boundary touches, not just centres. Useful for narrow polygons. |
+
+---
+
+## `sampler`
+
+Controls how fixed-size patches are extracted from the stitched image.
+
+| Field             | Type   | Default | Description |
+|-------------------|--------|---------|-------------|
+| `patch_size`      | int    | —       | Side length of each square patch in pixels. |
+| `stride`          | int    | `0`     | Step between patch centres. `0` = same as `patch_size`. Lower values produce overlapping patches. |
+| `mode`            | str    | `grid`  | `grid` scans row-by-row. `random` draws positions randomly — requires `random_count`. |
+| `edge_strategy`   | str    | `pad`   | `pad` fills partial edge patches to full size. `drop` discards them. `shift` slides the last patch inward to fit. |
+| `pad_mode`        | str    | `zero`  | `zero` = black fill, `reflect` = mirror border. Only applies when `edge_strategy: pad`. |
+| `max_empty_ratio` | float  | `1.0`   | Drop patches exceeding this fraction of black pixels. `1.0` keeps all. |
+| `min_label_ratio` | float  | `0.0`   | Drop patches below this fraction of labeled pixels. `0.0` keeps all. |
+| `random_count`    | int    | —       | Number of patches to draw. Only used when `mode: random`. |
+| `random_seed`     | int    | —       | Random seed for reproducibility. Only used when `mode: random`. |
+
+---
+
+## `writer`
+
+| Field          | Type   | Default | Description |
+|----------------|--------|---------|-------------|
+| `staging_dir`  | str    | —       | Directory where images, masks, and the manifest will be written. |
+| `image_format` | str    | `png`   | `png` is lossless. `jpg` is smaller but lossy. |
+| `jpg_quality`  | int    | `95`    | JPEG quality from 1 (smallest) to 100 (best). Only used when `image_format: jpg`. |
+
+---
+
+## `split` (optional)
+
+Omit to skip splitting. When present, mapcv writes `train.txt`, `val.txt`, and `test.txt` into `staging_dir`.
+
+| Field            | Type        | Default            | Description |
+|------------------|-------------|---------------------|-------------|
+| `test_ratio`     | float       | `0.20`             | Fraction of all patches reserved for the test set. |
+| `val_ratio`      | float       | `0.10`             | Fraction of the remaining patches used for validation. |
+| `labeled_ratios` | list[float] | `[0.10, 0.20, 0.30]` | For each ratio, creates a `<ratio>/labeled.txt` and `<ratio>/unlabeled.txt` inside `staging_dir`. For semi-supervised workflows. |
+| `seed`           | int         | `42`               | Random seed for reproducible splits. |
+| `strategy`       | str         | `stratified`       | `stratified` preserves class distribution across splits. `random` splits without balancing. |

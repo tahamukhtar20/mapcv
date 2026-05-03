@@ -36,8 +36,6 @@ dev = [
     "ruff"
 ]
 docs = [
-    "mkdocs-material",
-    "mkdocs-jupyter",
     "matplotlib",
     "ipywidgets",
 ]

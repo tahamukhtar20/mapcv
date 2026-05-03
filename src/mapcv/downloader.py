@@ -7,7 +7,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 from rich.console import Console
-from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from mapcv._mapcv_rs import (
     PyTileIndex,
@@ -33,6 +40,16 @@ URL_TEMPLATES: Dict[str, str] = {
 }
 
 _console = Console()
+
+
+def _ask_continue_after_failure(exc: BaseException) -> bool:
+    """Pause and ask the user whether to continue with lenient policy after a strict failure."""
+    _console.print(f"[yellow]Tile fetch failed:[/yellow] {exc}")
+    try:
+        answer = input("Some tiles failed. Continue with remaining strips, skipping failures? [y/N] ")
+        return answer.strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        return False
 
 
 def _in_jupyter() -> bool:
@@ -87,7 +104,7 @@ def _make_progress() -> Progress:
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         "•",
-        DownloadColumn(),
+        MofNCompleteColumn(),
         "•",
         TimeElapsedColumn(),
     )
@@ -231,6 +248,7 @@ def download_region_strips(
     total_fetched = 0
     total_failed = 0
 
+    current_policy = policy
     if _in_jupyter():
         print(f"Fetching {total} tiles ({len(strips)} strips)...", end=" ", flush=True)
         for strip in strips:
@@ -244,15 +262,22 @@ def download_region_strips(
                     to_fetch.append(t)
             fresh: List[Tuple[PyTileIndex, bytes]] = []
             if to_fetch:
-                fresh = fetch_tiles_rs(
-                    to_fetch, template, callback=lambda _: None,
-                    max_connections=max_connections, policy=policy,
-                    max_failed_ratio=max_failed_ratio,
-                )
+                try:
+                    fresh = fetch_tiles_rs(
+                        to_fetch, template, callback=lambda _: None,
+                        max_connections=max_connections, policy=current_policy,
+                        max_failed_ratio=max_failed_ratio,
+                    )
+                except RuntimeError as exc:
+                    if current_policy == "strict" and _ask_continue_after_failure(exc):
+                        current_policy = "lenient"
+                        fresh = []
+                    else:
+                        raise
                 for t, b in fresh:
                     tile_cache[(t.x, t.y, t.z)] = b
             strip_results = cached_results + fresh
-            strip_failed = 0 if policy == "ignore" else len(strip) - len(strip_results)
+            strip_failed = 0 if current_policy == "ignore" else len(strip) - len(strip_results)
             total_fetched += len(strip_results)
             total_failed += strip_failed
             all_results.append(strip_results)
@@ -286,14 +311,26 @@ def download_region_strips(
 
                         return _cb
 
-                    fresh2 = fetch_tiles_rs(
-                        to_fetch2,
-                        template,
-                        callback=_make_callback(_base),
-                        max_connections=max_connections,
-                        policy=policy,
-                        max_failed_ratio=max_failed_ratio,
-                    )
+                    try:
+                        fresh2 = fetch_tiles_rs(
+                            to_fetch2,
+                            template,
+                            callback=_make_callback(_base),
+                            max_connections=max_connections,
+                            policy=current_policy,
+                            max_failed_ratio=max_failed_ratio,
+                        )
+                    except RuntimeError as exc:
+                        if current_policy == "strict":
+                            progress.stop()
+                            if _ask_continue_after_failure(exc):
+                                current_policy = "lenient"
+                                fresh2 = []
+                                progress.start()
+                            else:
+                                raise
+                        else:
+                            raise
                     for t, b in fresh2:
                         tile_cache[(t.x, t.y, t.z)] = b
 
@@ -302,12 +339,12 @@ def download_region_strips(
 
                 strip_results2 = cached_results2 + fresh2
                 # under 'ignore' policy len(strip) - len(strip_results2) is always 0 and misleading
-                strip_failed2 = 0 if policy == "ignore" else len(strip) - len(strip_results2)
+                strip_failed2 = 0 if current_policy == "ignore" else len(strip) - len(strip_results2)
                 total_fetched += len(strip_results2)
                 total_failed += strip_failed2
                 all_results.append(strip_results2)
 
-    if policy == "ignore":
+    if current_policy == "ignore":
         _console.print(
             f"[dim]{total_fetched}/{total} tiles returned"
             " (failures are filled with NoData under 'ignore' policy)[/dim]"

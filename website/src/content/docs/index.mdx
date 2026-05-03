@@ -1,0 +1,50 @@
+---
+title: Home
+description: A high-performance satellite imagery dataset creation tool for computer vision.
+template: splash
+hero:
+  title: mapcv
+  tagline: A high-performance satellite imagery dataset creation tool for computer vision.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get Started
+      link: /mapcv/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/tahamukhtar20/mapcv
+      icon: external
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is mapcv?
+
+**mapcv** turns a bounding box and a set of polygon labels into a ready-to-train image segmentation dataset.
+It fetches XYZ map tiles, rasterizes KML or GeoJSON annotations onto the tile grid, extracts fixed-size
+image/mask patches, and writes them to disk. To ensure a lightweight footprint and easy installation, the tool is GDAL-free. Tile stitching, rasterization, and patch sampling are powered by Rust, accessible through the CLI (or via the Python API).
+## Features
+
+<CardGrid>
+  <Card title="Rust-accelerated core" icon="rocket">
+    Tile stitching, polygon rasterization, and patch sampling all run in compiled Rust via PyO3, which is orders of magnitude faster than other implementations.
+  </Card>
+  <Card title="Many tile sources" icon="external">
+    Built-in support for Esri World Imagery, Google Satellite, OpenStreetMap, CartoDB basemaps, and any custom XYZ URL template.
+  </Card>
+  <Card title="KML & GeoJSON labels" icon="pencil">
+    Parse polygon annotations directly from KML or GeoJSON files. Multiclass labels via a configurable field name. Automatic WGS-84 to Web Mercator projection.
+  </Card>
+  <Card title="Flexible patch sampling" icon="setting">
+    Grid or random sampling with configurable stride, edge strategies (pad / drop / shift), and empty-patch filtering.
+  </Card>
+  <Card title="Train / val / test splits" icon="list-format">
+    Stratified or random dataset splitting from the JSON manifest. Configurable labeled-data fractions for semi-supervised workflows.
+  </Card>
+  <Card title="Simple CLI" icon="laptop">
+    Run the full pipeline with `mapcv generate config.yaml`. One command, one config file, ready-to-train output.
+  </Card>
+</CardGrid>
+

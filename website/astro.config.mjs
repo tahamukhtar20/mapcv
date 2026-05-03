@@ -37,7 +37,6 @@ export default defineConfig({
           label: 'Examples',
           items: [
             { label: 'Examples', slug: 'examples' },
-            { label: 'Amsterdam Demo', slug: 'notebooks' },
           ],
         },
       ],

@@ -1,0 +1,66 @@
+---
+title: Introduction
+description: What mapcv is, how it works, and when to use it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**mapcv** turns a bounding box and a set of polygon labels into a ready-to-train satellite imagery dataset for semantic segmentation. You give it a geographic region, a tile source, and optionally a KML or GeoJSON annotation file. It fetches the tiles, rasterizes your labels onto the image grid, extracts fixed-size patches, and writes everything to disk with a JSON manifest.
+
+The heavy lifting — tile stitching, polygon rasterization, patch sampling — runs in compiled Rust via PyO3. The Python layer handles orchestration, config, and the CLI.
+
+---
+
+## How it works
+
+```
+bbox + zoom
+    │
+    ▼
+fetch XYZ tiles ──► stitch into image
+                          │
+                          ▼
+              rasterize polygons ──► uint8 mask
+                          │
+                          ▼
+                   sample patches ──► Images/ + Masks/
+                          │
+                          ▼
+                    manifest.json ──► train.txt / val.txt / test.txt
+```
+
+The pipeline runs in horizontal **strips** — only one strip is decoded in memory at a time, so peak RAM is proportional to strip height, not region size.
+
+---
+
+## Key concepts
+
+**Bounding box** — the region to download, in WGS-84 (longitude/latitude). mapcv snaps it outward to tile boundaries before fetching.
+
+**Zoom level** — controls resolution. At zoom 17 one tile pixel is ~1.2 m on the ground; at zoom 19 it is ~0.3 m. Higher zoom means more tiles and more detail.
+
+**Strips** — the tile grid is divided into horizontal bands of `strip_rows` tile rows. Processed and written one strip at a time to cap memory use.
+
+**Patches** — fixed-size square crops extracted from the stitched image. Each patch has a matching mask file of the same name.
+
+**Class IDs** — mask pixels are `0` (background) or `1..255` (class). When `label_field` is `null`, all polygons get `class_id = 1`. When a field name is given, IDs are assigned by encounter order starting at 1.
+
+---
+
+## When to use mapcv
+
+- You have polygon annotations (KML or GeoJSON) and want pixel-level segmentation masks.
+- You want image-only patches (unlabeled) — just omit the `labels` section.
+- You need a reproducible pipeline that goes from a config file to a ready-to-train dataset in one command.
+
+---
+
+## Platform support
+
+| Platform | Supported |
+|----------|-----------|
+| Linux    | Yes       |
+| macOS    | Yes       |
+| Windows  | Yes       |
+
+Requires **Python >= 3.10**. Pre-built wheels are available on PyPI for all three platforms. No GDAL required.

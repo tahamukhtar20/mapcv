@@ -1,0 +1,77 @@
+---
+title: CLI Reference
+description: Full reference for all mapcv CLI commands.
+---
+
+## `mapcv init`
+
+Writes an annotated example config to a file, or prints it to stdout if no path is given.
+
+```bash
+mapcv init my_dataset.yaml
+```
+
+Open the file and fill in your region, tile source, and label path. Everything else has sensible defaults.
+
+---
+
+## `mapcv validate`
+
+Parses and validates a config file without downloading any tiles or writing any files. Run this after editing your config to catch errors before a long download.
+
+```bash
+mapcv validate my_dataset.yaml
+```
+
+---
+
+## `mapcv generate`
+
+Runs the full pipeline: tile download, label rasterization, patch sampling, and dataset writing.
+
+```bash
+mapcv generate my_dataset.yaml
+```
+
+When it finishes you will find:
+
+```
+output/
+  Images/
+    patch_0000000.png
+    patch_0000001.png
+    ...
+  Masks/
+    patch_0000000.png
+    patch_0000001.png
+    ...
+  manifest.json
+  train.txt
+  val.txt
+  test.txt
+```
+
+Mask pixels are `0` for background and `1..255` for class IDs. If no `labels` section is present in the config, no `Masks/` directory is written.
+
+---
+
+## `mapcv split`
+
+Re-splits an existing dataset using its `manifest.json` without re-downloading or re-processing anything. Useful when you want to try different split ratios without rerunning the full pipeline.
+
+```bash
+mapcv split [OPTIONS] STAGING_DIR
+```
+
+| Option             | Default          | Description |
+|--------------------|------------------|-------------|
+| `--test-ratio`     | `0.2`            | Fraction of all patches reserved for test. |
+| `--val-ratio`      | `0.1`            | Fraction of remainder used for validation. |
+| `--labeled-ratios` | `0.10 0.20 0.30` | Optional. Pass once per ratio, e.g. `--labeled-ratios 0.10 --labeled-ratios 0.20`. |
+| `--seed`           | `42`             | Random seed. |
+| `--strategy`       | `stratified`     | `random` or `stratified`. |
+| `--sample-limit`   | —                | Optional. Cap on total patches sampled. |
+
+```bash
+mapcv split ./output --test-ratio 0.15 --val-ratio 0.10
+```

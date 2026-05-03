@@ -1,4 +1,7 @@
-# API Reference
+---
+title: API Reference
+description: Full Python API reference for mapcv.
+---
 
 All public symbols are importable directly from `mapcv`:
 
@@ -89,8 +92,7 @@ Parse GeoJSON bytes (FeatureCollection or single Feature) into
 - `label_field`: property name used for class labels. If `None`, all
   polygons receive `class_id = 1`.
 - Returns `(geometries, class_map)` where `class_map` maps each class name
-  string to its assigned integer ID (assigned by encounter order, starting
-  at 1).
+  string to its assigned integer ID (assigned by encounter order, starting at 1).
 
 Non-polygon geometries are silently skipped.
 

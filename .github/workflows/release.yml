@@ -6,60 +6,111 @@ on:
       - 'v*'
 
 jobs:
+  # ── Linux (manylinux, x86-64 + aarch64) ─────────────────────────────────────
   linux:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64
+          - runner: ubuntu-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          command: build
+          args: --release --sdist -o dist --find-interpreter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  # ── macOS (universal2 — runs on both Intel and Apple Silicon) ────────────────
+  macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: universal2-apple-darwin
+          args: --release -o dist --find-interpreter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.python }}
+          path: dist
+
+  # ── Windows (x86-64) ─────────────────────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release -o dist --find-interpreter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.python }}
+          path: dist
+
+  # ── Smoke-test one wheel before publishing ───────────────────────────────────
+  test-wheel:
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/setup-python@v5
         with:
-          command: build
-          args: --release --sdist -o dist --find-interpreter
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
         with:
-          name: wheels-linux
+          pattern: wheels-linux-x86_64
           path: dist
+          merge-multiple: true
+      - name: Install wheel and test dependencies
+        run: |
+          pip install dist/mapcv-*.whl
+          pip install pytest pytest-httpserver
+      - name: Run tests
+        run: pytest
 
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release -o dist --find-interpreter
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows
-          path: dist
-
-  macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release -o dist --find-interpreter
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos
-          path: dist
-
+  # ── Publish to PyPI + create GitHub Release ──────────────────────────────────
   publish:
-    name: Publish to PyPI
+    needs: test-wheel
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
-    needs: [linux, windows, macos]
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+          generate_release_notes: true

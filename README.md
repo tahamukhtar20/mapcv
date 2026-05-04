@@ -85,6 +85,10 @@ Contributions are welcome. Please review the [Contributing Guide](CONTRIBUTING.m
 
 *(Citation information will be added after publication.)*
 
+## Author
+
+**Muhammad Taha Mukhtar** · [tahamukhtar20+mapcv@gmail.com](mailto:tahamukhtar20+mapcv@gmail.com)
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

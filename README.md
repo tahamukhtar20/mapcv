@@ -18,6 +18,15 @@
     <a href="https://github.com/tahamukhtar20/mapcv/blob/main/LICENSE" target="_blank">
         <img src="https://img.shields.io/github/license/tahamukhtar20/mapcv.svg?color=%2334D058" alt="License">
     </a>
+    <a href="https://pepy.tech/project/mapcv" target="_blank">
+        <img src="https://static.pepy.tech/badge/mapcv" alt="Downloads">
+    </a>
+    <a href="https://tahamukhtar20.github.io/mapcv/" target="_blank">
+        <img src="https://img.shields.io/badge/docs-online-blue" alt="Documentation">
+    </a>
+    <a href="https://github.com/astral-sh/ruff" target="_blank">
+        <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff">
+    </a>
 </p>
 
 ---

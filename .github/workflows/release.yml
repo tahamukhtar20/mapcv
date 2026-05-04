@@ -31,32 +31,21 @@ jobs:
           fi
           echo "All versions match: $TAG"
 
-  # ── Linux (manylinux, x86-64 + aarch64) ─────────────────────────────────────
+  # ── Linux (manylinux, x86-64) ────────────────────────────────────────────────
   linux:
     needs: check-version
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            target: x86_64
-          - runner: ubuntu-latest
-            target: aarch64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-        if: matrix.target == 'aarch64'
-        with:
-          platforms: aarch64
       - uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: x86_64
           manylinux: auto
           command: build
           args: --release --sdist -o dist --find-interpreter
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.target }}
+          name: wheels-linux-x86_64
           path: dist
 
   # ── macOS (universal2 — runs on both Intel and Apple Silicon) ────────────────

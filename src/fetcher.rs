@@ -39,11 +39,14 @@ impl std::str::FromStr for FailurePolicy {
 
 // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
 const MAX_RETRIES: u32 = 3;
+const RETRY_BACKOFF_MS: u64 = 500;
 
 /// Standard tile pixel dimension used by XYZ tile servers.
 pub(crate) const TILE_PX: usize = 256;
-/// `TILE_PX` as `f64` for use in affine transform calculations.
-pub(crate) const TILE_PX_F: f64 = 256.0;
+/// `TILE_PX` as `f64`, derived from `TILE_PX` to stay in sync.
+// 256 is exactly representable in f64 (2^8), so no precision is lost.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) const TILE_PX_F: f64 = TILE_PX as f64;
 
 /// Outcome of a single tile fetch attempt.
 enum TileOutcome {
@@ -146,7 +149,7 @@ async fn fetch_single_tile(
             }
         }
         retries += 1;
-        tokio::time::sleep(Duration::from_millis(500 * u64::from(retries))).await;
+        tokio::time::sleep(Duration::from_millis(RETRY_BACKOFF_MS * u64::from(retries))).await;
     }
 }
 
@@ -192,7 +195,7 @@ pub fn fetch_tiles(
         rt.block_on(async {
             let client = match Client::builder()
                 .timeout(Duration::from_secs(10))
-                .user_agent("mapcv-fetcher/0.1.0")
+                .user_agent(concat!("mapcv-fetcher/", env!("CARGO_PKG_VERSION")))
                 .build()
             {
                 Ok(c) => c,
@@ -244,9 +247,11 @@ pub fn fetch_tiles(
     let rx = std::sync::Mutex::new(rx);
 
     loop {
-        let event = py.allow_threads(|| {
-            rx.lock()
-                .unwrap()
+        let event = py.allow_threads(|| -> PyResult<Event> {
+            let guard = rx
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("internal fetch mutex was poisoned"))?;
+            guard
                 .recv()
                 .map_err(|_| PyRuntimeError::new_err("Background thread died unexpectedly"))
         })?;

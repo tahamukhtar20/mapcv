@@ -94,7 +94,7 @@ def split(
     if not staging_dir.is_dir():
         _console.print(f"[red]Not a directory:[/red] {staging_dir}")
         raise typer.Exit(code=1)
-    ratios = labeled_ratios if labeled_ratios else [0.10, 0.20, 0.30]
+    ratios = labeled_ratios if labeled_ratios is not None else [0.10, 0.20, 0.30]
     try:
         cfg = SplitterConfig(
             test_ratio=test_ratio,
@@ -133,16 +133,22 @@ def validate(
     if config.labels is not None and not config.labels.path.exists():
         _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {config.labels.path}")
 
-    _console.print(f"  region : {config.region.west},{config.region.south} -> "
-                   f"{config.region.east},{config.region.north}  zoom={config.region.zoom}")
+    _console.print(
+        f"  region : {config.region.west},{config.region.south} -> "
+        f"{config.region.east},{config.region.north}  zoom={config.region.zoom}"
+    )
     source = config.tiles.source or config.tiles.url_template
     _console.print(f"  tiles  : {source}  strip_rows={config.tiles.strip_rows}")
-    _console.print(f"  sampler: patch_size={config.sampler.patch_size}  "
-                   f"mode={config.sampler.mode}  edge={config.sampler.edge_strategy}")
+    _console.print(
+        f"  sampler: patch_size={config.sampler.patch_size}  "
+        f"mode={config.sampler.mode}  edge={config.sampler.edge_strategy}"
+    )
     _console.print(f"  writer : {config.writer.staging_dir}  fmt={config.writer.image_format}")
     if config.split:
-        _console.print(f"  split  : test={config.split.test_ratio}  "
-                       f"val={config.split.val_ratio}  strategy={config.split.strategy}")
+        _console.print(
+            f"  split  : test={config.split.test_ratio}  "
+            f"val={config.split.val_ratio}  strategy={config.split.strategy}"
+        )
 
 
 @app.command()

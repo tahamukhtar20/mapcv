@@ -109,11 +109,10 @@ def sample_patches(
 ]:
     """Sample fixed-size patches from a strip image.
 
-    Returns ``(image_patches, mask_patches, metadata)``.
+    Returns (image_patches, mask_patches, metadata).
 
-    ``image_patches`` has shape ``(N, ps, ps)`` or ``(N, ps, ps, C)``.
-    ``mask_patches`` has shape ``(N, ps, ps)`` when *strip_mask* is given,
-    otherwise ``None``.
+    image_patches has shape (N, ps, ps) or (N, ps, ps, C).
+    mask_patches has shape (N, ps, ps) when strip_mask is given, otherwise None.
     """
     h, w = strip_image.shape[:2]
     ps = config.patch_size
@@ -125,9 +124,7 @@ def sample_patches(
             )
         )
     else:
-        raw_anchors = list(
-            grid_sample_anchors(h, w, ps, config.stride, config.edge_strategy)
-        )
+        raw_anchors = list(grid_sample_anchors(h, w, ps, config.stride, config.edge_strategy))
 
     img_list: List[npt.NDArray[np.uint8]] = []
     msk_list: List[npt.NDArray[np.uint8]] = []
@@ -157,7 +154,5 @@ def sample_patches(
         return empty_img, empty_msk, meta_list
 
     stacked_img = np.stack(img_list, axis=0)
-    stacked_msk: Optional[npt.NDArray[np.uint8]] = (
-        np.stack(msk_list, axis=0) if msk_list else None
-    )
+    stacked_msk: Optional[npt.NDArray[np.uint8]] = np.stack(msk_list, axis=0) if msk_list else None
     return stacked_img, stacked_msk, meta_list

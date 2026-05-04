@@ -12,12 +12,24 @@ use std::io::Cursor;
 /// Returns `(canvas, min_x, min_y, height, width)`.  The caller uses
 /// `min_x`/`min_y` to compute the affine transform via [`tile_transform`].
 ///
+/// # Errors
+/// Returns an error if tiles span more than one zoom level or if any tile's
+/// bytes cannot be decoded as a valid image.
+///
 /// # Panics
-/// Panics if any tile's bytes cannot be decoded as an image.
-#[must_use]
-pub fn stitch_tiles(tiles: &[(u32, u32, u8, Vec<u8>)]) -> (Vec<u8>, u32, u32, usize, usize) {
+/// Does not panic; the non-empty guard above ensures `min()`/`max()` are always `Some`.
+pub fn stitch_tiles(
+    tiles: &[(u32, u32, u8, Vec<u8>)],
+) -> Result<(Vec<u8>, u32, u32, usize, usize), String> {
     if tiles.is_empty() {
-        return (Vec::new(), 0, 0, 0, 0);
+        return Ok((Vec::new(), 0, 0, 0, 0));
+    }
+
+    let zooms: std::collections::HashSet<u8> = tiles.iter().map(|(_, _, z, _)| *z).collect();
+    if zooms.len() > 1 {
+        return Err(format!(
+            "stitch_tiles: all tiles must be at the same zoom level, got {zooms:?}"
+        ));
     }
 
     let min_x = tiles.iter().map(|(x, _, _, _)| *x).min().unwrap();
@@ -35,15 +47,15 @@ pub fn stitch_tiles(tiles: &[(u32, u32, u8, Vec<u8>)]) -> (Vec<u8>, u32, u32, us
         .map(|(tx, ty, _, data)| {
             let reader = ImageReader::new(Cursor::new(data))
                 .with_guessed_format()
-                .expect("cursor I/O never fails");
+                .map_err(|e| format!("tile format detection failed: {e}"))?;
             let pixels = reader
                 .decode()
-                .expect("tile PNG decode failed")
+                .map_err(|e| format!("tile PNG decode failed: {e}"))?
                 .to_rgb8()
                 .into_raw();
-            (*tx, *ty, pixels)
+            Ok((*tx, *ty, pixels))
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
     let mut canvas = vec![0u8; h * w * 3];
     for (tx, ty, pixels) in decoded {
@@ -56,7 +68,7 @@ pub fn stitch_tiles(tiles: &[(u32, u32, u8, Vec<u8>)]) -> (Vec<u8>, u32, u32, us
         }
     }
 
-    (canvas, min_x, min_y, h, w)
+    Ok((canvas, min_x, min_y, h, w))
 }
 
 /// Affine transform `(a, b, c, d, e, f)` mapping pixel `(col, row)` to

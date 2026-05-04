@@ -204,11 +204,14 @@ def test_val_ratio_approx(tmp_path: Path) -> None:
 
 def test_labeled_ratio_approx(tmp_path: Path) -> None:
     m = _make_manifest(100)
-    split_dataset(m, SplitterConfig(test_ratio=0.20, val_ratio=0.10, labeled_ratios=[0.10]), tmp_path)
+    split_dataset(
+        m, SplitterConfig(test_ratio=0.20, val_ratio=0.10, labeled_ratios=[0.10]), tmp_path
+    )
     train = _read_lines(tmp_path / "train.txt")
     labeled = _read_lines(tmp_path / "10" / "labeled.txt")
     # ceil(len(train) * 0.10)
     import math
+
     assert len(labeled) == math.ceil(len(train) * 0.10)
 
 
@@ -278,7 +281,7 @@ def test_random_strategy_still_partitions(tmp_path: Path) -> None:
 
 def test_stratified_uses_all_classes(tmp_path: Path) -> None:
     entries = (
-        [_entry(i, empty_ratio=1.0) for i in range(30)]   # class 0 - empty
+        [_entry(i, empty_ratio=1.0) for i in range(30)]  # class 0 - empty
         + [_entry(i + 30, empty_ratio=0.0) for i in range(30)]  # class 1 - labeled
         + [_entry(i + 60, empty_ratio=0.5) for i in range(30)]  # class 2 - mixed
     )

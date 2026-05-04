@@ -57,6 +57,7 @@ pub fn xy(lng: f64, lat: f64) -> (f64, f64) {
     (x, y)
 }
 
+/// Map (lng, lat) to fractional tile coordinates in [0, 1) using the Web Mercator projection.
 #[must_use]
 pub(crate) fn xy_fractional(lng: f64, lat: f64) -> (f64, f64) {
     let x = lng / 360.0 + 0.5;

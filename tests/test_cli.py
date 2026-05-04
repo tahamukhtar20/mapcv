@@ -40,12 +40,19 @@ def _write_manifest(staging_dir: Path, n: int = 20) -> None:
     m = Manifest(class_map={"bg": 0, "obj": 1})
     for i in range(n):
         from mapcv.writer import ManifestEntry
-        m.patches.append(ManifestEntry(
-            filename=f"patch_{i:07d}.png",
-            mask_filename=None,
-            row=i, col=0, padded=False, strip_index=0,
-            per_class_pixel_counts={}, empty_ratio=0.0,
-        ))
+
+        m.patches.append(
+            ManifestEntry(
+                filename=f"patch_{i:07d}.png",
+                mask_filename=None,
+                row=i,
+                col=0,
+                padded=False,
+                strip_index=0,
+                per_class_pixel_counts={},
+                empty_ratio=0.0,
+            )
+        )
     m.save(staging_dir / "manifest.json")
 
 
@@ -76,16 +83,15 @@ def test_validate_bad_config(tmp_path: Path) -> None:
 def test_validate_shows_summary(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path)
     result = runner.invoke(app, ["validate", str(cfg)])
-    assert "16" in result.output        # zoom
-    assert "256" in result.output       # patch_size
+    assert "16" in result.output  # zoom
+    assert "256" in result.output  # patch_size
 
 
 def test_validate_warns_missing_labels_path(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     staging = tmp_path / "output"
     cfg.write_text(
-        _VALID_CONFIG.format(staging_dir=staging)
-        + "labels:\n  path: /no/such/labels.kml\n"
+        _VALID_CONFIG.format(staging_dir=staging) + "labels:\n  path: /no/such/labels.kml\n"
     )
     result = runner.invoke(app, ["validate", str(cfg)])
     assert result.exit_code == 0
@@ -142,15 +148,23 @@ def test_split_missing_manifest(tmp_path: Path) -> None:
 def test_split_custom_ratios(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     _write_manifest(staging, n=100)
-    result = runner.invoke(app, [
-        "split", str(staging),
-        "--test-ratio", "0.10",
-        "--val-ratio", "0.05",
-        "--labeled-ratios", "0.20",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            str(staging),
+            "--test-ratio",
+            "0.10",
+            "--val-ratio",
+            "0.05",
+            "--labeled-ratios",
+            "0.20",
+        ],
+    )
     assert result.exit_code == 0
     test_lines = (staging / "splits" / "test.txt").read_text().strip().split("\n")
     import math
+
     assert len(test_lines) == math.ceil(100 * 0.10)
 
 

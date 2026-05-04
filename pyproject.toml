@@ -33,7 +33,8 @@ dev = [
     "pytest",
     "pytest-httpserver",
     "mypy",
-    "ruff"
+    "ruff",
+    "pre-commit",
 ]
 
 [tool.maturin]

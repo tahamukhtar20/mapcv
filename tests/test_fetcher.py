@@ -1,3 +1,7 @@
+"""Tests for the async tile fetcher (requires pytest-httpserver)."""
+
+from __future__ import annotations
+
 import pytest
 from typing import Any
 from mapcv._mapcv_rs import PyTileIndex, fetch_tiles
@@ -44,7 +48,11 @@ def test_fetch_tiles_lenient(httpserver: Any) -> None:
     ]
 
     results = fetch_tiles(
-        tile_list, url_template, callback=None, max_connections=2, policy="lenient",
+        tile_list,
+        url_template,
+        callback=None,
+        max_connections=2,
+        policy="lenient",
         max_failed_ratio=1.0,  # permissive - this test is about omit-on-failure, not the ratio gate
     )
 
@@ -59,9 +67,7 @@ def test_fetch_tiles_strict(httpserver: Any) -> None:
     tile_list = [PyTileIndex(1, 1, 14)]
 
     with pytest.raises(RuntimeError, match="Tile 404 Not Found"):
-        fetch_tiles(
-            tile_list, url_template, callback=None, max_connections=2, policy="strict"
-        )
+        fetch_tiles(tile_list, url_template, callback=None, max_connections=2, policy="strict")
 
 
 def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
@@ -72,7 +78,11 @@ def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
     tile_list = [PyTileIndex(1, 1, 14)]
 
     results = fetch_tiles(
-        tile_list, url_template, callback=None, max_connections=1, policy="ignore",
+        tile_list,
+        url_template,
+        callback=None,
+        max_connections=1,
+        policy="ignore",
         max_failed_ratio=1.0,  # allow all failures so the ratio check doesn't fire
     )
 
@@ -93,7 +103,11 @@ def test_fetch_tiles_ignore_counts_as_failure_for_ratio(httpserver: Any) -> None
     # 2/2 failed = 100 % > 0 % threshold
     with pytest.raises(RuntimeError, match="Too many failed tiles"):
         fetch_tiles(
-            tile_list, url_template, callback=None, max_connections=2, policy="ignore",
+            tile_list,
+            url_template,
+            callback=None,
+            max_connections=2,
+            policy="ignore",
             max_failed_ratio=0.0,
         )
 
@@ -114,7 +128,11 @@ def test_fetch_tiles_max_failed_ratio_exceeded(httpserver: Any) -> None:
     # 2/3 ~= 66.7% > 50% threshold
     with pytest.raises(RuntimeError, match="Too many failed tiles"):
         fetch_tiles(
-            tile_list, url_template, callback=None, max_connections=3, policy="lenient",
+            tile_list,
+            url_template,
+            callback=None,
+            max_connections=3,
+            policy="lenient",
             max_failed_ratio=0.5,
         )
 
@@ -129,7 +147,11 @@ def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:
 
     # 1/2 = 50 % which is not > 60 % threshold
     results = fetch_tiles(
-        tile_list, url_template, callback=None, max_connections=2, policy="lenient",
+        tile_list,
+        url_template,
+        callback=None,
+        max_connections=2,
+        policy="lenient",
         max_failed_ratio=0.6,
     )
     assert len(results) == 1

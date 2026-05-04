@@ -5,6 +5,7 @@ Run with the GDAL conda env:
 
 Produces tests/golden/{tile_math,transform,rasterize_golden,label_parse}_golden.{json,npz}.
 """
+
 from __future__ import annotations
 
 import io
@@ -164,16 +165,16 @@ _KML_CASES = [
 # ---- hand-picked coordinate pairs ----
 
 _HAND_PICKED: List[Tuple[float, float]] = [
-    (-122.4194, 37.7749),   # San Francisco
-    (139.6917, 35.6895),    # Tokyo
-    (-43.1729, -22.9068),   # Rio de Janeiro
-    (2.3522, 48.8566),      # Paris
-    (77.1025, 28.7041),     # Delhi
-    (0.0, 0.0),             # null island
-    (179.9, 85.0),          # near antimeridian + north pole
-    (-179.9, -85.0),        # near antimeridian + south pole
-    (90.0, 0.0),            # equator mid
-    (-90.0, 45.0),          # North America mid
+    (-122.4194, 37.7749),  # San Francisco
+    (139.6917, 35.6895),  # Tokyo
+    (-43.1729, -22.9068),  # Rio de Janeiro
+    (2.3522, 48.8566),  # Paris
+    (77.1025, 28.7041),  # Delhi
+    (0.0, 0.0),  # null island
+    (179.9, 85.0),  # near antimeridian + north pole
+    (-179.9, -85.0),  # near antimeridian + south pole
+    (90.0, 0.0),  # equator mid
+    (-90.0, 45.0),  # North America mid
 ]
 
 # ---- rasterize transform (1 pixel = 1 unit, north-up, origin at top-left) ----
@@ -230,15 +231,29 @@ def generate_tile_math_golden() -> None:
     for entry in tile_entries[:200]:
         t = mercantile.Tile(x=entry["x"], y=entry["y"], z=entry["z"])
         xb = mercantile.xy_bounds(t)
-        xy_bounds_entries.append({
-            "x": t.x, "y": t.y, "z": t.z,
-            "west": xb.left, "south": xb.bottom, "east": xb.right, "north": xb.top,
-        })
+        xy_bounds_entries.append(
+            {
+                "x": t.x,
+                "y": t.y,
+                "z": t.z,
+                "west": xb.left,
+                "south": xb.bottom,
+                "east": xb.right,
+                "north": xb.top,
+            }
+        )
         b = mercantile.bounds(t)
-        bounds_entries.append({
-            "x": t.x, "y": t.y, "z": t.z,
-            "west": b.west, "south": b.south, "east": b.east, "north": b.north,
-        })
+        bounds_entries.append(
+            {
+                "x": t.x,
+                "y": t.y,
+                "z": t.z,
+                "west": b.west,
+                "south": b.south,
+                "east": b.east,
+                "north": b.north,
+            }
+        )
 
     # ---- tiles section (50 standard bboxes, west < east only) ----
     # Use zoom <= 14 and stream-with-limit to avoid OOM on high-zoom large bboxes.
@@ -258,7 +273,9 @@ def generate_tile_math_golden() -> None:
                 break
         if overflow:
             continue
-        tiles_entries.append({"west": w, "south": s, "east": e, "north": n, "zoom": zoom, "tiles": tile_set})
+        tiles_entries.append(
+            {"west": w, "south": s, "east": e, "north": n, "zoom": zoom, "tiles": tile_set}
+        )
 
     golden: Dict[str, Any] = {
         "xy": xy_entries,
@@ -269,8 +286,10 @@ def generate_tile_math_golden() -> None:
     }
     out = GOLDEN_DIR / "tile_math_golden.json"
     out.write_text(json.dumps(golden, indent=2))
-    print(f"  xy: {len(xy_entries)}, tile: {len(tile_entries)}, xy_bounds: {len(xy_bounds_entries)}, "
-          f"bounds: {len(bounds_entries)}, tiles: {len(tiles_entries)} bboxes")
+    print(
+        f"  xy: {len(xy_entries)}, tile: {len(tile_entries)}, xy_bounds: {len(xy_bounds_entries)}, "
+        f"bounds: {len(bounds_entries)}, tiles: {len(tiles_entries)} bboxes"
+    )
 
 
 def generate_transform_golden() -> None:
@@ -311,17 +330,25 @@ def generate_rasterize_golden() -> None:
         # case 1: full image square
         (_rect_polygon(0, 0, size, size), 1),
         # case 2: polygon with hole, class 2
-        (Polygon(
-            [(10, 10), (110, 10), (110, 110), (10, 110)],
-            [[(20, 20), (100, 20), (100, 100), (20, 100)]],
-        ), 2),
+        (
+            Polygon(
+                [(10, 10), (110, 10), (110, 110), (10, 110)],
+                [[(20, 20), (100, 20), (100, 100), (20, 100)]],
+            ),
+            2,
+        ),
         # case 3: small 5x5 square, class 3
         (_rect_polygon(60, 60, 65, 65), 3),
         # case 4: MultiPolygon two squares far apart, class 1
-        (MultiPolygon([
-            _rect_polygon(5, 5, 25, 25),
-            _rect_polygon(95, 95, 115, 115),
-        ]), 1),
+        (
+            MultiPolygon(
+                [
+                    _rect_polygon(5, 5, 25, 25),
+                    _rect_polygon(95, 95, 115, 115),
+                ]
+            ),
+            1,
+        ),
         # case 5: thin diagonal polygon (3px wide), class 1
         (Polygon([(0, 0), (128, 125), (128, 128), (0, 3)]), 1),
         # case 6: polygon outside image bounds -> all zeros, class 1
@@ -345,14 +372,16 @@ def generate_rasterize_golden() -> None:
             all_touched=False,
         )
         masks[f"case_{i}"] = mask
-        meta.append({
-            "case": i,
-            "wkt": wkt_dumps(geom),
-            "class_id": class_id,
-            "transform": list(_RASTER_TRANSFORM),
-            "out_shape": [size, size],
-            "nonzero": int(np.count_nonzero(mask)),
-        })
+        meta.append(
+            {
+                "case": i,
+                "wkt": wkt_dumps(geom),
+                "class_id": class_id,
+                "transform": list(_RASTER_TRANSFORM),
+                "out_shape": [size, size],
+                "nonzero": int(np.count_nonzero(mask)),
+            }
+        )
 
     np.savez_compressed(GOLDEN_DIR / "rasterize_golden.npz", **masks)
     (GOLDEN_DIR / "rasterize_golden_meta.json").write_text(json.dumps(meta, indent=2))
@@ -380,12 +409,14 @@ def generate_label_parse_golden() -> None:
                 coords = list(geom.geoms[0].exterior.coords)
             else:
                 continue
-            features.append({
-                "wkt": wkt_dumps(geom, rounding_precision=-1),
-                "type": gtype,
-                "vertex_count": vertex_count,
-                "exterior_coords": [[c[0], c[1]] for c in coords],
-            })
+            features.append(
+                {
+                    "wkt": wkt_dumps(geom, rounding_precision=-1),
+                    "type": gtype,
+                    "vertex_count": vertex_count,
+                    "exterior_coords": [[c[0], c[1]] for c in coords],
+                }
+            )
         cases.append({"kml_id": kml_id, "features": features})
 
     (GOLDEN_DIR / "label_parse_golden.json").write_text(json.dumps(cases, indent=2))

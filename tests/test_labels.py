@@ -251,6 +251,7 @@ POINT_GEOJSON = _fc(
     _feat(_SQUARE),
 )
 
+
 def test_parse_kml_binary_mode() -> None:
     geoms, class_map = parse_kml(BINARY_KML)
     assert len(geoms) == 1

@@ -1,4 +1,5 @@
 """MV: validate coordinate transform against pyproj golden fixtures."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,10 @@ from mapcv.labels import transform_to_mercator
 _GOLDEN = Path(__file__).parent / "golden" / "transform_golden.json"
 
 if not _GOLDEN.exists():
-    pytest.skip("transform_golden.json not found - run tests/generate_golden.py first", allow_module_level=True)
+    pytest.skip(
+        "transform_golden.json not found - run tests/generate_golden.py first",
+        allow_module_level=True,
+    )
 
 
 def _load() -> List[Dict[str, Any]]:

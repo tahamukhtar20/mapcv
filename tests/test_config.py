@@ -101,7 +101,9 @@ def test_split_section_parsed(tmp_path: Path) -> None:
 
 
 def test_tiles_url_template(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("source: google_satellite", "url_template: https://example.com/{z}/{x}/{y}.png")
+    content = _MINIMAL.replace(
+        "source: google_satellite", "url_template: https://example.com/{z}/{x}/{y}.png"
+    )
     cfg = MapcvConfig.from_yaml(_write(tmp_path, content))
     assert cfg.tiles.url_template == "https://example.com/{z}/{x}/{y}.png"
     assert cfg.tiles.source is None
@@ -126,7 +128,9 @@ def test_writer_defaults_applied(tmp_path: Path) -> None:
 
 
 def test_missing_region_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("region:\n  west: 74.20\n  south: 31.40\n  east: 74.40\n  north: 31.60\n  zoom: 16\n", "")
+    content = _MINIMAL.replace(
+        "region:\n  west: 74.20\n  south: 31.40\n  east: 74.40\n  north: 31.60\n  zoom: 16\n", ""
+    )
     with pytest.raises(Exception):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 

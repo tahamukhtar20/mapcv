@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import numpy.typing as npt
 from rich.console import Console
-from rich.progress import BarColumn, DownloadColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from mapcv._mapcv_rs import (
     PyTileIndex,
@@ -33,6 +40,27 @@ URL_TEMPLATES: Dict[str, str] = {
 }
 
 _console = Console()
+
+
+def _ask_continue_after_failure(exc: BaseException) -> bool:
+    """Pause and ask the user whether to continue with lenient policy after a strict failure."""
+    _console.print(f"[yellow]Tile fetch failed:[/yellow] {exc}")
+    try:
+        answer = input(
+            "Some tiles failed. Continue with remaining strips, skipping failures? [y/N] "
+        )
+        return answer.strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+def _in_jupyter() -> bool:
+    try:
+        import IPython.core.getipython as _gip
+
+        return cast(Any, _gip.get_ipython)() is not None
+    except (ImportError, AttributeError):
+        return False
 
 
 def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> str:
@@ -79,7 +107,7 @@ def _make_progress() -> Progress:
         BarColumn(),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         "•",
-        DownloadColumn(),
+        MofNCompleteColumn(),
         "•",
         TimeElapsedColumn(),
     )
@@ -113,21 +141,33 @@ def download_region(
     target_tiles = tiles(west, south, east, north, [zoom])
     total = len(target_tiles)
 
-    with _make_progress() as progress:
-        task_id = progress.add_task(f"Fetching {total} tiles...", total=total)
-
-        def progress_callback(completed: int) -> None:
-            progress.update(task_id, completed=completed)
-
+    if _in_jupyter():
+        print(f"Fetching {total} tiles...", end=" ", flush=True)
         results: List[Tuple[PyTileIndex, bytes]] = fetch_tiles_rs(
             target_tiles,
             template,
-            callback=progress_callback,
+            callback=lambda _: None,
             max_connections=max_connections,
             policy=policy,
             max_failed_ratio=max_failed_ratio,
         )
-        progress.update(task_id, completed=total)
+        print("done.")
+    else:
+        with _make_progress() as progress:
+            task_id = progress.add_task(f"Fetching {total} tiles...", total=total)
+
+            def progress_callback(completed: int) -> None:
+                progress.update(task_id, completed=completed)
+
+            results = fetch_tiles_rs(
+                target_tiles,
+                template,
+                callback=progress_callback,
+                max_connections=max_connections,
+                policy=policy,
+                max_failed_ratio=max_failed_ratio,
+            )
+            progress.update(task_id, completed=total)
 
     fetched = len(results)
     if policy == "ignore":
@@ -210,11 +250,10 @@ def download_region_strips(
     all_results: List[List[Tuple[PyTileIndex, bytes]]] = []
     total_fetched = 0
     total_failed = 0
-    tiles_done = 0
 
-    with _make_progress() as progress:
-        task_id = progress.add_task("Fetching tiles (strips)...", total=total)
-
+    current_policy = policy
+    if _in_jupyter():
+        print(f"Fetching {total} tiles ({len(strips)} strips)...", end=" ", flush=True)
         for strip in strips:
             to_fetch: List[PyTileIndex] = []
             cached_results: List[Tuple[PyTileIndex, bytes]] = []
@@ -224,50 +263,101 @@ def download_region_strips(
                     cached_results.append((t, tile_cache[key]))
                 else:
                     to_fetch.append(t)
-
-            if cached_results:
-                tiles_done += len(cached_results)
-                progress.update(task_id, completed=tiles_done)
-
             fresh: List[Tuple[PyTileIndex, bytes]] = []
             if to_fetch:
-                _base = tiles_done
-
-                def _make_callback(base: int) -> Callable[[int], None]:
-                    def _cb(completed: int) -> None:
-                        progress.update(task_id, completed=base + completed)
-
-                    return _cb
-
-                fresh = fetch_tiles_rs(
-                    to_fetch,
-                    template,
-                    callback=_make_callback(_base),
-                    max_connections=max_connections,
-                    policy=policy,
-                    max_failed_ratio=max_failed_ratio,
-                )
+                try:
+                    fresh = fetch_tiles_rs(
+                        to_fetch,
+                        template,
+                        callback=lambda _: None,
+                        max_connections=max_connections,
+                        policy=current_policy,
+                        max_failed_ratio=max_failed_ratio,
+                    )
+                except RuntimeError as exc:
+                    if current_policy == "strict" and _ask_continue_after_failure(exc):
+                        current_policy = "lenient"
+                        fresh = []
+                    else:
+                        raise
                 for t, b in fresh:
                     tile_cache[(t.x, t.y, t.z)] = b
-
-                tiles_done += len(to_fetch)
-                progress.update(task_id, completed=tiles_done)
-
             strip_results = cached_results + fresh
-            # under 'ignore' policy len(strip) - len(strip_results) is always 0 and misleading
-            strip_failed = 0 if policy == "ignore" else len(strip) - len(strip_results)
+            strip_failed = 0 if current_policy == "ignore" else len(strip) - len(strip_results)
             total_fetched += len(strip_results)
             total_failed += strip_failed
             all_results.append(strip_results)
+        print("done.")
+    else:
+        tiles_done = 0
+        with _make_progress() as progress:
+            task_id = progress.add_task("Fetching tiles (strips)...", total=total)
 
-    if policy == "ignore":
+            for strip in strips:
+                to_fetch2: List[PyTileIndex] = []
+                cached_results2: List[Tuple[PyTileIndex, bytes]] = []
+                for t in strip:
+                    key = (t.x, t.y, t.z)
+                    if key in tile_cache:
+                        cached_results2.append((t, tile_cache[key]))
+                    else:
+                        to_fetch2.append(t)
+
+                if cached_results2:
+                    tiles_done += len(cached_results2)
+                    progress.update(task_id, completed=tiles_done)
+
+                fresh2: List[Tuple[PyTileIndex, bytes]] = []
+                if to_fetch2:
+                    _base = tiles_done
+
+                    def _make_callback(base: int) -> Callable[[int], None]:
+                        def _cb(completed: int) -> None:
+                            progress.update(task_id, completed=base + completed)
+
+                        return _cb
+
+                    try:
+                        fresh2 = fetch_tiles_rs(
+                            to_fetch2,
+                            template,
+                            callback=_make_callback(_base),
+                            max_connections=max_connections,
+                            policy=current_policy,
+                            max_failed_ratio=max_failed_ratio,
+                        )
+                    except RuntimeError as exc:
+                        if current_policy == "strict":
+                            progress.stop()
+                            if _ask_continue_after_failure(exc):
+                                current_policy = "lenient"
+                                fresh2 = []
+                                progress.start()
+                            else:
+                                raise
+                        else:
+                            raise
+                    for t, b in fresh2:
+                        tile_cache[(t.x, t.y, t.z)] = b
+
+                    tiles_done += len(fresh2)
+                    progress.update(task_id, completed=tiles_done)
+
+                strip_results2 = cached_results2 + fresh2
+                # under 'ignore' policy len(strip) - len(strip_results2) is always 0 and misleading
+                strip_failed2 = (
+                    0 if current_policy == "ignore" else len(strip) - len(strip_results2)
+                )
+                total_fetched += len(strip_results2)
+                total_failed += strip_failed2
+                all_results.append(strip_results2)
+
+    if current_policy == "ignore":
         _console.print(
             f"[dim]{total_fetched}/{total} tiles returned"
             " (failures are filled with NoData under 'ignore' policy)[/dim]"
         )
     else:
-        _console.print(
-            f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]"
-        )
+        _console.print(f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]")
 
     return all_results

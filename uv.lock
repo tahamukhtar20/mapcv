@@ -693,6 +693,7 @@ dependencies = [
 dev = [
     { name = "maturin" },
     { name = "mypy" },
+    { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-httpserver" },
     { name = "ruff" },
@@ -716,6 +717,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numpy" },
     { name = "pillow" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pydantic" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-httpserver", marker = "extra == 'dev'" },

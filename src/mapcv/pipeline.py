@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -14,7 +14,7 @@ from mapcv._mapcv_rs import stitch_tiles as stitch_tiles_rs
 from mapcv._mapcv_rs import tile_transform as tile_transform_rs
 from mapcv.config import MapcvConfig
 from mapcv.downloader import download_region_strips, resolve_url_template
-from mapcv.labels import parse_geojson, parse_kml, transform_to_mercator
+from mapcv.labels import GeomWithClass, parse_geojson, parse_kml, transform_to_mercator
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import SamplerConfig, sample_patches
 from mapcv.splitter import SplitterConfig, split_dataset
@@ -49,7 +49,7 @@ def run_generate(config: MapcvConfig) -> None:
     staging.mkdir(parents=True, exist_ok=True)
     manifest_path = staging / _MANIFEST_FILENAME
 
-    geoms_with_class = []
+    geoms_with_class: List[GeomWithClass] = []
     class_map: Dict[str, int] = {}
     if config.labels is not None:
         _console.print("[bold]Parsing labels...[/bold]")

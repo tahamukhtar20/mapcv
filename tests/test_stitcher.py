@@ -13,17 +13,15 @@ from mapcv._mapcv_rs import PyTileIndex, stitch_tiles, tile_transform
 
 def _make_tile(r: int, g: int, b: int) -> bytes:
     """Return PNG bytes for a solid-colour 256×256 RGB tile."""
-    img = Image.fromarray(
-        np.full((256, 256, 3), [r, g, b], dtype=np.uint8), mode="RGB"
-    )
+    img = Image.fromarray(np.full((256, 256, 3), [r, g, b], dtype=np.uint8), mode="RGB")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-RED   = _make_tile(255, 0, 0)
+RED = _make_tile(255, 0, 0)
 GREEN = _make_tile(0, 255, 0)
-BLUE  = _make_tile(0, 0, 255)
+BLUE = _make_tile(0, 0, 255)
 WHITE = _make_tile(255, 255, 255)
 
 
@@ -59,7 +57,7 @@ def test_two_tiles_horizontal() -> None:
     arr, min_x, min_y = stitch_tiles([(tl, RED), (tr, GREEN)])
     assert arr.shape == (256, 512, 3)
     assert min_x == 5 and min_y == 3
-    assert arr[128, 0].tolist() == [255, 0, 0]    # left half → red
+    assert arr[128, 0].tolist() == [255, 0, 0]  # left half → red
     assert arr[128, 256].tolist() == [0, 255, 0]  # right half → green
 
 
@@ -70,7 +68,7 @@ def test_two_tiles_vertical() -> None:
     arr, min_x, min_y = stitch_tiles([(top, BLUE), (bot, WHITE)])
     assert arr.shape == (512, 256, 3)
     assert min_x == 0 and min_y == 10
-    assert arr[0,   128].tolist() == [0, 0, 255]      # top → blue
+    assert arr[0, 128].tolist() == [0, 0, 255]  # top → blue
     assert arr[256, 128].tolist() == [255, 255, 255]  # bottom → white
 
 
@@ -80,14 +78,18 @@ def test_2x2_grid() -> None:
     tr = PyTileIndex(1, 0, 1)
     bl = PyTileIndex(0, 1, 1)
     br = PyTileIndex(1, 1, 1)
-    arr, min_x, min_y = stitch_tiles([
-        (tl, RED), (tr, GREEN),
-        (bl, BLUE), (br, WHITE),
-    ])
+    arr, min_x, min_y = stitch_tiles(
+        [
+            (tl, RED),
+            (tr, GREEN),
+            (bl, BLUE),
+            (br, WHITE),
+        ]
+    )
     assert arr.shape == (512, 512, 3)
-    assert arr[0,   0  ].tolist() == [255, 0,   0  ]  # top-left  → red
-    assert arr[0,   256].tolist() == [0,   255, 0  ]  # top-right → green
-    assert arr[256, 0  ].tolist() == [0,   0,   255]  # bot-left  → blue
+    assert arr[0, 0].tolist() == [255, 0, 0]  # top-left  → red
+    assert arr[0, 256].tolist() == [0, 255, 0]  # top-right → green
+    assert arr[256, 0].tolist() == [0, 0, 255]  # bot-left  → blue
     assert arr[256, 256].tolist() == [255, 255, 255]  # bot-right → white
 
 
@@ -127,8 +129,8 @@ def test_tile_transform_zero_zoom() -> None:
     a, b, c, d, e, f = tile_transform(0, 0, 0)
     assert b == pytest.approx(0.0)
     assert d == pytest.approx(0.0)
-    assert a > 0   # positive pixel width in metres
-    assert e < 0   # negative pixel height (y decreases downward)
+    assert a > 0  # positive pixel width in metres
+    assert e < 0  # negative pixel height (y decreases downward)
 
 
 def test_tile_transform_pixel_size_decreases_with_zoom() -> None:
@@ -141,7 +143,8 @@ def test_tile_transform_pixel_size_decreases_with_zoom() -> None:
 def test_tile_transform_origin_is_northwest() -> None:
     """c and f must be the northwest corner of tile (min_x, min_y)."""
     from mapcv._mapcv_rs import xy_bounds
+
     b = xy_bounds(3, 5, 10)
     _a, _b, c, _d, _e, f = tile_transform(3, 5, 10)
-    assert c == pytest.approx(b.west,  rel=1e-9)
+    assert c == pytest.approx(b.west, rel=1e-9)
     assert f == pytest.approx(b.north, rel=1e-9)

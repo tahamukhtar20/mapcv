@@ -1,4 +1,5 @@
 """MV: pixel-level validation of rasterizer against rasterio golden fixtures."""
+
 from __future__ import annotations
 
 import json

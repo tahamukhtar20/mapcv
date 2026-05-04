@@ -8,8 +8,10 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pytest
+from typing import List, Optional, Tuple
 
 from mapcv import SamplerConfig, sample_patches
+from mapcv.sampler import PatchMeta
 from mapcv.writer import (
     Manifest,
     WriterConfig,
@@ -27,13 +29,17 @@ def _solid(h: int, w: int, c: int = 3, value: int = 128) -> npt.NDArray[np.uint8
     return np.full((h, w, c), value, dtype=np.uint8)
 
 
-def _patches(h: int = 16, w: int = 16, ps: int = 8) -> tuple:  # type: ignore[type-arg]
+def _patches(
+    h: int = 16, w: int = 16, ps: int = 8
+) -> Tuple[npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
     img = _solid(h, w)
     cfg = SamplerConfig(patch_size=ps, edge_strategy="drop")
     return sample_patches(img, None, cfg)
 
 
-def _patches_with_mask(h: int = 16, w: int = 16, ps: int = 8) -> tuple:  # type: ignore[type-arg]
+def _patches_with_mask(
+    h: int = 16, w: int = 16, ps: int = 8
+) -> Tuple[npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
     img = _solid(h, w)
     msk = np.ones((h, w), dtype=np.uint8)
     msk[:, w // 2 :] = 2
@@ -323,11 +329,14 @@ def test_strip_indices_recorded_correctly(tmp_path: Path) -> None:
 
 def test_parallel_same_as_serial(tmp_path: Path) -> None:
     imgs, msks, meta = _patches_with_mask()
+    cfg1 = WriterConfig(staging_dir=tmp_path / "run1")
+    cfg2 = WriterConfig(staging_dir=tmp_path / "run2")
 
     m1 = Manifest(class_map={})
     m2 = Manifest(class_map={})
+    write_patches(imgs, msks, meta, cfg1, m1)
+    write_patches(imgs, msks, meta, cfg2, m2)
 
-    # Same number of entries with same row/col/counts
     assert len(m1.patches) == len(m2.patches)
     for e1, e2 in zip(m1.patches, m2.patches):
         assert e1["row"] == e2["row"]

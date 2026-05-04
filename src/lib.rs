@@ -23,6 +23,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use tile_math::{BBox, TileIndex};
 
+/// Return a greeting string confirming the Rust extension loaded correctly.
+#[must_use]
 #[pyfunction]
 fn hello() -> String {
     String::from("Hello from mapcv Rust core!")
@@ -97,18 +99,21 @@ impl From<BBox> for PyBBox {
 }
 
 /// Convert (lng, lat) in EPSG:4326 to Web Mercator (x, y) in EPSG:3857.
+#[must_use]
 #[pyfunction]
 fn xy(lng: f64, lat: f64) -> (f64, f64) {
     tile_math::xy(lng, lat)
 }
 
 /// Return the XYZ tile index for a (lng, lat) point at the given zoom level.
+#[must_use]
 #[pyfunction]
 fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
     tile_math::tile(lng, lat, zoom).into()
 }
 
 /// Return all XYZ tiles covering the given bounding box at the specified zoom levels.
+#[must_use]
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
 fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<PyTileIndex> {
@@ -117,6 +122,7 @@ fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<Py
 }
 
 /// Return the Web Mercator bounding box (EPSG:3857, meters) for an XYZ tile.
+#[must_use]
 #[pyfunction]
 fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
@@ -124,6 +130,7 @@ fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
 }
 
 /// Return the geographic bounding box (EPSG:4326, degrees) for an XYZ tile.
+#[must_use]
 #[pyfunction]
 fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
     let t = TileIndex { x, y, z };
@@ -131,6 +138,7 @@ fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
 }
 
 /// Expand a bbox outward to the nearest tile boundaries at the given zoom level.
+#[must_use]
 #[pyfunction]
 fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
     tile_math::snap_bbox(west, south, east, north, zoom).into()
@@ -378,7 +386,8 @@ fn stitch_tiles(
         .into_iter()
         .map(|(t, bytes)| (t.x, t.y, t.z, bytes))
         .collect();
-    let (canvas, min_x, min_y, h, w) = stitcher::stitch_tiles(&raw);
+    let (canvas, min_x, min_y, h, w) =
+        stitcher::stitch_tiles(&raw).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     let arr = numpy::ndarray::Array3::from_shape_vec((h, w, 3), canvas)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Ok((arr.into_pyarray_bound(py).unbind(), min_x, min_y))
@@ -387,6 +396,7 @@ fn stitch_tiles(
 /// Compute the affine transform for a stitched tile grid.
 ///
 /// Returns `(a, b, c, d, e, f)` mapping pixel `(col, row)` to Mercator `(x, y)` in metres.
+#[must_use]
 #[pyfunction]
 fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64, f64) {
     stitcher::tile_transform(min_x, min_y, zoom)

@@ -1,4 +1,5 @@
 """MV: vertex-level validation of KML parser against geopandas golden fixtures."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,10 @@ from mapcv.labels import parse_kml
 _GOLDEN = Path(__file__).parent / "golden" / "label_parse_golden.json"
 
 if not _GOLDEN.exists():
-    pytest.skip("label_parse_golden.json not found - run tests/generate_golden.py first", allow_module_level=True)
+    pytest.skip(
+        "label_parse_golden.json not found - run tests/generate_golden.py first",
+        allow_module_level=True,
+    )
 
 _KML_HEADER = b'<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2">'
 _KML_FOOTER = b"</kml>"
@@ -162,17 +166,19 @@ def _exterior_coords(geom: BaseGeometry) -> List[Tuple[float, float]]:
 
 
 @pytest.mark.parametrize("kml_id,kml_bytes,label_field", _KML_CASES)
-def test_kml_feature_count_matches_geopandas(kml_id: str, kml_bytes: bytes, label_field: Any) -> None:
+def test_kml_feature_count_matches_geopandas(
+    kml_id: str, kml_bytes: bytes, label_field: Any
+) -> None:
     """Feature count from our parser must match geopandas."""
     geoms, _ = parse_kml(kml_bytes, label_field)
     ref = _BY_ID[kml_id]["features"]
-    assert len(geoms) == len(ref), (
-        f"{kml_id}: got {len(geoms)} features, golden has {len(ref)}"
-    )
+    assert len(geoms) == len(ref), f"{kml_id}: got {len(geoms)} features, golden has {len(ref)}"
 
 
 @pytest.mark.parametrize("kml_id,kml_bytes,label_field", _KML_CASES)
-def test_kml_geometry_types_match_geopandas(kml_id: str, kml_bytes: bytes, label_field: Any) -> None:
+def test_kml_geometry_types_match_geopandas(
+    kml_id: str, kml_bytes: bytes, label_field: Any
+) -> None:
     """Geometry types from our parser must match geopandas."""
     geoms, _ = parse_kml(kml_bytes, label_field)
     ref = _BY_ID[kml_id]["features"]

@@ -26,6 +26,7 @@ pub struct KmlResult {
 ///
 /// # Errors
 /// Returns an error string if the XML is malformed or coordinate parsing fails.
+// The KML event loop cannot be decomposed without passing too many mutable state variables between helpers.
 #[allow(clippy::too_many_lines)]
 pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, String> {
     let mut reader = Reader::from_reader(data);

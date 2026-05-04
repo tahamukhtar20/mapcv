@@ -15,6 +15,13 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check .
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: ruff
         name: ruff
         entry: uv run ruff check .
@@ -31,6 +38,8 @@ repos:
 
       - id: pytest
         name: pytest
+        # test_fetcher.py requires a live mock HTTP server (pytest-httpserver);
+        # excluded here to keep the pre-commit hook fast and offline-safe.
         entry: uv run pytest --ignore=tests/test_fetcher.py -q
         language: system
         types: [python]

@@ -1,4 +1,5 @@
 """MV: validate tile math functions against mercantile golden fixtures."""
+
 from __future__ import annotations
 
 import json
@@ -12,7 +13,10 @@ from mapcv._mapcv_rs import bounds, tile, tiles, xy, xy_bounds
 _GOLDEN = Path(__file__).parent / "golden" / "tile_math_golden.json"
 
 if not _GOLDEN.exists():
-    pytest.skip("tile_math_golden.json not found - run tests/generate_golden.py first", allow_module_level=True)
+    pytest.skip(
+        "tile_math_golden.json not found - run tests/generate_golden.py first",
+        allow_module_level=True,
+    )
 
 
 def _load() -> Dict[str, Any]:
@@ -59,7 +63,9 @@ def test_xy_bounds_matches_mercantile() -> None:
         for key in ("west", "south", "east", "north"):
             diff = abs(getattr(our, key) - entry[key])
             if diff > 1e-5:
-                failures.append(f"[{i}] tile=({entry['x']},{entry['y']},{entry['z']}) {key}: diff={diff:.2e}")
+                failures.append(
+                    f"[{i}] tile=({entry['x']},{entry['y']},{entry['z']}) {key}: diff={diff:.2e}"
+                )
     assert not failures, f"{len(failures)} failures:\n" + "\n".join(failures[:10])
 
 
@@ -71,7 +77,9 @@ def test_bounds_matches_mercantile() -> None:
         for key in ("west", "south", "east", "north"):
             diff = abs(getattr(our, key) - entry[key])
             if diff > 1e-6:
-                failures.append(f"[{i}] tile=({entry['x']},{entry['y']},{entry['z']}) {key}: diff={diff:.2e}")
+                failures.append(
+                    f"[{i}] tile=({entry['x']},{entry['y']},{entry['z']}) {key}: diff={diff:.2e}"
+                )
     assert not failures, f"{len(failures)} failures:\n" + "\n".join(failures[:10])
 
 
@@ -79,7 +87,13 @@ def test_tiles_matches_mercantile() -> None:
     """Our tiles() must return the exact same tile set as mercantile.tiles."""
     failures: List[str] = []
     for i, entry in enumerate(_DATA["tiles"]):
-        w, s, e, n, zoom = entry["west"], entry["south"], entry["east"], entry["north"], entry["zoom"]
+        w, s, e, n, zoom = (
+            entry["west"],
+            entry["south"],
+            entry["east"],
+            entry["north"],
+            entry["zoom"],
+        )
         our_list = tiles(w, s, e, n, [zoom])
         our_set = {(t.x, t.y, t.z) for t in our_list}
         ref_set = {(row[0], row[1], row[2]) for row in entry["tiles"]}

@@ -17,9 +17,7 @@ IDENTITY: Transform = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
 
 def _square(x0: float, y0: float, side: float) -> Polygon:
-    return Polygon(
-        [(x0, y0), (x0 + side, y0), (x0 + side, y0 + side), (x0, y0 + side), (x0, y0)]
-    )
+    return Polygon([(x0, y0), (x0 + side, y0), (x0 + side, y0 + side), (x0, y0 + side), (x0, y0)])
 
 
 def test_unit_square_at_origin_fills_one_pixel() -> None:

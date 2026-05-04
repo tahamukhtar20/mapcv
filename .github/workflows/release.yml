@@ -91,7 +91,7 @@ jobs:
       - name: Run tests
         run: pytest
 
-  # ── Publish to PyPI + create GitHub Release ──────────────────────────────────
+  # ── Generate changelog + publish ─────────────────────────────────────────────
   publish:
     needs: test-wheel
     runs-on: ubuntu-latest
@@ -100,11 +100,22 @@ jobs:
       id-token: write
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
+
+      - name: Generate release notes with git-cliff
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --current --strip header
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -113,4 +124,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.whl
-          generate_release_notes: true
+          body: ${{ steps.cliff.outputs.content }}

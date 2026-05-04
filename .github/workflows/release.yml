@@ -108,7 +108,7 @@ jobs:
       - name: Install wheel and test dependencies
         run: |
           pip install --find-links dist mapcv
-          pip install pytest pytest-httpserver
+          pip install pytest pytest-httpserver mercantile
       - name: Run tests
         run: pytest
 

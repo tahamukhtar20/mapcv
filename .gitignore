@@ -19,3 +19,7 @@ Cargo.lock
 *.pyd
 *.dylib
 .claude/
+site/
+website/.astro/
+website/dist/
+website/node_modules/

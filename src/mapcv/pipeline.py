@@ -60,9 +60,8 @@ def run_generate(config: MapcvConfig) -> None:
         else:
             raw, class_map = parse_geojson(data, config.labels.label_field)
         geoms_with_class = [(transform_to_mercator(g), c) for g, c in raw]
-        _console.print(
-            f"[dim]  {len(geoms_with_class)} polygon(s), {len(class_map)} class(es)[/dim]"
-        )
+        n_classes = len(class_map) if class_map else (1 if geoms_with_class else 0)
+        _console.print(f"[dim]  {len(geoms_with_class)} polygon(s), {n_classes} class(es)[/dim]")
 
     manifest: Manifest = load_or_create_manifest(manifest_path, class_map)
 

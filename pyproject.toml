@@ -36,6 +36,10 @@ dev = [
     "ruff",
     "pre-commit",
 ]
+docs = [
+    "matplotlib",
+    "ipywidgets",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

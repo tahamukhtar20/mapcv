@@ -1,0 +1,43 @@
+---
+title: Installation
+description: Install mapcv from PyPI or build from source.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## PyPI
+
+```bash
+pip install mapcv
+```
+
+Requires Python >= 3.10. Pre-built wheels cover Linux, macOS, and Windows.
+
+---
+
+## Building from source
+
+You need [Rust](https://rustup.rs/) and `maturin`.
+
+```bash
+git clone https://github.com/tahamukhtar20/mapcv
+cd mapcv
+pip install maturin
+maturin develop --release
+```
+
+`--release` enables Rust optimizations. Omitting it builds a debug binary that is significantly slower.
+
+<Aside type="note">
+Building from source requires a Rust toolchain (stable). Install it with `rustup` (see [rustup.rs](https://rustup.rs/)).
+</Aside>
+
+---
+
+## Verifying the install
+
+```bash
+mapcv --help
+```
+
+You should see the list of available commands. If the command is not found, make sure the Python environment where you installed mapcv is active.

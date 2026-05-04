@@ -24,57 +24,58 @@
 
 ## Statement of Need
 
-Creating machine learning datasets from satellite imagery is traditionally a frustrating experience. Wrestling with heavy, notoriously complex GIS libraries like GDAL is a massive pain point for researchers who just want to train models. Furthermore, trying to extract data from platforms like Google Earth Engine (GEE) often forces users into clunky pipelines, such as having to export data to Google Drive first before finally downloading it locally.
+Creating machine learning datasets from satellite imagery is traditionally a frustrating experience. Wrestling with heavy, notoriously complex GIS libraries like GDAL is a massive pain point for researchers who just want to train models.
 
-Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is different. It is explicitly designed as a **data creation-first** tool. It provides a blazingly fast, end-to-end pipeline written in Python and Rust specifically optimized for fetching map tiles, rasterizing complex labels (KML/GeoJSON), and seamlessly splitting areas into uniform, ML-ready patches. The target audience includes computer vision researchers, data scientists, and ML engineers who need an efficient and reliable way to prepare high-quality satellite datasets for training segmentation models without the traditional GIS headaches.
+Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is different. It is explicitly designed as a **data creation-first** tool. It provides a fast, end-to-end pipeline written in Python and Rust specifically optimized for fetching map tiles, rasterizing complex labels (KML/GeoJSON), and splitting areas into uniform, ML-ready patches. The target audience includes computer vision researchers, data scientists, and ML engineers who need an efficient and reliable way to prepare high-quality satellite datasets for training segmentation models without the traditional GIS headaches.
 
 ## Installation
-
-You can install `mapcv` directly from PyPI using pip:
 
 ```bash
 pip install mapcv
 ```
 
-> **Note**: `mapcv` requires Python 3.10 or higher.
+Requires Python 3.10 or higher. Pre-built wheels cover Linux, macOS, and Windows.
 
-## Quick-start
+## Quick start
 
-`mapcv` provides a simple command-line interface to build your datasets.
+### 1. Scaffold a config file
 
-### 1. Initialize a Project
-Create a configuration file in your directory:
 ```bash
-mapcv init
-```
-This generates a `mapcv.yaml` file where you can define your bounding box, zoom level, and label files (e.g., `labels.kml`).
-
-### 2. Generate the Dataset
-Fetch the tiles, rasterize the labels, and generate image/mask patches:
-```bash
-mapcv generate --config mapcv.yaml
+mapcv init my_dataset.yaml
 ```
 
-### 3. Split the Dataset
-Split the generated patches into Train, Validation, and Test sets:
+Open the file and fill in your region, tile source, and (optionally) label path. Everything else has sensible defaults.
+
+> **Note:** mapcv supports tile sources that serve standard **256x256 pixel** tiles (OpenStreetMap, Esri, Google Satellite, CartoDB, and most providers). Sources serving 512x512 tiles are not supported and will produce incorrectly scaled patches.
+
+### 2. Generate the dataset
+
 ```bash
-mapcv split --config mapcv.yaml
+mapcv generate my_dataset.yaml
 ```
+
+This fetches tiles, rasterizes labels, extracts patches, and writes everything to the output directory specified in your config.
+
+### 3. Re-split an existing dataset (optional)
+
+```bash
+mapcv split ./output --test-ratio 0.15 --val-ratio 0.10
+```
+
+Re-runs the train/val/test split from the existing `manifest.json` without re-downloading anything.
 
 ## Documentation
 
-Full documentation, including API references and advanced usage tutorials, is coming soon.
+Full documentation including configuration reference, CLI reference, and API reference is available at **[tahamukhtar20.github.io/mapcv](https://tahamukhtar20.github.io/mapcv)**.
 
-## Community & Contributing
+## Contributing
 
-We welcome contributions! Please review our:
-- [Contributing Guide](CONTRIBUTING.md) for information on setting up your development environment and submitting pull requests.
-- [Code of Conduct](CODE_OF_CONDUCT.md) to understand our community standards.
+Contributions are welcome. Please review the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
 
 ## Citation
 
-*(Citation information will be added later)*
+*(Citation information will be added after publication.)*
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

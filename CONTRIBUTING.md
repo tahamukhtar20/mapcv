@@ -19,11 +19,12 @@ uv run maturin develop
 > **Note**: If you modify the Rust code (`src/*.rs`), you must re-run `uv run maturin develop` for the changes to take effect in Python.
 
 ### 2. Pre-commit Hooks
-We use `pre-commit` to ensure code quality. Our hooks automatically run tests and formatters (`cargo fmt`, `clippy`, `ruff`, `mypy`, and `pytest`) before every commit.
+`pre-commit` hooks run `cargo fmt`, `clippy`, `ruff`, `mypy`, and `pytest` automatically before every commit.
 
-Install the hooks by running:
+Install `pre-commit` if you don't have it, then install the hooks:
 ```bash
-uv run pre-commit install
+pip install pre-commit
+pre-commit install
 ```
 
 ## Running Tests and Linters Manually

@@ -6,8 +6,34 @@ on:
       - 'v*'
 
 jobs:
+  # ── Version consistency check ─────────────────────────────────────────────────
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches pyproject.toml and Cargo.toml
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PYPROJECT=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CARGO=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          echo "Tag:          $TAG"
+          echo "pyproject.toml: $PYPROJECT"
+          echo "Cargo.toml:     $CARGO"
+
+          if [ "$TAG" != "$PYPROJECT" ]; then
+            echo "::error::Tag v$TAG does not match pyproject.toml version $PYPROJECT"
+            exit 1
+          fi
+          if [ "$TAG" != "$CARGO" ]; then
+            echo "::error::Tag v$TAG does not match Cargo.toml version $CARGO"
+            exit 1
+          fi
+          echo "All versions match: $TAG"
+
   # ── Linux (manylinux, x86-64 + aarch64) ─────────────────────────────────────
   linux:
+    needs: check-version
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -31,6 +57,7 @@ jobs:
 
   # ── macOS (universal2 — runs on both Intel and Apple Silicon) ────────────────
   macos:
+    needs: check-version
     runs-on: macos-latest
     strategy:
       matrix:
@@ -52,6 +79,7 @@ jobs:
 
   # ── Windows (x86-64) ─────────────────────────────────────────────────────────
   windows:
+    needs: check-version
     runs-on: windows-latest
     strategy:
       matrix:

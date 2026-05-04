@@ -78,13 +78,13 @@ Controls how fixed-size patches are extracted from the stitched image.
 |-------------------|--------|---------|-------------|
 | `patch_size`      | int    | -       | Side length of each square patch in pixels. |
 | `stride`          | int    | `0`     | Step between patch centres. `0` = same as `patch_size`. Lower values produce overlapping patches. |
-| `mode`            | str    | `grid`  | `grid` scans row-by-row. `random` draws positions randomly, requires `random_count`. |
+| `mode`            | str    | `grid`  | `grid` scans row-by-row. `random` draws positions randomly. |
 | `edge_strategy`   | str    | `pad`   | `pad` fills partial edge patches to full size. `drop` discards them. `shift` slides the last patch inward to fit. |
 | `pad_mode`        | str    | `zero`  | `zero` = black fill, `reflect` = mirror border. Only applies when `edge_strategy: pad`. |
 | `max_empty_ratio` | float  | `1.0`   | Drop patches exceeding this fraction of black pixels. `1.0` keeps all. |
 | `min_label_ratio` | float  | `0.0`   | Drop patches below this fraction of labeled pixels. `0.0` keeps all. |
-| `random_count`    | int    | -       | Number of patches to draw. Only used when `mode: random`. |
-| `random_seed`     | int    | -       | Random seed for reproducibility. Only used when `mode: random`. |
+| `random_count`    | int    | `100`   | Number of patches to draw. Only used when `mode: random`. |
+| `random_seed`     | int    | `42`    | Random seed for reproducibility. Only used when `mode: random`. |
 
 ---
 
@@ -100,7 +100,7 @@ Controls how fixed-size patches are extracted from the stitched image.
 
 ## `split` (optional)
 
-Omit to skip splitting. When present, mapcv writes `train.txt`, `val.txt`, and `test.txt` into `staging_dir`.
+Omit to skip splitting. When present, mapcv writes `train.txt`, `val.txt`, and `test.txt` into `staging_dir/splits/`.
 
 | Field            | Type        | Default            | Description |
 |------------------|-------------|---------------------|-------------|

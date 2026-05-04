@@ -327,6 +327,23 @@ class mapcv.Manifest(
 
 ---
 
+### `ManifestEntry`
+
+Each entry in `manifest.patches` is a `TypedDict` with the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `filename` | `str` | Relative path to the patch image inside the staging directory. |
+| `mask_filename` | `str \| None` | Relative path to the mask image, or `None` for unlabeled datasets. |
+| `row` | `int` | Top-left row of the patch in the stitched strip image. |
+| `col` | `int` | Top-left column of the patch in the stitched strip image. |
+| `padded` | `bool` | `True` if the patch was zero-padded to reach `patch_size`. |
+| `strip_index` | `int` | Index of the strip this patch was sampled from. |
+| `per_class_pixel_counts` | `dict[str, int]` | Pixel count for each class ID string (e.g. `{"1": 1024, "2": 512}`). Empty for unlabeled patches. |
+| `empty_ratio` | `float` | Fraction of black (zero) pixels in the image patch. |
+
+---
+
 ### `load_or_create_manifest`
 
 ```python
@@ -344,8 +361,8 @@ Load an existing manifest from `path`, or create a new one with `class_map` if t
 
 ```python
 mapcv.write_patches(
-    images: np.ndarray,
-    masks: np.ndarray | None,
+    image_patches: np.ndarray,
+    mask_patches: np.ndarray | None,
     meta: list[dict],
     config: WriterConfig,
     manifest: Manifest,
@@ -357,8 +374,8 @@ Write patch images and masks to disk and append entries to `manifest`. Skips fil
 
 **Parameters**
 
-- **`images`** (`np.ndarray`) - `(N, patch_size, patch_size, 3)` `uint8` array.
-- **`masks`** (`np.ndarray | None`) - `(N, patch_size, patch_size)` `uint8` array, or `None`.
+- **`image_patches`** (`np.ndarray`) - `(N, patch_size, patch_size, 3)` `uint8` array.
+- **`mask_patches`** (`np.ndarray | None`) - `(N, patch_size, patch_size)` `uint8` array, or `None`.
 - **`meta`** (`list[dict]`) - Patch metadata from `sample_patches`.
 - **`config`** (`WriterConfig`) - Writer configuration.
 - **`manifest`** (`Manifest`) - Manifest to append patch entries to.

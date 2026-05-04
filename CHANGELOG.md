@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.0] - 2026-05-04
+## [Unreleased]
 
 ### Bug Fixes
 
@@ -25,6 +25,8 @@ All notable changes to this project will be documented in this file.
 
 - Add rasterio to mypy ignore_missing_imports for cross-validation test
 - Improve release workflow with multi-Python, ARM, test gate, and GitHub Release
+- Add version consistency check to release workflow (#25)
+- Add git-cliff changelog generation (#26)
 
 ### Documentation
 
@@ -32,6 +34,8 @@ All notable changes to this project will be documented in this file.
 - Fix API inaccuracies, remove Amsterdam demo, add deploy workflow
 - Update documentation, simplify CONTRIBUTING instructions, and refine README quick-start guide
 - Fix QA-identified inaccuracies in CLI, config, API, and examples
+- Add downloads, docs, and ruff badges to README (#22)
+- Add author contact to README
 
 ### Features
 

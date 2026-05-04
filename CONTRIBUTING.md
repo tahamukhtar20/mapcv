@@ -161,14 +161,14 @@ Use **squash merge** when merging PRs to keep `main` history clean and changelog
    git commit -m "chore: release 0.1.1"
    ```
 
-4. **Merge to `main`**, then tag:
+4. **Open a PR** (e.g. `chore/release-0.1.1`), merge it to `main`, then tag:
    ```bash
    git tag v0.1.1 && git push mapcv v0.1.1
    ```
 
 CI takes over from here: it verifies the tag matches both version files, builds wheels for all platforms and Python versions, runs the test suite, publishes to PyPI, and creates a GitHub Release with the changelog section as release notes.
 
-> **Important:** Always bump versions and commit *before* tagging. The tag must point to the version-bump commit on `main`.
+> **Important:** Always bump versions and merge to `main` *before* tagging. The tag must point to the version-bump commit on `main`.
 
 ---
 

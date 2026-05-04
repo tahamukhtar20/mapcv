@@ -677,7 +677,6 @@ name = "mapcv"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "mercantile" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
@@ -692,6 +691,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "maturin" },
+    { name = "mercantile" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -713,7 +713,7 @@ requires-dist = [
     { name = "ipywidgets", marker = "extra == 'docs'" },
     { name = "matplotlib", marker = "extra == 'docs'" },
     { name = "maturin", marker = "extra == 'dev'" },
-    { name = "mercantile" },
+    { name = "mercantile", marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numpy" },
     { name = "pillow" },

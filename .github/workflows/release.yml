@@ -107,7 +107,7 @@ jobs:
           merge-multiple: true
       - name: Install wheel and test dependencies
         run: |
-          pip install dist/mapcv-*.whl
+          pip install --no-index --find-links dist mapcv
           pip install pytest pytest-httpserver
       - name: Run tests
         run: pytest

@@ -127,6 +127,51 @@ the module's responsibility.
 - Avoid magic numbers; extract named constants (`const TILE_PX: usize = 256`).
 - `pub(crate)` for items used across modules but not part of the Python API.
 
+## Commit Style
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes — this is what drives the automatic changelog:
+
+| Prefix | When to use | Appears in changelog |
+|---|---|---|
+| `feat:` | New user-facing feature | Yes — Features |
+| `fix:` | Bug fix | Yes — Bug Fixes |
+| `perf:` | Performance improvement | Yes — Performance |
+| `refactor:` | Code restructure, no behaviour change | Yes — Refactoring |
+| `docs:` | Documentation only | Yes — Documentation |
+| `ci:` | CI/CD workflow changes | Yes — CI/CD |
+| `chore:` | Maintenance (deps, version bumps) | Skipped |
+| `test:` | Tests only | Skipped |
+
+Use **squash merge** when merging PRs to keep `main` history clean and changelog output meaningful.
+
+---
+
+## Release Process (maintainers)
+
+1. **Bump versions** in `pyproject.toml` and `Cargo.toml` to the new version (e.g. `0.1.1`).
+
+2. **Regenerate the changelog:**
+   ```bash
+   uvx git-cliff -o CHANGELOG.md
+   ```
+
+3. **Commit everything in one go:**
+   ```bash
+   git add pyproject.toml Cargo.toml CHANGELOG.md
+   git commit -m "chore: release 0.1.1"
+   ```
+
+4. **Merge to `main`**, then tag:
+   ```bash
+   git tag v0.1.1 && git push mapcv v0.1.1
+   ```
+
+CI takes over from here: it verifies the tag matches both version files, builds wheels for all platforms and Python versions, runs the test suite, publishes to PyPI, and creates a GitHub Release with the changelog section as release notes.
+
+> **Important:** Always bump versions and commit *before* tagging. The tag must point to the version-bump commit on `main`.
+
+---
+
 ## How to Submit a Contribution
 
 1. **Open an Issue:** If you're planning a significant change, please open an issue first to discuss it with the maintainers.

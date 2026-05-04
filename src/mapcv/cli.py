@@ -14,7 +14,7 @@ from mapcv.splitter import SplitterConfig
 
 app = typer.Typer(
     name="mapcv",
-    help="Satellite imagery dataset creation tool for segmentation.",
+    help="A high-performance satellite imagery dataset creation tool for computer vision.",
     no_args_is_help=True,
 )
 _console = Console()

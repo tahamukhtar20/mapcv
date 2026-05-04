@@ -46,12 +46,13 @@ output/
     patch_0000001.png
     ...
   manifest.json
-  train.txt
-  val.txt
-  test.txt
+  splits/
+    train.txt
+    val.txt
+    test.txt
 ```
 
-Mask pixels are `0` for background and `1..255` for class IDs. If no `labels` section is present in the config, no `Masks/` directory is written.
+Mask pixels are `0` for background and `1..255` for class IDs. If no `labels` section is present in the config, no `Masks/` directory is written. If no `split` section is present, no `splits/` directory is written.
 
 ---
 
@@ -75,3 +76,5 @@ mapcv split [OPTIONS] STAGING_DIR
 ```bash
 mapcv split ./output --test-ratio 0.15 --val-ratio 0.10
 ```
+
+Split files are written to `STAGING_DIR/splits/` (e.g. `output/splits/train.txt`).

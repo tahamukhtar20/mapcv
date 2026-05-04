@@ -41,7 +41,7 @@ tiles:
 
 sampler:
   patch_size: 256
-  stride: 256                # 0 = same as patch_size (non-overlapping)
+  stride: 0                  # 0 = same as patch_size (non-overlapping)
   mode: grid                 # grid | random
   edge_strategy: pad         # pad | drop | shift
   pad_mode: zero             # zero | reflect

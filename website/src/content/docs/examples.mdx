@@ -7,6 +7,8 @@ description: Common mapcv config patterns for real-world use cases.
 
 The most common case is to download satellite tiles and rasterize KML polygon annotations onto them.
 
+Replace `buildings.kml` below with the path to your own KML or GeoJSON annotation file.
+
 ```yaml
 region:
   west: 4.883
@@ -103,7 +105,7 @@ split:
   strategy: stratified
 ```
 
-This writes `5/labeled.txt`, `5/unlabeled.txt`, `10/labeled.txt`, `10/unlabeled.txt`, and so on for each ratio, directly inside `staging_dir`. The directory name is the ratio as an integer percentage.
+This writes `5/labeled.txt`, `5/unlabeled.txt`, `10/labeled.txt`, `10/unlabeled.txt`, and so on for each ratio, inside `staging_dir/splits/`. The directory name is the ratio as an integer percentage.
 
 ---
 

@@ -154,7 +154,16 @@ async fn fetch_single_tile(
             Err(e) => {
                 if retries >= MAX_RETRIES {
                     match policy {
-                        FailurePolicy::Strict => return Err(format!("Network error: {e}")),
+                        FailurePolicy::Strict => {
+                            // reqwest's error message may contain the URL. We attempt to redact it.
+                            let err_str = e.to_string();
+                            let sanitized_msg = if err_str.contains(&url) {
+                                err_str.replace(&url, &sanitize_url(&url))
+                            } else {
+                                err_str
+                            };
+                            return Err(format!("Network error: {sanitized_msg}"));
+                        }
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                         FailurePolicy::Ignore => {
                             return Ok((tile, TileOutcome::BlackFill(black_tile_png())))

@@ -36,17 +36,26 @@ pub fn stitch_tiles(
     let min_y = tiles.iter().map(|(_, y, _, _)| *y).min().unwrap();
     let max_x = tiles.iter().map(|(x, _, _, _)| *x).max().unwrap();
     let max_y = tiles.iter().map(|(_, y, _, _)| *y).max().unwrap();
-    let n_x_64 = u64::from(max_x) - u64::from(min_x) + 1;
-    let n_y_64 = u64::from(max_y) - u64::from(min_y) + 1;
+    let tile_count_x = u64::from(max_x) - u64::from(min_x) + 1;
+    let tile_count_y = u64::from(max_y) - u64::from(min_y) + 1;
 
-    if n_x_64 > 16384 || n_y_64 > 16384 {
+    if tile_count_x > 16384 || tile_count_y > 16384 {
         return Err(format!(
-            "stitch_tiles: tile range too large ({n_x_64}x{n_y_64} tiles)"
+            "stitch_tiles: tile range too large ({tile_count_x}x{tile_count_y} tiles)"
         ));
     }
 
-    let n_x = n_x_64 as usize;
-    let n_y = n_y_64 as usize;
+    let total_tiles = tile_count_x.saturating_mul(tile_count_y);
+    if total_tiles > 16384 {
+        return Err(format!(
+            "stitch_tiles: total tile count too large ({total_tiles} tiles)"
+        ));
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    let n_x = tile_count_x as usize;
+    #[allow(clippy::cast_possible_truncation)]
+    let n_y = tile_count_y as usize;
     let h = n_y * TILE_PX;
     let w = n_x * TILE_PX;
 

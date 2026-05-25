@@ -92,24 +92,24 @@ def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
     assert len(data) > 0, "Black fill must produce non-empty bytes"
 
 
-def test_fetch_tiles_ignore_counts_as_failure_for_ratio(httpserver: Any) -> None:
-    """Ignore policy: black-fill tiles still count toward max_failed_ratio."""
+def test_fetch_tiles_ignore_ignores_ratio(httpserver: Any) -> None:
+    """Ignore policy: black-fill tiles ignore max_failed_ratio."""
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"NOT FOUND", status=404)
     httpserver.expect_request("/tile/14/2/1.png").respond_with_data(b"NOT FOUND", status=404)
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     tile_list = [PyTileIndex(1, 1, 14), PyTileIndex(2, 1, 14)]
 
-    # 2/2 failed = 100 % > 0 % threshold
-    with pytest.raises(RuntimeError, match="Too many failed tiles"):
-        fetch_tiles(
-            tile_list,
-            url_template,
-            callback=None,
-            max_connections=2,
-            policy="ignore",
-            max_failed_ratio=0.0,
-        )
+    # 2/2 failed = 100 % > 0 % threshold, but policy is "ignore" so it should pass
+    results = fetch_tiles(
+        tile_list,
+        url_template,
+        callback=None,
+        max_connections=2,
+        policy="ignore",
+        max_failed_ratio=0.0,
+    )
+    assert len(results) == 2
 
 
 def test_fetch_tiles_max_failed_ratio_exceeded(httpserver: Any) -> None:

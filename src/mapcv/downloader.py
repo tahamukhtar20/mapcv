@@ -56,9 +56,10 @@ def _ask_continue_after_failure(exc: BaseException) -> bool:
 
 def _in_jupyter() -> bool:
     try:
-        import IPython.core.getipython as _gip  # type: ignore
+        from importlib import import_module
 
-        return cast(Any, _gip.get_ipython)() is not None
+        _gip = import_module("IPython.core.getipython")
+        return cast(Any, _gip).get_ipython() is not None
     except (ImportError, AttributeError):
         return False
 

@@ -105,8 +105,9 @@ def parse_geojson(
             if label_val is None:
                 continue
             label = str(label_val)
-            if label not in class_map:
-                class_map[label] = len(class_map) + 1
-            result.append((geom, class_map[label]))
+            class_id = class_map.get(label)
+            if class_id is None:
+                class_id = class_map[label] = len(class_map) + 1
+            result.append((geom, class_id))
 
     return result, class_map

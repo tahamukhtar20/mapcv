@@ -71,4 +71,5 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",
+    "pytest-cov>=7.1.0",
 ]

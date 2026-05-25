@@ -36,10 +36,25 @@ pub fn stitch_tiles(
     let min_y = tiles.iter().map(|(_, y, _, _)| *y).min().unwrap();
     let max_x = tiles.iter().map(|(x, _, _, _)| *x).max().unwrap();
     let max_y = tiles.iter().map(|(_, y, _, _)| *y).max().unwrap();
-    let n_x = (max_x - min_x + 1) as usize;
-    let n_y = (max_y - min_y + 1) as usize;
+    let n_x_64 = u64::from(max_x) - u64::from(min_x) + 1;
+    let n_y_64 = u64::from(max_y) - u64::from(min_y) + 1;
+
+    if n_x_64 > 16384 || n_y_64 > 16384 {
+        return Err(format!(
+            "stitch_tiles: tile range too large ({n_x_64}x{n_y_64} tiles)"
+        ));
+    }
+
+    let n_x = n_x_64 as usize;
+    let n_y = n_y_64 as usize;
     let h = n_y * TILE_PX;
     let w = n_x * TILE_PX;
+
+    // Ensure total buffer size does not overflow usize
+    let _ = h
+        .checked_mul(w)
+        .and_then(|area| area.checked_mul(3))
+        .ok_or_else(|| "stitch_tiles: canvas dimensions overflow usize".to_string())?;
 
     // Decode all tiles in parallel; each thread produces (tx, ty, rgb_bytes).
     let decoded: Vec<(u32, u32, Vec<u8>)> = tiles

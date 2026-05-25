@@ -58,6 +58,11 @@ enum TileOutcome {
     Missing,
 }
 
+/// Remove query parameters from a URL string to prevent leaking sensitive API keys in error messages.
+fn sanitize_url(url: &str) -> String {
+    url.split('?').next().unwrap_or(url).to_owned()
+}
+
 /// Return a solid-black `TILE_PX x TILE_PX` PNG buffer used as a `NoData` placeholder.
 fn black_tile_png() -> Vec<u8> {
     // TILE_PX is 256, well within u32 range.
@@ -102,7 +107,9 @@ async fn fetch_single_tile(
                 return Ok((tile, TileOutcome::Success(bytes.to_vec())));
             }
             Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => match policy {
-                FailurePolicy::Strict => return Err(format!("Tile 404 Not Found: {url}")),
+                FailurePolicy::Strict => {
+                    return Err(format!("Tile 404 Not Found: {}", sanitize_url(&url)))
+                }
                 FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                 FailurePolicy::Ignore => {
                     return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
@@ -115,7 +122,11 @@ async fn fetch_single_tile(
             {
                 match policy {
                     FailurePolicy::Strict => {
-                        return Err(format!("HTTP {} for URL: {}", r.status(), url))
+                        return Err(format!(
+                            "HTTP {} for URL: {}",
+                            r.status(),
+                            sanitize_url(&url)
+                        ))
                     }
                     FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                     FailurePolicy::Ignore => {
@@ -127,7 +138,11 @@ async fn fetch_single_tile(
                 if retries >= MAX_RETRIES {
                     match policy {
                         FailurePolicy::Strict => {
-                            return Err(format!("HTTP {} for URL: {}", r.status(), url))
+                            return Err(format!(
+                                "HTTP {} for URL: {}",
+                                r.status(),
+                                sanitize_url(&url)
+                            ))
                         }
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                         FailurePolicy::Ignore => {

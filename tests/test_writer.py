@@ -103,6 +103,44 @@ def test_load_or_create_loads_existing(tmp_path: Path) -> None:
     assert m.class_map == {"y": 2}
 
 
+def test_manifest_save_exact_content(tmp_path: Path) -> None:
+    m = Manifest(class_map={"bg": 0})
+    path = tmp_path / "manifest.json"
+    m.save(path)
+    content = path.read_text()
+    expected = m.model_dump_json(indent=2)
+    assert content == expected
+    # Also check a few lines for indentation
+    lines = content.splitlines()
+    assert lines[1].startswith("  ")
+
+
+def test_manifest_save_non_existent_dir(tmp_path: Path) -> None:
+    m = Manifest(class_map={"bg": 0})
+    path = tmp_path / "non_existent" / "manifest.json"
+    with pytest.raises(FileNotFoundError):
+        m.save(path)
+
+
+def test_manifest_save_permission_error(tmp_path: Path) -> None:
+    m = Manifest(class_map={"bg": 0})
+    path = tmp_path / "manifest.json"
+    path.touch()
+    path.chmod(0o444)  # Read-only
+    try:
+        # If we can still write to it (e.g. running as root), skip the test.
+        try:
+            path.write_text("test")
+            pytest.skip("Environment allows writing to read-only files (likely root)")
+        except OSError:
+            pass
+
+        with pytest.raises(OSError):
+            m.save(path)
+    finally:
+        path.chmod(0o644)
+
+
 # ---------------------------------------------------------------------------
 # write_patches: file creation
 # ---------------------------------------------------------------------------

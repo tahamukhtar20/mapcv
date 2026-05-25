@@ -161,7 +161,7 @@ fn fetch_tiles(
     max_connections: usize,
     policy: &str,
     max_failed_ratio: f64,
-) -> PyResult<Vec<(PyTileIndex, PyObject)>> {
+) -> PyResult<(Vec<(PyTileIndex, PyObject)>, usize)> {
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -190,7 +190,7 @@ fn fetch_tiles(
         )));
     }
 
-    Ok(results
+    let results_py = results
         .into_iter()
         .map(|(t, bytes)| {
             (
@@ -198,7 +198,9 @@ fn fetch_tiles(
                 pyo3::types::PyBytes::new_bound(py, &bytes).into(),
             )
         })
-        .collect())
+        .collect();
+
+    Ok((results_py, failed))
 }
 
 /// Generate grid (or sliding-window) patch anchor positions.

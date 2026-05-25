@@ -56,7 +56,7 @@ def _ask_continue_after_failure(exc: BaseException) -> bool:
 
 def _in_jupyter() -> bool:
     try:
-        import IPython.core.getipython as _gip
+        import IPython.core.getipython as _gip  # type: ignore
 
         return cast(Any, _gip.get_ipython)() is not None
     except (ImportError, AttributeError):
@@ -143,7 +143,7 @@ def download_region(
 
     if _in_jupyter():
         print(f"Fetching {total} tiles...", end=" ", flush=True)
-        results: List[Tuple[PyTileIndex, bytes]] = fetch_tiles_rs(
+        results, failed_count = fetch_tiles_rs(
             target_tiles,
             template,
             callback=lambda _: None,
@@ -159,7 +159,7 @@ def download_region(
             def progress_callback(completed: int) -> None:
                 progress.update(task_id, completed=completed)
 
-            results = fetch_tiles_rs(
+            results, failed_count = fetch_tiles_rs(
                 target_tiles,
                 template,
                 callback=progress_callback,
@@ -173,12 +173,12 @@ def download_region(
     if policy == "ignore":
         _console.print(
             f"[dim]{fetched}/{total} tiles returned"
-            " (failures are filled with NoData under 'ignore' policy)[/dim]"
+            f" ({failed_count} failures filled with NoData under 'ignore' policy)[/dim]"
         )
     else:
-        _console.print(f"[dim]{fetched}/{total} tiles fetched, {total - fetched} failed[/dim]")
+        _console.print(f"[dim]{fetched}/{total} tiles fetched, {failed_count} failed[/dim]")
 
-    return results
+    return cast(List[Tuple[PyTileIndex, bytes]], results)
 
 
 def stitch_region(
@@ -264,26 +264,28 @@ def download_region_strips(
                 else:
                     to_fetch.append(t)
             fresh: List[Tuple[PyTileIndex, bytes]] = []
+            strip_failed = 0
             if to_fetch:
                 try:
-                    fresh = fetch_tiles_rs(
+                    # Pass ratio=1.0 to defer global check to Python side
+                    fresh, strip_failed = fetch_tiles_rs(
                         to_fetch,
                         template,
                         callback=lambda _: None,
                         max_connections=max_connections,
                         policy=current_policy,
-                        max_failed_ratio=max_failed_ratio,
+                        max_failed_ratio=1.0 if current_policy != "strict" else max_failed_ratio,
                     )
                 except RuntimeError as exc:
                     if current_policy == "strict" and _ask_continue_after_failure(exc):
                         current_policy = "lenient"
                         fresh = []
+                        strip_failed = len(to_fetch)
                     else:
                         raise
                 for t, b in fresh:
                     tile_cache[(t.x, t.y, t.z)] = b
             strip_results = cached_results + fresh
-            strip_failed = 0 if current_policy == "ignore" else len(strip) - len(strip_results)
             total_fetched += len(strip_results)
             total_failed += strip_failed
             all_results.append(strip_results)
@@ -308,6 +310,7 @@ def download_region_strips(
                     progress.update(task_id, completed=tiles_done)
 
                 fresh2: List[Tuple[PyTileIndex, bytes]] = []
+                strip_failed2 = 0
                 if to_fetch2:
                     _base = tiles_done
 
@@ -318,13 +321,14 @@ def download_region_strips(
                         return _cb
 
                     try:
-                        fresh2 = fetch_tiles_rs(
+                        # Pass ratio=1.0 to defer global check to Python side
+                        fresh2, strip_failed2 = fetch_tiles_rs(
                             to_fetch2,
                             template,
                             callback=_make_callback(_base),
                             max_connections=max_connections,
                             policy=current_policy,
-                            max_failed_ratio=max_failed_ratio,
+                            max_failed_ratio=1.0 if current_policy != "strict" else max_failed_ratio,
                         )
                     except RuntimeError as exc:
                         if current_policy == "strict":
@@ -332,6 +336,7 @@ def download_region_strips(
                             if _ask_continue_after_failure(exc):
                                 current_policy = "lenient"
                                 fresh2 = []
+                                strip_failed2 = len(to_fetch2)
                                 progress.start()
                             else:
                                 raise
@@ -344,18 +349,20 @@ def download_region_strips(
                     progress.update(task_id, completed=tiles_done)
 
                 strip_results2 = cached_results2 + fresh2
-                # under 'ignore' policy len(strip) - len(strip_results2) is always 0 and misleading
-                strip_failed2 = (
-                    0 if current_policy == "ignore" else len(strip) - len(strip_results2)
-                )
                 total_fetched += len(strip_results2)
                 total_failed += strip_failed2
                 all_results.append(strip_results2)
 
+    if total > 0 and total_failed / total > max_failed_ratio:
+        raise RuntimeError(
+            f"Too many failed tiles: {total_failed}/{total} "
+            f"({100.0 * total_failed / total:.1f}% exceeds {100.0 * max_failed_ratio:.1f}% threshold)"
+        )
+
     if current_policy == "ignore":
         _console.print(
             f"[dim]{total_fetched}/{total} tiles returned"
-            " (failures are filled with NoData under 'ignore' policy)[/dim]"
+            f" ({total_failed} failures filled with NoData under 'ignore' policy)[/dim]"
         )
     else:
         _console.print(f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]")

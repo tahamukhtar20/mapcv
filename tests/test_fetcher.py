@@ -23,11 +23,12 @@ def test_fetch_tiles_mock(httpserver: Any) -> None:
     def callback(c: int) -> None:
         progress_updates.append(c)
 
-    results = fetch_tiles(
+    results, failed = fetch_tiles(
         tile_list, url_template, callback=callback, max_connections=2, policy="strict"
     )
 
     assert len(results) == 2
+    assert failed == 0
     # `completed` is a monotonic counter incremented after each outcome regardless
     # of which tile finishes first, so [1, 2] is always the order even with buffer_unordered.
     assert progress_updates == [1, 2]
@@ -47,7 +48,7 @@ def test_fetch_tiles_lenient(httpserver: Any) -> None:
         PyTileIndex(2, 1, 14),
     ]
 
-    results = fetch_tiles(
+    results, failed = fetch_tiles(
         tile_list,
         url_template,
         callback=None,
@@ -57,6 +58,7 @@ def test_fetch_tiles_lenient(httpserver: Any) -> None:
     )
 
     assert len(results) == 1
+    assert failed == 1
     assert results[0][0].x == 1
 
 
@@ -77,7 +79,7 @@ def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     tile_list = [PyTileIndex(1, 1, 14)]
 
-    results = fetch_tiles(
+    results, failed = fetch_tiles(
         tile_list,
         url_template,
         callback=None,
@@ -87,6 +89,7 @@ def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
     )
 
     assert len(results) == 1, "Ignore policy must keep the tile in results"
+    assert failed == 1
     tile, data = results[0]
     assert tile.x == 1
     assert len(data) > 0, "Black fill must produce non-empty bytes"
@@ -146,7 +149,7 @@ def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:
     tile_list = [PyTileIndex(1, 1, 14), PyTileIndex(2, 1, 14)]
 
     # 1/2 = 50 % which is not > 60 % threshold
-    results = fetch_tiles(
+    results, failed = fetch_tiles(
         tile_list,
         url_template,
         callback=None,
@@ -155,4 +158,5 @@ def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:
         max_failed_ratio=0.6,
     )
     assert len(results) == 1
+    assert failed == 1
     assert results[0][0].x == 1

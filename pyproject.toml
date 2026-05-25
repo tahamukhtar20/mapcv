@@ -11,6 +11,17 @@ license = { text = "MIT" }
 authors = [
     { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
 requires-python = ">=3.10"
 dependencies = [
     "Pillow",

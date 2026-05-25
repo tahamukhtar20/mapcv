@@ -182,7 +182,7 @@ fn fetch_tiles(
         policy,
     )?;
 
-    if total > 0 && failed as f64 / total as f64 > max_failed_ratio {
+    if policy == "lenient" && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold)",
             100.0 * failed as f64 / total as f64,

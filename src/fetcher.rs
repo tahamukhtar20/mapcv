@@ -5,7 +5,7 @@ use futures::stream::{self, StreamExt};
 use image::{DynamicImage, ImageFormat};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use std::io::Cursor;
 use std::sync::mpsc;
 use std::thread;
@@ -58,9 +58,30 @@ enum TileOutcome {
     Missing,
 }
 
-/// Remove query parameters from a URL string to prevent leaking sensitive API keys in error messages.
+/// Remove credentials, query parameters, and fragments before a URL is logged.
 fn sanitize_url(url: &str) -> String {
-    url.split('?').next().unwrap_or(url).to_owned()
+    if let Ok(mut parsed) = Url::parse(url) {
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        return parsed.to_string();
+    }
+
+    url.split(['?', '#']).next().unwrap_or(url).to_owned()
+}
+
+fn network_error_message(error: &reqwest::Error, url: &str) -> String {
+    let reason = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_request() {
+        "request could not be sent"
+    } else {
+        "request failed"
+    };
+    format!("Network error for {}: {reason}", sanitize_url(url))
 }
 
 /// Return a solid-black `TILE_PX x TILE_PX` PNG buffer used as a `NoData` placeholder.
@@ -155,14 +176,7 @@ async fn fetch_single_tile(
                 if retries >= MAX_RETRIES {
                     match policy {
                         FailurePolicy::Strict => {
-                            // reqwest's error message may contain the URL. We attempt to redact it.
-                            let err_str = e.to_string();
-                            let sanitized_msg = if err_str.contains(&url) {
-                                err_str.replace(&url, &sanitize_url(&url))
-                            } else {
-                                err_str
-                            };
-                            return Err(format!("Network error: {sanitized_msg}"));
+                            return Err(network_error_message(&e, &url));
                         }
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                         FailurePolicy::Ignore => {

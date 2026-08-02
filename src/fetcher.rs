@@ -5,7 +5,7 @@ use futures::stream::{self, StreamExt};
 use image::{DynamicImage, ImageFormat};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use std::io::Cursor;
 use std::sync::mpsc;
 use std::thread;
@@ -58,6 +58,32 @@ enum TileOutcome {
     Missing,
 }
 
+/// Remove credentials, query parameters, and fragments before a URL is logged.
+fn sanitize_url(url: &str) -> String {
+    if let Ok(mut parsed) = Url::parse(url) {
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        return parsed.to_string();
+    }
+
+    url.split(['?', '#']).next().unwrap_or(url).to_owned()
+}
+
+fn network_error_message(error: &reqwest::Error, url: &str) -> String {
+    let reason = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_request() {
+        "request could not be sent"
+    } else {
+        "request failed"
+    };
+    format!("Network error for {}: {reason}", sanitize_url(url))
+}
+
 /// Return a solid-black `TILE_PX x TILE_PX` PNG buffer used as a `NoData` placeholder.
 fn black_tile_png() -> Vec<u8> {
     // TILE_PX is 256, well within u32 range.
@@ -102,7 +128,9 @@ async fn fetch_single_tile(
                 return Ok((tile, TileOutcome::Success(bytes.to_vec())));
             }
             Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => match policy {
-                FailurePolicy::Strict => return Err(format!("Tile 404 Not Found: {url}")),
+                FailurePolicy::Strict => {
+                    return Err(format!("Tile 404 Not Found: {}", sanitize_url(&url)))
+                }
                 FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                 FailurePolicy::Ignore => {
                     return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
@@ -115,7 +143,11 @@ async fn fetch_single_tile(
             {
                 match policy {
                     FailurePolicy::Strict => {
-                        return Err(format!("HTTP {} for URL: {}", r.status(), url))
+                        return Err(format!(
+                            "HTTP {} for URL: {}",
+                            r.status(),
+                            sanitize_url(&url)
+                        ))
                     }
                     FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                     FailurePolicy::Ignore => {
@@ -127,7 +159,11 @@ async fn fetch_single_tile(
                 if retries >= MAX_RETRIES {
                     match policy {
                         FailurePolicy::Strict => {
-                            return Err(format!("HTTP {} for URL: {}", r.status(), url))
+                            return Err(format!(
+                                "HTTP {} for URL: {}",
+                                r.status(),
+                                sanitize_url(&url)
+                            ))
                         }
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                         FailurePolicy::Ignore => {
@@ -139,7 +175,9 @@ async fn fetch_single_tile(
             Err(e) => {
                 if retries >= MAX_RETRIES {
                     match policy {
-                        FailurePolicy::Strict => return Err(format!("Network error: {e}")),
+                        FailurePolicy::Strict => {
+                            return Err(network_error_message(&e, &url));
+                        }
                         FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
                         FailurePolicy::Ignore => {
                             return Ok((tile, TileOutcome::BlackFill(black_tile_png())))

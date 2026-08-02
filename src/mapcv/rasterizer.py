@@ -35,7 +35,7 @@ def _flatten(geom: BaseGeometry, class_id: int) -> List[Tuple[RingSet, int]]:
 
 
 def rasterize(
-    geometries: Sequence[Tuple[BaseGeometry, int]],
+    geometries: Iterable[Tuple[BaseGeometry, int]],
     out_shape: Tuple[int, int],
     transform: Transform,
     all_touched: bool = False,

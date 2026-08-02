@@ -78,6 +78,14 @@ def test_multiclass_mapping() -> None:
     assert (mask[2:4, 2:4] == 0).all()
 
 
+def test_single_pass_geometry_iterable() -> None:
+    geometries = ((_square(float(i), 0, 1), i + 1) for i in range(3))
+
+    mask = rasterize(geometries, (2, 4), IDENTITY)
+
+    assert mask[0, :3].tolist() == [1, 2, 3]
+
+
 def test_class_id_zero_is_rejected() -> None:
     with pytest.raises(ValueError, match="class_id"):
         rasterize([(_square(0, 0, 1), 0)], (4, 4), IDENTITY)

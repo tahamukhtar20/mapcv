@@ -20,7 +20,6 @@ Cargo.lock
 *.dylib
 .claude/
 site/
-.coverage
 website/.astro/
 website/dist/
 website/node_modules/

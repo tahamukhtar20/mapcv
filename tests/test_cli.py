@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+import pytest
 from typer.testing import CliRunner
 
 from mapcv.cli import app
@@ -211,10 +212,12 @@ def test_generate_bad_config(tmp_path: Path) -> None:
     assert "Config error" in result.output
 
 
-def test_generate_unreadable_config(tmp_path: Path, monkeypatch) -> None:
+def test_generate_unreadable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = _write_config(tmp_path)
 
-    def mock_read_text(*args, **kwargs):
+    def mock_read_text(*args: Any, **kwargs: Any) -> str:
         raise OSError("Permission denied")
 
     monkeypatch.setattr(Path, "read_text", mock_read_text)
@@ -225,11 +228,13 @@ def test_generate_unreadable_config(tmp_path: Path, monkeypatch) -> None:
     assert "Permission denied" in result.output
 
 
-def test_generate_calls_run_generate(tmp_path: Path, monkeypatch) -> None:
+def test_generate_calls_run_generate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = _write_config(tmp_path)
     called = False
 
-    def mock_run_generate(config):
+    def mock_run_generate(config: Any) -> None:
         nonlocal called
         called = True
 
@@ -245,10 +250,12 @@ def test_generate_calls_run_generate(tmp_path: Path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_unreadable_config(tmp_path: Path, monkeypatch) -> None:
+def test_validate_unreadable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = _write_config(tmp_path)
 
-    def mock_read_text(*args, **kwargs):
+    def mock_read_text(*args: Any, **kwargs: Any) -> str:
         raise OSError("Permission denied")
 
     monkeypatch.setattr(Path, "read_text", mock_read_text)

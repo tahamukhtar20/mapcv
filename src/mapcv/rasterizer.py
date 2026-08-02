@@ -35,7 +35,7 @@ def _flatten(geom: BaseGeometry, class_id: int) -> List[Tuple[RingSet, int]]:
 
 
 def rasterize(
-    geometries: Sequence[Tuple[BaseGeometry, int]],
+    geometries: Iterable[Tuple[BaseGeometry, int]],
     out_shape: Tuple[int, int],
     transform: Transform,
     all_touched: bool = False,
@@ -47,13 +47,13 @@ def rasterize(
     Background pixels are 0; polygons in later list positions overwrite
     earlier ones. Non-polygon geometries are silently skipped.
     """
-    if any(int(cid) <= 0 or int(cid) > 255 for _, cid in geometries):
-        raise ValueError("class_id must be in 1..=255 (0 is reserved for background)")
-
     height, width = out_shape
     polygons: List[Tuple[RingSet, int]] = []
     for geom, cid in geometries:
-        polygons.extend(_flatten(geom, int(cid)))
+        cid_int = int(cid)
+        if cid_int <= 0 or cid_int > 255:
+            raise ValueError("class_id must be in 1..=255 (0 is reserved for background)")
+        polygons.extend(_flatten(geom, cid_int))
 
     return cast(
         npt.NDArray[np.uint8],

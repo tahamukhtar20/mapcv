@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+import pytest
 from typer.testing import CliRunner
 
 from mapcv.cli import app
@@ -180,3 +181,98 @@ def test_split_invalid_test_ratio(tmp_path: Path) -> None:
     _write_manifest(staging, n=50)
     result = runner.invoke(app, ["split", str(staging), "--test-ratio", "1.5"])
     assert result.exit_code != 0
+
+
+def test_split_config_error(tmp_path: Path) -> None:
+    # Trigger the except Exception block in split command
+    staging = tmp_path / "staging"
+    _write_manifest(staging, n=50)
+    # providing an invalid strategy to trigger validation error
+    result = runner.invoke(app, ["split", str(staging), "--strategy", "invalid_strategy"])
+    assert result.exit_code != 0
+    assert "Config error" in result.output
+
+
+# ---------------------------------------------------------------------------
+# generate command
+# ---------------------------------------------------------------------------
+
+
+def test_generate_missing_file(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["generate", str(tmp_path / "no_file.yaml")])
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
+
+
+def test_generate_bad_config(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("region:\n  west: 0\n")
+    result = runner.invoke(app, ["generate", str(bad)])
+    assert result.exit_code != 0
+    assert "Config error" in result.output
+
+
+def test_generate_unreadable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_config(tmp_path)
+
+    def mock_read_text(*args: Any, **kwargs: Any) -> str:
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", mock_read_text)
+
+    result = runner.invoke(app, ["generate", str(cfg)])
+    assert result.exit_code != 0
+    assert "Config error" in result.output
+    assert "Permission denied" in result.output
+
+
+def test_generate_calls_run_generate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_config(tmp_path)
+    called = False
+
+    def mock_run_generate(config: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("mapcv.cli.run_generate", mock_run_generate)
+
+    result = runner.invoke(app, ["generate", str(cfg)])
+    assert result.exit_code == 0
+    assert called
+
+
+# ---------------------------------------------------------------------------
+# Error handling in validate
+# ---------------------------------------------------------------------------
+
+
+def test_validate_unreadable_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _write_config(tmp_path)
+
+    def mock_read_text(*args: Any, **kwargs: Any) -> str:
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", mock_read_text)
+
+    result = runner.invoke(app, ["validate", str(cfg)])
+    assert result.exit_code != 0
+    assert "Config error" in result.output
+    assert "Permission denied" in result.output
+
+
+def test_validate_shows_split_info(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.yaml"
+    staging = tmp_path / "output"
+    cfg.write_text(
+        _VALID_CONFIG.format(staging_dir=staging) + "split:\n  test_ratio: 0.2\n  strategy: random\n"
+    )
+    result = runner.invoke(app, ["validate", str(cfg)])
+    assert result.exit_code == 0
+    assert "split" in result.output
+    assert "0.2" in result.output

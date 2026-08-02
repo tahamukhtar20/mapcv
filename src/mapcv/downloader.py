@@ -56,9 +56,9 @@ def _ask_continue_after_failure(exc: BaseException) -> bool:
 
 def _in_jupyter() -> bool:
     try:
-        import IPython
+        import IPython.core.getipython as _gip
 
-        return cast(Any, IPython).get_ipython() is not None
+        return cast(Any, _gip.get_ipython)() is not None
     except (ImportError, AttributeError):
         return False
 
@@ -353,7 +353,7 @@ def download_region_strips(
                 total_failed += strip_failed2
                 all_results.append(strip_results2)
 
-    if total > 0 and total_failed / total > max_failed_ratio:
+    if current_policy == "lenient" and total > 0 and total_failed / total > max_failed_ratio:
         raise RuntimeError(
             f"Too many failed tiles: {total_failed}/{total} "
             f"({100.0 * total_failed / total:.1f}% exceeds {100.0 * max_failed_ratio:.1f}% threshold)"

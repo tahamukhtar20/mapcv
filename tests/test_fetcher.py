@@ -104,7 +104,7 @@ def test_fetch_tiles_ignore_ignores_ratio(httpserver: Any) -> None:
     tile_list = [PyTileIndex(1, 1, 14), PyTileIndex(2, 1, 14)]
 
     # 2/2 failed = 100 % > 0 % threshold, but policy is "ignore" so it should pass
-    results = fetch_tiles(
+    results, failed = fetch_tiles(
         tile_list,
         url_template,
         callback=None,
@@ -113,6 +113,7 @@ def test_fetch_tiles_ignore_ignores_ratio(httpserver: Any) -> None:
         max_failed_ratio=0.0,
     )
     assert len(results) == 2
+    assert failed == 2
 
 
 def test_fetch_tiles_max_failed_ratio_exceeded(httpserver: Any) -> None:

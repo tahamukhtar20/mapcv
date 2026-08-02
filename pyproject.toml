@@ -52,7 +52,6 @@ exclude = ["tests/generate_golden\\.py"]
 
 [[tool.mypy.overrides]]
 module = [
-    "IPython",
     "mapcv._mapcv_rs",
     "mercantile",
     "shapely",

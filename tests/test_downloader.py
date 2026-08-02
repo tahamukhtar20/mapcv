@@ -5,7 +5,34 @@ from __future__ import annotations
 from typing import List
 
 import pytest
-from mapcv.downloader import iter_tile_strips
+from mapcv.downloader import iter_tile_strips, resolve_url_template
+
+
+def test_resolve_url_template_explicit() -> None:
+    template = "https://example.com/{z}/{x}/{y}"
+    assert resolve_url_template(template, None) == template
+
+
+def test_resolve_url_template_source() -> None:
+    assert (
+        resolve_url_template(None, "osm")
+        == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    )
+
+
+def test_resolve_url_template_precedence() -> None:
+    template = "https://example.com/{z}/{x}/{y}"
+    assert resolve_url_template(template, "osm") == template
+
+
+def test_resolve_url_template_invalid_source() -> None:
+    with pytest.raises(ValueError, match="Unknown tile source: invalid_source"):
+        resolve_url_template(None, "invalid_source")
+
+
+def test_resolve_url_template_missing_both() -> None:
+    with pytest.raises(ValueError, match="Provide url_template or source"):
+        resolve_url_template(None, None)
 
 
 def test_iter_tile_strips_groups_rows() -> None:

@@ -148,7 +148,7 @@ Use **squash merge** when merging PRs to keep `main` history clean and changelog
 
 ## Release Process (maintainers)
 
-1. **Bump versions** in `pyproject.toml` and `Cargo.toml` to the new version (e.g. `0.1.1`).
+1. **Bump versions** in `pyproject.toml` and `Cargo.toml` to the new version (e.g. `0.2.0`).
 
 2. **Regenerate the changelog:**
    ```bash
@@ -158,12 +158,12 @@ Use **squash merge** when merging PRs to keep `main` history clean and changelog
 3. **Commit everything in one go:**
    ```bash
    git add pyproject.toml Cargo.toml CHANGELOG.md
-   git commit -m "chore: release 0.1.1"
+   git commit -m "chore: release 0.2.0"
    ```
 
-4. **Open a PR** (e.g. `chore/release-0.1.1`), merge it to `main`, then tag:
+4. **Open a PR** (e.g. `chore/release-0.2.0`), merge it to `main`, then tag:
    ```bash
-   git tag v0.1.1 && git push mapcv v0.1.1
+   git tag v0.2.0 && git push mapcv v0.2.0
    ```
 
 CI takes over from here: it verifies the tag matches both version files, builds wheels for all platforms and Python versions, runs the test suite, publishes to PyPI, and creates a GitHub Release with the changelog section as release notes.

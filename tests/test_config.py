@@ -1,12 +1,20 @@
-"""Tests for MapcvConfig YAML loading and validation."""
+"""Tests for mapcv configuration loading and migration."""
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
-from mapcv.config import MapcvConfig
+from mapcv.config import (
+    DEFAULT_SENTINEL2_L2A_BANDS,
+    EOPFZarrImageryConfig,
+    MapcvConfig,
+    XYZImageryConfig,
+    eopf_local_path,
+)
 
 
 _MINIMAL = """\
@@ -15,16 +23,17 @@ region:
   south: 31.40
   east: 74.40
   north: 31.60
+imagery:
+  type: xyz
   zoom: 16
-tiles:
-  source: google_satellite
+  source: osm
 sampler:
   patch_size: 256
 writer:
   staging_dir: ./output
 """
 
-_WITH_LABELS = """\
+_LEGACY = """\
 region:
   west: 74.20
   south: 31.40
@@ -32,133 +41,198 @@ region:
   north: 31.60
   zoom: 16
 tiles:
-  source: google_satellite
-labels:
-  path: labels.kml
-  label_field: class
-  all_touched: true
+  source: osm
 sampler:
   patch_size: 256
 writer:
   staging_dir: ./output
 """
 
-_WITH_SPLIT = """\
+_ZARR = """\
 region:
-  west: 74.20
-  south: 31.40
-  east: 74.40
-  north: 31.60
-  zoom: 16
-tiles:
-  source: google_satellite
+  west: 10.0
+  south: 45.0
+  east: 10.2
+  north: 45.2
+imagery:
+  type: eopf_zarr
+  path: /data/S2_L2A_PRODUCT.zarr
+  resolution: 10
 sampler:
-  patch_size: 256
+  patch_size: 64
 writer:
   staging_dir: ./output
-split:
-  test_ratio: 0.20
-  val_ratio: 0.10
-  labeled_ratios: [0.10, 0.20, 0.30]
-  seed: 42
-  strategy: stratified
+  image_format: npy
 """
 
 
 def _write(tmp_path: Path, content: str) -> Path:
-    p = tmp_path / "config.yaml"
-    p.write_text(content)
-    return p
+    path = tmp_path / "config.yaml"
+    path.write_text(content)
+    return path
 
 
-# ---------------------------------------------------------------------------
-# Valid configs
-# ---------------------------------------------------------------------------
+def test_xyz_config_loads(tmp_path: Path) -> None:
+    config = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
+    assert isinstance(config.imagery, XYZImageryConfig)
+    assert config.imagery.zoom == 16
+    assert config.imagery.source == "osm"
+    assert config.tiles is None
+    assert config.sampler.patch_size == 256
 
 
-def test_minimal_config_loads(tmp_path: Path) -> None:
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
-    assert cfg.region.zoom == 16
-    assert cfg.tiles.source == "google_satellite"
-    assert cfg.sampler.patch_size == 256
-    assert cfg.labels is None
-    assert cfg.split is None
+def test_legacy_tiles_config_is_normalized(tmp_path: Path) -> None:
+    with pytest.warns(FutureWarning, match="0.3.0"):
+        config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
+    assert isinstance(config.imagery, XYZImageryConfig)
+    assert config.imagery.zoom == 16
+    assert config.imagery.source == "osm"
+    assert config.tiles is None
+    assert config.region.zoom is None
 
 
-def test_labels_section_parsed(tmp_path: Path) -> None:
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, _WITH_LABELS))
-    assert cfg.labels is not None
-    assert cfg.labels.path == Path("labels.kml")
-    assert cfg.labels.label_field == "class"
-    assert cfg.labels.all_touched is True
+def test_normalized_legacy_config_round_trips(tmp_path: Path) -> None:
+    with pytest.warns(FutureWarning):
+        config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = MapcvConfig.model_validate(config.model_dump())
+    assert again == config
 
 
-def test_split_section_parsed(tmp_path: Path) -> None:
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, _WITH_SPLIT))
-    assert cfg.split is not None
-    assert cfg.split.test_ratio == 0.20
-    assert cfg.split.labeled_ratios == [0.10, 0.20, 0.30]
-
-
-def test_tiles_url_template(tmp_path: Path) -> None:
-    content = _MINIMAL.replace(
-        "source: google_satellite", "url_template: https://example.com/{z}/{x}/{y}.png"
+def test_region_zoom_fills_missing_imagery_zoom_with_warning(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  north: 31.60\n", "  north: 31.60\n  zoom: 15\n").replace(
+        "  zoom: 16\n", ""
     )
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, content))
-    assert cfg.tiles.url_template == "https://example.com/{z}/{x}/{y}.png"
-    assert cfg.tiles.source is None
+    with pytest.warns(FutureWarning, match="set imagery.zoom"):
+        config = MapcvConfig.from_yaml(_write(tmp_path, content))
+    assert isinstance(config.imagery, XYZImageryConfig)
+    assert config.imagery.zoom == 15
 
 
-def test_sampler_defaults_applied(tmp_path: Path) -> None:
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
-    assert cfg.sampler.mode == "grid"
-    assert cfg.sampler.edge_strategy == "pad"
-    assert cfg.sampler.max_empty_ratio == 1.0
+@pytest.mark.parametrize("content", [_MINIMAL, _ZARR])
+def test_region_zoom_beside_imagery_warns_that_it_is_ignored(tmp_path: Path, content: str) -> None:
+    content = content.replace("  north: ", "  zoom: 12\n  north: ", 1)
+    with pytest.warns(FutureWarning, match="ignored"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_writer_defaults_applied(tmp_path: Path) -> None:
-    cfg = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
-    assert cfg.writer.image_format == "png"
-    assert cfg.writer.jpg_quality == 95
+def test_missing_imagery_type_has_clear_error(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  type: xyz\n", "")
+    with pytest.raises(ValueError, match="imagery.type is required"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-# ---------------------------------------------------------------------------
-# Validation errors
-# ---------------------------------------------------------------------------
+def test_removed_google_preset_is_rejected(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("source: osm", "source: google_satellite")
+    with pytest.raises(ValueError, match="removed in mapcv 0.2.0"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_missing_region_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace(
-        "region:\n  west: 74.20\n  south: 31.40\n  east: 74.40\n  north: 31.60\n  zoom: 16\n", ""
+def test_unknown_tile_source_is_rejected(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("source: osm", "source: nope")
+    with pytest.raises(ValueError, match="unknown tile source 'nope'"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "https://user:pw@example.com/S2.zarr",
+        "https://example.com/S2.zarr?token=secret",
+        "https://example.com/S2.zarr#frag",
+        "http://example.com/S2.zarr",
+        "gs://bucket/S2.zarr",
+    ],
+)
+def test_eopf_path_rejects_unsafe_urls(path: str) -> None:
+    with pytest.raises(ValueError):
+        EOPFZarrImageryConfig(path=path)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/data/S2.zarr", "/data/S2.zarr"),
+        (r"C:\data\S2.zarr", r"C:\data\S2.zarr"),
+        ("file:///C:/data/S2.zarr", "C:/data/S2.zarr"),
+        ("file:///data/S2.zarr", "/data/S2.zarr"),
+        ("s3://bucket/S2.zarr", None),
+        ("https://example.com/S2.zarr", None),
+    ],
+)
+def test_eopf_local_path(path: str, expected: Optional[str]) -> None:
+    EOPFZarrImageryConfig(path=path)
+    local = eopf_local_path(path)
+    assert (str(local).replace("\\", "/") if local else None) == (
+        expected.replace("\\", "/") if expected else None
     )
-    with pytest.raises(Exception):
+
+
+def test_xyz_url_template(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("source: osm", "url_template: https://example.com/{z}/{x}/{y}.png")
+    config = MapcvConfig.from_yaml(_write(tmp_path, content))
+    assert isinstance(config.imagery, XYZImageryConfig)
+    assert config.imagery.url_template == "https://example.com/{z}/{x}/{y}.png"
+
+
+def test_eopf_zarr_defaults(tmp_path: Path) -> None:
+    config = MapcvConfig.from_yaml(_write(tmp_path, _ZARR))
+    assert isinstance(config.imagery, EOPFZarrImageryConfig)
+    assert config.imagery.bands == DEFAULT_SENTINEL2_L2A_BANDS
+    assert config.imagery.resolution == 10
+    assert config.imagery.chunk_rows == 1024
+
+
+def test_eopf_band_order_is_preserved_and_normalized(tmp_path: Path) -> None:
+    content = _ZARR.replace("  resolution: 10\n", "  resolution: 20\n  bands: [B08, B04, B03]\n")
+    config = MapcvConfig.from_yaml(_write(tmp_path, content))
+    assert isinstance(config.imagery, EOPFZarrImageryConfig)
+    assert config.imagery.bands == ["b08", "b04", "b03"]
+
+
+def test_labels_and_split_sections_parse(tmp_path: Path) -> None:
+    content = (
+        _MINIMAL
+        + "labels:\n  path: labels.kml\n  label_field: class\n  all_touched: true\n"
+        + "split:\n  test_ratio: 0.2\n  val_ratio: 0.1\n"
+    )
+    config = MapcvConfig.from_yaml(_write(tmp_path, content))
+    assert config.labels is not None and config.labels.path == Path("labels.kml")
+    assert config.split is not None and config.split.test_ratio == 0.2
+
+
+def test_eopf_requires_npy_writer(tmp_path: Path) -> None:
+    with pytest.raises(Exception, match="requires writer.image_format='npy'"):
+        MapcvConfig.from_yaml(_write(tmp_path, _ZARR.replace("  image_format: npy\n", "")))
+
+
+def test_xyz_rejects_npy_writer(tmp_path: Path) -> None:
+    content = _MINIMAL.replace(
+        "  staging_dir: ./output\n", "  staging_dir: ./output\n  image_format: npy\n"
+    )
+    with pytest.raises(Exception, match="XYZ imagery supports"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_missing_tiles_source_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("source: google_satellite", "max_connections: 8")
-    with pytest.raises(Exception):
+def test_duplicate_eopf_bands_raise(tmp_path: Path) -> None:
+    content = _ZARR.replace("  resolution: 10\n", "  resolution: 10\n  bands: [b04, B04]\n")
+    with pytest.raises(Exception, match="duplicates"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_zoom_out_of_range_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("zoom: 16", "zoom: 0")
-    with pytest.raises(Exception):
+def test_invalid_region_bounds_raise(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  east: 74.40", "  east: 74.10")
+    with pytest.raises(Exception, match="west"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_missing_patch_size_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("  patch_size: 256\n", "")
-    with pytest.raises(Exception):
-        MapcvConfig.from_yaml(_write(tmp_path, content))
-
-
-def test_missing_staging_dir_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("  staging_dir: ./output\n", "")
+def test_missing_imagery_raises(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("imagery:\n  type: xyz\n  zoom: 16\n  source: osm\n", "")
     with pytest.raises(Exception):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
 def test_nonexistent_file_raises(tmp_path: Path) -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(FileNotFoundError):
         MapcvConfig.from_yaml(tmp_path / "no_such_file.yaml")

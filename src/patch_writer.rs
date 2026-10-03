@@ -40,7 +40,8 @@ pub struct PatchResult {
 ///
 /// Files are named `patch_{global_idx:07}.{ext}` where `global_idx = start_idx + local_i`.
 /// Masks are always written as PNG regardless of `image_format`.
-/// An existing file is left untouched (resume support).
+/// Existing files are overwritten: the caller indexes from the manifest length, so any file
+/// at these indices is an orphan from an interrupted run, never a recorded patch.
 #[allow(clippy::too_many_arguments)]
 pub fn write_patches(
     image_data: &[u8],
@@ -71,18 +72,14 @@ pub fn write_patches(
 
             let img_slice = &image_data[local_i * img_patch_bytes..(local_i + 1) * img_patch_bytes];
 
-            if !img_path.exists() {
-                encode_image(img_slice, patch_size, &img_path, image_format, jpg_quality)?;
-            }
+            encode_image(img_slice, patch_size, &img_path, image_format, jpg_quality)?;
 
             let mask_filename = if has_mask {
                 let msk_fname = format!("patch_{global_idx:07}.png");
                 let msk_path: PathBuf = masks_dir.join(&msk_fname);
-                if !msk_path.exists() {
-                    let msk_slice =
-                        &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
-                    encode_mask(msk_slice, patch_size, &msk_path)?;
-                }
+                let msk_slice =
+                    &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
+                encode_mask(msk_slice, patch_size, &msk_path)?;
                 Some(msk_fname)
             } else {
                 None

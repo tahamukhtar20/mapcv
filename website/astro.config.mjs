@@ -23,6 +23,7 @@ export default defineConfig({
           items: [
             { label: 'Introduction', slug: 'introduction' },
             { label: 'Installation', slug: 'installation' },
+            { label: 'Migrating to 0.2', slug: 'migration' },
           ],
         },
         {
@@ -31,6 +32,7 @@ export default defineConfig({
             { label: 'Configuration', slug: 'configuration' },
             { label: 'CLI', slug: 'cli' },
             { label: 'API', slug: 'api' },
+            { label: 'Provider Terms', slug: 'providers' },
           ],
         },
         {

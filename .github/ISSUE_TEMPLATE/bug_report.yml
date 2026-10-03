@@ -1,5 +1,6 @@
 name: Bug Report
 description: Something isn't working as expected.
+title: "fix: "
 labels: ["bug"]
 body:
   - type: markdown
@@ -62,3 +63,11 @@ body:
       label: Error output
       description: Paste the full error message or traceback.
       render: text
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What observable behavior would confirm that this is fixed?
+    validations:
+      required: true

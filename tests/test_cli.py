@@ -19,9 +19,10 @@ region:
   south: 31.40
   east: 74.40
   north: 31.60
+imagery:
+  type: xyz
   zoom: 16
-tiles:
-  source: google_satellite
+  source: osm
 sampler:
   patch_size: 256
 writer:
@@ -212,9 +213,7 @@ def test_generate_bad_config(tmp_path: Path) -> None:
     assert "Config error" in result.output
 
 
-def test_generate_unreadable_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
 
     def mock_read_text(*args: Any, **kwargs: Any) -> str:
@@ -228,9 +227,7 @@ def test_generate_unreadable_config(
     assert "Permission denied" in result.output
 
 
-def test_generate_calls_run_generate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_calls_run_generate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
     called = False
 
@@ -250,9 +247,7 @@ def test_generate_calls_run_generate(
 # ---------------------------------------------------------------------------
 
 
-def test_validate_unreadable_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_validate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
 
     def mock_read_text(*args: Any, **kwargs: Any) -> str:
@@ -270,9 +265,56 @@ def test_validate_shows_split_info(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     staging = tmp_path / "output"
     cfg.write_text(
-        _VALID_CONFIG.format(staging_dir=staging) + "split:\n  test_ratio: 0.2\n  strategy: random\n"
+        _VALID_CONFIG.format(staging_dir=staging)
+        + "split:\n  test_ratio: 0.2\n  strategy: random\n"
     )
     result = runner.invoke(app, ["validate", str(cfg)])
     assert result.exit_code == 0
     assert "split" in result.output
     assert "0.2" in result.output
+
+
+def test_generate_reports_runtime_errors_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("requested region does not intersect the EOPF product")
+
+    monkeypatch.setattr("mapcv.cli.run_generate", fail)
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path))])
+    assert result.exit_code == 1
+    assert "Generation failed" in result.output
+    assert "does not intersect" in result.output
+
+
+def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
+    p = _write_config(tmp_path)
+    p.write_text(
+        p.read_text().replace(
+            "source: osm",
+            'url_template: "https://tiles.example.com/SECRET/{z}/{x}/{y}.png?key=SECRET"',
+        )
+    )
+    result = runner.invoke(app, ["validate", str(p)])
+    assert result.exit_code == 0
+    assert "tiles.example.com" in result.output
+    assert "SECRET" not in result.output
+
+
+def test_validate_reports_deprecated_legacy_config(tmp_path: Path) -> None:
+    p = _write_config(tmp_path)
+    p.write_text(
+        p.read_text()
+        .replace("  north: 31.60\n", "  north: 31.60\n  zoom: 16\n")
+        .replace("imagery:\n  type: xyz\n  zoom: 16\n", "tiles:\n")
+    )
+    result = runner.invoke(app, ["validate", str(p)])
+    assert result.exit_code == 0
+    assert "Deprecated" in result.output
+
+
+def test_init_links_provider_guidance(tmp_path: Path) -> None:
+    out = tmp_path / "cfg.yaml"
+    result = runner.invoke(app, ["init", str(out)])
+    assert result.exit_code == 0
+    assert "PROVIDERS.md" in out.read_text()

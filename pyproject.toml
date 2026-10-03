@@ -4,12 +4,26 @@ build-backend = "maturin"
 
 [project]
 name = "mapcv"
-version = "0.1.0"
+version = "0.2.0"
 description = "A high-performance satellite imagery dataset creation tool for computer vision"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -35,10 +49,21 @@ dev = [
     "ruff",
     "pre-commit",
     "mercantile",
+    "pytest-cov",
 ]
 docs = [
     "matplotlib",
     "ipywidgets",
+]
+zarr = [
+    "xarray-eopf==0.2.5; python_version < '3.11'",
+    "xarray-eopf>=0.2.9,<0.3; python_version >= '3.11'",
+    "xarray>=2024.10",
+    "dask[array]>=2024.10",
+    "numba>=0.61",
+    "zarr>=2.18,<3",
+    "pyproj>=3.6",
+    "s3fs>=2024.10",
 ]
 
 [tool.maturin]
@@ -59,6 +84,10 @@ module = [
     "rasterio",
     "rasterio.*",
     "yaml",
+    "xarray",
+    "xarray.*",
+    "pyproj",
+    "pyproj.*",
 ]
 ignore_missing_imports = true
 
@@ -67,6 +96,21 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "eopf_live: opt-in integration test against a public EOPF product",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["mapcv"]
+omit = [
+    "src/mapcv/_mapcv_rs*",
+]
+
+[tool.coverage.report]
+fail_under = 65
+show_missing = true
+skip_covered = true
 
 [dependency-groups]
 dev = [

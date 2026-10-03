@@ -8,12 +8,13 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pytest
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from mapcv import SamplerConfig, sample_patches
 from mapcv.sampler import PatchMeta
 from mapcv.writer import (
     Manifest,
+    ManifestMismatchError,
     WriterConfig,
     load_or_create_manifest,
     write_patches,
@@ -76,7 +77,7 @@ def test_manifest_save_and_load(tmp_path: Path) -> None:
     m.save(path)
     loaded = Manifest.load(path)
     assert loaded.class_map == {"bg": 0, "building": 1}
-    assert loaded.version == 1
+    assert loaded.version == 2
     assert loaded.patches == []
 
 
@@ -87,7 +88,7 @@ def test_manifest_save_is_valid_json(tmp_path: Path) -> None:
     data = json.loads(path.read_text())
     assert "patches" in data
     assert "class_map" in data
-    assert data["version"] == 1
+    assert data["version"] == 2
 
 
 def test_load_or_create_returns_new_when_missing(tmp_path: Path) -> None:
@@ -98,9 +99,59 @@ def test_load_or_create_returns_new_when_missing(tmp_path: Path) -> None:
 
 def test_load_or_create_loads_existing(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
-    Manifest(class_map={"y": 2}).save(path)
-    m = load_or_create_manifest(path, {"ignored": 99})
+    Manifest(class_map={"y": 2}, bands=["b04"]).save(path)
+    m = load_or_create_manifest(path, {"y": 2}, bands=["b04"])
     assert m.class_map == {"y": 2}
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"class_map": {"other": 1}},
+        {"bands": ["b08"]},
+        {"patch_shape": [1, 8, 8]},
+        {"product_id": "other.zarr"},
+        {"transform": (20.0, 0.0, 0.0, 0.0, -20.0, 0.0)},
+        {"sampler": {"patch_size": 8}},
+    ],
+)
+def test_load_or_create_rejects_mismatched_resume(tmp_path: Path, changed: Dict[str, Any]) -> None:
+    path = tmp_path / "manifest.json"
+    original: Dict[str, Any] = {
+        "class_map": {"y": 2},
+        "bands": ["b04"],
+        "patch_shape": [1, 4, 4],
+        "product_id": "S2.zarr",
+        "transform": (10.0, 0.0, 0.0, 0.0, -10.0, 0.0),
+        "sampler": {"patch_size": 4},
+    }
+    Manifest(**original).save(path)
+    with pytest.raises(ManifestMismatchError):
+        load_or_create_manifest(path, **{**original, **changed})
+
+
+def test_load_or_create_refuses_to_resume_version_one(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text('{"version":1,"class_map":{},"patches":[]}')
+    with pytest.raises(ManifestMismatchError, match="version-1"):
+        load_or_create_manifest(path, {})
+
+
+def test_manifest_save_is_atomic(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    Manifest(class_map={}).save(path)
+    assert not (tmp_path / "manifest.json.tmp").exists()
+
+
+def test_version_one_manifest_remains_readable(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text('{"version":1,"class_map":{},"patches":[]}')
+
+    manifest = Manifest.load(path)
+
+    assert manifest.version == 1
+    assert manifest.source_type == "xyz"
+    assert manifest.bands == []
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +208,43 @@ def test_jpg_format_written(tmp_path: Path) -> None:
     write_patches(imgs, None, meta, cfg, m)
     written = list((tmp_path / "Images").glob("*.jpg"))
     assert len(written) == len(meta)
+
+
+def test_npy_format_preserves_float32_bands_first(tmp_path: Path) -> None:
+    images = np.arange(2 * 4 * 4 * 5, dtype=np.float32).reshape(2, 4, 4, 5)
+    meta = [
+        PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0),
+        PatchMeta(row=4, col=0, padded=False, empty_ratio=0.0),
+    ]
+    config = WriterConfig(staging_dir=tmp_path, image_format="npy")
+    manifest = Manifest(
+        class_map={},
+        source_type="eopf_zarr",
+        bands=["b01", "b02", "b03", "b04", "b05"],
+        dtype="float32",
+        patch_shape=[5, 4, 4],
+    )
+
+    write_patches(images, None, meta, config, manifest)
+
+    stored = np.load(tmp_path / "Images" / "patch_0000000.npy", allow_pickle=False)
+    assert stored.shape == (5, 4, 4)
+    assert stored.dtype == np.float32
+    np.testing.assert_array_equal(stored[2], images[0, :, :, 2])
+
+
+def test_npy_overwrites_orphaned_tensor(tmp_path: Path) -> None:
+    images = np.ones((1, 2, 2, 2), dtype=np.float32)
+    meta = [PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0)]
+    config = WriterConfig(staging_dir=tmp_path, image_format="npy")
+    first_manifest = Manifest(class_map={})
+    write_patches(images, None, meta, config, first_manifest)
+    tensor_path = tmp_path / "Images" / "patch_0000000.npy"
+    np.save(tensor_path, np.zeros((2, 2, 2), dtype=np.float32), allow_pickle=False)
+
+    write_patches(images, None, meta, config, Manifest(class_map={}))
+
+    assert np.all(np.load(tensor_path, allow_pickle=False) == 1)
 
 
 def test_empty_meta_writes_nothing(tmp_path: Path) -> None:
@@ -275,23 +363,23 @@ def test_empty_ratio_all_nonzero(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# write_patches: resume (skip existing files)
+# write_patches: orphaned files from interrupted runs
 # ---------------------------------------------------------------------------
 
 
-def test_resume_skips_existing_file(tmp_path: Path) -> None:
+def test_orphaned_file_is_overwritten(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
     m = Manifest(class_map={})
     write_patches(imgs, None, meta, cfg, m)
 
-    # Corrupt the first image on disk to verify it isn't overwritten.
+    # A file left by an interrupted run is not in the manifest and must be replaced.
     first_path = tmp_path / "Images" / m.patches[0]["filename"]
-    first_path.write_bytes(b"SENTINEL")
+    first_path.write_bytes(b"STALE")
 
     m2 = Manifest(class_map={})
     write_patches(imgs, None, meta, cfg, m2)
-    assert first_path.read_bytes() == b"SENTINEL"
+    assert first_path.read_bytes() != b"STALE"
 
 
 # ---------------------------------------------------------------------------

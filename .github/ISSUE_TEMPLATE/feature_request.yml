@@ -1,5 +1,6 @@
 name: Feature Request
 description: Suggest a new feature or improvement.
+title: "feat: "
 labels: ["enhancement"]
 body:
   - type: textarea
@@ -11,10 +12,10 @@ body:
       required: true
 
   - type: textarea
-    id: solution
+    id: acceptance
     attributes:
-      label: Proposed solution
-      description: What would you like to see added or changed?
+      label: Acceptance criteria
+      description: What observable capabilities should be present when this is complete?
     validations:
       required: true
 
@@ -25,7 +26,7 @@ body:
       description: Any other approaches you've thought about or tried?
 
   - type: textarea
-    id: context
+    id: notes
     attributes:
-      label: Additional context
+      label: Notes
       description: Anything else that would help — links, examples, related issues.

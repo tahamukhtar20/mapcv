@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import List, Literal, Optional, cast
+from urllib.parse import urlsplit
 
 import typer
 from rich.console import Console
 
-from mapcv.config import MapcvConfig
+from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
 from mapcv.pipeline import run_generate, run_split
 from mapcv.splitter import SplitterConfig
 
@@ -19,18 +21,24 @@ app = typer.Typer(
 )
 _console = Console()
 
-_EXAMPLE_CONFIG = """\
+_PROVIDERS_URL = "https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md"
+
+_EXAMPLE_CONFIG = f"""\
+# You are responsible for complying with the imagery provider's license,
+# attribution, rate limits, and terms. mapcv grants no imagery rights:
+# {_PROVIDERS_URL}
 region:
   west: 74.20
   south: 31.40
   east: 74.40
   north: 31.60
-  zoom: 16
 
-tiles:
-  source: google_satellite   # or url_template: "https://..."
+imagery:
+  type: xyz
+  zoom: 16
+  source: osm                # or an authorized url_template: "https://..."
   strip_rows: 4
-  max_connections: 16
+  max_connections: 2         # keep low for OSM; see its tile usage policy
   policy: lenient            # strict | lenient | ignore
   max_failed_ratio: 0.05
 
@@ -50,7 +58,7 @@ sampler:
 
 writer:
   staging_dir: ./output
-  image_format: png          # png | jpg
+  image_format: png          # png | jpg; EOPF Zarr uses npy
   jpg_quality: 95
 
 # split:                     # omit to skip splitting
@@ -62,20 +70,46 @@ writer:
 """
 
 
+def _load_config(config_path: Path) -> MapcvConfig:
+    if not config_path.exists():
+        _console.print(f"[red]Config file not found:[/red] {config_path}")
+        raise typer.Exit(code=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", FutureWarning)
+        try:
+            config = MapcvConfig.from_yaml(config_path)
+        except Exception as exc:
+            _console.print(f"[red]Config error:[/red] {exc}")
+            raise typer.Exit(code=1)
+    for warning in caught:
+        if issubclass(warning.category, FutureWarning):
+            _console.print(f"[yellow]Deprecated:[/yellow] {warning.message}")
+        else:
+            warnings.showwarning(
+                warning.message, warning.category, warning.filename, warning.lineno
+            )
+    return config
+
+
+def _redact_url(url: str) -> str:
+    """Show only scheme and host of a URL that may embed credentials."""
+    parsed = urlsplit(url)
+    if not parsed.scheme or not parsed.hostname:
+        return url
+    return f"{parsed.scheme}://{parsed.hostname}/..."
+
+
 @app.command()
 def generate(
     config_path: Path = typer.Argument(..., help="Path to YAML config file."),
 ) -> None:
     """Fetch tiles, rasterize labels, extract patches, and write a dataset."""
-    if not config_path.exists():
-        _console.print(f"[red]Config file not found:[/red] {config_path}")
-        raise typer.Exit(code=1)
+    config = _load_config(config_path)
     try:
-        config = MapcvConfig.from_yaml(config_path)
-    except Exception as exc:
-        _console.print(f"[red]Config error:[/red] {exc}")
+        run_generate(config)
+    except (ValueError, RuntimeError, OSError) as exc:
+        _console.print(f"[red]Generation failed:[/red] {exc}")
         raise typer.Exit(code=1)
-    run_generate(config)
 
 
 @app.command()
@@ -119,14 +153,7 @@ def validate(
     config_path: Path = typer.Argument(..., help="Path to YAML config file."),
 ) -> None:
     """Validate a config file without fetching any data."""
-    if not config_path.exists():
-        _console.print(f"[red]Config file not found:[/red] {config_path}")
-        raise typer.Exit(code=1)
-    try:
-        config = MapcvConfig.from_yaml(config_path)
-    except Exception as exc:
-        _console.print(f"[red]Config error:[/red] {exc}")
-        raise typer.Exit(code=1)
+    config = _load_config(config_path)
 
     _console.print("[green]Config is valid.[/green]")
 
@@ -135,10 +162,19 @@ def validate(
 
     _console.print(
         f"  region : {config.region.west},{config.region.south} -> "
-        f"{config.region.east},{config.region.north}  zoom={config.region.zoom}"
+        f"{config.region.east},{config.region.north}"
     )
-    source = config.tiles.source or config.tiles.url_template
-    _console.print(f"  tiles  : {source}  strip_rows={config.tiles.strip_rows}")
+    if isinstance(config.imagery, EOPFZarrImageryConfig):
+        _console.print(
+            f"  imagery: EOPF Zarr {config.imagery.path}  "
+            f"resolution={config.imagery.resolution}m  bands={len(config.imagery.bands)}"
+        )
+    else:
+        source = config.imagery.source or _redact_url(config.imagery.url_template or "")
+        _console.print(
+            f"  imagery: XYZ {source}  zoom={config.imagery.zoom}  "
+            f"strip_rows={config.imagery.strip_rows}"
+        )
     _console.print(
         f"  sampler: patch_size={config.sampler.patch_size}  "
         f"mode={config.sampler.mode}  edge={config.sampler.edge_strategy}"
@@ -163,3 +199,4 @@ def init(
     else:
         output.write_text(_EXAMPLE_CONFIG)
         _console.print(f"[green]Example config written to[/green] [bold]{output}[/bold]")
+    _console.print(f"[dim]Check your imagery provider's terms first: {_PROVIDERS_URL}[/dim]")

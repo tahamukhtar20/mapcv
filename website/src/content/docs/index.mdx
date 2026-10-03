@@ -23,7 +23,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## What is mapcv?
 
 **mapcv** turns a bounding box and optional polygon labels into a ready-to-train image segmentation dataset.
-It reads XYZ map tiles or one EOPF Sentinel-2 L2A Zarr product, aligns KML or GeoJSON annotations, extracts fixed-size patches, and writes them to disk. Base XYZ support remains lightweight and GDAL-free; EOPF support is an optional install.
+It reads XYZ map tiles or one EOPF Sentinel-2 L2A Zarr product, aligns KML or GeoJSON annotations, extracts fixed-size patches, and writes them to disk. Base XYZ support does not need GDAL; EOPF support is an optional install that brings in rasterio.
 ## Features
 
 <CardGrid>

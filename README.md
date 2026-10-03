@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="mapcv logo" width="180"/>
+  <img src="https://raw.githubusercontent.com/tahamukhtar20/mapcv/main/assets/logo.svg" alt="mapcv logo" width="180"/>
 </p>
 
 <h1 align="center">mapcv</h1>
@@ -43,7 +43,7 @@ Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is diff
 pip install mapcv
 ```
 
-Requires Python 3.10–3.13. Pre-built wheels cover Linux, macOS, and Windows.
+Requires Python 3.10 or newer. Pre-built wheels for Python 3.10–3.13 cover Linux (x86-64), macOS, and Windows; other versions build from source and need a Rust toolchain.
 
 EOPF Sentinel-2 L2A Zarr support is optional:
 
@@ -105,7 +105,7 @@ writer:
   image_format: npy
 ```
 
-Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, Google Earth Engine integration, and aarch64 wheels are outside the 0.2.0 scope. See the [migration guide](MIGRATION.md) and [provider guidance](PROVIDERS.md).
+Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, Google Earth Engine integration, and aarch64 wheels are outside the 0.2.0 scope. See the [migration guide](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) and [provider guidance](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
 
 ## Documentation
 
@@ -113,7 +113,7 @@ Full documentation including configuration reference, CLI reference, and API ref
 
 ## Contributing
 
-Contributions are welcome. Please review the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
+Contributions are welcome. Please review the [Contributing Guide](https://github.com/tahamukhtar20/mapcv/blob/main/CONTRIBUTING.md) and [Code of Conduct](https://github.com/tahamukhtar20/mapcv/blob/main/CODE_OF_CONDUCT.md) before opening a pull request.
 
 ## Citation
 
@@ -125,4 +125,4 @@ Contributions are welcome. Please review the [Contributing Guide](CONTRIBUTING.m
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](https://github.com/tahamukhtar20/mapcv/blob/main/LICENSE) file for details.

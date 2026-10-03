@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **mapcv** turns a bounding box and optional polygon labels into a ready-to-train satellite imagery dataset for semantic segmentation. You give it a geographic region, an XYZ or EOPF Sentinel-2 L2A source, and optionally a KML or GeoJSON annotation file. It reads the imagery, aligns and rasterizes labels, extracts fixed-size patches, and writes everything to disk.
 
-To ensure a lightweight footprint and easy installation, the tool is GDAL-free. Tile stitching, rasterization, and patch sampling are powered by Rust, while the Python layer handles orchestration, configuration, and access via the CLI or API.
+To keep installation light, the core XYZ pipeline does not depend on GDAL. The optional `mapcv[zarr]` extra for EOPF Sentinel-2 pulls in rasterio, which ships its own GDAL wheels. Tile stitching, rasterization, and patch sampling are powered by Rust, while the Python layer handles orchestration, configuration, and access via the CLI or API.
 
 ---
 

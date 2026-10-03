@@ -36,9 +36,9 @@ region:
 imagery:
   type: xyz
   zoom: 16
-  source: osm                # or an authorized url_template: "https://..."
+  source: esri_satellite     # or an authorized url_template: "https://..."
   strip_rows: 4
-  max_connections: 2         # keep low for OSM; see its tile usage policy
+  max_connections: 4         # keep requests modest; respect the provider's limits
   policy: lenient            # strict | lenient | ignore
   max_failed_ratio: 0.05
 

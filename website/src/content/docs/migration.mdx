@@ -14,7 +14,7 @@ region:
   north: 52.378
   zoom: 17
 tiles:
-  source: osm
+  source: esri_satellite
 ```
 
 ```yaml
@@ -27,7 +27,7 @@ region:
 imagery:
   type: xyz
   zoom: 17
-  source: osm
+  source: esri_satellite
 ```
 
 The 0.1 shape still runs with a deprecation notice and will be removed in 0.3.0. `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom` and is otherwise ignored. `imagery.type` is required.
@@ -35,6 +35,10 @@ The 0.1 shape still runs with a deprecation notice and will be removed in 0.3.0.
 ## Replace the Google preset
 
 `google_satellite` is no longer built in, and configs that use it fail validation. If a provider explicitly authorizes automated XYZ access for your use case, configure its URL through `imagery.url_template` and follow its terms. Never commit credentials or signed URLs.
+
+## Replace the OpenStreetMap preset
+
+`osm` is no longer built in: the OpenStreetMap Foundation's tile servers forbid bulk downloading ([tile usage policy](https://operations.osmfoundation.org/policies/tiles/)). Use a commercial or self-hosted OSM tile service through `imagery.url_template`, or export OSM features to GeoJSON and use them as `labels.path`.
 
 ## Understand EOPF output
 

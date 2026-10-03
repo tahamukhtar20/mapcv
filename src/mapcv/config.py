@@ -67,13 +67,22 @@ def _validate_eopf_path(path: str) -> str:
     return path
 
 
+_REMOVED_SOURCES = {
+    "google_satellite": "Google does not permit downloading its imagery for datasets",
+    "osm": (
+        "the OpenStreetMap Foundation tile servers forbid bulk downloading; use a commercial "
+        "or self-hosted OSM tile service through imagery.url_template"
+    ),
+}
+
+
 def _validate_tile_source(source: Optional[str]) -> Optional[str]:
     if source is None or source in URL_TEMPLATES:
         return source
-    if source == "google_satellite":
+    if source in _REMOVED_SOURCES:
         raise ValueError(
-            "the built-in 'google_satellite' source was removed in mapcv 0.2.0; use an "
-            "imagery.url_template you are authorized to use (see MIGRATION.md and PROVIDERS.md)"
+            f"the built-in '{source}' source was removed in mapcv 0.2.0: "
+            f"{_REMOVED_SOURCES[source]} (see MIGRATION.md and PROVIDERS.md)"
         )
     raise ValueError(
         f"unknown tile source '{source}'; built-in sources: {', '.join(sorted(URL_TEMPLATES))}"

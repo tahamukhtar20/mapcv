@@ -22,7 +22,7 @@ region:
 imagery:
   type: xyz
   zoom: 16
-  source: osm
+  source: esri_satellite
 sampler:
   patch_size: 256
 writer:
@@ -291,7 +291,7 @@ def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
     p = _write_config(tmp_path)
     p.write_text(
         p.read_text().replace(
-            "source: osm",
+            "source: esri_satellite",
             'url_template: "https://tiles.example.com/SECRET/{z}/{x}/{y}.png?key=SECRET"',
         )
     )

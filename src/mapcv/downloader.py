@@ -26,8 +26,6 @@ from mapcv._mapcv_rs import (
 )
 
 URL_TEMPLATES: Dict[str, str] = {
-    # OpenStreetMap
-    "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     # Esri
     "esri_satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     "esri_topo": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",

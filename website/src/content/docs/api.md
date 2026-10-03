@@ -18,7 +18,7 @@ from mapcv import stitch_region, parse_geojson, rasterize, sample_patches, ...
 ```python
 from mapcv import EOPFZarrImageryConfig, XYZImageryConfig
 
-xyz = XYZImageryConfig(type="xyz", zoom=16, source="osm")
+xyz = XYZImageryConfig(type="xyz", zoom=16, source="esri_satellite")
 eopf = EOPFZarrImageryConfig(
     type="eopf_zarr",
     path="/data/S2_L2A_PRODUCT.zarr",
@@ -433,6 +433,6 @@ Split the manifest into `train.txt`, `val.txt`, and `test.txt` files written to 
 ```python
 from mapcv import URL_TEMPLATES
 print(list(URL_TEMPLATES.keys()))
-# ['osm', 'esri_satellite', 'esri_topo', 'esri_street',
+# ['esri_satellite', 'esri_topo', 'esri_street',
 #  'cartodb_positron', 'cartodb_dark_matter']
 ```

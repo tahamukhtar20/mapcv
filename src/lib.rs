@@ -23,13 +23,6 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use tile_math::{BBox, TileIndex};
 
-/// Return a greeting string confirming the Rust extension loaded correctly.
-#[must_use]
-#[pyfunction]
-fn hello() -> String {
-    String::from("Hello from mapcv Rust core!")
-}
-
 /// Python-visible XYZ tile index.
 #[pyclass]
 #[derive(Clone)]
@@ -431,7 +424,6 @@ fn parse_kml_rs(
 
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(hello, m)?)?;
     m.add_function(wrap_pyfunction!(xy, m)?)?;
     m.add_function(wrap_pyfunction!(tile, m)?)?;
     m.add_function(wrap_pyfunction!(tiles, m)?)?;

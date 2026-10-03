@@ -1,8 +1,8 @@
-"""Tile downloading: fetch, stitch, and strip-partition satellite tiles."""
+"""Tile downloading: fetch XYZ tiles for a region and stitch them into one image."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -40,18 +40,6 @@ URL_TEMPLATES: Dict[str, str] = {
 _console = Console()
 
 
-def _ask_continue_after_failure(exc: BaseException) -> bool:
-    """Pause and ask the user whether to continue with lenient policy after a strict failure."""
-    _console.print(f"[yellow]Tile fetch failed:[/yellow] {exc}")
-    try:
-        answer = input(
-            "Some tiles failed. Continue with remaining strips, skipping failures? [y/N] "
-        )
-        return answer.strip().lower() == "y"
-    except (EOFError, KeyboardInterrupt):
-        return False
-
-
 def _in_jupyter() -> bool:
     try:
         import IPython.core.getipython as _gip
@@ -70,32 +58,6 @@ def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> 
             raise ValueError(f"Unknown tile source: {source}")
         return URL_TEMPLATES[source]
     raise ValueError("Provide url_template or source")
-
-
-def iter_tile_strips(
-    west: float,
-    south: float,
-    east: float,
-    north: float,
-    zoom: int,
-    strip_rows: int,
-) -> List[List[PyTileIndex]]:
-    """Partition the tile grid for a bbox into horizontal strips of strip_rows tile rows each."""
-    if strip_rows <= 0:
-        raise ValueError("strip_rows must be positive")
-    target_tiles = tiles(west, south, east, north, [zoom])
-    target_tiles.sort(key=lambda t: (t.y, t.x))
-    rows: Dict[int, List[PyTileIndex]] = {}
-    for t in target_tiles:
-        rows.setdefault(t.y, []).append(t)
-    row_keys = sorted(rows.keys())
-    strips: List[List[PyTileIndex]] = []
-    for i in range(0, len(row_keys), strip_rows):
-        strip_tiles: List[PyTileIndex] = []
-        for y in row_keys[i : i + strip_rows]:
-            strip_tiles.extend(rows[y])
-        strips.append(strip_tiles)
-    return strips
 
 
 def _make_progress() -> Progress:
@@ -213,158 +175,3 @@ def stitch_region(
     image_array, min_x, min_y = stitch_tiles_rs(tile_data)
     transform = tile_transform_rs(min_x, min_y, zoom)
     return image_array, transform
-
-
-def download_region_strips(
-    west: float,
-    south: float,
-    east: float,
-    north: float,
-    zoom: int,
-    strip_rows: int,
-    url_template: Optional[str] = None,
-    source: Optional[str] = None,
-    max_connections: int = 16,
-    policy: str = "lenient",
-    snap_to_tiles: bool = True,
-    max_failed_ratio: float = 0.05,
-) -> List[List[Tuple[PyTileIndex, bytes]]]:
-    """Fetch tiles for a bbox in horizontal strips, caching tiles shared between strips.
-
-    Returns one inner list per strip; each entry is a (tile, bytes) pair.
-    strip_rows controls how many tile rows form a single strip.
-    """
-    template = resolve_url_template(url_template, source)
-    if snap_to_tiles:
-        snapped = snap_bbox(west, south, east, north, zoom)
-        west, south, east, north = snapped.west, snapped.south, snapped.east, snapped.north
-
-    strips = iter_tile_strips(west, south, east, north, zoom, strip_rows)
-    total = sum(len(strip) for strip in strips)
-
-    # shared across strips so overlapping tiles (stride-based patches) are fetched only once
-    tile_cache: Dict[Tuple[int, int, int], bytes] = {}
-
-    all_results: List[List[Tuple[PyTileIndex, bytes]]] = []
-    total_fetched = 0
-    total_failed = 0
-
-    current_policy = policy
-    if _in_jupyter():
-        print(f"Fetching {total} tiles ({len(strips)} strips)...", end=" ", flush=True)
-        for strip in strips:
-            to_fetch: List[PyTileIndex] = []
-            cached_results: List[Tuple[PyTileIndex, bytes]] = []
-            for t in strip:
-                key = (t.x, t.y, t.z)
-                if key in tile_cache:
-                    cached_results.append((t, tile_cache[key]))
-                else:
-                    to_fetch.append(t)
-            fresh: List[Tuple[PyTileIndex, bytes]] = []
-            strip_failed = 0
-            if to_fetch:
-                try:
-                    # Pass ratio=1.0 to defer global check to Python side
-                    fresh, strip_failed = fetch_tiles_rs(
-                        to_fetch,
-                        template,
-                        callback=lambda _: None,
-                        max_connections=max_connections,
-                        policy=current_policy,
-                        max_failed_ratio=1.0 if current_policy != "strict" else max_failed_ratio,
-                    )
-                except RuntimeError as exc:
-                    if current_policy == "strict" and _ask_continue_after_failure(exc):
-                        current_policy = "lenient"
-                        fresh = []
-                        strip_failed = len(to_fetch)
-                    else:
-                        raise
-                for t, b in fresh:
-                    tile_cache[(t.x, t.y, t.z)] = b
-            strip_results = cached_results + fresh
-            total_fetched += len(strip_results)
-            total_failed += strip_failed
-            all_results.append(strip_results)
-        print("done.")
-    else:
-        tiles_done = 0
-        with _make_progress() as progress:
-            task_id = progress.add_task("Fetching tiles (strips)...", total=total)
-
-            for strip in strips:
-                to_fetch2: List[PyTileIndex] = []
-                cached_results2: List[Tuple[PyTileIndex, bytes]] = []
-                for t in strip:
-                    key = (t.x, t.y, t.z)
-                    if key in tile_cache:
-                        cached_results2.append((t, tile_cache[key]))
-                    else:
-                        to_fetch2.append(t)
-
-                if cached_results2:
-                    tiles_done += len(cached_results2)
-                    progress.update(task_id, completed=tiles_done)
-
-                fresh2: List[Tuple[PyTileIndex, bytes]] = []
-                strip_failed2 = 0
-                if to_fetch2:
-                    _base = tiles_done
-
-                    def _make_callback(base: int) -> Callable[[int], None]:
-                        def _cb(completed: int) -> None:
-                            progress.update(task_id, completed=base + completed)
-
-                        return _cb
-
-                    try:
-                        # Pass ratio=1.0 to defer global check to Python side
-                        fresh2, strip_failed2 = fetch_tiles_rs(
-                            to_fetch2,
-                            template,
-                            callback=_make_callback(_base),
-                            max_connections=max_connections,
-                            policy=current_policy,
-                            max_failed_ratio=1.0
-                            if current_policy != "strict"
-                            else max_failed_ratio,
-                        )
-                    except RuntimeError as exc:
-                        if current_policy == "strict":
-                            progress.stop()
-                            if _ask_continue_after_failure(exc):
-                                current_policy = "lenient"
-                                fresh2 = []
-                                strip_failed2 = len(to_fetch2)
-                                progress.start()
-                            else:
-                                raise
-                        else:
-                            raise
-                    for t, b in fresh2:
-                        tile_cache[(t.x, t.y, t.z)] = b
-
-                    tiles_done += len(fresh2)
-                    progress.update(task_id, completed=tiles_done)
-
-                strip_results2 = cached_results2 + fresh2
-                total_fetched += len(strip_results2)
-                total_failed += strip_failed2
-                all_results.append(strip_results2)
-
-    if current_policy == "lenient" and total > 0 and total_failed / total > max_failed_ratio:
-        raise RuntimeError(
-            f"Too many failed tiles: {total_failed}/{total} "
-            f"({100.0 * total_failed / total:.1f}% exceeds {100.0 * max_failed_ratio:.1f}% threshold)"
-        )
-
-    if current_policy == "ignore":
-        _console.print(
-            f"[dim]{total_fetched}/{total} tiles returned"
-            f" ({total_failed} failures filled with NoData under 'ignore' policy)[/dim]"
-        )
-    else:
-        _console.print(f"[dim]{total_fetched}/{total} tiles fetched, {total_failed} failed[/dim]")
-
-    return all_results

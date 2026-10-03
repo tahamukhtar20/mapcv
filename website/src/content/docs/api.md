@@ -120,39 +120,6 @@ Same as `stitch_region`, plus:
 
 ---
 
-### `download_region_strips`
-
-```python
-mapcv.download_region_strips(
-    west: float,
-    south: float,
-    east: float,
-    north: float,
-    zoom: int,
-    strip_rows: int,
-    url_template: str | None = None,
-    source: str | None = None,
-    max_connections: int = 16,
-    policy: str = "lenient",
-    snap_to_tiles: bool = True,
-    max_failed_ratio: float = 0.05,
-) -> list[list[tuple[PyTileIndex, bytes]]]
-```
-
-Like `download_region` but divides the tile grid into horizontal strips of `strip_rows` tile rows. Tiles shared between strips are cached and fetched only once.
-
-**Parameters**
-
-Same as `download_region`, plus:
-
-- **`strip_rows`** (`int`) - Number of tile rows per strip.
-
-**Returns**
-
-`list[list[tuple[PyTileIndex, bytes]]]`, one inner list per strip.
-
----
-
 ## Labels
 
 ### `parse_geojson`
@@ -290,18 +257,18 @@ class mapcv.SamplerConfig(
 
 ```python
 mapcv.sample_patches(
-    strip_image: np.ndarray,
-    strip_mask: np.ndarray | None,
+    image: np.ndarray,
+    mask: np.ndarray | None,
     config: SamplerConfig,
 ) -> tuple[np.ndarray, np.ndarray | None, list[dict]]
 ```
 
-Extract fixed-size patches from `strip_image` and optionally `strip_mask`.
+Extract fixed-size patches from an in-memory `image` and optionally `mask`, using the same anchors as `mapcv generate`.
 
 **Parameters**
 
-- **`strip_image`** (`np.ndarray`) - `(H, W, 3)` `uint8` array.
-- **`strip_mask`** (`np.ndarray | None`) - `(H, W)` `uint8` array, or `None` for image-only datasets.
+- **`image`** (`np.ndarray`) - `(H, W)` or `(H, W, C)` array.
+- **`mask`** (`np.ndarray | None`) - `(H, W)` `uint8` array, or `None` for image-only datasets.
 - **`config`** (`SamplerConfig`) - Sampling configuration.
 
 **Returns**
@@ -309,7 +276,7 @@ Extract fixed-size patches from `strip_image` and optionally `strip_mask`.
 `(patch_images, patch_masks, meta)` where:
 - `patch_images`: `(N, patch_size, patch_size, 3)` `uint8`
 - `patch_masks`: `(N, patch_size, patch_size)` `uint8`, or `None` if no mask given
-- `meta`: list of dicts with keys `row`, `col`, `padded`
+- `meta`: list of dicts with keys `row`, `col`, `padded`, `empty_ratio`
 
 ---
 

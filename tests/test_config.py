@@ -77,7 +77,6 @@ def test_xyz_config_loads(tmp_path: Path) -> None:
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.zoom == 16
     assert config.imagery.source == "osm"
-    assert config.tiles is None
     assert config.sampler.patch_size == 256
 
 
@@ -87,7 +86,6 @@ def test_legacy_tiles_config_is_normalized(tmp_path: Path) -> None:
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.zoom == 16
     assert config.imagery.source == "osm"
-    assert config.tiles is None
     assert config.region.zoom is None
 
 

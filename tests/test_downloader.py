@@ -1,4 +1,4 @@
-"""Tests for tile-strip iteration and download helpers."""
+"""Tests for the region download and stitch helpers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 
 from mapcv import downloader
 from mapcv._mapcv_rs import PyTileIndex
-from mapcv.downloader import iter_tile_strips, resolve_url_template
+from mapcv.downloader import download_region, resolve_url_template, stitch_region
 
 
 def test_resolve_url_template_explicit() -> None:
@@ -35,84 +35,40 @@ def test_resolve_url_template_missing_both() -> None:
         resolve_url_template(None, None)
 
 
-def test_iter_tile_strips_groups_rows() -> None:
-    strips = iter_tile_strips(-0.1, -0.1, 0.1, 0.1, 6, strip_rows=2)
-    assert strips
-    flat_tiles = [tile for strip in strips for tile in strip]
-    rows: List[int] = sorted({tile.y for tile in flat_tiles})
-    strip_rows = [sorted({tile.y for tile in strip}) for strip in strips]
+def _png(value: int) -> bytes:
+    from io import BytesIO
 
-    assert sum(len(rows) for rows in strip_rows) == len(rows)
-    assert all(len(rows) <= 2 for rows in strip_rows)
+    import numpy as np
+    from PIL import Image
 
-    first_rows = strip_rows[0]
-    assert first_rows == rows[: len(first_rows)]
+    buffer = BytesIO()
+    Image.fromarray(np.full((256, 256, 3), value, dtype=np.uint8)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
-def test_iter_tile_strips_invalid_size() -> None:
-    with pytest.raises(ValueError, match="strip_rows must be positive"):
-        iter_tile_strips(-0.1, -0.1, 0.1, 0.1, 6, strip_rows=0)
+def _fake_fetch(calls: List[Tuple[int, str]]) -> Any:
+    def fetch(
+        requested: List[PyTileIndex], template: str, **kwargs: Any
+    ) -> Tuple[List[Tuple[PyTileIndex, bytes]], int]:
+        calls.append((len(requested), template))
+        return [(tile, _png(tile.x % 200)) for tile in requested], 0
+
+    return fetch
 
 
-def _stub_strip_downloads(
-    monkeypatch: pytest.MonkeyPatch,
-    outcomes: List[Tuple[List[Tuple[PyTileIndex, bytes]], int]],
-) -> None:
-    strips = [[PyTileIndex(index, 0, 1)] for index in range(len(outcomes))]
-    pending = iter(outcomes)
-
-    def fake_iter_strips(*args: Any, **kwargs: Any) -> List[List[PyTileIndex]]:
-        return strips
-
-    def fake_fetch(*args: Any, **kwargs: Any) -> Tuple[List[Tuple[PyTileIndex, bytes]], int]:
-        return next(pending)
-
-    monkeypatch.setattr(downloader, "_in_jupyter", lambda: True)
-    monkeypatch.setattr(downloader, "iter_tile_strips", fake_iter_strips)
-    monkeypatch.setattr(downloader, "fetch_tiles_rs", fake_fetch)
-
-
-def test_download_strips_enforces_global_lenient_ratio(
+def test_download_region_fetches_every_tile_in_the_snapped_bbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tile = PyTileIndex(0, 0, 1)
-    _stub_strip_downloads(monkeypatch, [([(tile, b"ok")], 0), ([], 1), ([], 1)])
-
-    with pytest.raises(RuntimeError, match="2/3"):
-        downloader.download_region_strips(
-            -1,
-            -1,
-            1,
-            1,
-            1,
-            1,
-            url_template="https://example.com/{z}/{x}/{y}.png",
-            policy="lenient",
-            snap_to_tiles=False,
-            max_failed_ratio=0.5,
-        )
+    calls: List[Tuple[int, str]] = []
+    monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
+    results = download_region(4.88, 52.37, 4.89, 52.375, 15, source="osm")
+    assert calls == [(len(results), downloader.URL_TEMPLATES["osm"])]
+    assert len({(tile.x, tile.y) for tile, _ in results}) == len(results) > 0
 
 
-def test_download_strips_ignore_bypasses_global_ratio(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tiles = [PyTileIndex(index, 0, 1) for index in range(2)]
-    _stub_strip_downloads(
-        monkeypatch,
-        [([(tiles[0], b"black")], 1), ([(tiles[1], b"black")], 1)],
-    )
-
-    results = downloader.download_region_strips(
-        -1,
-        -1,
-        1,
-        1,
-        1,
-        1,
-        url_template="https://example.com/{z}/{x}/{y}.png",
-        policy="ignore",
-        snap_to_tiles=False,
-        max_failed_ratio=0.0,
-    )
-
-    assert sum(len(strip) for strip in results) == 2
+def test_stitch_region_returns_image_and_transform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch([]))
+    image, transform = stitch_region(4.88, 52.37, 4.89, 52.375, 15, source="osm")
+    assert image.ndim == 3 and image.shape[2] == 3
+    assert image.shape[0] % 256 == 0 and image.shape[1] % 256 == 0
+    assert transform[0] > 0 and transform[4] < 0

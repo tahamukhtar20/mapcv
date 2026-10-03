@@ -1,0 +1,28 @@
+name: EOPF public smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_url:
+        description: Anonymous public Sentinel-2 L2A EOPF Zarr product URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v9
+      - name: Install mapcv with EOPF support
+        run: uv sync --extra zarr --extra dev
+      - name: Run public EOPF integration test
+        env:
+          MAPCV_EOPF_URL: ${{ inputs.product_url }}
+        run: uv run pytest -m eopf_live -v

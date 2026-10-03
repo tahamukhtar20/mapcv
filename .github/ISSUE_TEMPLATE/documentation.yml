@@ -1,0 +1,26 @@
+name: Documentation
+description: Report missing, unclear, or incorrect documentation.
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Which documentation is missing, unclear, or incorrect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What should a reader be able to understand or accomplish afterward?
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Include relevant links, examples, or related issues.

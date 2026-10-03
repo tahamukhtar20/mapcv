@@ -43,6 +43,9 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - Reject more than 255 classes instead of wrapping KML class IDs to 0 or reusing IDs, and treat `3` and `3.0` as one class.
 - Reject non-WGS-84 GeoJSON `crs` members, truncated KML, and non-finite coordinates; accept spaces after commas in KML coordinates and keep polygons inside GeometryCollections.
 - Warn with counts when features are skipped (no polygon, no label, or unmapped label), and reject unsupported label file types up front.
+- Retry truncated tile responses and apply the failure policy instead of aborting the whole download; count non-image responses (HTML error pages, empty bodies) as failed tiles.
+- Honour `Retry-After` on 429/5xx with jittered backoff, identify requests with a contact URL in the User-Agent, and raise `ValueError` for an invalid policy or connection count.
+- Enforce `max_failed_ratio` for any capitalization of `lenient`, and validate `url_template` placeholders up front.
 
 ### Documentation
 

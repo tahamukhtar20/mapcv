@@ -42,10 +42,10 @@ Exactly one of `source` or `url_template` is required.
 | `type` | `xyz` | required | Selects the XYZ adapter |
 | `zoom` | int | required | XYZ zoom level, 1–22 |
 | `source` | str | — | Built-in source name |
-| `url_template` | str | — | Custom URL with `{z}`, `{x}`, and `{y}` placeholders |
+| `url_template` | str | — | Custom `http(s)` URL with `{z}`, `{x}`, and `{y}` placeholders; other placeholders such as `{s}` are rejected |
 | `strip_rows` | int | `4` | Tile rows per processing chunk |
 | `max_connections` | int | `16` | Parallel tile fetches |
-| `policy` | str | `lenient` | `strict`, `lenient`, or `ignore` |
+| `policy` | str | `lenient` | What to do with a tile that still fails after retries (network errors, truncated responses, 429/5xx) or is not an image (for example an HTML error page): `strict` stops, `lenient` leaves it out and enforces `max_failed_ratio`, `ignore` fills it black and never enforces the ratio |
 | `max_failed_ratio` | float | `0.05` | Global failure threshold for `lenient` |
 
 Built-in sources are `osm`, `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, and `cartodb_dark_matter`.

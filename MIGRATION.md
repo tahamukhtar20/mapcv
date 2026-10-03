@@ -42,3 +42,7 @@ Anchors are now computed once over the whole raster instead of per strip:
 ## Splitting
 
 The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × `patch_size` by default, set with `split.block_size`) go to one split, and train/val patches that overlap a held-out patch are left out. Random patch-level splits overstate accuracy when patches overlap or neighbour each other. Set `strategy: stratified` or `random` to keep a patch-level split; mapcv warns when that leaks overlapping pixels. Manifests from 0.1 do not record the patch size, so `spatial` falls back to `stratified` unless `block_size` is set.
+
+## Class IDs
+
+With `labels.label_field`, class IDs used to follow the order labels first appeared in the file, so the same classes could get different IDs in different files. Now integer labels in 1..255 are used as their own IDs and other labels are numbered in sorted order. Set `labels.classes` (for example `{building: 1, road: 2}`) to pin IDs explicitly, for instance to match a dataset created with 0.1.

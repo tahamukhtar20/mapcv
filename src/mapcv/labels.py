@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from math import pi
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,39 +45,163 @@ def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
     return result
 
 
+MAX_CLASS_ID = 255
+
+# RFC 7946 GeoJSON is always WGS-84 lon/lat; these legacy `crs` names mean the same.
+_WGS84_CRS_NAMES = frozenset(
+    {
+        "urn:ogc:def:crs:ogc:1.3:crs84",
+        "urn:ogc:def:crs:epsg::4326",
+        "epsg:4326",
+        "crs84",
+    }
+)
+
+
+def _normalize_label(value: Any) -> Optional[str]:
+    """Return a stable string form of a label value, or ``None`` when missing."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    return str(int(number)) if number.is_integer() and "." in text else text
+
+
+def assign_class_ids(
+    labels: List[Optional[str]],
+    label_field: Optional[str],
+    classes: Optional[ClassMap] = None,
+) -> Tuple[List[int], ClassMap]:
+    """Map raw label values to mask class IDs.
+
+    Without ``label_field`` every geometry is class 1 and the class map is
+    empty. With an explicit ``classes`` map, labels missing from it get 0
+    (skipped). Otherwise labels that are all integers in 1..255 are used as
+    their own IDs, and any other labels get IDs 1..N in sorted order, so IDs
+    do not depend on the order of features in the file.
+
+    Returns one class ID per label (0 = skip) and the class map.
+
+    Raises:
+        ValueError: More distinct labels than fit in a ``uint8`` mask.
+    """
+    if label_field is None:
+        return [1] * len(labels), {}
+
+    present = sorted({label for label in labels if label is not None})
+    if classes is not None:
+        class_map = dict(classes)
+    elif present and all(label.isdigit() and 1 <= int(label) <= MAX_CLASS_ID for label in present):
+        class_map = {label: int(label) for label in present}
+    else:
+        if len(present) > MAX_CLASS_ID:
+            raise ValueError(
+                f"labels.label_field '{label_field}' has {len(present)} distinct values; "
+                f"masks support at most {MAX_CLASS_ID} classes. Map them with labels.classes."
+            )
+        class_map = {label: index for index, label in enumerate(present, start=1)}
+
+    ids = [class_map.get(label, 0) if label is not None else 0 for label in labels]
+    return ids, class_map
+
+
+def _warn_skipped(source: str, unlabeled: int, unmapped: int, non_polygon: int) -> None:
+    reasons = []
+    if non_polygon:
+        reasons.append(f"{non_polygon} without polygon geometry (points/lines)")
+    if unlabeled:
+        reasons.append(f"{unlabeled} without a label value")
+    if unmapped:
+        reasons.append(f"{unmapped} with a label not in labels.classes")
+    if reasons:
+        warnings.warn(f"{source}: skipped {', '.join(reasons)}.", UserWarning, stacklevel=4)
+
+
+def _with_class_ids(
+    source: str,
+    geometries: List[BaseGeometry],
+    labels: List[Optional[str]],
+    label_field: Optional[str],
+    classes: Optional[ClassMap],
+    non_polygon: int,
+) -> Tuple[List[GeomWithClass], ClassMap]:
+    ids, class_map = assign_class_ids(labels, label_field, classes)
+    result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
+    unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
+    unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
+    _warn_skipped(source, unlabeled, unmapped, non_polygon)
+    return result, class_map
+
+
 def parse_kml(
     data: bytes,
     label_field: Optional[str] = None,
+    classes: Optional[ClassMap] = None,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Parse KML bytes into (geometry, class_id) pairs.
 
-    Points, lines, and empty placemarks are skipped. If label_field is None
-    all polygons get class 1. Returns (geometries, class_map).
+    Labels are read from ``<Data>`` or ``<SimpleData>`` fields named
+    ``label_field``; see :func:`assign_class_ids` for how IDs are chosen.
+    Points, lines, and unlabeled placemarks are skipped with a warning.
+    Returns (geometries, class_map).
     """
-    raw_polys, raw_class_map = parse_kml_rs(data, label_field)
-    class_map: ClassMap = {k: int(v) for k, v in raw_class_map.items()}
-    result: List[GeomWithClass] = []
-    for poly_group, class_id in raw_polys:
-        if class_id == 0:
-            continue
-        if len(poly_group) == 1:
-            rings = poly_group[0]
-            geom: BaseGeometry = ShapelyPolygon(rings[0], rings[1:])
-        else:
-            parts = [ShapelyPolygon(rings[0], rings[1:]) for rings in poly_group]
-            geom = MultiPolygon(parts)
-        result.append((geom, int(class_id)))
-    return result, class_map
+    raw_polys, non_polygon = parse_kml_rs(data, label_field)
+    geometries: List[BaseGeometry] = []
+    labels: List[Optional[str]] = []
+    for poly_group, label in raw_polys:
+        parts = [ShapelyPolygon(rings[0], rings[1:]) for rings in poly_group]
+        geometries.append(parts[0] if len(parts) == 1 else MultiPolygon(parts))
+        labels.append(_normalize_label(label))
+    return _with_class_ids("KML", geometries, labels, label_field, classes, non_polygon)
+
+
+def _check_geojson_crs(obj: Any) -> None:
+    crs = obj.get("crs")
+    if not crs:
+        return
+    name = str((crs.get("properties") or {}).get("name", "")).lower()
+    if name not in _WGS84_CRS_NAMES:
+        raise ValueError(
+            f"GeoJSON 'crs' {name or crs!r} is not supported; mapcv reads GeoJSON as WGS-84 "
+            "longitude/latitude (RFC 7946). Reproject the file to EPSG:4326 first."
+        )
+
+
+def _polygon_parts(geom: BaseGeometry) -> Optional[BaseGeometry]:
+    if geom.geom_type in _POLYGON_TYPES:
+        return geom
+    if geom.geom_type == "GeometryCollection":
+        parts: List[ShapelyPolygon] = []
+        for part in getattr(geom, "geoms", []):
+            if part.geom_type == "Polygon":
+                parts.append(part)
+            elif part.geom_type == "MultiPolygon":
+                parts.extend(part.geoms)
+        if parts:
+            return parts[0] if len(parts) == 1 else MultiPolygon(parts)
+    return None
 
 
 def parse_geojson(
     data: bytes,
     label_field: Optional[str] = None,
+    classes: Optional[ClassMap] = None,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
-    Accepts FeatureCollection or a single Feature. If label_field is None
-    all polygons get class 1. Returns (geometries, class_map).
+    Accepts a FeatureCollection or a single Feature in WGS-84 lon/lat.
+    Polygons inside GeometryCollections are kept; points and lines are
+    skipped with a warning. See :func:`assign_class_ids` for class IDs.
+    Returns (geometries, class_map).
     """
     obj: Any = json.loads(data.decode("utf-8"))
     top_type: str = obj.get("type", "")
@@ -86,27 +211,20 @@ def parse_geojson(
         features = [obj]
     else:
         raise ValueError(f"Expected FeatureCollection or Feature, got: {top_type!r}")
+    _check_geojson_crs(obj)
 
-    class_map: ClassMap = {}
-    result: List[GeomWithClass] = []
-
+    geometries: List[BaseGeometry] = []
+    labels: List[Optional[str]] = []
+    non_polygon = 0
     for feat in features:
         geom_dict: Any = feat.get("geometry")
         if geom_dict is None:
             continue
-        geom: BaseGeometry = shape(geom_dict)
-        if geom.geom_type not in _POLYGON_TYPES:
+        geom = _polygon_parts(shape(geom_dict))
+        if geom is None:
+            non_polygon += 1
             continue
-        if label_field is None:
-            result.append((geom, 1))
-        else:
-            props: Dict[str, Any] = feat.get("properties") or {}
-            label_val: Any = props.get(label_field)
-            if label_val is None:
-                continue
-            label = str(label_val)
-            if label not in class_map:
-                class_map[label] = len(class_map) + 1
-            result.append((geom, class_map[label]))
-
-    return result, class_map
+        geometries.append(geom)
+        props: Dict[str, Any] = feat.get("properties") or {}
+        labels.append(_normalize_label(props.get(label_field)) if label_field else None)
+    return _with_class_ids("GeoJSON", geometries, labels, label_field, classes, non_polygon)

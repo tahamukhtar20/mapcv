@@ -17,7 +17,7 @@ To keep installation light, the core XYZ pipeline does not depend on GDAL. The o
 - **Resolution**: XYZ uses a zoom level. EOPF Sentinel-2 uses a harmonized 10, 20, or 60 metre grid while preserving the product's native projected CRS.
 - **Chunks**: Sampling anchors are generated globally, then imagery is read in row chunks with a patch halo so seam patches are neither lost nor duplicated.
 - **Patches**: Fixed-size square crops extracted from the stitched image. Each patch has a matching mask file of the same name.
-- **Class IDs**: Mask pixels are `0` (background) or `1..255` (class). When `label_field` is `null`, all polygons get `class_id = 1`. When a field name is given, IDs are assigned by encounter order starting at 1.
+- **Class IDs**: Mask pixels are `0` (background) or `1..255` (class). When `label_field` is `null`, all polygons get `class_id = 1`. When a field name is given, integer labels in 1..255 are used as IDs, other labels get IDs in sorted order, and `labels.classes` sets them explicitly.
 
 ---
 

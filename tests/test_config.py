@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -11,6 +13,7 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     MapcvConfig,
     XYZImageryConfig,
+    eopf_local_path,
 )
 
 
@@ -79,12 +82,91 @@ def test_xyz_config_loads(tmp_path: Path) -> None:
 
 
 def test_legacy_tiles_config_is_normalized(tmp_path: Path) -> None:
-    with pytest.warns(DeprecationWarning, match="0.3.0"):
+    with pytest.warns(FutureWarning, match="0.3.0"):
         config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.zoom == 16
-    assert config.tiles is not None
-    assert config.tiles.source == "osm"
+    assert config.imagery.source == "osm"
+    assert config.tiles is None
+    assert config.region.zoom is None
+
+
+def test_normalized_legacy_config_round_trips(tmp_path: Path) -> None:
+    with pytest.warns(FutureWarning):
+        config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = MapcvConfig.model_validate(config.model_dump())
+    assert again == config
+
+
+def test_region_zoom_fills_missing_imagery_zoom_with_warning(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  north: 31.60\n", "  north: 31.60\n  zoom: 15\n").replace(
+        "  zoom: 16\n", ""
+    )
+    with pytest.warns(FutureWarning, match="set imagery.zoom"):
+        config = MapcvConfig.from_yaml(_write(tmp_path, content))
+    assert isinstance(config.imagery, XYZImageryConfig)
+    assert config.imagery.zoom == 15
+
+
+@pytest.mark.parametrize("content", [_MINIMAL, _ZARR])
+def test_region_zoom_beside_imagery_warns_that_it_is_ignored(tmp_path: Path, content: str) -> None:
+    content = content.replace("  north: ", "  zoom: 12\n  north: ", 1)
+    with pytest.warns(FutureWarning, match="ignored"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_missing_imagery_type_has_clear_error(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  type: xyz\n", "")
+    with pytest.raises(ValueError, match="imagery.type is required"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_removed_google_preset_is_rejected(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("source: osm", "source: google_satellite")
+    with pytest.raises(ValueError, match="removed in mapcv 0.2.0"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_unknown_tile_source_is_rejected(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("source: osm", "source: nope")
+    with pytest.raises(ValueError, match="unknown tile source 'nope'"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "https://user:pw@example.com/S2.zarr",
+        "https://example.com/S2.zarr?token=secret",
+        "https://example.com/S2.zarr#frag",
+        "http://example.com/S2.zarr",
+        "gs://bucket/S2.zarr",
+    ],
+)
+def test_eopf_path_rejects_unsafe_urls(path: str) -> None:
+    with pytest.raises(ValueError):
+        EOPFZarrImageryConfig(path=path)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/data/S2.zarr", "/data/S2.zarr"),
+        (r"C:\data\S2.zarr", r"C:\data\S2.zarr"),
+        ("file:///C:/data/S2.zarr", "C:/data/S2.zarr"),
+        ("file:///data/S2.zarr", "/data/S2.zarr"),
+        ("s3://bucket/S2.zarr", None),
+        ("https://example.com/S2.zarr", None),
+    ],
+)
+def test_eopf_local_path(path: str, expected: Optional[str]) -> None:
+    EOPFZarrImageryConfig(path=path)
+    local = eopf_local_path(path)
+    assert (str(local).replace("\\", "/") if local else None) == (
+        expected.replace("\\", "/") if expected else None
+    )
 
 
 def test_xyz_url_template(tmp_path: Path) -> None:

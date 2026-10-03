@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -15,7 +16,12 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
 from mapcv._mapcv_rs import snap_bbox, tile_transform, tiles
-from mapcv.config import EOPFZarrImageryConfig, RegionConfig, XYZImageryConfig
+from mapcv.config import (
+    EOPFZarrImageryConfig,
+    RegionConfig,
+    XYZImageryConfig,
+    eopf_local_path,
+)
 from mapcv.downloader import download_region, resolve_url_template
 
 
@@ -72,9 +78,18 @@ def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> B
 
 
 def _safe_product_id(path_or_url: str) -> str:
+    local = eopf_local_path(path_or_url)
+    if local is not None:
+        return local.name or "imagery-product"
     parsed = urlsplit(path_or_url)
     name = Path(parsed.path.rstrip("/")).name
     return name or parsed.hostname or "imagery-product"
+
+
+def _xyz_product_id(url_template: str) -> str:
+    # Custom templates can embed secrets in the path or query (e.g. an instance
+    # ID), so only the hostname is recorded.
+    return f"custom-xyz:{urlsplit(url_template).hostname or 'unknown'}"
 
 
 class XYZRasterSource:
@@ -116,10 +131,10 @@ class XYZRasterSource:
         self._min_y = min(tile.y for tile in target_tiles)
         self._max_y = max(tile.y for tile in target_tiles)
 
-        template = resolve_url_template(config.url_template, config.source)
         self.metadata = RasterMetadata(
             source_type="xyz",
-            product_id=config.source or _safe_product_id(template),
+            product_id=config.source
+            or _xyz_product_id(resolve_url_template(config.url_template, None)),
             width=(self._max_x - self._min_x + 1) * 256,
             height=(self._max_y - self._min_y + 1) * 256,
             bands=["red", "green", "blue"],
@@ -173,6 +188,9 @@ class XYZRasterSource:
                     ]
                 )
                 valid[target_row_start:target_row_stop, target_col_start:target_col_stop] = True
+        # Failed tiles are black-filled by the fetcher and some providers serve
+        # black NoData, so all-zero pixels count as empty, as in mapcv 0.1.
+        valid &= np.any(window != 0, axis=-1)
         return window, valid
 
     def close(self) -> None:
@@ -225,19 +243,39 @@ def _coordinate_transform(dataset: Any, resolution: int) -> Transform:
     )
 
 
+def _snap_bounds_to_grid(
+    bounds: Tuple[float, float, float, float],
+    x_values: npt.NDArray[Any],
+    y_values: npt.NDArray[Any],
+    resolution: int,
+) -> Tuple[float, float, float, float]:
+    """Expand ``bounds`` outward to pixel edges of the product grid.
+
+    The reader builds its output grid from the bbox origin, so an unsnapped bbox
+    is offset by a sub-pixel amount and every band would be resampled.
+    """
+    x_res = abs(float(x_values[1] - x_values[0])) if x_values.size > 1 else float(resolution)
+    y_res = abs(float(y_values[1] - y_values[0])) if y_values.size > 1 else float(resolution)
+    x_edge = float(np.min(x_values)) - x_res / 2.0
+    y_edge = float(np.min(y_values)) - y_res / 2.0
+    eps = 1e-9
+    left, bottom, right, top = bounds
+    return (
+        x_edge + math.floor((left - x_edge) / x_res + eps) * x_res,
+        y_edge + math.floor((bottom - y_edge) / y_res + eps) * y_res,
+        x_edge + math.ceil((right - x_edge) / x_res - eps) * x_res,
+        y_edge + math.ceil((top - y_edge) / y_res - eps) * y_res,
+    )
+
+
 class EOPFZarrRasterSource:
     """Lazy window reader for one Sentinel-2 L2A EOPF Zarr product."""
 
     def __init__(self, region: RegionConfig, config: EOPFZarrImageryConfig) -> None:
-        parsed = urlsplit(config.path)
-        if parsed.scheme not in ("", "file", "http", "https", "s3"):
-            raise ValueError("EOPF path must be local, file://, HTTPS, or anonymous s3://")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("EOPF URLs must not contain credentials, query strings, or fragments")
-        if parsed.scheme in ("", "file"):
-            local_path = Path(parsed.path if parsed.scheme == "file" else config.path)
-            if not local_path.exists():
-                raise FileNotFoundError(f"EOPF Zarr product not found: {local_path}")
+        # URL safety rules are enforced by EOPFZarrImageryConfig validation.
+        local_path = eopf_local_path(config.path)
+        if local_path is not None and not local_path.exists():
+            raise FileNotFoundError(f"EOPF Zarr product not found: {local_path}")
 
         try:
             import xarray as xr
@@ -247,7 +285,7 @@ class EOPFZarrRasterSource:
                 "EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'."
             ) from exc
 
-        storage_options = {"anon": True} if parsed.scheme == "s3" else None
+        storage_options = {"anon": True} if urlsplit(config.path).scheme == "s3" else None
 
         def open_dataset(**spatial_options: Any) -> Any:
             return xr.open_dataset(
@@ -307,6 +345,10 @@ class EOPFZarrRasterSource:
             or top < product_bottom
             or bottom > product_top
         )
+        if intersects:
+            left, bottom, right, top = _snap_bounds_to_grid(
+                (left, bottom, right, top), x_values, y_values, config.resolution
+            )
         discovery.close()
         if not intersects:
             raise ValueError("requested region does not intersect the EOPF product")

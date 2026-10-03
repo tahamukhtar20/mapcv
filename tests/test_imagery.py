@@ -18,6 +18,7 @@ from mapcv.config import EOPFZarrImageryConfig, RegionConfig, XYZImageryConfig
 from mapcv.imagery import (
     EOPFZarrRasterSource,
     XYZRasterSource,
+    _snap_bounds_to_grid,
     offset_transform,
     transform_geometry_to_crs,
 )
@@ -63,7 +64,8 @@ def test_eopf_source_preserves_band_order_and_casts_float32(
     assert captured[0]["engine"] == "eopf-zarr"
     assert captured[0]["variables"] == ["b08", "b04"]
     assert "bbox" not in captured[0]
-    assert captured[1]["bbox"] == pytest.approx([10.0, 45.0, 10.15, 45.15])
+    # The bbox is expanded to pixel edges of the 0.05-degree product grid.
+    assert captured[1]["bbox"] == pytest.approx([9.975, 44.975, 10.175, 45.175])
     assert captured[1]["crs"] == "EPSG:4326"
     assert source.metadata.product_id == "S2_TEST.zarr"
     assert source.metadata.bands == ["b08", "b04"]
@@ -83,6 +85,17 @@ def test_eopf_source_reports_missing_variables(
 
     with pytest.raises(ValueError, match="b11.*Available variables"):
         EOPFZarrRasterSource(_region(), EOPFZarrImageryConfig(path=str(product), bands=["b11"]))
+
+
+def test_snap_bounds_to_grid_aligns_to_pixel_edges() -> None:
+    x_values = np.array([500005.0, 500015.0, 500025.0])
+    y_values = np.array([4999995.0, 4999985.0, 4999975.0])
+    snapped = _snap_bounds_to_grid(
+        (500003.2, 4999971.0, 500021.7, 4999999.9), x_values, y_values, 10
+    )
+    assert snapped == pytest.approx((500000.0, 4999970.0, 500030.0, 5000000.0))
+    # Bounds already on pixel edges are left unchanged.
+    assert _snap_bounds_to_grid(snapped, x_values, y_values, 10) == pytest.approx(snapped)
 
 
 def test_eopf_source_rejects_secret_bearing_url() -> None:
@@ -153,6 +166,42 @@ def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> 
     assert valid.all()
     assert source.metadata.crs == "EPSG:3857"
     assert source.metadata.chunk_rows == 512
+
+
+def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    tile = PyTileIndex(3, 4, 12)
+    monkeypatch.setattr(
+        "mapcv.imagery.snap_bbox",
+        lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
+    )
+    monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
+    # The fetcher black-fills failed tiles under the lenient/ignore policies.
+    monkeypatch.setattr(
+        "mapcv.imagery.download_region", lambda *args, **kwargs: [(tile, _png_tile(0))]
+    )
+    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm"))
+
+    _, valid = source.read_window(0, 256, 0, 256)
+
+    assert not valid.any()
+
+
+def test_xyz_custom_template_product_id_keeps_only_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tile = PyTileIndex(3, 4, 12)
+    monkeypatch.setattr(
+        "mapcv.imagery.snap_bbox",
+        lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
+    )
+    monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
+    monkeypatch.setattr(
+        "mapcv.imagery.download_region", lambda *args, **kwargs: [(tile, _png_tile(7))]
+    )
+    template = "https://tiles.example.com/wmts/SECRET-INSTANCE/{z}/{x}/{y}.png?key=SECRET"
+    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, url_template=template))
+
+    assert source.metadata.product_id == "custom-xyz:tiles.example.com"
 
 
 def test_offset_transform_uses_global_pixel_origin() -> None:

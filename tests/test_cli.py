@@ -272,3 +272,49 @@ def test_validate_shows_split_info(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "split" in result.output
     assert "0.2" in result.output
+
+
+def test_generate_reports_runtime_errors_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("requested region does not intersect the EOPF product")
+
+    monkeypatch.setattr("mapcv.cli.run_generate", fail)
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path))])
+    assert result.exit_code == 1
+    assert "Generation failed" in result.output
+    assert "does not intersect" in result.output
+
+
+def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
+    p = _write_config(tmp_path)
+    p.write_text(
+        p.read_text().replace(
+            "source: osm",
+            'url_template: "https://tiles.example.com/SECRET/{z}/{x}/{y}.png?key=SECRET"',
+        )
+    )
+    result = runner.invoke(app, ["validate", str(p)])
+    assert result.exit_code == 0
+    assert "tiles.example.com" in result.output
+    assert "SECRET" not in result.output
+
+
+def test_validate_reports_deprecated_legacy_config(tmp_path: Path) -> None:
+    p = _write_config(tmp_path)
+    p.write_text(
+        p.read_text()
+        .replace("  north: 31.60\n", "  north: 31.60\n  zoom: 16\n")
+        .replace("imagery:\n  type: xyz\n  zoom: 16\n", "tiles:\n")
+    )
+    result = runner.invoke(app, ["validate", str(p)])
+    assert result.exit_code == 0
+    assert "Deprecated" in result.output
+
+
+def test_init_links_provider_guidance(tmp_path: Path) -> None:
+    out = tmp_path / "cfg.yaml"
+    result = runner.invoke(app, ["init", str(out)])
+    assert result.exit_code == 0
+    assert "PROVIDERS.md" in out.read_text()

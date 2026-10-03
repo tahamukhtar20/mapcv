@@ -247,7 +247,7 @@ def _dataset_crs(dataset: Any) -> str:
     for candidate in candidates:
         if candidate:
             try:
-                return CRS.from_user_input(candidate).to_string()
+                return str(CRS.from_user_input(candidate).to_string())
             except Exception:
                 continue
     raise ValueError("EOPF dataset does not expose a readable projected CRS")

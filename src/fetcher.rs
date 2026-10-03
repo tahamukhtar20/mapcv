@@ -222,7 +222,7 @@ pub fn fetch_tiles(
     py: Python,
     tiles: Vec<TileIndex>,
     url_template: String,
-    callback: Option<PyObject>,
+    callback: Option<Py<PyAny>>,
     max_connections: usize,
     policy_str: &str,
 ) -> PyResult<(Vec<(TileIndex, Vec<u8>)>, usize)> {
@@ -305,7 +305,7 @@ pub fn fetch_tiles(
     let rx = std::sync::Mutex::new(rx);
 
     loop {
-        let event = py.allow_threads(|| -> PyResult<Event> {
+        let event = py.detach(|| -> PyResult<Event> {
             let guard = rx
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("internal fetch mutex was poisoned"))?;

@@ -42,7 +42,8 @@ jobs:
           target: x86_64
           manylinux: auto
           command: build
-          args: --release --sdist -o dist -i 3.10 3.11 3.12 3.13
+          # abi3 (cp310-abi3): one wheel serves Python 3.10 and newer.
+          args: --release --sdist -o dist
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-x86_64
@@ -52,43 +53,37 @@ jobs:
   macos:
     needs: check-version
     runs-on: macos-latest
-    strategy:
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
       - uses: PyO3/maturin-action@v1
         with:
           command: build
           target: universal2-apple-darwin
-          args: --release -o dist -i python${{ matrix.python }}
+          args: --release -o dist
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-macos-${{ matrix.python }}
+          name: wheels-macos
           path: dist
 
   # ── Windows (x86-64) ─────────────────────────────────────────────────────────
   windows:
     needs: check-version
     runs-on: windows-latest
-    strategy:
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
       - uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release -o dist -i python${{ matrix.python }}
+          args: --release -o dist
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-windows-${{ matrix.python }}
+          name: wheels-windows
           path: dist
 
   # ── Test the Linux wheels on every supported Python before publishing ────────
@@ -98,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -118,13 +113,14 @@ jobs:
           from email.parser import Parser
           wheels = glob.glob("dist/*.whl")
           assert wheels, "no wheels built"
+          assert all("-cp310-abi3-" in whl for whl in wheels), wheels
           for whl in wheels:
               with zipfile.ZipFile(whl) as zf:
                   name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
                   meta = Parser().parsestr(zf.read(name).decode())
               assert meta["Requires-Python"] == ">=3.10", (whl, meta["Requires-Python"])
               classifiers = meta.get_all("Classifier") or []
-              for minor in ("3.10", "3.11", "3.12", "3.13"):
+              for minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):
                   assert f"Programming Language :: Python :: {minor}" in classifiers, (whl, minor)
           print(f"metadata OK for {len(wheels)} wheels")
           EOF
@@ -132,8 +128,10 @@ jobs:
         run: |
           pip install --find-links dist mapcv
           python -c "import mapcv"
-          pip install --find-links dist 'mapcv[zarr]'
-          python -c "import xarray; import xarray_eopf"
+          if [ "${{ matrix.python }}" != "3.14" ]; then
+            pip install --find-links dist 'mapcv[zarr]'
+            python -c "import xarray; import xarray_eopf"
+          fi
           pip install pytest pytest-httpserver pytest-cov mercantile
       - name: Run tests
         run: pytest --cov=mapcv --cov-branch --cov-fail-under=65

@@ -18,12 +18,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
           - { os: macos-latest, python: "3.10" }
-          - { os: macos-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.14" }
           - { os: windows-latest, python: "3.10" }
-          - { os: windows-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.14" }
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v7
@@ -73,4 +73,5 @@ jobs:
         fail_ci_if_error: false
 
     - name: Smoke-test optional EOPF imports
+      if: matrix.python != '3.14'
       run: uv run python -c "import xarray; import xarray_eopf"

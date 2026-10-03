@@ -43,13 +43,15 @@ Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is diff
 pip install mapcv
 ```
 
-Requires Python 3.10 or newer. Pre-built wheels for Python 3.10–3.13 cover Linux (x86-64), macOS, and Windows; other versions build from source and need a Rust toolchain.
+Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
 
 EOPF Sentinel-2 L2A Zarr support is optional:
 
 ```bash
 pip install "mapcv[zarr]"
 ```
+
+The `zarr` extra currently supports Python 3.10–3.13: its zarr 2 dependency has no Python 3.14 wheels yet.
 
 ## Quick start
 

@@ -157,6 +157,7 @@ def run_generate(config: MapcvConfig) -> None:
             patch_shape=patch_shape,
             crs=source.metadata.crs,
             transform=source.metadata.transform,
+            sampler=config.sampler.model_dump(mode="json"),
         )
 
         anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
@@ -179,6 +180,8 @@ def run_generate(config: MapcvConfig) -> None:
                     manifest,
                     strip_index=chunk_index,
                 )
+                # Persist after every chunk so an interrupted run resumes from here.
+                manifest.save(manifest_path)
                 progress.advance(task)
 
         manifest.save(manifest_path)

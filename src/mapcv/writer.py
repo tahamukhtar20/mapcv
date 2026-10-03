@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -59,6 +61,7 @@ class Manifest(BaseModel):
     patch_shape: List[int] = Field(default_factory=list)
     crs: Optional[str] = None
     transform: Optional[Transform] = None
+    sampler: Optional[Dict[str, Any]] = None
     patches: List[ManifestEntry] = Field(default_factory=list)
 
     @classmethod
@@ -67,8 +70,37 @@ class Manifest(BaseModel):
         return cls.model_validate_json(path.read_text())
 
     def save(self, path: Path) -> None:
-        """Serialize the manifest to indented JSON."""
-        path.write_text(self.model_dump_json(indent=2))
+        """Atomically serialize the manifest to indented JSON."""
+        tmp_path = path.with_name(path.name + ".tmp")
+        tmp_path.write_text(self.model_dump_json(indent=2))
+        os.replace(tmp_path, path)
+
+
+class ManifestMismatchError(ValueError):
+    """An existing manifest cannot be resumed with the current configuration."""
+
+
+def _resume_mismatches(manifest: Manifest, expected: Manifest) -> List[str]:
+    fields = (
+        "class_map",
+        "source_type",
+        "product_id",
+        "bands",
+        "dtype",
+        "patch_shape",
+        "crs",
+        "sampler",
+    )
+    mismatches = [name for name in fields if getattr(manifest, name) != getattr(expected, name)]
+    if manifest.transform is None or expected.transform is None:
+        if manifest.transform != expected.transform:
+            mismatches.append("transform")
+    elif not all(
+        math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+        for a, b in zip(manifest.transform, expected.transform)
+    ):
+        mismatches.append("transform")
+    return mismatches
 
 
 def load_or_create_manifest(
@@ -82,11 +114,15 @@ def load_or_create_manifest(
     patch_shape: Optional[List[int]] = None,
     crs: Optional[str] = None,
     transform: Optional[Transform] = None,
+    sampler: Optional[Dict[str, Any]] = None,
 ) -> Manifest:
-    """Load an existing manifest or create a version-2 manifest."""
-    if path.exists():
-        return Manifest.load(path)
-    return Manifest(
+    """Load a resumable manifest from ``path`` or create a version-2 manifest.
+
+    Raises:
+        ManifestMismatchError: The existing manifest is version 1, or was
+            generated with different imagery, labels, or sampler settings.
+    """
+    expected = Manifest(
         class_map=class_map,
         source_type=source_type,
         product_id=product_id,
@@ -95,7 +131,24 @@ def load_or_create_manifest(
         patch_shape=patch_shape or [],
         crs=crs,
         transform=transform,
+        sampler=sampler,
     )
+    if not path.exists():
+        return expected
+
+    manifest = Manifest.load(path)
+    if manifest.version < MANIFEST_VERSION:
+        raise ManifestMismatchError(
+            f"{path} is a version-{manifest.version} manifest from mapcv 0.1.x and cannot be "
+            "resumed; generate into a new writer.staging_dir ('mapcv split' still reads it)"
+        )
+    mismatches = _resume_mismatches(manifest, expected)
+    if mismatches:
+        raise ManifestMismatchError(
+            f"{path} was generated with a different configuration "
+            f"({', '.join(mismatches)}); use a new writer.staging_dir or remove the old dataset"
+        )
+    return manifest
 
 
 def _class_counts(mask: npt.NDArray[np.uint8]) -> Dict[str, int]:
@@ -132,8 +185,7 @@ def _write_npy_patches(
         image_path = images_dir / filename
         image = image_patches[local_index]
         channels_first = image[np.newaxis, ...] if image.ndim == 2 else np.moveaxis(image, -1, 0)
-        if not image_path.exists():
-            np.save(image_path, np.ascontiguousarray(channels_first), allow_pickle=False)
+        np.save(image_path, np.ascontiguousarray(channels_first), allow_pickle=False)
 
         mask_filename: Optional[str] = None
         counts: Dict[str, int] = {}
@@ -141,8 +193,7 @@ def _write_npy_patches(
             mask = mask_patches[local_index]
             mask_filename = f"patch_{global_index:07d}.png"
             mask_path = masks_dir / mask_filename
-            if not mask_path.exists():
-                Image.fromarray(mask, mode="L").save(mask_path, format="PNG")
+            Image.fromarray(mask, mode="L").save(mask_path, format="PNG")
             counts = _class_counts(mask)
 
         manifest.patches.append(
@@ -154,7 +205,11 @@ def _write_npy_patches(
                 padded=patch_meta["padded"],
                 strip_index=strip_index,
                 per_class_pixel_counts=counts,
-                empty_ratio=patch_meta.get("empty_ratio", _empty_ratio(image)),
+                empty_ratio=(
+                    patch_meta["empty_ratio"]
+                    if "empty_ratio" in patch_meta
+                    else _empty_ratio(image)
+                ),
             )
         )
 
@@ -171,7 +226,8 @@ def write_patches(
 
     PNG/JPG images retain the Rust-backed RGB writer. NPY images preserve an
     arbitrary channel count and dtype and are stored bands-first on disk.
-    Existing files are not overwritten, preserving resume behavior.
+    Files are indexed from ``len(manifest.patches)``, so any existing file at
+    those indices is an orphan from an interrupted run and is overwritten.
     """
     if len(meta) == 0:
         return

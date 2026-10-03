@@ -10,7 +10,7 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify tag matches pyproject.toml and Cargo.toml
         run: |
           TAG="${GITHUB_REF_NAME#v}"
@@ -36,14 +36,14 @@ jobs:
     needs: check-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
           target: x86_64
           manylinux: auto
           command: build
           args: --release --sdist -o dist -i 3.10 3.11 3.12 3.13
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-x86_64
           path: dist
@@ -56,8 +56,8 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - uses: PyO3/maturin-action@v1
@@ -65,7 +65,7 @@ jobs:
           command: build
           target: universal2-apple-darwin
           args: --release -o dist -i python${{ matrix.python }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.python }}
           path: dist
@@ -78,15 +78,15 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - uses: PyO3/maturin-action@v1
         with:
           command: build
           args: --release -o dist -i python${{ matrix.python }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.python }}
           path: dist
@@ -96,11 +96,11 @@ jobs:
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-linux-x86_64
           path: dist
@@ -108,9 +108,12 @@ jobs:
       - name: Install wheel and test dependencies
         run: |
           pip install --find-links dist mapcv
-          pip install pytest pytest-httpserver mercantile
+          python -c "import mapcv"
+          pip install --find-links dist 'mapcv[zarr]'
+          python -c "import xarray; import xarray_eopf"
+          pip install pytest pytest-httpserver pytest-cov mercantile
       - name: Run tests
-        run: pytest
+        run: pytest --cov=mapcv --cov-branch --cov-fail-under=65
 
   # ── Generate changelog + publish ─────────────────────────────────────────────
   publish:
@@ -121,11 +124,11 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist

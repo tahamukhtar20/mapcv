@@ -66,7 +66,8 @@ writer:
 #   val_ratio: 0.10
 #   labeled_ratios: [0.10, 0.20, 0.30]
 #   seed: 42
-#   strategy: stratified     # random | stratified
+#   strategy: spatial        # spatial (leakage-safe) | stratified | random
+#   block_size: null         # spatial block in pixels; null = 4 x patch_size
 """
 
 
@@ -121,7 +122,10 @@ def split(
         None, help="Labeled fractions (repeatable). Default: 0.10 0.20 0.30."
     ),
     seed: int = typer.Option(42, help="Random seed."),
-    strategy: str = typer.Option("stratified", help="Sampling strategy: random | stratified."),
+    strategy: str = typer.Option("spatial", help="Split strategy: spatial | stratified | random."),
+    block_size: Optional[int] = typer.Option(
+        None, help="Spatial block size in pixels (default: 4 x patch size)."
+    ),
     sample_limit: Optional[int] = typer.Option(None, help="Cap on total patches sampled."),
 ) -> None:
     """Split an existing dataset using its manifest (no images are re-read)."""
@@ -135,7 +139,8 @@ def split(
             val_ratio=val_ratio,
             labeled_ratios=ratios,
             seed=seed,
-            strategy=cast(Literal["random", "stratified"], strategy),
+            strategy=cast(Literal["spatial", "stratified", "random"], strategy),
+            block_size=block_size,
             sample_limit=sample_limit,
         )
     except Exception as exc:

@@ -38,3 +38,7 @@ Anchors are now computed once over the whole raster instead of per strip:
 - `sampler.mode: random` draws `random_count` patches **in total**. In 0.1 it drew `random_count` per strip, so the same config now yields fewer patches; raise `random_count` to compensate.
 - Grid patches can cross the old strip seams, and `edge_strategy` applies only at the raster's outer edges. Patch positions and counts can therefore differ from a 0.1 run over the same region.
 - For XYZ, all-black pixels (including tiles that failed under `policy: lenient` or `ignore`) count as empty for `max_empty_ratio`, as in 0.1.
+
+## Splitting
+
+The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × `patch_size` by default, set with `split.block_size`) go to one split, and train/val patches that overlap a held-out patch are left out. Random patch-level splits overstate accuracy when patches overlap or neighbour each other. Set `strategy: stratified` or `random` to keep a patch-level split; mapcv warns when that leaks overlapping pixels. Manifests from 0.1 do not record the patch size, so `spatial` falls back to `stratified` unless `block_size` is set.

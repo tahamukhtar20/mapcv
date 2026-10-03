@@ -51,3 +51,7 @@ Resuming requires the same imagery, labels, and sampler settings; a mismatch sto
 - `sampler.mode: random` now draws `random_count` patches in total, not per strip. Raise `random_count` to keep a similar dataset size.
 - Grid patches can cross the old strip seams, and `edge_strategy` applies only at the raster's outer edges, so positions and counts can differ from 0.1.
 - For XYZ, all-black pixels (including failed tiles under `lenient` or `ignore`) count as empty for `max_empty_ratio`.
+
+## Splitting
+
+The default `split.strategy` is now `spatial`: whole raster blocks go to one split and overlapping train/val patches are left out, so test scores are not inflated by leaked pixels. Use `strategy: stratified` or `random` for a patch-level split. 0.1 manifests need `split.block_size` for a spatial split.

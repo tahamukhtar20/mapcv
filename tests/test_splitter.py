@@ -37,7 +37,7 @@ def _entry(
 
 
 def _manifest(entries: List[ManifestEntry]) -> Manifest:
-    m = Manifest(class_map={"bg": 0, "obj": 1})
+    m = Manifest(class_map={"bg": 0, "obj": 1}, sampler={"patch_size": 1, "stride": 1})
     m.patches = list(entries)
     return m
 
@@ -62,7 +62,8 @@ def test_config_defaults() -> None:
     assert cfg.val_ratio == 0.10
     assert cfg.labeled_ratios == [0.10, 0.20, 0.30]
     assert cfg.seed == 42
-    assert cfg.strategy == "stratified"
+    assert cfg.strategy == "spatial"
+    assert cfg.block_size is None
     assert cfg.sample_limit is None
 
 
@@ -115,9 +116,13 @@ def test_classify_mask_mixed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_empty_manifest_writes_nothing(tmp_path: Path) -> None:
-    split_dataset(_manifest([]), SplitterConfig(), tmp_path / "splits")
-    assert not (tmp_path / "splits").exists()
+def test_empty_manifest_writes_empty_lists(tmp_path: Path) -> None:
+    out = tmp_path / "splits"
+    out.mkdir()
+    (out / "train.txt").write_text("stale.png")
+    counts = split_dataset(_manifest([]), SplitterConfig(labeled_ratios=[]), out)
+    assert counts == {"train": 0, "val": 0, "test": 0, "dropped": 0}
+    assert _read_lines(out / "train.txt") == []
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +193,9 @@ def test_all_filenames_come_from_manifest(tmp_path: Path) -> None:
 
 def test_test_ratio_approx(tmp_path: Path) -> None:
     m = _make_manifest(100)
-    split_dataset(m, SplitterConfig(test_ratio=0.20, labeled_ratios=[]), tmp_path)
+    split_dataset(
+        m, SplitterConfig(strategy="random", test_ratio=0.20, labeled_ratios=[]), tmp_path
+    )
     test = _read_lines(tmp_path / "test.txt")
     # ceil(100 * 0.20) = 20
     assert len(test) == 20
@@ -196,7 +203,11 @@ def test_test_ratio_approx(tmp_path: Path) -> None:
 
 def test_val_ratio_approx(tmp_path: Path) -> None:
     m = _make_manifest(100)
-    split_dataset(m, SplitterConfig(test_ratio=0.20, val_ratio=0.10, labeled_ratios=[]), tmp_path)
+    split_dataset(
+        m,
+        SplitterConfig(strategy="random", test_ratio=0.20, val_ratio=0.10, labeled_ratios=[]),
+        tmp_path,
+    )
     val = _read_lines(tmp_path / "val.txt")
     # ceil(80 * 0.10) = 8
     assert len(val) == 8
@@ -309,3 +320,83 @@ def test_output_dir_created(tmp_path: Path) -> None:
     nested = tmp_path / "a" / "b" / "splits"
     split_dataset(m, SplitterConfig(labeled_ratios=[]), nested)
     assert nested.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# split_dataset: leakage, stratification, labeled-ratio names
+# ---------------------------------------------------------------------------
+
+
+def _grid_manifest(size: int, patch: int, stride: int) -> Manifest:
+    entries: List[ManifestEntry] = []
+    for row in range(0, size - patch + 1, stride):
+        for col in range(0, size - patch + 1, stride):
+            entry = _entry(len(entries))
+            entry["row"], entry["col"] = row, col
+            entries.append(entry)
+    m = _manifest(entries)
+    m.sampler = {"patch_size": patch, "stride": stride, "mode": "grid"}
+    return m
+
+
+def _overlaps(a: ManifestEntry, b: ManifestEntry, patch: int) -> bool:
+    return abs(a["row"] - b["row"]) < patch and abs(a["col"] - b["col"]) < patch
+
+
+def test_spatial_split_has_no_overlap_between_splits(tmp_path: Path) -> None:
+    m = _grid_manifest(size=4096, patch=256, stride=128)
+    counts = split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
+    by_name = {e["filename"]: e for e in m.patches}
+    test = [by_name[f] for f in _read_lines(tmp_path / "test.txt")]
+    val = [by_name[f] for f in _read_lines(tmp_path / "val.txt")]
+    train = [by_name[f] for f in _read_lines(tmp_path / "train.txt")]
+
+    assert test and val and train
+    assert counts["dropped"] > 0
+    for held_out, others in ((test, val + train), (val, train)):
+        assert not any(_overlaps(a, b, 256) for a in held_out for b in others)
+
+
+def test_patch_strategies_warn_when_patches_overlap(tmp_path: Path) -> None:
+    m = _grid_manifest(size=1024, patch=256, stride=128)
+    with pytest.warns(UserWarning, match="leaks pixels"):
+        split_dataset(m, SplitterConfig(strategy="random", labeled_ratios=[]), tmp_path)
+
+
+def test_spatial_without_patch_size_falls_back_with_warning(tmp_path: Path) -> None:
+    m = _make_manifest(20)
+    m.sampler = None
+    with pytest.warns(UserWarning, match="falling back to 'stratified'"):
+        split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
+
+
+def test_stratified_split_preserves_stratum_shares(tmp_path: Path) -> None:
+    entries = [
+        _entry(i, counts={"0": 10} if i < 50 else {"1": 10} if i < 80 else {"0": 5, "2": 5})
+        for i in range(100)
+    ]
+    split_dataset(
+        _manifest(entries),
+        SplitterConfig(strategy="stratified", test_ratio=0.2, labeled_ratios=[]),
+        tmp_path,
+    )
+    test = set(_read_lines(tmp_path / "test.txt"))
+    shares = [
+        len(test & {e["filename"] for e in entries[lo:hi]})
+        for lo, hi in ((0, 50), (50, 80), (80, 100))
+    ]
+    assert shares == [10, 6, 4]
+
+
+@pytest.mark.parametrize(
+    ("ratio", "name"), [(0.1, "10"), (0.29, "29"), (0.125, "12.5"), (1.0, "100")]
+)
+def test_labeled_ratio_directory_names(tmp_path: Path, ratio: float, name: str) -> None:
+    split_dataset(_make_manifest(20), SplitterConfig(labeled_ratios=[ratio]), tmp_path)
+    assert (tmp_path / name / "labeled.txt").exists()
+
+
+@pytest.mark.parametrize("ratios", [[0.0], [1.5], [0.1, 0.1]])
+def test_config_rejects_invalid_labeled_ratios(ratios: List[float]) -> None:
+    with pytest.raises(ValueError):
+        SplitterConfig(labeled_ratios=ratios)

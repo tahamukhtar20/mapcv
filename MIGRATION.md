@@ -14,7 +14,7 @@ region:
 imagery:
   type: xyz
   zoom: 17
-  source: osm
+  source: esri_satellite
 ```
 
 Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a deprecation notice (a `FutureWarning`). `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom`, and is otherwise ignored with a notice. This compatibility path will be removed in 0.3.0. `imagery.type` is required.
@@ -22,6 +22,10 @@ Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a de
 ## Google imagery preset
 
 The built-in `google_satellite` preset has been removed, and configs that still use it fail validation with a pointer to this guide. mapcv cannot determine whether a use of Google imagery is licensed for downloading, caching, or machine-learning dataset creation. Authorized custom XYZ templates remain supported through `imagery.url_template`; do not put credentials or signed query strings in committed YAML.
+
+## OpenStreetMap preset
+
+The built-in `osm` preset has also been removed. OpenStreetMap data is open (ODbL), but the OpenStreetMap Foundation's tile servers run on donated capacity and their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) forbids bulk downloading, which is what dataset generation does. To use OSM-styled tiles, point `imagery.url_template` at a commercial OSM tile service whose terms allow it (with your API key kept out of committed YAML) or at a tile server you host. To use OSM *features* as labels, export them (for example with Overpass or QuackOSM) to GeoJSON and pass them as `labels.path`, with ODbL attribution.
 
 ## EOPF output and manifests
 

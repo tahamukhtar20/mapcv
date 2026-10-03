@@ -28,9 +28,9 @@ The area of interest in WGS-84 longitude/latitude.
 imagery:
   type: xyz
   zoom: 17
-  source: osm
+  source: esri_satellite
   strip_rows: 4
-  max_connections: 2        # keep low for OSM; see its tile usage policy
+  max_connections: 4        # keep requests modest; respect the provider's limits
   policy: lenient
   max_failed_ratio: 0.05
 ```
@@ -48,7 +48,7 @@ Exactly one of `source` or `url_template` is required.
 | `policy` | str | `lenient` | What to do with a tile that still fails after retries (network errors, truncated responses, 429/5xx) or is not an image (for example an HTML error page): `strict` stops, `lenient` leaves it out and enforces `max_failed_ratio`, `ignore` fills it black and never enforces the ratio |
 | `max_failed_ratio` | float | `0.05` | Global failure threshold for `lenient` |
 
-Built-in sources are `osm`, `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, and `cartodb_dark_matter`.
+Built-in sources are `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, and `cartodb_dark_matter`.
 
 <Aside type="caution">
 XYZ sources must return 256 × 256 pixel tiles. You are responsible for provider terms, licensing, attribution, quotas, and authorized access. See [Provider guidance](/mapcv/providers/).

@@ -53,7 +53,9 @@ def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> 
         lambda requested, *args, **kwargs: ([(t, _png_tile(7)) for t in requested], 0),
     )
     monkeypatch.setattr("mapcv.imagery.tile_transform", lambda *args: transform)
-    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm", strip_rows=2))
+    source = XYZRasterSource(
+        _region(), XYZImageryConfig(zoom=12, source="esri_satellite", strip_rows=2)
+    )
 
     window, valid = source.read_window(20, 60, 30, 80)
 
@@ -76,7 +78,7 @@ def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) 
         "mapcv.imagery.fetch_tiles",
         lambda requested, *args, **kwargs: ([(t, _png_tile(0)) for t in requested], 0),
     )
-    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm"))
+    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="esri_satellite"))
 
     _, valid = source.read_window(0, 256, 0, 256)
 
@@ -128,7 +130,7 @@ def test_xyz_source_fetches_lazily_per_window_and_evicts(monkeypatch: pytest.Mon
     )
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: grid)
     monkeypatch.setattr("mapcv.imagery.fetch_tiles", fake_fetch)
-    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm"))
+    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="esri_satellite"))
     assert calls == []  # nothing is downloaded until a window is read
 
     source.read_window(0, 512, 0, 512)  # tile rows 10-11

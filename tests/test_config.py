@@ -26,7 +26,7 @@ region:
 imagery:
   type: xyz
   zoom: 16
-  source: osm
+  source: esri_satellite
 sampler:
   patch_size: 256
 writer:
@@ -41,7 +41,7 @@ region:
   north: 31.60
   zoom: 16
 tiles:
-  source: osm
+  source: esri_satellite
 sampler:
   patch_size: 256
 writer:
@@ -76,7 +76,7 @@ def test_xyz_config_loads(tmp_path: Path) -> None:
     config = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.zoom == 16
-    assert config.imagery.source == "osm"
+    assert config.imagery.source == "esri_satellite"
     assert config.sampler.patch_size == 256
 
 
@@ -85,7 +85,7 @@ def test_legacy_tiles_config_is_normalized(tmp_path: Path) -> None:
         config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.zoom == 16
-    assert config.imagery.source == "osm"
+    assert config.imagery.source == "esri_satellite"
     assert config.region.zoom is None
 
 
@@ -121,14 +121,17 @@ def test_missing_imagery_type_has_clear_error(tmp_path: Path) -> None:
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
-def test_removed_google_preset_is_rejected(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("source: osm", "source: google_satellite")
-    with pytest.raises(ValueError, match="removed in mapcv 0.2.0"):
+@pytest.mark.parametrize(
+    ("source", "reason"), [("google_satellite", "Google"), ("osm", "forbid bulk downloading")]
+)
+def test_removed_presets_are_rejected(tmp_path: Path, source: str, reason: str) -> None:
+    content = _MINIMAL.replace("source: esri_satellite", f"source: {source}")
+    with pytest.raises(ValueError, match=f"removed in mapcv 0.2.0: .*{reason}"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
 def test_unknown_tile_source_is_rejected(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("source: osm", "source: nope")
+    content = _MINIMAL.replace("source: esri_satellite", "source: nope")
     with pytest.raises(ValueError, match="unknown tile source 'nope'"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
@@ -168,7 +171,9 @@ def test_eopf_local_path(path: str, expected: Optional[str]) -> None:
 
 
 def test_xyz_url_template(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("source: osm", "url_template: https://example.com/{z}/{x}/{y}.png")
+    content = _MINIMAL.replace(
+        "source: esri_satellite", "url_template: https://example.com/{z}/{x}/{y}.png"
+    )
     config = MapcvConfig.from_yaml(_write(tmp_path, content))
     assert isinstance(config.imagery, XYZImageryConfig)
     assert config.imagery.url_template == "https://example.com/{z}/{x}/{y}.png"
@@ -226,7 +231,7 @@ def test_invalid_region_bounds_raise(tmp_path: Path) -> None:
 
 
 def test_missing_imagery_raises(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("imagery:\n  type: xyz\n  zoom: 16\n  source: osm\n", "")
+    content = _MINIMAL.replace("imagery:\n  type: xyz\n  zoom: 16\n  source: esri_satellite\n", "")
     with pytest.raises(Exception):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
@@ -245,6 +250,6 @@ def test_nonexistent_file_raises(tmp_path: Path) -> None:
     ],
 )
 def test_url_template_is_validated(tmp_path: Path, template: str, message: str) -> None:
-    content = _MINIMAL.replace("source: osm", f'url_template: "{template}"')
+    content = _MINIMAL.replace("source: esri_satellite", f'url_template: "{template}"')
     with pytest.raises(ValueError, match=message):
         MapcvConfig.from_yaml(_write(tmp_path, content))

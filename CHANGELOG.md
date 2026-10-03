@@ -46,6 +46,8 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - Retry truncated tile responses and apply the failure policy instead of aborting the whole download; count non-image responses (HTML error pages, empty bodies) as failed tiles.
 - Honour `Retry-After` on 429/5xx with jittered backoff, identify requests with a contact URL in the User-Agent, and raise `ValueError` for an invalid policy or connection count.
 - Enforce `max_failed_ratio` for any capitalization of `lenient`, and validate `url_template` placeholders up front.
+- Fetch XYZ tiles per chunk instead of holding the whole region in memory, so labels and resume compatibility are checked before any download, memory stays bounded to about one chunk of tiles, and a resumed run downloads only the chunks it still needs. `max_failed_ratio` now applies to each chunk.
+- Warn when no label polygon intersects the imagery (for example swapped longitude/latitude).
 
 ### Documentation
 

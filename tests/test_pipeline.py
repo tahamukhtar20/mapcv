@@ -9,7 +9,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from mapcv.config import MapcvConfig
+from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.imagery import RasterMetadata
 from mapcv.pipeline import run_generate
 from mapcv.writer import Manifest
@@ -108,3 +108,21 @@ def test_generate_keeps_global_anchors_across_chunk_seams_and_resumes(
     assert [(entry["row"], entry["col"]) for entry in resumed.patches] == coordinates
     assert sources[1].windows == []
     assert sources[1].closed
+
+
+def test_generate_warns_when_labels_miss_the_imagery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(
+        '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},'
+        '"geometry":{"type":"Polygon","coordinates":[[[100,10],[101,10],[101,11],[100,10]]]}}]}'
+    )
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
+    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    config = _config(tmp_path)
+    config.labels = LabelsConfig(path=labels)
+
+    run_generate(config)
+
+    assert "no label polygon intersects" in capsys.readouterr().out

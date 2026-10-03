@@ -5,7 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, List, Tuple
 
 import numpy as np
 import pytest
@@ -155,7 +155,8 @@ def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> 
     )
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
     monkeypatch.setattr(
-        "mapcv.imagery.download_region", lambda *args, **kwargs: [(tile, _png_tile(7))]
+        "mapcv.imagery.fetch_tiles",
+        lambda requested, *args, **kwargs: ([(t, _png_tile(7)) for t in requested], 0),
     )
     monkeypatch.setattr("mapcv.imagery.tile_transform", lambda *args: transform)
     source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm", strip_rows=2))
@@ -178,7 +179,8 @@ def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
     # The fetcher black-fills failed tiles under the lenient/ignore policies.
     monkeypatch.setattr(
-        "mapcv.imagery.download_region", lambda *args, **kwargs: [(tile, _png_tile(0))]
+        "mapcv.imagery.fetch_tiles",
+        lambda requested, *args, **kwargs: ([(t, _png_tile(0)) for t in requested], 0),
     )
     source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm"))
 
@@ -197,7 +199,8 @@ def test_xyz_custom_template_product_id_keeps_only_hostname(
     )
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
     monkeypatch.setattr(
-        "mapcv.imagery.download_region", lambda *args, **kwargs: [(tile, _png_tile(7))]
+        "mapcv.imagery.fetch_tiles",
+        lambda requested, *args, **kwargs: ([(t, _png_tile(7)) for t in requested], 0),
     )
     template = "https://tiles.example.com/wmts/SECRET-INSTANCE/{z}/{x}/{y}.png?key=SECRET"
     source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, url_template=template))
@@ -228,3 +231,28 @@ def test_transform_geometry_to_projected_crs() -> None:
 
     assert transformed.x == pytest.approx(expected_x)
     assert transformed.y == pytest.approx(expected_y)
+
+
+def test_xyz_source_fetches_lazily_per_window_and_evicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    grid = [PyTileIndex(x, y, 12) for y in range(10, 14) for x in range(5, 7)]
+    calls: List[List[Tuple[int, int]]] = []
+
+    def fake_fetch(requested: List[Any], *args: Any, **kwargs: Any) -> Tuple[List[Any], int]:
+        calls.append([(t.x, t.y) for t in requested])
+        return [(t, _png_tile(9)) for t in requested if (t.x, t.y) != (6, 11)], 1
+
+    monkeypatch.setattr(
+        "mapcv.imagery.snap_bbox",
+        lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
+    )
+    monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: grid)
+    monkeypatch.setattr("mapcv.imagery.fetch_tiles", fake_fetch)
+    source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="osm"))
+    assert calls == []  # nothing is downloaded until a window is read
+
+    source.read_window(0, 512, 0, 512)  # tile rows 10-11
+    source.read_window(256, 768, 0, 512)  # rows 11-12: row 11 is reused, row 10 evicted
+    assert calls == [[(5, 10), (6, 10), (5, 11), (6, 11)], [(5, 12), (6, 12)]]
+    assert {key[1] for key in source._tiles} == {11, 12}
+    assert source.tiles_requested == 6
+    assert source.tiles_failed == 2

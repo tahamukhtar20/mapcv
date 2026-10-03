@@ -46,3 +46,6 @@ The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × 
 ## Class IDs
 
 With `labels.label_field`, class IDs used to follow the order labels first appeared in the file, so the same classes could get different IDs in different files. Now integer labels in 1..255 are used as their own IDs and other labels are numbered in sorted order. Set `labels.classes` (for example `{building: 1, road: 2}`) to pin IDs explicitly, for instance to match a dataset created with 0.1.
+## Removed Python APIs
+
+`download_region_strips`, `iter_tile_strips`, `TilesConfig` and the `hello()` stub are removed; `mapcv generate` reads imagery in chunks without them. `download_region`, `stitch_region` and `sample_patches` remain for in-memory workflows.

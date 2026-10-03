@@ -2,7 +2,7 @@
 mapcv - A satellite imagery dataset creation tool for segmentation.
 """
 
-from mapcv._mapcv_rs import bounds, hello, snap_bbox
+from mapcv._mapcv_rs import bounds, snap_bbox
 from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
     EOPFZarrImageryConfig,
@@ -10,14 +10,11 @@ from mapcv.config import (
     LabelsConfig,
     MapcvConfig,
     RegionConfig,
-    TilesConfig,
     XYZImageryConfig,
 )
 from mapcv.downloader import (
     URL_TEMPLATES,
     download_region,
-    download_region_strips,
-    iter_tile_strips,
     resolve_url_template,
     stitch_region,
 )
@@ -48,19 +45,15 @@ __all__ = [
     "DEFAULT_SENTINEL2_L2A_BANDS",
     "MapcvConfig",
     "RegionConfig",
-    "TilesConfig",
     "ClassMap",
     "GeomWithClass",
     "Manifest",
     "ManifestEntry",
     "WriterConfig",
     "download_region",
-    "download_region_strips",
-    "hello",
     "bounds",
     "load_or_create_manifest",
     "snap_bbox",
-    "iter_tile_strips",
     "parse_geojson",
     "parse_kml",
     "rasterize",

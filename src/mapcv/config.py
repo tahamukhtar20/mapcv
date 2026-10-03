@@ -129,26 +129,6 @@ class RegionConfig(BaseModel):
         return self
 
 
-class TilesConfig(BaseModel):
-    """Legacy XYZ tile configuration accepted until mapcv 0.3.0."""
-
-    source: Optional[str] = None
-    url_template: Optional[str] = None
-    max_connections: int = Field(default=16, ge=1)
-    policy: Literal["strict", "lenient", "ignore"] = "lenient"
-    max_failed_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
-    strip_rows: int = Field(default=4, ge=1)
-
-    _check_source = field_validator("source")(_validate_tile_source)
-    _check_template = field_validator("url_template")(_validate_url_template)
-
-    @model_validator(mode="after")
-    def _require_source_or_template(self) -> "TilesConfig":
-        if self.source is None and self.url_template is None:
-            raise ValueError("tiles: provide either 'source' or 'url_template'")
-        return self
-
-
 class XYZImageryConfig(BaseModel):
     """XYZ tile imagery source and fetch settings."""
 
@@ -248,7 +228,6 @@ class MapcvConfig(BaseModel):
 
     region: RegionConfig
     imagery: ImageryConfig
-    tiles: Optional[TilesConfig] = None
     labels: Optional[LabelsConfig] = None
     sampler: SamplerConfig
     writer: WriterConfig

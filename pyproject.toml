@@ -26,16 +26,33 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 requires-python = ">=3.10"
-dependencies = [
-    "Pillow",
-    "numpy",
-    "shapely",
-    "pydantic",
-    "typer",
-    "rich",
-    "pyyaml",
-    "typing_extensions",
+keywords = [
+    "remote-sensing",
+    "satellite-imagery",
+    "semantic-segmentation",
+    "computer-vision",
+    "dataset",
+    "geospatial",
+    "sentinel-2",
+    "xyz-tiles",
 ]
+dependencies = [
+    "Pillow>=10.0",
+    "numpy>=1.24",
+    "shapely>=2.0",
+    "pydantic>=2.5",
+    "typer>=0.9",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "typing_extensions>=4.6",
+]
+
+[project.urls]
+Homepage = "https://tahamukhtar20.github.io/mapcv/"
+Documentation = "https://tahamukhtar20.github.io/mapcv/"
+Repository = "https://github.com/tahamukhtar20/mapcv"
+Issues = "https://github.com/tahamukhtar20/mapcv/issues"
+Changelog = "https://github.com/tahamukhtar20/mapcv/blob/main/CHANGELOG.md"
 
 [project.scripts]
 mapcv = "mapcv.cli:app"
@@ -70,6 +87,16 @@ zarr = [
 features = ["pyo3/extension-module"]
 module-name = "mapcv._mapcv_rs"
 python-source = "src"
+# Keep the sdist to what is needed to build and test: no docs site, CI config,
+# or notebooks (the demo notebook embeds third-party imagery).
+exclude = [
+    { path = "website/**/*", format = "sdist" },
+    { path = "examples/**/*", format = "sdist" },
+    { path = ".github/**/*", format = "sdist" },
+    { path = "uv.lock", format = "sdist" },
+    { path = ".pre-commit-config.yaml", format = "sdist" },
+    { path = "cliff.toml", format = "sdist" },
+]
 
 [tool.mypy]
 strict = true

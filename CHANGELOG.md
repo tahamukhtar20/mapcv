@@ -43,6 +43,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 
 - Test Python 3.10–3.13, enforce branch coverage, and check wheel metadata before publishing.
 - Add a PR-title policy, grouped Dependabot updates, an EOPF smoke-test workflow, and issue/PR templates.
+- Publish project URLs and keywords on PyPI, set minimum versions for runtime dependencies, and slim the sdist from 4.5 MB to 0.2 MB.
 
 ## [0.1.0] - 2026-05-04
 

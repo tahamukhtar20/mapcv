@@ -148,29 +148,17 @@ Use **squash merge** when merging PRs to keep `main` history clean and changelog
 
 ## Release Process (maintainers)
 
-1. **Bump versions** in `pyproject.toml` and `Cargo.toml` to the new version (e.g. `0.2.0`).
+Work lands on `main` through small PRs; a release is just a tag on `main`.
 
-2. **Regenerate the changelog:**
+1. **Open a release PR** (e.g. `chore/release-0.2.0`) that:
+   - bumps `version` in `pyproject.toml` and `Cargo.toml` (and refreshes `Cargo.lock` with `cargo update -p mapcv_rs`);
+   - turns `## [X.Y.Z] - Unreleased` in `CHANGELOG.md` into `## [X.Y.Z] - YYYY-MM-DD`. That section becomes the GitHub release notes, so write it for users. `uvx git-cliff --unreleased` can draft entries from commit titles.
+2. **Merge it, then tag the merge commit on `main`:**
    ```bash
-   uvx git-cliff -o CHANGELOG.md
-   ```
-
-3. **Commit everything in one go:**
-   ```bash
-   git add pyproject.toml Cargo.toml CHANGELOG.md
-   git commit -m "chore: release 0.2.0"
-   ```
-
-4. **Open a PR** (e.g. `chore/release-0.2.0`), merge it to `main`, then tag:
-   ```bash
+   git switch main && git pull mapcv main
    git tag v0.2.0 && git push mapcv v0.2.0
    ```
-
-CI takes over from here: it verifies the tag matches both version files, builds wheels for all platforms and Python versions, runs the test suite, publishes to PyPI, and creates a GitHub Release with the changelog section as release notes.
-
-> **Important:** Always bump versions and merge to `main` *before* tagging. The tag must point to the version-bump commit on `main`.
-
----
+3. **Approve the `pypi` deployment** when GitHub asks. The release workflow first checks that the tag is on `main`, matches both version files and has a dated CHANGELOG section; builds abi3 wheels for Linux, macOS and Windows plus the sdist; tests the wheels on every OS and the sdist; and only then waits for approval to publish to PyPI and create the GitHub release.
 
 ## How to Submit a Contribution
 

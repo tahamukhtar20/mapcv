@@ -22,9 +22,8 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## What is mapcv?
 
-**mapcv** turns a bounding box and a set of polygon labels into a ready-to-train image segmentation dataset.
-It fetches XYZ map tiles, rasterizes KML or GeoJSON annotations onto the tile grid, extracts fixed-size
-image/mask patches, and writes them to disk. To ensure a lightweight footprint and easy installation, the tool is GDAL-free. Tile stitching, rasterization, and patch sampling are powered by Rust, accessible through the CLI (or via the Python API).
+**mapcv** turns a bounding box and optional polygon labels into a ready-to-train image segmentation dataset.
+It reads XYZ map tiles or one EOPF Sentinel-2 L2A Zarr product, aligns KML or GeoJSON annotations, extracts fixed-size patches, and writes them to disk. Base XYZ support remains lightweight and GDAL-free; EOPF support is an optional install.
 ## Features
 
 <CardGrid>
@@ -32,10 +31,13 @@ image/mask patches, and writes them to disk. To ensure a lightweight footprint a
     Tile stitching, polygon rasterization, and patch sampling all run in compiled Rust via PyO3, which is orders of magnitude faster than other implementations.
   </Card>
   <Card title="Many tile sources" icon="external">
-    Built-in support for Esri World Imagery, Google Satellite, OpenStreetMap, CartoDB basemaps, and any custom XYZ URL template.
+    Built-in support for Esri, OpenStreetMap, and CartoDB endpoints, plus authorized custom XYZ URL templates.
+  </Card>
+  <Card title="Multispectral EOPF Zarr" icon="database">
+    Lazy Sentinel-2 L2A band selection, resolution harmonization, native projected CRS, and bands-first float32 NPY output.
   </Card>
   <Card title="KML & GeoJSON labels" icon="pencil">
-    Parse polygon annotations directly from KML or GeoJSON files. Multiclass labels via a configurable field name. Automatic WGS-84 to Web Mercator projection.
+    Parse polygon annotations directly from KML or GeoJSON files. Multiclass labels via a configurable field name. Automatic WGS-84 to imagery-CRS projection.
   </Card>
   <Card title="Flexible patch sampling" icon="setting">
     Grid or random sampling with configurable stride, edge strategies (pad / drop / shift), and empty-patch filtering.
@@ -47,4 +49,3 @@ image/mask patches, and writes them to disk. To ensure a lightweight footprint a
     Run the full pipeline with `mapcv generate config.yaml`. One command, one config file, ready-to-train output.
   </Card>
 </CardGrid>
-

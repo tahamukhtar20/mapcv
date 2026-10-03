@@ -11,7 +11,7 @@ Writes an annotated example config to a file, or prints it to stdout if no path 
 mapcv init my_dataset.yaml
 ```
 
-Open the file and fill in your region, tile source, and label path. Everything else has sensible defaults.
+Open the file and fill in your region, imagery source, and label path. The generated example uses XYZ; EOPF configuration is documented separately.
 
 ---
 
@@ -27,7 +27,7 @@ mapcv validate my_dataset.yaml
 
 ## `mapcv generate`
 
-Runs the full pipeline: tile download, label rasterization, patch sampling, and dataset writing.
+Runs the full pipeline: imagery reading, CRS-aligned label rasterization, patch sampling, and dataset writing.
 
 ```bash
 mapcv generate my_dataset.yaml
@@ -53,6 +53,8 @@ output/
 ```
 
 Mask pixels are `0` for background and `1..255` for class IDs. If no `labels` section is present in the config, no `Masks/` directory is written. If no `split` section is present, no `splits/` directory is written.
+
+For EOPF input, image filenames end in `.npy`; each array is bands-first `float32`. The manifest records band order, source CRS, transform, dtype, and patch shape.
 
 ---
 

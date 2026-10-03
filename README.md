@@ -43,7 +43,13 @@ Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is diff
 pip install mapcv
 ```
 
-Requires Python 3.10 or higher. Pre-built wheels cover Linux, macOS, and Windows.
+Requires Python 3.10–3.13. Pre-built wheels cover Linux, macOS, and Windows.
+
+EOPF Sentinel-2 L2A Zarr support is optional:
+
+```bash
+pip install "mapcv[zarr]"
+```
 
 ## Quick start
 
@@ -53,9 +59,9 @@ Requires Python 3.10 or higher. Pre-built wheels cover Linux, macOS, and Windows
 mapcv init my_dataset.yaml
 ```
 
-Open the file and fill in your region, tile source, and (optionally) label path. Everything else has sensible defaults.
+Open the file and fill in your region, imagery source, and (optionally) label path. Everything else has sensible defaults.
 
-> **Note:** mapcv supports tile sources that serve standard **256x256 pixel** tiles (OpenStreetMap, Esri, Google Satellite, CartoDB, and most providers). Sources serving 512x512 tiles are not supported and will produce incorrectly scaled patches.
+> **Note:** XYZ sources must return standard **256x256 pixel** tiles. You are responsible for complying with the imagery provider's license, attribution, rate limits, and terms. mapcv does not grant imagery rights.
 
 ### 2. Generate the dataset
 
@@ -72,6 +78,34 @@ mapcv split ./output --test-ratio 0.15 --val-ratio 0.10
 ```
 
 Re-runs the train/val/test split from the existing `manifest.json` without re-downloading anything.
+
+## EOPF Sentinel-2 Zarr
+
+Version 0.2.0 can read one local or anonymous public EOPF Sentinel-2 L2A product per run. It preserves the product's projected CRS, harmonizes selected bands with the EOPF backend, and writes bands-first `float32` NPY patches.
+
+```yaml
+region:
+  west: 10.0
+  south: 45.0
+  east: 10.2
+  north: 45.2
+
+imagery:
+  type: eopf_zarr
+  path: /data/S2_L2A_PRODUCT.zarr
+  resolution: 10
+  bands: [b01, b02, b03, b04, b05, b06, b07, b08, b8a, b09, b11, b12]
+  chunk_rows: 1024
+
+sampler:
+  patch_size: 256
+
+writer:
+  staging_dir: ./dataset
+  image_format: npy
+```
+
+Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, Google Earth Engine integration, and aarch64 wheels are outside the 0.2.0 scope. See the [migration guide](MIGRATION.md) and [provider guidance](PROVIDERS.md).
 
 ## Documentation
 

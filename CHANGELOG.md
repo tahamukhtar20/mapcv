@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 0.2.0 release highlights
+
+- Add optional EOPF Sentinel-2 L2A Zarr input with lazy window reads, band selection, resolution harmonization, native-CRS label alignment, and bands-first `float32` NPY output.
+- Add imagery configuration models and a deprecated compatibility path for `region.zoom` plus `tiles` until 0.3.0.
+- Upgrade manifests to version 2 while retaining version 1 loading and resume compatibility.
+- Remove the built-in Google Satellite preset and clarify provider licensing responsibility.
+- Add branch coverage, PR title policy, issue/PR templates, grouped Dependabot updates, and current release workflows.
+
 ### Bug Fixes
 
 - Clamp tile math inputs to mercantile defaults
@@ -62,5 +70,4 @@ All notable changes to this project will be documented in this file.
 ### Refactoring
 
 - Migrate documentation to Astro Starlight and improve class count logging in pipeline
-
 

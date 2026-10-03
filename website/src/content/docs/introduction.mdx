@@ -5,7 +5,7 @@ description: What mapcv is, how it works, and when to use it.
 
 import { Aside } from '@astrojs/starlight/components';
 
-**mapcv** turns a bounding box and a set of polygon labels into a ready-to-train satellite imagery dataset for semantic segmentation. You give it a geographic region, a tile source, and optionally a KML or GeoJSON annotation file. It fetches the tiles, rasterizes your labels onto the image grid, extracts fixed-size patches, and writes everything to disk.
+**mapcv** turns a bounding box and optional polygon labels into a ready-to-train satellite imagery dataset for semantic segmentation. You give it a geographic region, an XYZ or EOPF Sentinel-2 L2A source, and optionally a KML or GeoJSON annotation file. It reads the imagery, aligns and rasterizes labels, extracts fixed-size patches, and writes everything to disk.
 
 To ensure a lightweight footprint and easy installation, the tool is GDAL-free. Tile stitching, rasterization, and patch sampling are powered by Rust, while the Python layer handles orchestration, configuration, and access via the CLI or API.
 
@@ -14,8 +14,8 @@ To ensure a lightweight footprint and easy installation, the tool is GDAL-free. 
 ## Key concepts
 
 - **Bounding box**: The target area in WGS-84 (longitude/latitude). mapcv expands these coordinates outward to align with the nearest tile grid so no downloaded tiles are partially cut off.
-- **Zoom level**: Controls resolution. Higher zoom means more tiles and more detail. For example, zoom 19 has about 4x more tiles than zoom 17 for the same area.
-- **Strips**: The tile grid is divided into horizontal bands of `strip_rows` tile rows. Processed and written one strip at a time to cap memory use.
+- **Resolution**: XYZ uses a zoom level. EOPF Sentinel-2 uses a harmonized 10, 20, or 60 metre grid while preserving the product's native projected CRS.
+- **Chunks**: Sampling anchors are generated globally, then imagery is read in row chunks with a patch halo so seam patches are neither lost nor duplicated.
 - **Patches**: Fixed-size square crops extracted from the stitched image. Each patch has a matching mask file of the same name.
 - **Class IDs**: Mask pixels are `0` (background) or `1..255` (class). When `label_field` is `null`, all polygons get `class_id = 1`. When a field name is given, IDs are assigned by encounter order starting at 1.
 
@@ -26,6 +26,7 @@ To ensure a lightweight footprint and easy installation, the tool is GDAL-free. 
 - You have polygon annotations (KML or GeoJSON) and want pixel-level segmentation masks.
 - You want image-only patches (unlabeled) — just omit the `labels` section.
 - You need a reproducible pipeline that goes from a config file to a ready-to-train dataset in one command.
+- You need selected Sentinel-2 L2A reflectance bands as bands-first `float32` NPY patches.
 
 ---
 

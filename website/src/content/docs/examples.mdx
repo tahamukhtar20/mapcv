@@ -1,13 +1,9 @@
 ---
 title: Examples
-description: Common mapcv config patterns for real-world use cases.
+description: Common mapcv config patterns.
 ---
 
-## Labeled dataset (KML annotations)
-
-The most common case is to download satellite tiles and rasterize KML polygon annotations onto them.
-
-Replace `buildings.kml` below with the path to your own KML or GeoJSON annotation file.
+## Labeled XYZ dataset
 
 ```yaml
 region:
@@ -15,73 +11,73 @@ region:
   south: 52.371
   east: 4.896
   north: 52.378
-  zoom: 17
 
-tiles:
-  source: google_satellite
+imagery:
+  type: xyz
+  zoom: 17
+  source: osm
   strip_rows: 4
-  max_connections: 16
   policy: lenient
 
 labels:
   path: buildings.kml
-  label_field: null      # all polygons get class_id = 1
+  label_field: null
   all_touched: false
 
 sampler:
   patch_size: 256
   stride: 0
-  mode: grid
   edge_strategy: drop
-  max_empty_ratio: 0.95
 
 writer:
   staging_dir: ./output
   image_format: png
-
-split:
-  test_ratio: 0.20
-  val_ratio: 0.10
-  seed: 42
-  strategy: stratified
 ```
 
----
-
-## Multiclass dataset (GeoJSON with class field)
-
-When your GeoJSON has a property that identifies the class, pass it as `label_field`. Class IDs are assigned by encounter order starting at 1.
-
-```yaml
-labels:
-  path: landuse.geojson
-  label_field: class      # e.g. "residential", "commercial", "park"
-  all_touched: false
-```
-
-The returned `class_map` (visible in the manifest) tells you the exact `name -> id` mapping.
-
----
-
-## Unlabeled dataset (image-only)
-
-Omit the `labels` section entirely. No `Masks/` directory is written.
+## EOPF multispectral dataset
 
 ```yaml
 region:
-  west: 74.274
-  south: 31.568
-  east: 74.327
-  north: 31.613
-  zoom: 19
+  west: 10.0
+  south: 45.0
+  east: 10.2
+  north: 45.2
 
-tiles:
+imagery:
+  type: eopf_zarr
+  path: /data/S2_L2A_PRODUCT.zarr
+  resolution: 10
+  bands: [b08, b04, b03]
+  chunk_rows: 1024
+
+labels:
+  path: landuse.geojson
+  label_field: class
+
+sampler:
+  patch_size: 128
+  stride: 64
+  max_empty_ratio: 0.25
+
+writer:
+  staging_dir: ./sentinel_dataset
+  image_format: npy
+```
+
+The output array order is exactly `b08`, `b04`, `b03`, with shape `(3, 128, 128)` and `float32` dtype.
+
+## Unlabeled dataset
+
+Omit `labels`; no `Masks/` directory is created.
+
+```yaml
+imagery:
+  type: xyz
+  zoom: 19
   source: esri_satellite
 
 sampler:
   patch_size: 512
-  stride: 0
-  mode: grid
   edge_strategy: shift
 
 writer:
@@ -90,42 +86,20 @@ writer:
   jpg_quality: 90
 ```
 
----
+## Custom XYZ source
 
-## Semi-supervised dataset
-
-Use `labeled_ratios` to generate labeled/unlabeled split files for semi-supervised training.
+Use only a URL you are authorized to access. Do not commit keys or signed query strings.
 
 ```yaml
-split:
-  test_ratio: 0.20
-  val_ratio: 0.10
-  labeled_ratios: [0.05, 0.10, 0.20]
-  seed: 42
-  strategy: stratified
-```
-
-This writes `5/labeled.txt`, `5/unlabeled.txt`, `10/labeled.txt`, `10/unlabeled.txt`, and so on for each ratio, inside `staging_dir/splits/`. The directory name is the ratio as an integer percentage.
-
----
-
-## Custom tile source
-
-Pass any XYZ URL with `{z}`, `{x}`, `{y}` placeholders via `url_template` instead of `source`.
-
-```yaml
-tiles:
+imagery:
+  type: xyz
+  zoom: 16
   url_template: "https://tile.example.com/{z}/{x}/{y}.png"
-  strip_rows: 4
   max_connections: 8
   policy: lenient
 ```
 
----
-
-## Random patch sampling
-
-Use `mode: random` to draw patches at random positions instead of a regular grid. Useful for large regions where you only need a sample.
+## Random sampling and semi-supervised splits
 
 ```yaml
 sampler:
@@ -133,5 +107,10 @@ sampler:
   mode: random
   random_count: 500
   random_seed: 42
-  edge_strategy: pad
+
+split:
+  test_ratio: 0.20
+  val_ratio: 0.10
+  labeled_ratios: [0.05, 0.10, 0.20]
+  strategy: stratified
 ```

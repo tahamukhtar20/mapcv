@@ -11,6 +11,26 @@ from mapcv import stitch_region, parse_geojson, rasterize, sample_patches, ...
 
 ---
 
+## Imagery configuration
+
+`MapcvConfig.imagery` is a discriminated union of `XYZImageryConfig` and `EOPFZarrImageryConfig`.
+
+```python
+from mapcv import EOPFZarrImageryConfig, XYZImageryConfig
+
+xyz = XYZImageryConfig(type="xyz", zoom=16, source="osm")
+eopf = EOPFZarrImageryConfig(
+    type="eopf_zarr",
+    path="/data/S2_L2A_PRODUCT.zarr",
+    resolution=10,
+    bands=["b08", "b04", "b03"],
+)
+```
+
+EOPF access requires the `mapcv[zarr]` extra and `WriterConfig(image_format="npy")`. The default EOPF band order is available as `DEFAULT_SENTINEL2_L2A_BANDS`.
+
+---
+
 ## Downloading
 
 ### `stitch_region`
@@ -297,7 +317,7 @@ Extract fixed-size patches from `strip_image` and optionally `strip_mask`.
 ```python
 class mapcv.WriterConfig(
     staging_dir: Path,
-    image_format: str = "png",
+    image_format: Literal["png", "jpg", "npy"] = "png",
     jpg_quality: int = 95,
 )
 ```
@@ -305,7 +325,7 @@ class mapcv.WriterConfig(
 **Parameters**
 
 - **`staging_dir`** (`Path`) - Directory where `Images/`, `Masks/`, and `manifest.json` are written.
-- **`image_format`** (`str`, optional, defaults to `"png"`) - `"png"` for lossless, `"jpg"` for smaller lossy files.
+- **`image_format`** (`str`, optional, defaults to `"png"`) - XYZ uses PNG/JPG; EOPF requires bands-first NPY.
 - **`jpg_quality`** (`int`, optional, defaults to `95`) - JPEG quality from 1 to 100. Only used when `image_format="jpg"`.
 
 ---
@@ -314,8 +334,15 @@ class mapcv.WriterConfig(
 
 ```python
 class mapcv.Manifest(
-    version: int,
+    version: int = 2,
     class_map: dict[str, int],
+    source_type: str = "xyz",
+    product_id: str | None = None,
+    bands: list[str] = [],
+    dtype: str | None = None,
+    patch_shape: list[int] = [],
+    crs: str | None = None,
+    transform: tuple[float, float, float, float, float, float] | None = None,
     patches: list[ManifestEntry],
 )
 ```
@@ -335,8 +362,8 @@ Each entry in `manifest.patches` is a `TypedDict` with the following fields:
 |---|---|---|
 | `filename` | `str` | Relative path to the patch image inside the staging directory. |
 | `mask_filename` | `str \| None` | Relative path to the mask image, or `None` for unlabeled datasets. |
-| `row` | `int` | Top-left row of the patch in the stitched strip image. |
-| `col` | `int` | Top-left column of the patch in the stitched strip image. |
+| `row` | `int` | Top-left row in global raster coordinates. |
+| `col` | `int` | Top-left column in global raster coordinates. |
 | `padded` | `bool` | `True` if the patch was zero-padded to reach `patch_size`. |
 | `strip_index` | `int` | Index of the strip this patch was sampled from. |
 | `per_class_pixel_counts` | `dict[str, int]` | Pixel count for each class ID string (e.g. `{"1": 1024, "2": 512}`). Empty for unlabeled patches. |
@@ -434,6 +461,6 @@ Split the manifest into `train.txt`, `val.txt`, and `test.txt` files written to 
 ```python
 from mapcv import URL_TEMPLATES
 print(list(URL_TEMPLATES.keys()))
-# ['google_satellite', 'osm', 'esri_satellite', 'esri_topo',
-#  'esri_street', 'cartodb_positron', 'cartodb_dark_matter']
+# ['osm', 'esri_satellite', 'esri_topo', 'esri_street',
+#  'cartodb_positron', 'cartodb_dark_matter']
 ```

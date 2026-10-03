@@ -5,13 +5,14 @@ from __future__ import annotations
 import re
 import warnings
 from pathlib import Path
-from typing import Annotated, Any, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import unquote, urlsplit
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from mapcv.downloader import URL_TEMPLATES
+from mapcv.labels import _normalize_label
 from mapcv.sampler import SamplerConfig
 from mapcv.splitter import SplitterConfig
 from mapcv.writer import WriterConfig
@@ -31,6 +32,9 @@ DEFAULT_SENTINEL2_L2A_BANDS: List[str] = [
     "b11",
     "b12",
 ]
+
+
+_LABEL_SUFFIXES = frozenset({".kml", ".geojson", ".json"})
 
 
 def eopf_local_path(path: str) -> Optional[Path]:
@@ -169,11 +173,47 @@ ImageryConfig = Annotated[
 
 
 class LabelsConfig(BaseModel):
-    """Label file (KML or GeoJSON) settings."""
+    """Label file (KML or GeoJSON) settings.
+
+    ``classes`` maps label values to mask IDs (1..255). Without it, integer
+    labels in 1..255 are used as-is and other labels get IDs in sorted order.
+    """
 
     path: Path
     label_field: Optional[str] = None
+    classes: Optional[Dict[str, int]] = None
     all_touched: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def _check_suffix(cls, path: Path) -> Path:
+        if path.suffix.lower() not in _LABEL_SUFFIXES:
+            raise ValueError(
+                f"labels.path must be a .kml, .geojson, or .json file, got '{path.name}' "
+                "(convert KMZ or Shapefiles to GeoJSON first)"
+            )
+        return path
+
+    @field_validator("classes", mode="before")
+    @classmethod
+    def _normalize_classes(cls, classes: Any) -> Any:
+        if not isinstance(classes, dict):
+            return classes
+        normalized: Dict[str, int] = {}
+        for key, value in classes.items():
+            name = _normalize_label(key)
+            if name is None:
+                raise ValueError("labels.classes keys must be non-empty label values")
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 255:
+                raise ValueError(f"labels.classes['{name}'] must be an integer in 1..255")
+            normalized[name] = value
+        return normalized
+
+    @model_validator(mode="after")
+    def _classes_need_field(self) -> "LabelsConfig":
+        if self.classes is not None and self.label_field is None:
+            raise ValueError("labels.classes requires labels.label_field")
+        return self
 
 
 class MapcvConfig(BaseModel):

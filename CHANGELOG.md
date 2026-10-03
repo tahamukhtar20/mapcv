@@ -10,6 +10,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 
 - Add optional EOPF Sentinel-2 L2A Zarr input (`pip install "mapcv[zarr]"`) with lazy window reads, band selection, resolution harmonization, native-CRS label alignment, and bands-first `float32` NPY output.
 - Add a discriminated `imagery` configuration block (`xyz` | `eopf_zarr`).
+- Add `labels.classes` for explicit label → class ID mapping, and read KML `<SimpleData>` labels (QGIS/ogr2ogr exports).
 - Upgrade manifests to version 2, recording source, product, bands, dtype, patch shape, CRS, affine transform, and sampler settings.
 - Compute sampling anchors over the whole raster, so patches cross former strip seams without loss or duplication.
 - Add a leakage-safe `spatial` split strategy (now the default) that keeps whole raster blocks in one split and leaves out train/val patches overlapping a held-out patch.
@@ -22,6 +23,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - Resuming requires the same imagery, labels, and sampler settings.
 - `imagery.type` is required.
 - The default split strategy is `spatial` instead of `stratified`.
+- Class IDs no longer depend on feature order: integer labels are used as IDs, other labels are numbered in sorted order.
 
 ### Deprecations
 
@@ -38,6 +40,9 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - `stratified` splits now stratify the train/val/test assignment by labeled fraction and dominant class, not only the subsample.
 - Name labeled-ratio folders exactly (`0.29` → `29/`, `0.125` → `12.5/`) and reject ratios outside (0, 1] or duplicates.
 - Overwrite stale split lists when splitting an empty manifest.
+- Reject more than 255 classes instead of wrapping KML class IDs to 0 or reusing IDs, and treat `3` and `3.0` as one class.
+- Reject non-WGS-84 GeoJSON `crs` members, truncated KML, and non-finite coordinates; accept spaces after commas in KML coordinates and keep polygons inside GeometryCollections.
+- Warn with counts when features are skipped (no polygon, no label, or unmapped label), and reject unsupported label file types up front.
 
 ### Documentation
 

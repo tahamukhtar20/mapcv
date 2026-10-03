@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
+from typing import Any, Dict, List, Optional
+
 import pytest
 from shapely.geometry import MultiPolygon, Polygon
 
 from mapcv._mapcv_rs import xy as rust_xy
-from mapcv.labels import parse_geojson, parse_kml, transform_to_mercator
+from mapcv.config import LabelsConfig
+from mapcv.labels import assign_class_ids, parse_geojson, parse_kml, transform_to_mercator
 
 _KML_HEADER = b'<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2">'
 _KML_FOOTER = b"</kml>"
@@ -265,9 +269,8 @@ def test_parse_kml_multiclass() -> None:
     geoms, class_map = parse_kml(MULTICLASS_KML, label_field="land_use")
     assert len(geoms) == 3
     assert set(class_map.keys()) == {"residential", "industrial"}
-    assert class_map["residential"] != class_map["industrial"]
-    assert class_map["residential"] == 1
-    assert class_map["industrial"] == 2
+    # IDs follow sorted label order, not the order features appear in.
+    assert class_map == {"industrial": 1, "residential": 2}
     assert geoms[2][1] == class_map["residential"]
 
 
@@ -327,8 +330,7 @@ def test_parse_geojson_binary_mode() -> None:
 def test_parse_geojson_multiclass() -> None:
     geoms, class_map = parse_geojson(MULTICLASS_GEOJSON, label_field="category")
     assert len(geoms) == 3
-    assert class_map["residential"] == 1
-    assert class_map["industrial"] == 2
+    assert class_map == {"industrial": 1, "residential": 2}
     assert geoms[2][1] == class_map["residential"]
 
 
@@ -415,3 +417,123 @@ def test_transform_to_mercator_multipolygon() -> None:
     proj = transform_to_mercator(mp)
     assert proj.geom_type == "MultiPolygon"
     assert proj.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Class IDs, label normalization, skipped features
+# ---------------------------------------------------------------------------
+
+_UNIT_SQUARE: List[List[List[int]]] = [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]
+
+
+def _collection(features: List[Dict[str, Any]], **extra: Any) -> bytes:
+    return json.dumps({"type": "FeatureCollection", "features": features, **extra}).encode()
+
+
+def _feature(value: Any, geometry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "type": "Feature",
+        "properties": {"cls": value},
+        "geometry": geometry or {"type": "Polygon", "coordinates": _UNIT_SQUARE},
+    }
+
+
+def test_class_ids_do_not_depend_on_feature_order() -> None:
+    values = ["water", "road", "building"]
+    _, forward = parse_geojson(_collection([_feature(v) for v in values]), "cls")
+    _, backward = parse_geojson(_collection([_feature(v) for v in reversed(values)]), "cls")
+    assert forward == backward == {"building": 1, "road": 2, "water": 3}
+
+
+def test_integer_labels_are_used_as_class_ids() -> None:
+    geoms, class_map = parse_geojson(
+        _collection([_feature(3), _feature(3.0), _feature("7")]), "cls"
+    )
+    assert class_map == {"3": 3, "7": 7}
+    assert [cid for _, cid in geoms] == [3, 3, 7]
+
+
+def test_explicit_classes_map_and_skips_unmapped_labels() -> None:
+    data = _collection([_feature("roof"), _feature("tree"), _feature("road")])
+    with pytest.warns(UserWarning, match="1 with a label not in labels.classes"):
+        geoms, class_map = parse_geojson(data, "cls", {"roof": 1, "road": 1})
+    assert class_map == {"roof": 1, "road": 1}
+    assert [cid for _, cid in geoms] == [1, 1]
+
+
+def test_more_than_255_classes_is_an_error() -> None:
+    with pytest.raises(ValueError, match="at most 255 classes"):
+        assign_class_ids([f"c{i}" for i in range(256)], "cls")
+
+
+def test_skipped_features_are_reported() -> None:
+    data = _collection(
+        [
+            _feature("a"),
+            _feature(None),
+            _feature("b", {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}),
+        ]
+    )
+    with pytest.warns(UserWarning, match="1 without polygon geometry.*1 without a label"):
+        geoms, _ = parse_geojson(data, "cls")
+    assert len(geoms) == 1
+
+
+def test_geometry_collection_polygons_are_kept() -> None:
+    geometry = {
+        "type": "GeometryCollection",
+        "geometries": [
+            {"type": "Polygon", "coordinates": _UNIT_SQUARE},
+            {"type": "Point", "coordinates": [0, 0]},
+        ],
+    }
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        geoms, _ = parse_geojson(_collection([_feature("a", geometry)]))
+    assert geoms[0][0].geom_type == "Polygon"
+
+
+@pytest.mark.parametrize("name", ["urn:ogc:def:crs:OGC:1.3:CRS84", "EPSG:4326"])
+def test_geojson_wgs84_crs_member_is_accepted(name: str) -> None:
+    crs = {"type": "name", "properties": {"name": name}}
+    geoms, _ = parse_geojson(_collection([_feature("a")], crs=crs))
+    assert len(geoms) == 1
+
+
+def test_geojson_projected_crs_member_is_rejected() -> None:
+    crs = {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::3857"}}
+    with pytest.raises(ValueError, match="Reproject the file to EPSG:4326"):
+        parse_geojson(_collection([_feature("a")], crs=crs))
+
+
+def test_kml_simple_data_labels_are_read() -> None:
+    body = (
+        b"<Document><Placemark><ExtendedData><SchemaData schemaUrl='#s'>"
+        b"<SimpleData name='kind'>roof</SimpleData></SchemaData></ExtendedData>"
+        b"<Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 1,0 1,1 0,0"
+        b"</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document>"
+    )
+    geoms, class_map = parse_kml(_kml(body), label_field="kind")
+    assert class_map == {"roof": 1}
+    assert len(geoms) == 1
+
+
+def test_truncated_kml_is_an_error() -> None:
+    with pytest.raises(ValueError, match="invalid KML"):
+        parse_kml(_kml(b"<Document><Placemark><Polygon>")[:-6])
+
+
+def test_labels_config_normalizes_classes_and_checks_suffix() -> None:
+    def config(**fields: Any) -> LabelsConfig:
+        return LabelsConfig.model_validate(fields)
+
+    assert config(path="labels.geojson", label_field="cls", classes={3: 1, "roof": 2}).classes == {
+        "3": 1,
+        "roof": 2,
+    }
+    with pytest.raises(ValueError, match="1..255"):
+        config(path="labels.geojson", label_field="cls", classes={"a": 256})
+    with pytest.raises(ValueError, match="requires labels.label_field"):
+        config(path="labels.geojson", classes={"a": 1})
+    with pytest.raises(ValueError, match="convert KMZ"):
+        config(path="labels.kmz")

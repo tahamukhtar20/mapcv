@@ -83,6 +83,7 @@ The backend preserves the product's native projected CRS. URLs cannot contain cr
 |---|---|---|---|
 | `path` | str | required | `.kml` or `.geojson` annotation file |
 | `label_field` | str | `null` | Property used as the class label; `null` assigns class 1 |
+| `classes` | map | `null` | Explicit label → class ID (1..255), e.g. `{building: 1, road: 2}`; unmapped labels are skipped. Without it, integer labels are used as IDs and other labels get IDs in sorted order |
 | `all_touched` | bool | `false` | Include every pixel touched by polygon boundaries |
 
 Labels are interpreted as WGS-84 and transformed into the imagery CRS before rasterization.

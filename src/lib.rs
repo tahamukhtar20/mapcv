@@ -404,27 +404,28 @@ fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64,
     stitcher::tile_transform(min_x, min_y, zoom)
 }
 
-/// Parse KML bytes and return polygon geometries with class labels.
+/// Parse KML bytes into polygon groups with their raw label values.
 ///
-/// `label_field` is the `<Data name="...">` field to use for class IDs.
-/// When `None` every polygon gets class 1.
+/// `label_field` names the `<Data>` or `<SimpleData>` field to read; when
+/// `None`, every label is `None`. Class IDs are assigned by the Python caller.
 ///
-/// Returns `(polygons, class_map)` where `polygons` is a list of
-/// `(rings, class_id)` pairs (exterior ring first, then holes) and
-/// `class_map` maps class names to integer IDs.
+/// Returns `(polygons, skipped_non_polygon)` where `polygons` is a list of
+/// `(polygon_group, label)` pairs; each polygon is a list of rings, exterior
+/// ring first.
 ///
 /// # Errors
-/// Raises `RuntimeError` if the KML is malformed or coordinate parsing fails.
+/// Raises `ValueError` if the KML is malformed or truncated, or a coordinate
+/// is not a finite number.
 #[allow(clippy::type_complexity)]
 #[pyfunction]
 #[pyo3(signature = (data, label_field=None))]
 fn parse_kml_rs(
     data: &[u8],
     label_field: Option<&str>,
-) -> PyResult<(Vec<(Vec<Vec<Vec<(f64, f64)>>>, u8)>, HashMap<String, u8>)> {
+) -> PyResult<(Vec<(Vec<kml_parser::Polygon>, Option<String>)>, usize)> {
     let result = kml_parser::parse_kml(data, label_field)
-        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-    Ok((result.polygons, result.class_map))
+        .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("invalid KML: {err}")))?;
+    Ok((result.polygons, result.skipped_non_polygon))
 }
 
 #[pymodule]

@@ -95,10 +95,11 @@ def _parse_labels(
 
     _console.print("[bold]Parsing labels...[/bold]")
     data = config.labels.path.read_bytes()
-    if config.labels.path.suffix.lower() == ".kml":
-        raw, class_map = parse_kml(data, config.labels.label_field)
+    labels = config.labels
+    if labels.path.suffix.lower() == ".kml":
+        raw, class_map = parse_kml(data, labels.label_field, labels.classes)
     else:
-        raw, class_map = parse_geojson(data, config.labels.label_field)
+        raw, class_map = parse_geojson(data, labels.label_field, labels.classes)
 
     if destination_crs.upper() == "EPSG:3857":
         transformed = [(transform_to_mercator(geometry), class_id) for geometry, class_id in raw]

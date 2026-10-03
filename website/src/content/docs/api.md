@@ -161,6 +161,7 @@ Same as `download_region`, plus:
 mapcv.parse_geojson(
     data: bytes,
     label_field: str | None = None,
+    classes: dict[str, int] | None = None,
 ) -> tuple[list[tuple[Geometry, int]], dict[str, int]]
 ```
 
@@ -168,19 +169,20 @@ Parse GeoJSON bytes into `(geometry, class_id)` pairs.
 
 **Parameters**
 
-- **`data`** (`bytes`) - Raw GeoJSON bytes (FeatureCollection or single Feature).
+- **`data`** (`bytes`) - Raw GeoJSON bytes (FeatureCollection or single Feature) in WGS-84 longitude/latitude (RFC 7946). A legacy `crs` member other than WGS-84 raises `ValueError`.
 - **`label_field`** (`str`, optional, defaults to `None`) - Property name used for class labels. If `None`, all polygons receive `class_id = 1`.
+- **`classes`** (`dict[str, int]`, optional) - Explicit label → class ID map (IDs 1..255). Labels not in it are skipped.
 
 **Returns**
 
-`(geometries, class_map)` where `class_map` maps each class name to its integer ID (assigned by encounter order, starting at 1). Non-polygon geometries are silently skipped.
+`(geometries, class_map)`. Without `classes`, labels that are all integers in 1..255 are used as their own IDs (`3` and `3.0` are the same class), and other labels get IDs 1..N in sorted order, so IDs do not depend on feature order. More than 255 distinct labels raise `ValueError`. Polygons inside GeometryCollections are kept; points, lines and unlabeled features are skipped with a `UserWarning` that counts them.
 
 **Example**
 
 ```python
 data = Path("labels.geojson").read_bytes()
 geoms, class_map = mapcv.parse_geojson(data, label_field="class")
-# class_map: {"residential": 1, "water": 2, "park": 3}
+# class_map: {"park": 1, "residential": 2, "water": 3}
 ```
 
 ---
@@ -191,10 +193,11 @@ geoms, class_map = mapcv.parse_geojson(data, label_field="class")
 mapcv.parse_kml(
     data: bytes,
     label_field: str | None = None,
+    classes: dict[str, int] | None = None,
 ) -> tuple[list[tuple[Geometry, int]], dict[str, int]]
 ```
 
-Same interface as `parse_geojson` but accepts KML bytes. Supports nested `<Folder>` elements and `<MultiGeometry>`.
+Same interface as `parse_geojson` but accepts KML bytes. Supports nested `<Folder>` elements and `<MultiGeometry>`. Labels are read from `<ExtendedData><Data name="...">` or `<SchemaData><SimpleData name="...">` (the form QGIS and ogr2ogr export). Malformed or truncated KML raises `ValueError`.
 
 ---
 

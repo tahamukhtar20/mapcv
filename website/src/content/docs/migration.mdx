@@ -55,3 +55,7 @@ Resuming requires the same imagery, labels, and sampler settings; a mismatch sto
 ## Splitting
 
 The default `split.strategy` is now `spatial`: whole raster blocks go to one split and overlapping train/val patches are left out, so test scores are not inflated by leaked pixels. Use `strategy: stratified` or `random` for a patch-level split. 0.1 manifests need `split.block_size` for a spatial split.
+
+## Class IDs
+
+Class IDs no longer follow the order labels appear in the file. Integer labels in 1..255 are used as IDs and other labels are numbered in sorted order. Set `labels.classes` to pin IDs, for example to match a 0.1 dataset.

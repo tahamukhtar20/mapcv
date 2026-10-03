@@ -23,8 +23,11 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use tile_math::{BBox, TileIndex};
 
+/// A fetched tile and its encoded image bytes, as returned to Python.
+type FetchedTile = (PyTileIndex, Py<PyAny>);
+
 /// Python-visible XYZ tile index.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct PyTileIndex {
     #[pyo3(get)]
@@ -54,7 +57,7 @@ impl From<TileIndex> for PyTileIndex {
 }
 
 /// Python-visible geographic bounding box (WGS-84 degrees).
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct PyBBox {
     #[pyo3(get)]
@@ -150,11 +153,11 @@ fn fetch_tiles(
     py: Python,
     tiles: Vec<PyTileIndex>,
     url_template: String,
-    callback: Option<PyObject>,
+    callback: Option<Py<PyAny>>,
     max_connections: usize,
     policy: &str,
     max_failed_ratio: f64,
-) -> PyResult<(Vec<(PyTileIndex, PyObject)>, usize)> {
+) -> PyResult<(Vec<FetchedTile>, usize)> {
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -189,7 +192,7 @@ fn fetch_tiles(
         .map(|(t, bytes)| {
             (
                 PyTileIndex::from(t),
-                pyo3::types::PyBytes::new_bound(py, &bytes).into(),
+                pyo3::types::PyBytes::new(py, &bytes).into_any().unbind(),
             )
         })
         .collect();
@@ -270,7 +273,7 @@ fn rasterize(
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
     let arr = numpy::ndarray::Array2::from_shape_vec((height, width), buf)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-    Ok(arr.to_pyarray_bound(py).unbind())
+    Ok(arr.to_pyarray(py).unbind())
 }
 
 /// Write image and mask patches to disk in parallel using rayon.
@@ -333,7 +336,7 @@ fn write_patches_rs(
     let fmt = image_format.to_owned();
 
     let results = py
-        .allow_threads(|| {
+        .detach(|| {
             patch_writer::write_patches(
                 &img_data,
                 &msk_data,
@@ -386,7 +389,7 @@ fn stitch_tiles(
         stitcher::stitch_tiles(&raw).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     let arr = numpy::ndarray::Array3::from_shape_vec((h, w, 3), canvas)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-    Ok((arr.into_pyarray_bound(py).unbind(), min_x, min_y))
+    Ok((arr.into_pyarray(py).unbind(), min_x, min_y))
 }
 
 /// Compute the affine transform for a stitched tile grid.

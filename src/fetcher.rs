@@ -3,7 +3,7 @@
 use crate::tile_math::TileIndex;
 use futures::stream::{self, StreamExt};
 use image::{DynamicImage, ImageFormat};
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use reqwest::{Client, Url};
 use std::io::Cursor;
@@ -52,7 +52,8 @@ pub(crate) const TILE_PX_F: f64 = TILE_PX as f64;
 enum TileOutcome {
     /// Tile fetched successfully; contains the raw PNG bytes.
     Success(Vec<u8>),
-    /// Black-fill PNG returned under the Ignore policy; still counts toward the failed ratio.
+    /// Black-fill PNG returned under the Ignore policy; counted as failed but never
+    /// subject to `max_failed_ratio`.
     BlackFill(Vec<u8>),
     /// Tile was not found or failed; omitted from results under the Lenient policy.
     Missing,
@@ -107,7 +108,51 @@ enum Event {
     Done(Vec<(TileIndex, Vec<u8>)>, usize),
 }
 
+/// Longest server-requested `Retry-After` delay mapcv will honour.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// Apply *policy* to a failed tile.
+fn on_failure(
+    tile: TileIndex,
+    policy: FailurePolicy,
+    message: impl FnOnce() -> String,
+) -> Result<(TileIndex, TileOutcome), String> {
+    match policy {
+        FailurePolicy::Strict => Err(message()),
+        FailurePolicy::Lenient => Ok((tile, TileOutcome::Missing)),
+        FailurePolicy::Ignore => Ok((tile, TileOutcome::BlackFill(black_tile_png()))),
+    }
+}
+
+/// True when *bytes* start with a PNG, JPEG, WebP or GIF signature.
+fn looks_like_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+        || bytes.starts_with(b"GIF8")
+}
+
+/// Delay before the next attempt: the server's `Retry-After` (seconds, capped)
+/// when given, otherwise linear backoff with up to 50% jitter.
+fn retry_delay(retries: u32, retry_after: Option<&reqwest::header::HeaderValue>) -> Duration {
+    if let Some(seconds) = retry_after
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds).min(MAX_RETRY_AFTER);
+    }
+    let base = RETRY_BACKOFF_MS * u64::from(retries);
+    let jitter_seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::from(elapsed.subsec_nanos()));
+    Duration::from_millis(base + jitter_seed % (base / 2 + 1))
+}
+
 /// Fetch a single tile with retries, applying *policy* on failure.
+///
+/// Network errors, truncated bodies, 429 and 5xx responses are retried. A
+/// success response whose body is not an image (an HTML error page, an empty
+/// 204) and other 4xx responses fail immediately.
 async fn fetch_single_tile(
     client: Client,
     tile: TileIndex,
@@ -121,73 +166,46 @@ async fn fetch_single_tile(
 
     let mut retries: u32 = 0;
     loop {
-        let resp = client.get(&url).send().await;
-        match resp {
-            Ok(r) if r.status().is_success() => {
-                let bytes = r.bytes().await.map_err(|e| e.to_string())?;
-                return Ok((tile, TileOutcome::Success(bytes.to_vec())));
-            }
-            Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => match policy {
-                FailurePolicy::Strict => {
-                    return Err(format!("Tile 404 Not Found: {}", sanitize_url(&url)))
+        let (retryable_error, retry_after) = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => match r.bytes().await {
+                Ok(bytes) if looks_like_image(&bytes) => {
+                    return Ok((tile, TileOutcome::Success(bytes.to_vec())));
                 }
-                FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
-                FailurePolicy::Ignore => {
-                    return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
+                Ok(bytes) => {
+                    return on_failure(tile, policy, || {
+                        format!(
+                            "Response for {} is not an image ({} bytes); the server may be \
+                             returning an error page or rate-limiting",
+                            sanitize_url(&url),
+                            bytes.len()
+                        )
+                    });
                 }
+                Err(e) => (network_error_message(&e, &url), None),
             },
-            // Non-retryable client errors (4xx except 404 above and 429 which may clear).
             Ok(r)
                 if r.status().is_client_error()
                     && r.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
             {
-                match policy {
-                    FailurePolicy::Strict => {
-                        return Err(format!(
-                            "HTTP {} for URL: {}",
-                            r.status(),
-                            sanitize_url(&url)
-                        ))
-                    }
-                    FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
-                    FailurePolicy::Ignore => {
-                        return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
-                    }
-                }
+                let status = r.status();
+                return on_failure(tile, policy, || {
+                    format!("HTTP {status} for URL: {}", sanitize_url(&url))
+                });
             }
             Ok(r) => {
-                if retries >= MAX_RETRIES {
-                    match policy {
-                        FailurePolicy::Strict => {
-                            return Err(format!(
-                                "HTTP {} for URL: {}",
-                                r.status(),
-                                sanitize_url(&url)
-                            ))
-                        }
-                        FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
-                        FailurePolicy::Ignore => {
-                            return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
-                        }
-                    }
-                }
+                let retry_after = r.headers().get(reqwest::header::RETRY_AFTER).cloned();
+                (
+                    format!("HTTP {} for URL: {}", r.status(), sanitize_url(&url)),
+                    retry_after,
+                )
             }
-            Err(e) => {
-                if retries >= MAX_RETRIES {
-                    match policy {
-                        FailurePolicy::Strict => {
-                            return Err(network_error_message(&e, &url));
-                        }
-                        FailurePolicy::Lenient => return Ok((tile, TileOutcome::Missing)),
-                        FailurePolicy::Ignore => {
-                            return Ok((tile, TileOutcome::BlackFill(black_tile_png())))
-                        }
-                    }
-                }
-            }
+            Err(e) => (network_error_message(&e, &url), None),
+        };
+        if retries >= MAX_RETRIES {
+            return on_failure(tile, policy, || retryable_error);
         }
         retries += 1;
-        tokio::time::sleep(Duration::from_millis(RETRY_BACKOFF_MS * u64::from(retries))).await;
+        tokio::time::sleep(retry_delay(retries, retry_after.as_ref())).await;
     }
 }
 
@@ -198,8 +216,7 @@ async fn fetch_single_tile(
 /// Returns a `PyResult` error if the policy string is invalid or if the
 /// background Tokio runtime fails.
 ///
-/// # Panics
-/// Panics if the internal cross-thread channel mutex is poisoned.
+/// Raises `ValueError` for an unknown policy or zero connections.
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 pub fn fetch_tiles(
     py: Python,
@@ -211,12 +228,10 @@ pub fn fetch_tiles(
 ) -> PyResult<(Vec<(TileIndex, Vec<u8>)>, usize)> {
     let policy = policy_str
         .parse::<FailurePolicy>()
-        .map_err(PyRuntimeError::new_err)?;
+        .map_err(PyValueError::new_err)?;
 
     if max_connections == 0 {
-        return Err(PyRuntimeError::new_err(
-            "max_connections must be at least 1",
-        ));
+        return Err(PyValueError::new_err("max_connections must be at least 1"));
     }
 
     let (tx, rx) = mpsc::channel();
@@ -232,8 +247,13 @@ pub fn fetch_tiles(
 
         rt.block_on(async {
             let client = match Client::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent(concat!("mapcv-fetcher/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
+                .user_agent(concat!(
+                    "mapcv/",
+                    env!("CARGO_PKG_VERSION"),
+                    " (+https://github.com/tahamukhtar20/mapcv)"
+                ))
                 .build()
             {
                 Ok(c) => c,

@@ -80,6 +80,31 @@ def _validate_tile_source(source: Optional[str]) -> Optional[str]:
     )
 
 
+_TEMPLATE_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
+
+
+def _validate_url_template(template: Optional[str]) -> Optional[str]:
+    if template is None:
+        return None
+    if urlsplit(template).scheme not in ("http", "https"):
+        raise ValueError("url_template must be an http:// or https:// URL")
+    placeholders = set(_TEMPLATE_PLACEHOLDER.findall(template))
+    missing = {"x", "y", "z"} - placeholders
+    if missing:
+        raise ValueError(
+            f"url_template must contain {{x}}, {{y}} and {{z}}; missing "
+            f"{', '.join('{' + name + '}' for name in sorted(missing))}"
+        )
+    unknown = placeholders - {"x", "y", "z"}
+    if unknown:
+        hint = " (replace {s} with one subdomain, e.g. 'a')" if "s" in unknown else ""
+        raise ValueError(
+            f"url_template has unsupported placeholder(s) "
+            f"{', '.join('{' + name + '}' for name in sorted(unknown))}{hint}"
+        )
+    return template
+
+
 def _warn_deprecated(message: str) -> None:
     # FutureWarning, not DeprecationWarning: this targets end users editing YAML,
     # and Python hides DeprecationWarning raised outside __main__ by default.
@@ -115,6 +140,7 @@ class TilesConfig(BaseModel):
     strip_rows: int = Field(default=4, ge=1)
 
     _check_source = field_validator("source")(_validate_tile_source)
+    _check_template = field_validator("url_template")(_validate_url_template)
 
     @model_validator(mode="after")
     def _require_source_or_template(self) -> "TilesConfig":
@@ -136,6 +162,7 @@ class XYZImageryConfig(BaseModel):
     strip_rows: int = Field(default=4, ge=1)
 
     _check_source = field_validator("source")(_validate_tile_source)
+    _check_template = field_validator("url_template")(_validate_url_template)
 
     @model_validator(mode="after")
     def _require_source_or_template(self) -> "XYZImageryConfig":

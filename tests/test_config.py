@@ -236,3 +236,17 @@ def test_missing_imagery_raises(tmp_path: Path) -> None:
 def test_nonexistent_file_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         MapcvConfig.from_yaml(tmp_path / "no_such_file.yaml")
+
+
+@pytest.mark.parametrize(
+    ("template", "message"),
+    [
+        ("https://{s}.tile.example.com/{z}/{x}/{y}.png", "replace {s} with one subdomain"),
+        ("https://tiles.example.com/{z}/{x}.png", "missing {y}"),
+        ("ftp://tiles.example.com/{z}/{x}/{y}.png", "http:// or https://"),
+    ],
+)
+def test_url_template_is_validated(tmp_path: Path, template: str, message: str) -> None:
+    content = _MINIMAL.replace("source: osm", f'url_template: "{template}"')
+    with pytest.raises(ValueError, match=message):
+        MapcvConfig.from_yaml(_write(tmp_path, content))

@@ -148,8 +148,8 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
 ///
 /// Returns a list of `(PyTileIndex, bytes)` pairs for successfully fetched
 /// tiles (and, with the `ignore` policy, black `NoData`-filled tiles).
-/// Raises `RuntimeError` if the fraction of failed tiles exceeds
-/// `max_failed_ratio`.
+/// Under the `lenient` policy, raises `RuntimeError` if the fraction of
+/// failed tiles exceeds `max_failed_ratio`; `ignore` never enforces it.
 #[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
 #[pyfunction]
 #[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05))]
@@ -182,7 +182,8 @@ fn fetch_tiles(
         policy,
     )?;
 
-    if policy == "lenient" && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
+    let lenient = policy.eq_ignore_ascii_case("lenient");
+    if lenient && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold)",
             100.0 * failed as f64 / total as f64,

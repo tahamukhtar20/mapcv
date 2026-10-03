@@ -128,8 +128,10 @@ jobs:
         run: |
           pip install --find-links dist mapcv
           python -c "import mapcv"
-          pip install --find-links dist 'mapcv[zarr]'
-          python -c "import xarray; import xarray_eopf"
+          if [ "${{ matrix.python }}" != "3.14" ]; then
+            pip install --find-links dist 'mapcv[zarr]'
+            python -c "import xarray; import xarray_eopf"
+          fi
           pip install pytest pytest-httpserver pytest-cov mercantile
       - name: Run tests
         run: pytest --cov=mapcv --cov-branch --cov-fail-under=65

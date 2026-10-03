@@ -51,6 +51,8 @@ EOPF Sentinel-2 L2A Zarr support is optional:
 pip install "mapcv[zarr]"
 ```
 
+The `zarr` extra currently supports Python 3.10–3.13: its zarr 2 dependency has no Python 3.14 wheels yet.
+
 ## Quick start
 
 ### 1. Scaffold a config file

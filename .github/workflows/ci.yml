@@ -73,4 +73,5 @@ jobs:
         fail_ci_if_error: false
 
     - name: Smoke-test optional EOPF imports
+      if: matrix.python != '3.14'
       run: uv run python -c "import xarray; import xarray_eopf"

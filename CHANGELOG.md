@@ -56,7 +56,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 
 ### CI/CD
 
-- Support Python 3.14 by upgrading PyO3 to 0.29, and ship stable-ABI (abi3) wheels: one wheel per platform for Python 3.10 and newer.
+- Support Python 3.14 by upgrading PyO3 to 0.29, and ship stable-ABI (abi3) wheels: one wheel per platform for Python 3.10 and newer. The optional `zarr` extra stays on Python 3.10–3.13 until its zarr 2 dependency ships Python 3.14 wheels.
 - Test Python 3.10–3.14, enforce branch coverage, and check wheel metadata before publishing.
 - Add a PR-title policy, grouped Dependabot updates, an EOPF smoke-test workflow, and issue/PR templates.
 - Publish project URLs and keywords on PyPI, set minimum versions for runtime dependencies, and slim the sdist from 4.5 MB to 0.2 MB.

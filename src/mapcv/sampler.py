@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Optional, Sequence, Tuple
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -40,6 +40,7 @@ class PatchMeta(TypedDict):
     row: int
     col: int
     padded: bool
+    empty_ratio: NotRequired[float]
 
 
 def _extract_patch(
@@ -156,3 +157,97 @@ def sample_patches(
     stacked_img = np.stack(img_list, axis=0)
     stacked_msk: Optional[npt.NDArray[np.uint8]] = np.stack(msk_list, axis=0) if msk_list else None
     return stacked_img, stacked_msk, meta_list
+
+
+def _extract_array_patch(
+    array: npt.NDArray[Any],
+    row: int,
+    col: int,
+    patch_size: int,
+    pad_mode: Literal["zero", "reflect"],
+) -> Tuple[npt.NDArray[Any], bool]:
+    height, width = array.shape[:2]
+    row_end = min(row + patch_size, height)
+    col_end = min(col + patch_size, width)
+    chunk = array[row:row_end, col:col_end]
+    pad_bottom = max(0, row + patch_size - height)
+    pad_right = max(0, col + patch_size - width)
+    if pad_bottom == 0 and pad_right == 0:
+        return chunk, False
+
+    pad_spec = [(0, pad_bottom), (0, pad_right)]
+    if array.ndim == 3:
+        pad_spec.append((0, 0))
+    use_reflect = pad_mode == "reflect" and chunk.shape[0] >= 2 and chunk.shape[1] >= 2
+    if use_reflect:
+        return np.pad(chunk, pad_spec, mode="reflect"), True
+    return np.pad(chunk, pad_spec, mode="constant", constant_values=0), True
+
+
+def sample_patches_at_anchors(
+    image: npt.NDArray[Any],
+    mask: Optional[npt.NDArray[np.uint8]],
+    anchors: Sequence[Tuple[int, int]],
+    config: SamplerConfig,
+    *,
+    row_offset: int = 0,
+    col_offset: int = 0,
+    valid_mask: Optional[npt.NDArray[np.bool_]] = None,
+) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
+    """Extract configured patches at explicit local anchors.
+
+    Metadata coordinates are translated to the global raster using the supplied
+    offsets. When ``valid_mask`` is provided, its false pixels define imagery
+    emptiness instead of treating numeric zero as NoData.
+    """
+    image_patches: List[npt.NDArray[Any]] = []
+    mask_patches: List[npt.NDArray[np.uint8]] = []
+    metadata: List[PatchMeta] = []
+    patch_size = config.patch_size
+
+    for row, col in anchors:
+        image_patch, padded = _extract_array_patch(image, row, col, patch_size, config.pad_mode)
+        mask_patch: Optional[npt.NDArray[np.uint8]] = None
+        if mask is not None:
+            extracted_mask, _ = _extract_array_patch(mask, row, col, patch_size, config.pad_mode)
+            mask_patch = extracted_mask.astype(np.uint8, copy=False)
+
+        if valid_mask is not None:
+            valid_patch, _ = _extract_array_patch(valid_mask, row, col, patch_size, "zero")
+            empty_ratio = float(1.0 - np.count_nonzero(valid_patch) / valid_patch.size)
+        elif image_patch.ndim == 3:
+            empty = np.all(image_patch == 0, axis=-1)
+            empty_ratio = float(np.count_nonzero(empty) / empty.size)
+        else:
+            empty_ratio = float(np.count_nonzero(image_patch == 0) / image_patch.size)
+
+        if empty_ratio > config.max_empty_ratio:
+            continue
+        if config.min_label_ratio > 0.0 and mask_patch is not None:
+            labeled_ratio = float(np.count_nonzero(mask_patch) / mask_patch.size)
+            if labeled_ratio < config.min_label_ratio:
+                continue
+
+        image_patches.append(image_patch)
+        if mask_patch is not None:
+            mask_patches.append(mask_patch)
+        metadata.append(
+            PatchMeta(
+                row=row + row_offset,
+                col=col + col_offset,
+                padded=padded,
+                empty_ratio=empty_ratio,
+            )
+        )
+
+    if not image_patches:
+        trailing_shape = image.shape[2:]
+        empty_images = np.empty((0, patch_size, patch_size, *trailing_shape), dtype=image.dtype)
+        empty_masks = (
+            np.empty((0, patch_size, patch_size), dtype=np.uint8) if mask is not None else None
+        )
+        return empty_images, empty_masks, metadata
+
+    stacked_images = np.stack(image_patches, axis=0)
+    stacked_masks = np.stack(mask_patches, axis=0) if mask_patches else None
+    return stacked_images, stacked_masks, metadata

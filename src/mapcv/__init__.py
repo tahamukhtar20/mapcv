@@ -3,7 +3,16 @@ mapcv - A satellite imagery dataset creation tool for segmentation.
 """
 
 from mapcv._mapcv_rs import bounds, hello, snap_bbox
-from mapcv.config import LabelsConfig, MapcvConfig, RegionConfig, TilesConfig
+from mapcv.config import (
+    DEFAULT_SENTINEL2_L2A_BANDS,
+    EOPFZarrImageryConfig,
+    ImageryConfig,
+    LabelsConfig,
+    MapcvConfig,
+    RegionConfig,
+    TilesConfig,
+    XYZImageryConfig,
+)
 from mapcv.downloader import (
     URL_TEMPLATES,
     download_region,
@@ -20,7 +29,7 @@ from mapcv.labels import (
     transform_to_mercator,
 )
 from mapcv.rasterizer import rasterize
-from mapcv.sampler import SamplerConfig, sample_patches
+from mapcv.sampler import SamplerConfig, sample_patches, sample_patches_at_anchors
 from mapcv.splitter import SplitterConfig, split_dataset
 from mapcv.writer import (
     Manifest,
@@ -33,6 +42,10 @@ from mapcv.writer import (
 __all__ = [
     "URL_TEMPLATES",
     "LabelsConfig",
+    "ImageryConfig",
+    "XYZImageryConfig",
+    "EOPFZarrImageryConfig",
+    "DEFAULT_SENTINEL2_L2A_BANDS",
     "MapcvConfig",
     "RegionConfig",
     "TilesConfig",
@@ -53,6 +66,7 @@ __all__ = [
     "rasterize",
     "resolve_url_template",
     "sample_patches",
+    "sample_patches_at_anchors",
     "SamplerConfig",
     "split_dataset",
     "SplitterConfig",

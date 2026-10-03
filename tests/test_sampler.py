@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from mapcv import SamplerConfig, sample_patches
+from mapcv import SamplerConfig, sample_patches, sample_patches_at_anchors
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 
 
@@ -247,3 +247,54 @@ def test_metadata_row_col_correct() -> None:
     _, _, meta = sample_patches(img, None, cfg)
     positions = {(m["row"], m["col"]) for m in meta}
     assert positions == {(0, 0), (0, 8), (8, 0), (8, 8)}
+
+
+def test_explicit_anchors_preserve_float_values_and_global_offsets() -> None:
+    image = np.arange(6 * 6 * 4, dtype=np.float32).reshape(6, 6, 4)
+    valid = np.ones((6, 6), dtype=bool)
+    config = SamplerConfig(patch_size=3, edge_strategy="drop")
+
+    patches, masks, metadata = sample_patches_at_anchors(
+        image,
+        None,
+        [(1, 2)],
+        config,
+        row_offset=100,
+        col_offset=200,
+        valid_mask=valid,
+    )
+
+    assert patches.dtype == np.float32
+    assert patches.shape == (1, 3, 3, 4)
+    assert masks is None
+    assert metadata[0]["row"] == 101
+    assert metadata[0]["col"] == 202
+
+
+def test_valid_mask_not_numeric_zero_controls_empty_filter() -> None:
+    image = np.zeros((4, 4, 6), dtype=np.float32)
+    config = SamplerConfig(patch_size=4, max_empty_ratio=0.0)
+
+    patches, _, metadata = sample_patches_at_anchors(
+        image,
+        None,
+        [(0, 0)],
+        config,
+        valid_mask=np.ones((4, 4), dtype=bool),
+    )
+
+    assert patches.shape[0] == 1
+    assert metadata[0]["empty_ratio"] == 0.0
+
+
+def test_invalid_pixels_and_padding_are_counted_as_empty() -> None:
+    image = np.full((3, 3, 2), np.nan, dtype=np.float32)
+    valid = np.zeros((3, 3), dtype=bool)
+    config = SamplerConfig(patch_size=4, edge_strategy="pad", max_empty_ratio=0.5)
+
+    patches, _, metadata = sample_patches_at_anchors(
+        image, None, [(0, 0)], config, valid_mask=valid
+    )
+
+    assert patches.shape[0] == 0
+    assert metadata == []

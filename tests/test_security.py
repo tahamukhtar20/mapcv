@@ -19,6 +19,7 @@ def _make_tile(r: int, g: int, b: int) -> bytes:
     img.save(buf, format="PNG")
     return buf.getvalue()
 
+
 RED = _make_tile(255, 0, 0)
 
 

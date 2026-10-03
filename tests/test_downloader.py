@@ -17,10 +17,7 @@ def test_resolve_url_template_explicit() -> None:
 
 
 def test_resolve_url_template_source() -> None:
-    assert (
-        resolve_url_template(None, "osm")
-        == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-    )
+    assert resolve_url_template(None, "osm") == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
 
 def test_resolve_url_template_precedence() -> None:

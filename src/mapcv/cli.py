@@ -8,7 +8,7 @@ from typing import List, Literal, Optional, cast
 import typer
 from rich.console import Console
 
-from mapcv.config import MapcvConfig
+from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
 from mapcv.pipeline import run_generate, run_split
 from mapcv.splitter import SplitterConfig
 
@@ -25,10 +25,11 @@ region:
   south: 31.40
   east: 74.40
   north: 31.60
-  zoom: 16
 
-tiles:
-  source: google_satellite   # or url_template: "https://..."
+imagery:
+  type: xyz
+  zoom: 16
+  source: osm                # or an authorized url_template: "https://..."
   strip_rows: 4
   max_connections: 16
   policy: lenient            # strict | lenient | ignore
@@ -50,7 +51,7 @@ sampler:
 
 writer:
   staging_dir: ./output
-  image_format: png          # png | jpg
+  image_format: png          # png | jpg; EOPF Zarr uses npy
   jpg_quality: 95
 
 # split:                     # omit to skip splitting
@@ -135,10 +136,19 @@ def validate(
 
     _console.print(
         f"  region : {config.region.west},{config.region.south} -> "
-        f"{config.region.east},{config.region.north}  zoom={config.region.zoom}"
+        f"{config.region.east},{config.region.north}"
     )
-    source = config.tiles.source or config.tiles.url_template
-    _console.print(f"  tiles  : {source}  strip_rows={config.tiles.strip_rows}")
+    if isinstance(config.imagery, EOPFZarrImageryConfig):
+        _console.print(
+            f"  imagery: EOPF Zarr {config.imagery.path}  "
+            f"resolution={config.imagery.resolution}m  bands={len(config.imagery.bands)}"
+        )
+    else:
+        source = config.imagery.source or config.imagery.url_template
+        _console.print(
+            f"  imagery: XYZ {source}  zoom={config.imagery.zoom}  "
+            f"strip_rows={config.imagery.strip_rows}"
+        )
     _console.print(
         f"  sampler: patch_size={config.sampler.patch_size}  "
         f"mode={config.sampler.mode}  edge={config.sampler.edge_strategy}"

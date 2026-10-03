@@ -26,8 +26,6 @@ from mapcv._mapcv_rs import (
 )
 
 URL_TEMPLATES: Dict[str, str] = {
-    # Google
-    "google_satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
     # OpenStreetMap
     "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     # Esri
@@ -328,7 +326,9 @@ def download_region_strips(
                             callback=_make_callback(_base),
                             max_connections=max_connections,
                             policy=current_policy,
-                            max_failed_ratio=1.0 if current_policy != "strict" else max_failed_ratio,
+                            max_failed_ratio=1.0
+                            if current_policy != "strict"
+                            else max_failed_ratio,
                         )
                     except RuntimeError as exc:
                         if current_policy == "strict":

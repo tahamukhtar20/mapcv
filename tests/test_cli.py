@@ -19,9 +19,10 @@ region:
   south: 31.40
   east: 74.40
   north: 31.60
+imagery:
+  type: xyz
   zoom: 16
-tiles:
-  source: google_satellite
+  source: osm
 sampler:
   patch_size: 256
 writer:
@@ -212,9 +213,7 @@ def test_generate_bad_config(tmp_path: Path) -> None:
     assert "Config error" in result.output
 
 
-def test_generate_unreadable_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
 
     def mock_read_text(*args: Any, **kwargs: Any) -> str:
@@ -228,9 +227,7 @@ def test_generate_unreadable_config(
     assert "Permission denied" in result.output
 
 
-def test_generate_calls_run_generate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_calls_run_generate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
     called = False
 
@@ -250,9 +247,7 @@ def test_generate_calls_run_generate(
 # ---------------------------------------------------------------------------
 
 
-def test_validate_unreadable_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_validate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _write_config(tmp_path)
 
     def mock_read_text(*args: Any, **kwargs: Any) -> str:
@@ -270,7 +265,8 @@ def test_validate_shows_split_info(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     staging = tmp_path / "output"
     cfg.write_text(
-        _VALID_CONFIG.format(staging_dir=staging) + "split:\n  test_ratio: 0.2\n  strategy: random\n"
+        _VALID_CONFIG.format(staging_dir=staging)
+        + "split:\n  test_ratio: 0.2\n  strategy: random\n"
     )
     result = runner.invoke(app, ["validate", str(cfg)])
     assert result.exit_code == 0

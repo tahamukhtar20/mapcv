@@ -420,7 +420,8 @@ class mapcv.SplitterConfig(
     val_ratio: float = 0.10,
     labeled_ratios: list[float] = [0.10, 0.20, 0.30],
     seed: int = 42,
-    strategy: str = "stratified",
+    strategy: str = "spatial",
+    block_size: int | None = None,
     sample_limit: int | None = None,
 )
 ```
@@ -429,9 +430,10 @@ class mapcv.SplitterConfig(
 
 - **`test_ratio`** (`float`, optional, defaults to `0.20`) - Fraction of patches reserved for the test set.
 - **`val_ratio`** (`float`, optional, defaults to `0.10`) - Fraction of non-test patches used for validation.
-- **`labeled_ratios`** (`list[float]`, optional, defaults to `[0.10, 0.20, 0.30]`) - For each ratio, writes `<ratio>/labeled.txt` and `<ratio>/unlabeled.txt` for semi-supervised workflows.
+- **`labeled_ratios`** (`list[float]`, optional, defaults to `[0.10, 0.20, 0.30]`) - Each ratio must be in (0, 1]. For each ratio, writes `<percent>/labeled.txt` and `<percent>/unlabeled.txt` (for example `10/`, `12.5/`) for semi-supervised workflows.
 - **`seed`** (`int`, optional, defaults to `42`) - Random seed for reproducible splits.
-- **`strategy`** (`str`, optional, defaults to `"stratified"`) - `"stratified"` preserves class distribution. `"random"` splits without balancing.
+- **`strategy`** (`str`, optional, defaults to `"spatial"`) - `"spatial"` assigns whole square blocks of the raster to one split and leaves out train/val patches that overlap a held-out patch, so overlapping or neighbouring patches cannot leak between splits. `"stratified"` splits individual patches within strata of labeled fraction and dominant class. `"random"` splits individual patches. Both patch-level strategies leak pixels when patches overlap (`stride < patch_size`) or repeat (`mode: random`), and mapcv warns in that case.
+- **`block_size`** (`int`, optional) - Spatial block size in pixels. Defaults to 4 × the patch size recorded in the manifest. Manifests from mapcv 0.1 do not record the patch size, so `spatial` falls back to `stratified` with a warning unless `block_size` is set.
 - **`sample_limit`** (`int`, optional) - Cap on total patches sampled before splitting.
 
 ---
@@ -443,10 +445,10 @@ mapcv.split_dataset(
     manifest: Manifest,
     config: SplitterConfig,
     output_dir: Path,
-) -> None
+) -> dict[str, int]
 ```
 
-Split the manifest into `train.txt`, `val.txt`, and `test.txt` files written to `output_dir`.
+Split the manifest into `train.txt`, `val.txt`, and `test.txt` files written to `output_dir`. Returns the patch count per split and `dropped`, the number of train/val patches left out because they overlapped a held-out patch.
 
 **Parameters**
 

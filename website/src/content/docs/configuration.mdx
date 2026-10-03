@@ -119,9 +119,10 @@ NPY image patches have `(bands, height, width)` shape and decoded `float32` valu
 |---|---|---|---|
 | `test_ratio` | float | `0.20` | Fraction reserved for testing |
 | `val_ratio` | float | `0.10` | Fraction of the remaining pool used for validation |
-| `labeled_ratios` | list[float] | `[0.10, 0.20, 0.30]` | Semi-supervised labeled subsets |
+| `labeled_ratios` | list[float] | `[0.10, 0.20, 0.30]` | Semi-supervised labeled subsets, each in (0, 1] |
 | `seed` | int | `42` | Split seed |
-| `strategy` | str | `stratified` | `stratified` or `random` |
+| `strategy` | str | `spatial` | `spatial` (whole blocks per split, no overlap between splits), `stratified`, or `random` |
+| `block_size` | int | 4 × `patch_size` | Spatial block size in pixels |
 | `sample_limit` | int | — | Optional cap before splitting |
 
 ## Legacy 0.1 configuration

@@ -72,7 +72,8 @@ mapcv split [OPTIONS] STAGING_DIR
 | `--val-ratio`      | `0.1`            | Fraction of remainder used for validation. |
 | `--labeled-ratios` | `0.10 0.20 0.30` | Optional. Pass once per ratio, e.g. `--labeled-ratios 0.10 --labeled-ratios 0.20`. |
 | `--seed`           | `42`             | Random seed. |
-| `--strategy`       | `stratified`     | `random` or `stratified`. |
+| `--strategy`       | `spatial`        | `spatial`, `stratified`, or `random`. |
+| `--block-size`     | 4 × patch size   | Spatial block size in pixels. |
 | `--sample-limit`   | —                | Optional. Cap on total patches sampled. |
 
 ```bash

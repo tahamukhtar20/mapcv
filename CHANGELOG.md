@@ -12,6 +12,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - Add a discriminated `imagery` configuration block (`xyz` | `eopf_zarr`).
 - Upgrade manifests to version 2, recording source, product, bands, dtype, patch shape, CRS, affine transform, and sampler settings.
 - Compute sampling anchors over the whole raster, so patches cross former strip seams without loss or duplication.
+- Add a leakage-safe `spatial` split strategy (now the default) that keeps whole raster blocks in one split and leaves out train/val patches overlapping a held-out patch.
 
 ### Breaking changes
 
@@ -20,6 +21,7 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - 0.1.x (manifest v1) datasets can be split but not resumed by `mapcv generate`.
 - Resuming requires the same imagery, labels, and sampler settings.
 - `imagery.type` is required.
+- The default split strategy is `spatial` instead of `stratified`.
 
 ### Deprecations
 
@@ -33,6 +35,9 @@ See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md
 - Treat black-filled failed XYZ tiles as empty for `max_empty_ratio`.
 - Keep secrets out of manifests and `mapcv validate` output; reject EOPF URLs with credentials, query strings, or fragments at validation.
 - Report generation errors without a traceback.
+- `stratified` splits now stratify the train/val/test assignment by labeled fraction and dominant class, not only the subsample.
+- Name labeled-ratio folders exactly (`0.29` → `29/`, `0.125` → `12.5/`) and reject ratios outside (0, 1] or duplicates.
+- Overwrite stale split lists when splitting an empty manifest.
 
 ### Documentation
 

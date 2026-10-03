@@ -43,6 +43,20 @@ def _chunk_progress() -> Progress:
     )
 
 
+def _print_split_summary(counts: Dict[str, int], splits_dir: Path) -> None:
+    total = counts["train"] + counts["val"] + counts["test"]
+    shares = "  ".join(
+        f"{name}={counts[name]} ({counts[name] / total:.0%})" if total else f"{name}=0"
+        for name in ("train", "val", "test")
+    )
+    _console.print(f"[green]Splits written to[/green] [bold]{splits_dir}[/bold]: {shares}")
+    if counts["dropped"]:
+        _console.print(
+            f"[dim]  {counts['dropped']} train/val patch(es) overlapping a held-out patch "
+            "were left out[/dim]"
+        )
+
+
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
     if config.mode == "random":
         return list(
@@ -196,8 +210,8 @@ def run_generate(config: MapcvConfig) -> None:
     if config.split is not None:
         _console.print("[bold]Splitting dataset...[/bold]")
         splits_dir = staging / _SPLITS_SUBDIR
-        split_dataset(manifest, config.split, splits_dir)
-        _console.print(f"[green]Splits written to[/green] [bold]{splits_dir}[/bold]")
+        counts = split_dataset(manifest, config.split, splits_dir)
+        _print_split_summary(counts, splits_dir)
 
 
 def run_split(
@@ -212,5 +226,5 @@ def run_split(
     manifest = Manifest.load(manifest_path)
     cfg = split_config or SplitterConfig()
     splits_dir = staging_dir / _SPLITS_SUBDIR
-    split_dataset(manifest, cfg, splits_dir)
-    _console.print(f"[green]Splits written to[/green] [bold]{splits_dir}[/bold]")
+    counts = split_dataset(manifest, cfg, splits_dir)
+    _print_split_summary(counts, splits_dir)

@@ -27,7 +27,7 @@ from mapcv.imagery import (
 def _dataset() -> xr.Dataset:
     b08 = np.arange(16, dtype=np.float64).reshape(4, 4)
     b04 = b08 + 100
-    return xr.Dataset(
+    dataset: xr.Dataset = xr.Dataset(
         data_vars={"b08": (("y", "x"), b08), "b04": (("y", "x"), b04)},
         coords={
             "x": np.array([10.00, 10.05, 10.10, 10.15]),
@@ -35,6 +35,7 @@ def _dataset() -> xr.Dataset:
         },
         attrs={"crs": "EPSG:4326"},
     ).chunk({"x": 2, "y": 2})
+    return dataset
 
 
 def _region() -> RegionConfig:

@@ -116,7 +116,7 @@ def _process_anchor_chunk(
     if geometries:
         mask = rasterize(
             geometries,
-            image.shape[:2],
+            (image.shape[0], image.shape[1]),
             offset_transform(source.metadata.transform, row_start, col_start),
             config.labels.all_touched if config.labels else False,
         )

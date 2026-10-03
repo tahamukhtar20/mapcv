@@ -28,7 +28,13 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    - name: Install uv and Python
+    # On PATH for PyO3's build script (cargo clippy); runners default to a newer Python.
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Install uv
       uses: astral-sh/setup-uv@v10.2.0
       with:
         python-version: ${{ matrix.python }}

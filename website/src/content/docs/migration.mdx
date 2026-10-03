@@ -1,0 +1,45 @@
+---
+title: Migrating to 0.2
+description: Update 0.1 configurations and datasets for mapcv 0.2.
+---
+
+## Move XYZ settings into `imagery`
+
+```yaml
+# 0.1 (deprecated)
+region:
+  west: 4.883
+  south: 52.371
+  east: 4.896
+  north: 52.378
+  zoom: 17
+tiles:
+  source: osm
+```
+
+```yaml
+# 0.2
+region:
+  west: 4.883
+  south: 52.371
+  east: 4.896
+  north: 52.378
+imagery:
+  type: xyz
+  zoom: 17
+  source: osm
+```
+
+The 0.1 shape still runs with a deprecation warning and will be removed in 0.3.0.
+
+## Replace the Google preset
+
+`google_satellite` is no longer built in. If a provider explicitly authorizes automated XYZ access for your use case, configure its URL through `imagery.url_template` and follow its terms. Never commit credentials or signed URLs.
+
+## Understand EOPF output
+
+Install `mapcv[zarr]` and select `writer.image_format: npy`. EOPF patches use bands-first `(bands, height, width)` layout and decoded `float32` values. The configured band order is preserved.
+
+## Manifest version 2
+
+New manifests add source, product, band, dtype, patch shape, CRS, and affine-transform metadata. Rows and columns are global raster coordinates. Version 1 manifests remain readable and splittable; matching coordinates are skipped when generation resumes.

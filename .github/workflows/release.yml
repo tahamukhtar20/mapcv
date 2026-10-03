@@ -91,20 +91,43 @@ jobs:
           name: wheels-windows-${{ matrix.python }}
           path: dist
 
-  # ── Smoke-test one wheel before publishing ───────────────────────────────────
+  # ── Test the Linux wheels on every supported Python before publishing ────────
   test-wheel:
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - uses: actions/download-artifact@v8
         with:
-          pattern: wheels-linux-x86_64
+          pattern: wheels-*
           path: dist
           merge-multiple: true
+      - name: Check distribution metadata
+        run: |
+          pip install twine
+          twine check --strict dist/*
+          python - <<'EOF'
+          import glob, zipfile
+          from email.parser import Parser
+          wheels = glob.glob("dist/*.whl")
+          assert wheels, "no wheels built"
+          for whl in wheels:
+              with zipfile.ZipFile(whl) as zf:
+                  name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
+                  meta = Parser().parsestr(zf.read(name).decode())
+              assert meta["Requires-Python"] == ">=3.10", (whl, meta["Requires-Python"])
+              classifiers = meta.get_all("Classifier") or []
+              for minor in ("3.10", "3.11", "3.12", "3.13"):
+                  assert f"Programming Language :: Python :: {minor}" in classifiers, (whl, minor)
+          print(f"metadata OK for {len(wheels)} wheels")
+          EOF
       - name: Install wheel and test dependencies
         run: |
           pip install --find-links dist mapcv

@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Set, Tuple
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -15,14 +15,14 @@ from PIL import Image
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
-from mapcv._mapcv_rs import snap_bbox, tile_transform, tiles
+from mapcv._mapcv_rs import PyTileIndex, fetch_tiles, snap_bbox, tile_transform, tiles
 from mapcv.config import (
     EOPFZarrImageryConfig,
     RegionConfig,
     XYZImageryConfig,
     eopf_local_path,
 )
-from mapcv.downloader import download_region, resolve_url_template
+from mapcv.downloader import resolve_url_template
 
 
 Transform = Tuple[float, float, float, float, float, float]
@@ -113,19 +113,16 @@ class XYZRasterSource:
         if not target_tiles:
             raise ValueError("XYZ imagery returned no tiles for the requested region")
 
-        downloaded = download_region(
-            region.west,
-            region.south,
-            region.east,
-            region.north,
-            config.zoom,
-            url_template=config.url_template,
-            source=config.source,
-            max_connections=config.max_connections,
-            policy=config.policy,
-            max_failed_ratio=config.max_failed_ratio,
-        )
-        self._tiles = {(tile.x, tile.y): payload for tile, payload in downloaded}
+        self._config = config
+        self._template = resolve_url_template(config.url_template, config.source)
+        self._zoom = config.zoom
+        # Tiles are fetched lazily per window and evicted once windows move
+        # past them, so memory stays bounded to about one chunk of tiles and
+        # a resumed run only downloads the chunks it still needs.
+        self._tiles: Dict[Tuple[int, int], bytes] = {}
+        self._attempted: Set[Tuple[int, int]] = set()
+        self.tiles_requested = 0
+        self.tiles_failed = 0
         self._min_x = min(tile.x for tile in target_tiles)
         self._max_x = max(tile.x for tile in target_tiles)
         self._min_y = min(tile.y for tile in target_tiles)
@@ -133,8 +130,7 @@ class XYZRasterSource:
 
         self.metadata = RasterMetadata(
             source_type="xyz",
-            product_id=config.source
-            or _xyz_product_id(resolve_url_template(config.url_template, None)),
+            product_id=config.source or _xyz_product_id(self._template),
             width=(self._max_x - self._min_x + 1) * 256,
             height=(self._max_y - self._min_y + 1) * 256,
             bands=["red", "green", "blue"],
@@ -158,6 +154,14 @@ class XYZRasterSource:
         tile_col_stop = self._min_x + (col_stop - 1) // 256
         tile_row_start = self._min_y + row_start // 256
         tile_row_stop = self._min_y + (row_stop - 1) // 256
+        self._evict_rows_above(tile_row_start)
+        self._fetch(
+            [
+                (tile_x, tile_y)
+                for tile_y in range(tile_row_start, tile_row_stop + 1)
+                for tile_x in range(tile_col_start, tile_col_stop + 1)
+            ]
+        )
         for tile_y in range(tile_row_start, tile_row_stop + 1):
             for tile_x in range(tile_col_start, tile_col_stop + 1):
                 payload = self._tiles.get((tile_x, tile_y))
@@ -193,8 +197,31 @@ class XYZRasterSource:
         valid &= np.any(window != 0, axis=-1)
         return window, valid
 
+    def _evict_rows_above(self, tile_row: int) -> None:
+        for key in [key for key in self._tiles if key[1] < tile_row]:
+            del self._tiles[key]
+
+    def _fetch(self, keys: List[Tuple[int, int]]) -> None:
+        missing = [key for key in keys if key not in self._attempted]
+        if not missing:
+            return
+        self._attempted.update(missing)
+        config = self._config
+        results, failed = fetch_tiles(
+            [PyTileIndex(x, y, self._zoom) for x, y in missing],
+            self._template,
+            max_connections=config.max_connections,
+            policy=config.policy,
+            max_failed_ratio=config.max_failed_ratio,
+        )
+        self.tiles_requested += len(missing)
+        self.tiles_failed += failed
+        for tile, payload in results:
+            self._tiles[(tile.x, tile.y)] = payload
+
     def close(self) -> None:
-        """XYZ sources hold no external resources."""
+        """Drop cached tiles."""
+        self._tiles.clear()
 
 
 def _dataset_crs(dataset: Any) -> str:

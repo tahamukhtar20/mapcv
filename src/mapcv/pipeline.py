@@ -9,6 +9,7 @@ from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 from rich.console import Console
+from shapely.geometry import box
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
@@ -113,6 +114,27 @@ def _parse_labels(
     return transformed, class_map
 
 
+def _raster_bounds(source: WindowedRasterSource) -> Tuple[float, float, float, float]:
+    a, _, c, _, e, f = source.metadata.transform
+    xs = (c, c + a * source.metadata.width)
+    ys = (f, f + e * source.metadata.height)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _warn_if_labels_miss_raster(
+    geometries: List[GeomWithClass], source: WindowedRasterSource
+) -> None:
+    if not geometries:
+        return
+    extent = box(*_raster_bounds(source))
+    if not any(geometry.intersects(extent) for geometry, _ in geometries):
+        _console.print(
+            "[yellow]Warning:[/yellow] no label polygon intersects the imagery extent, so "
+            "every mask will be background. Check that labels are longitude/latitude "
+            "(not swapped) and cover the configured region."
+        )
+
+
 def _process_anchor_chunk(
     source: WindowedRasterSource,
     anchors: List[Tuple[int, int]],
@@ -157,6 +179,7 @@ def run_generate(config: MapcvConfig) -> None:
     source = open_raster_source(config.region, config.imagery)
     try:
         geometries, class_map = _parse_labels(config, source.metadata.crs)
+        _warn_if_labels_miss_raster(geometries, source)
         patch_shape = (
             [len(source.metadata.bands), config.sampler.patch_size, config.sampler.patch_size]
             if config.writer.image_format == "npy"
@@ -200,6 +223,10 @@ def run_generate(config: MapcvConfig) -> None:
                 progress.advance(task)
 
         manifest.save(manifest_path)
+        requested = getattr(source, "tiles_requested", 0)
+        if requested:
+            failed = getattr(source, "tiles_failed", 0)
+            _console.print(f"[dim]  {requested} tile(s) fetched, {failed} failed[/dim]")
     finally:
         source.close()
 

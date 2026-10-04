@@ -534,3 +534,20 @@ def test_wizard_hides_id_like_fields(tmp_path: Path) -> None:
     path = tmp_path / "labels.geojson"
     path.write_text(_json.dumps({"type": "FeatureCollection", "features": features}))
     assert set(label_fields(path)) == {"kind"}
+
+
+def test_redirected_output_on_a_legacy_code_page_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    from mapcv.cli import _make_output_encodable
+
+    # What Windows gives `mapcv plan x.yaml > plan.txt`: a cp1252 file stream.
+    redirected = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr("sys.stdout", redirected)
+    monkeypatch.setattr("sys.stderr", redirected)
+    _make_output_encodable()
+    print("Region 4.9 → 5.0 ✓ ⚠ ╭─╮", file=redirected)
+    redirected.flush()
+    assert "→ 5.0 ✓".encode() in redirected.buffer.getvalue()

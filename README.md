@@ -46,7 +46,7 @@ Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is diff
 pip install mapcv
 ```
 
-Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
+Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64 and aarch64 with glibc or musl, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
 
 EOPF Sentinel-2 L2A Zarr support is optional:
 
@@ -110,7 +110,7 @@ writer:
   image_format: npy
 ```
 
-Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, Google Earth Engine integration, and aarch64 wheels are outside the 0.2.0 scope. See the [migration guide](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) and [provider guidance](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
+Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, and Google Earth Engine integration are outside the 0.2.0 scope. See the [migration guide](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) and [provider guidance](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
 
 ## Documentation
 

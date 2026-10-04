@@ -153,12 +153,13 @@ Work lands on `main` through small PRs; a release is just a tag on `main`.
 1. **Open a release PR** (e.g. `chore/release-0.2.0`) that:
    - bumps `version` in `pyproject.toml` and `Cargo.toml` (and refreshes `Cargo.lock` with `cargo update -p mapcv_rs`);
    - turns `## [X.Y.Z] - Unreleased` in `CHANGELOG.md` into `## [X.Y.Z] - YYYY-MM-DD`. That section becomes the GitHub release notes, so write it for users. `uvx git-cliff --unreleased` can draft entries from commit titles.
-2. **Merge it, then tag the merge commit on `main`:**
+2. **Rehearse the release** (optional, recommended): run the *Release* workflow by hand (Actions → Release → Run workflow, or `gh workflow run release.yml --ref main`). It builds and tests every artifact exactly as a tag would, plus a live Esri quickstart on each OS, and publishes nothing.
+3. **Merge it, then tag the merge commit on `main`:**
    ```bash
    git switch main && git pull mapcv main
    git tag v0.2.0 && git push mapcv v0.2.0
    ```
-3. **Approve the `pypi` deployment** when GitHub asks. The release workflow first checks that the tag is on `main`, matches both version files and has a dated CHANGELOG section; builds abi3 wheels for Linux, macOS and Windows plus the sdist; tests the wheels on every OS and the sdist; and only then waits for approval to publish to PyPI and create the GitHub release.
+4. **Approve the `pypi` deployment** when GitHub asks. The release workflow first checks that the tag is on `main`, matches both version files and has a dated CHANGELOG section; builds abi3 wheels for Linux (x86-64 and aarch64, glibc and musl), macOS and Windows plus the sdist; tests every wheel on its platform (including Alpine) with the test suite and an end-to-end CLI journey, and the sdist; and only then waits for approval to publish to PyPI and create the GitHub release.
 
 ## How to Submit a Contribution
 

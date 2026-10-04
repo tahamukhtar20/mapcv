@@ -47,6 +47,31 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
     pretty_exceptions_enable=False,
 )
+
+
+def _make_output_encodable() -> None:
+    """Keep non-ASCII output (→ ✓ ⚠ box drawing) from crashing on legacy code pages.
+
+    On Windows, redirected or piped output (``mapcv plan x.yaml > plan.txt``, CI
+    logs) uses the locale code page such as cp1252, which cannot encode these
+    characters. Redirected streams switch to UTF-8; a terminal on a legacy code
+    page keeps it and shows ``?`` for characters it cannot display.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        reconfigure = getattr(stream, "reconfigure", None)
+        if encoding in ("utf8", "utf8sig") or reconfigure is None:
+            continue
+        try:
+            if stream.isatty():
+                reconfigure(errors="replace")
+            else:
+                reconfigure(encoding="utf-8")
+        except (OSError, ValueError):  # pragma: no cover - exotic stream objects
+            continue
+
+
+_make_output_encodable()
 _console = Console()
 
 _DOCS_URL = "https://tahamukhtar20.github.io/mapcv"

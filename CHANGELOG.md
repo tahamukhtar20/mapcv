@@ -10,7 +10,7 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 
 - **EOPF Sentinel-2 L2A Zarr input** (`pip install "mapcv[zarr]"`): lazy windowed reads, band selection, 10/20/60 m harmonization on the product's own pixel grid, labels aligned in the native UTM CRS, and bands-first `float32` NPY patches.
 - **Leakage-safe splits by default.** The new `spatial` strategy keeps whole raster blocks in one split and leaves out train/val patches that overlap a held-out patch, so test scores are not inflated by shared pixels.
-- **Python 3.14 and one wheel per platform.** Stable-ABI (abi3) wheels for Linux x86-64, macOS and Windows cover Python 3.10 and newer.
+- **Python 3.14 and one wheel per platform.** Stable-ABI (abi3) wheels cover Python 3.10 and newer on Linux (x86-64 and aarch64, glibc and musl), macOS and Windows, so Docker on Apple Silicon, AWS Graviton, Raspberry Pi and Alpine install without a Rust toolchain.
 - **Bounded memory for large regions.** XYZ tiles are fetched per chunk instead of all at once; labels and resume compatibility are checked before the first download, and a resumed run fetches only the chunks it still needs. Labels are reprojected in one pass and each chunk rasterizes only the polygons near it.
 - **Stable class IDs.** Integer labels are used as mask values, other labels are numbered in sorted order, and `labels.classes` pins IDs explicitly.
 - **A CLI that walks you through it.** `mapcv init` asks about imagery, area, zoom and labels and writes a commented config; `mapcv plan` estimates tiles, patches, download size and memory without downloading; `generate` previews the plan, asks before large jobs and ends with a summary of files, classes and splits; `mapcv info` describes an existing dataset.
@@ -59,6 +59,7 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 - Validate `url_template` placeholders when the config loads (for example, a leftover `{s}`).
 
 **EOPF**
+- Retry Sentinel-2 window reads up to 4 times when the object store times out or a band comes back empty, instead of failing the run on the first error.
 - A band that fails to read is an error instead of a silent all-NaN band, and a pixel is valid only when every band has data.
 - Accept Windows drive and `file:///C:/` paths; reject URLs with credentials, query strings or fragments at validation.
 
@@ -67,6 +68,7 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 - Build the image crate with only the PNG, JPEG, WebP and GIF codecs, dropping 56 dependencies including the unmaintained `paste`.
 
 **CLI and security**
+- On Windows, redirected or piped output (`mapcv plan x.yaml > plan.txt`, CI logs) no longer crashes with `UnicodeEncodeError`.
 - Print each warning once, also under `--quiet`; warn when most tiles fail under `policy: ignore`; say why a resume was refused.
 - `mapcv.__version__`, and uppercase argument names in `--help` with Typer 0.27.
 - Keep secrets out of manifests and `mapcv validate` output; show deprecation notices; report generation errors without a traceback; `mapcv init` links the provider guidance.

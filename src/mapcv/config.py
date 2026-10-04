@@ -328,13 +328,14 @@ class MapcvConfig(BaseModel):
         return self
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "MapcvConfig":
+    def from_yaml(cls, path: Union[str, "os.PathLike[str]"]) -> "MapcvConfig":
         """Load and validate a mapcv YAML file.
 
         Relative paths in the file (``labels.path``, ``writer.staging_dir`` and a
         local ``imagery.path``) are resolved against the file's folder, so a
         config works from any working directory.
         """
+        path = Path(path)
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             _resolve_relative_paths(data, path.parent)

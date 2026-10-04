@@ -1,0 +1,24 @@
+name: Workflow security (zizmor)
+
+# Static analysis of the GitHub Actions workflows (injection, excessive
+# permissions, unpinned actions); findings appear in GitHub code scanning.
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ ".github/workflows/**" ]
+  pull_request:
+    paths: [ ".github/workflows/**" ]
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@v0.6.4

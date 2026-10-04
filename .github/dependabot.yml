@@ -8,6 +8,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
     groups:
       python-dependencies:
         patterns: ["*"]
@@ -20,6 +22,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
     groups:
       rust-dependencies:
         patterns: ["*"]
@@ -32,6 +36,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]

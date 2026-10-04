@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import warnings
 from math import pi
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
+import shapely
 from shapely.geometry import MultiPolygon, Polygon as ShapelyPolygon
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
@@ -43,6 +44,24 @@ def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
     """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857)."""
     result: BaseGeometry = shapely_transform(_to_mercator, geom)
     return result
+
+
+def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> List[BaseGeometry]:
+    """Reproject many WGS-84 geometries to Web Mercator in one vectorized pass.
+
+    Same values as :func:`transform_to_mercator` per geometry, but one shapely call
+    for the whole list instead of one per geometry. Z coordinates are dropped.
+    """
+    if not geometries:
+        return []
+
+    def project(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        mx, my = _to_mercator(coords[:, 0], coords[:, 1])
+        return np.column_stack((mx, my))
+
+    array = np.empty(len(geometries), dtype=object)
+    array[:] = list(geometries)
+    return list(shapely.transform(array, project))
 
 
 MAX_CLASS_ID = 255

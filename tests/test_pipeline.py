@@ -173,3 +173,29 @@ def test_generate_warns_when_failed_tiles_stay_in_patches(
         run_generate(config)
 
     assert any("filled with black" in str(w.message) for w in caught) is warns
+
+
+@pytest.mark.parametrize("all_touched", [False, True])
+def test_windowed_label_selection_matches_full_rasterization(all_touched: bool) -> None:
+    from shapely.geometry import box as make_box
+
+    from mapcv.pipeline import _geometries_in_window, _label_bounds
+    from mapcv.rasterizer import rasterize
+
+    rng = np.random.default_rng(7)
+    geometries = []
+    for _ in range(400):
+        x, y = rng.uniform(0, 1000, 2)
+        w, h = rng.uniform(0.3, 40, 2)
+        # Overlapping boxes with mixed classes: order decides the burned value.
+        geometries.append((make_box(x, y, x + w, y + h), int(rng.integers(1, 4))))
+    bounds = _label_bounds(geometries)
+    for _ in range(25):
+        col, row = rng.integers(0, 900, 2)
+        height, width = rng.integers(1, 120, 2)
+        transform = (1.0, 0.0, float(col), 0.0, -1.0, 1000.0 - float(row))
+        nearby = _geometries_in_window(geometries, bounds, transform, int(height), int(width))
+        assert len(nearby) < len(geometries)
+        expected = rasterize(geometries, (int(height), int(width)), transform, all_touched)
+        actual = rasterize(nearby, (int(height), int(width)), transform, all_touched)
+        np.testing.assert_array_equal(actual, expected)

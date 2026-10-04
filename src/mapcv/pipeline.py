@@ -8,10 +8,11 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Optional, Tuple
+from typing import Any, DefaultDict, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import numpy.typing as npt
+import shapely
 from rich.console import Console
 from shapely.geometry import box
 from rich.progress import (
@@ -32,7 +33,7 @@ from mapcv.imagery import (
     open_raster_source,
     transform_geometry_to_crs,
 )
-from mapcv.labels import GeomWithClass, parse_geojson, parse_kml, transform_to_mercator
+from mapcv.labels import GeomWithClass, parse_geojson, parse_kml, transform_all_to_mercator
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import PatchMeta, SamplerConfig, sample_patches_at_anchors
 from mapcv.splitter import SplitterConfig, split_dataset
@@ -116,7 +117,8 @@ def _parse_labels(
         raw, class_map = parse_geojson(data, labels.label_field, labels.classes)
 
     if destination_crs.upper() == "EPSG:3857":
-        transformed = [(transform_to_mercator(geometry), class_id) for geometry, class_id in raw]
+        projected = transform_all_to_mercator([geometry for geometry, _ in raw])
+        transformed = [(geometry, class_id) for geometry, (_, class_id) in zip(projected, raw)]
     else:
         transformed = [
             (transform_geometry_to_crs(geometry, destination_crs), class_id)
@@ -159,11 +161,47 @@ def _warn_if_labels_miss_raster(
         warnings.warn(LABELS_MISS_MESSAGE, UserWarning, stacklevel=2)
 
 
+def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:
+    """(N, 4) minx, miny, maxx, maxy per label geometry, computed once per run."""
+    if not geometries:
+        return np.empty((0, 4), dtype=np.float64)
+    array = np.empty(len(geometries), dtype=object)
+    array[:] = [geometry for geometry, _ in geometries]
+    return cast(npt.NDArray[np.float64], shapely.bounds(array))
+
+
+def _geometries_in_window(
+    geometries: List[GeomWithClass],
+    bounds: npt.NDArray[np.float64],
+    transform: Tuple[float, float, float, float, float, float],
+    height: int,
+    width: int,
+) -> List[GeomWithClass]:
+    """Label geometries whose bounding box touches the window, in their original order.
+
+    Order matters: later polygons overwrite earlier ones when rasterized.
+    """
+    a, b, c, d, e, f = transform
+    if b or d:  # rotated grid: no cheap window bounds, keep everything
+        return geometries
+    xs = sorted((c, c + a * width))
+    ys = sorted((f, f + e * height))
+    pad = abs(a) + abs(e)  # one pixel of slack for all_touched edges
+    hit = (
+        (bounds[:, 0] <= xs[1] + pad)
+        & (bounds[:, 2] >= xs[0] - pad)
+        & (bounds[:, 1] <= ys[1] + pad)
+        & (bounds[:, 3] >= ys[0] - pad)
+    )
+    return [geometries[index] for index in np.flatnonzero(hit)]
+
+
 def _process_anchor_chunk(
     source: WindowedRasterSource,
     anchors: List[Tuple[int, int]],
     config: MapcvConfig,
     geometries: List[GeomWithClass],
+    label_bounds: Optional[npt.NDArray[np.float64]] = None,
 ) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
     patch_size = config.sampler.patch_size
     row_start = min(row for row, _ in anchors)
@@ -175,10 +213,16 @@ def _process_anchor_chunk(
     local_anchors = [(row - row_start, col - col_start) for row, col in anchors]
     mask: Optional[npt.NDArray[np.uint8]] = None
     if geometries:
+        window_transform = offset_transform(source.metadata.transform, row_start, col_start)
+        if label_bounds is None:
+            label_bounds = _label_bounds(geometries)
+        nearby = _geometries_in_window(
+            geometries, label_bounds, window_transform, image.shape[0], image.shape[1]
+        )
         mask = rasterize(
-            geometries,
+            nearby,
             (image.shape[0], image.shape[1]),
-            offset_transform(source.metadata.transform, row_start, col_start),
+            window_transform,
             config.labels.all_touched if config.labels else False,
         )
 
@@ -206,6 +250,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     try:
         geometries, class_map = _parse_labels(config, source.metadata.crs)
         _warn_if_labels_miss_raster(geometries, source)
+        label_bounds = _label_bounds(geometries)
         patch_shape = (
             [len(source.metadata.bands), config.sampler.patch_size, config.sampler.patch_size]
             if config.writer.image_format == "npy"
@@ -250,7 +295,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
             for chunk_index, chunk_anchors in chunks:
                 images, masks, metadata = _process_anchor_chunk(
-                    source, chunk_anchors, config, geometries
+                    source, chunk_anchors, config, geometries, label_bounds
                 )
                 write_patches(
                     images,

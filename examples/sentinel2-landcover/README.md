@@ -79,7 +79,7 @@ import numpy as np
 from pathlib import Path
 
 for path in sorted(Path("dataset/Images").glob("*.npy")):
-    empty = np.isnan(np.load(path)).all(axis=(1, 2))   # one flag per band
+    empty = np.isnan(np.load(path)).all(axis=(1, 2))  # one flag per band
     if empty.any():
         print(path.name, "has empty band(s):", np.flatnonzero(empty))
 ```
@@ -106,7 +106,7 @@ model-ready tensor layout with no transposing:
 ```python
 import numpy as np
 
-patch = np.load("dataset/Images/patch_0000000.npy")   # (4, 128, 128) float32
+patch = np.load("dataset/Images/patch_0000000.npy")  # (4, 128, 128) float32
 red, green, blue, nir = patch
 ndvi = (nir - red) / (nir + red)
 ```

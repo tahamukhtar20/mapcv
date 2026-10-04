@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Protocol, Set, Tuple
@@ -64,8 +65,8 @@ def offset_transform(transform: Transform, row: int, col: int) -> Transform:
     return (a, b, c + col * a + row * b, d, e, f + col * d + row * e)
 
 
-def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> BaseGeometry:
-    """Transform a WGS-84 geometry into ``destination_crs``."""
+@lru_cache(maxsize=8)
+def _wgs84_transformer(destination_crs: str) -> Any:
     try:
         from pyproj import Transformer
     except ImportError as exc:  # pragma: no cover - exercised by optional-extra smoke tests
@@ -73,9 +74,12 @@ def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> B
             "Non-Web-Mercator imagery requires the Zarr dependencies. "
             "Install them with 'pip install mapcv[zarr]'."
         ) from exc
+    return Transformer.from_crs("EPSG:4326", destination_crs, always_xy=True)
 
-    transformer = Transformer.from_crs("EPSG:4326", destination_crs, always_xy=True)
-    return shapely_transform(transformer.transform, geometry)
+
+def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> BaseGeometry:
+    """Transform a WGS-84 geometry into ``destination_crs``."""
+    return shapely_transform(_wgs84_transformer(destination_crs).transform, geometry)
 
 
 def _safe_product_id(path_or_url: str) -> str:

@@ -537,3 +537,25 @@ def test_labels_config_normalizes_classes_and_checks_suffix() -> None:
         config(path="labels.geojson", classes={"a": 1})
     with pytest.raises(ValueError, match="convert KMZ"):
         config(path="labels.kmz")
+
+
+def test_transform_all_to_mercator_matches_per_geometry() -> None:
+    from shapely.geometry import MultiPolygon, Polygon
+
+    from mapcv.labels import transform_all_to_mercator
+
+    geometries = [
+        Polygon([(4.9, 52.3), (5.0, 52.3), (5.0, 52.4), (4.9, 52.3)]),
+        Polygon(
+            [(-10, -10), (10, -10), (10, 10), (-10, 10)],
+            holes=[[(-1, -1), (1, -1), (1, 1), (-1, -1)]],
+        ),
+        MultiPolygon(
+            [Polygon([(170, 60), (179, 60), (179, 70)]), Polygon([(0, 0), (1, 0), (1, 1)])]
+        ),
+    ]
+    vectorized = transform_all_to_mercator(geometries)
+    assert [g.geom_type for g in vectorized] == [g.geom_type for g in geometries]
+    for fast, slow in zip(vectorized, (transform_to_mercator(g) for g in geometries)):
+        assert fast.equals_exact(slow, tolerance=0)
+    assert transform_all_to_mercator([]) == []

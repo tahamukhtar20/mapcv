@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import numpy as np
 import pytest
@@ -11,6 +11,7 @@ from shapely.geometry import Point
 
 from mapcv.config import EOPFZarrImageryConfig, RegionConfig
 from mapcv.imagery import (
+    BandGapError,
     EOPFZarrRasterSource,
     transform_geometry_to_crs,
 )
@@ -151,11 +152,60 @@ def test_eopf_band_that_comes_back_empty_fails_the_read(
         return dataset
 
     monkeypatch.setattr(xr, "open_dataset", dataset_with_failed_band)
+    waits: List[float] = []
+    monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
     source = EOPFZarrRasterSource(
         _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
     )
-    with pytest.raises(RuntimeError, match="band b04 returned no data"):
+    with pytest.raises(RuntimeError, match="failed 4 times; last error: band b04 returned no"):
         source.read_window(0, source.metadata.height, 0, source.metadata.width)
+    assert waits == [2.0, 5.0, 10.0]
+
+
+def test_eopf_read_retries_transient_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "S2_TEST.zarr"
+    product.mkdir()
+    monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset())
+    waits: List[float] = []
+    monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
+    source = EOPFZarrRasterSource(
+        _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
+    )
+    read_once = source._read_window_once
+    failures = [TimeoutError("408 Request Timeout"), BandGapError("band b04 returned no data")]
+
+    def flaky(*args: Any) -> Any:
+        if failures:
+            raise failures.pop(0)
+        return read_once(*args)
+
+    monkeypatch.setattr(source, "_read_window_once", flaky)
+    image, valid = source.read_window(0, source.metadata.height, 0, source.metadata.width)
+    assert waits == [2.0, 5.0]
+    assert valid.all() and image.shape[-1] == 2
+
+
+def test_eopf_read_does_not_retry_bad_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "S2_TEST.zarr"
+    product.mkdir()
+    monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset())
+    waits: List[float] = []
+    monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
+    source = EOPFZarrRasterSource(
+        _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
+    )
+
+    def bad(*args: Any) -> Any:
+        raise ValueError("selected EOPF variables must resolve to two-dimensional rasters")
+
+    monkeypatch.setattr(source, "_read_window_once", bad)
+    with pytest.raises(ValueError, match="two-dimensional"):
+        source.read_window(0, 1, 0, 1)
+    assert waits == []
 
 
 def test_eopf_pixel_is_invalid_when_any_band_is_missing(

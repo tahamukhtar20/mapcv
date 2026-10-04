@@ -31,10 +31,11 @@ mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built w
 
 | Platform | Wheel |
 | --- | --- |
-| Linux x86-64 | yes |
-| macOS | yes |
-| Windows | yes |
-| Other (for example Linux aarch64) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
+| Linux x86-64 and aarch64 (glibc, e.g. Ubuntu, Debian, Docker on Apple Silicon) | yes |
+| Linux x86-64 and aarch64 (musl, e.g. Alpine) | yes |
+| macOS (Intel and Apple Silicon) | yes |
+| Windows x86-64 | yes |
+| Other (for example Windows on ARM) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
 
 The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich and PyYAML. There is no GDAL, rasterio or PROJ dependency for XYZ imagery.
 

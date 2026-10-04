@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -314,6 +315,18 @@ def _snap_bounds_to_grid(
     )
 
 
+class BandGapError(RuntimeError):
+    """One band came back empty while the others had data (a failed read)."""
+
+
+# Remote EOPF reads (object store over HTTPS) time out now and then; a window is
+# read up to this many times, waiting the listed seconds between attempts.
+EOPF_READ_ATTEMPTS = 4
+EOPF_RETRY_DELAYS = (2.0, 5.0, 10.0)
+# Errors that mean the request or the configuration is wrong; retrying cannot help.
+_NOT_RETRYABLE = (ValueError, TypeError, KeyError, IndexError, NotImplementedError)
+
+
 def _check_band_coverage(
     finite: npt.NDArray[np.bool_], bands: List[str], row_start: int, row_stop: int
 ) -> None:
@@ -328,7 +341,7 @@ def _check_band_coverage(
         return
     for index, band in enumerate(bands):
         if not np.any(finite[..., index] & has_any):
-            raise RuntimeError(
+            raise BandGapError(
                 f"band {band} returned no data for rows {row_start}-{row_stop} while other "
                 "bands did; the read probably failed (e.g. a network timeout). Run the same "
                 "command again to resume from this chunk."
@@ -454,6 +467,24 @@ class EOPFZarrRasterSource:
         )
 
     def read_window(
+        self, row_start: int, row_stop: int, col_start: int, col_stop: int
+    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+        """Read a window, retrying transient failures (timeouts, empty bands)."""
+        for attempt in range(1, EOPF_READ_ATTEMPTS + 1):
+            try:
+                return self._read_window_once(row_start, row_stop, col_start, col_stop)
+            except _NOT_RETRYABLE:
+                raise
+            except Exception as exc:  # noqa: BLE001 - network stacks raise many types
+                if attempt == EOPF_READ_ATTEMPTS:
+                    raise RuntimeError(
+                        f"reading rows {row_start}-{row_stop} failed {attempt} times; last "
+                        f"error: {exc}"
+                    ) from exc
+                time.sleep(EOPF_RETRY_DELAYS[min(attempt, len(EOPF_RETRY_DELAYS)) - 1])
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _read_window_once(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
     ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         window = self._dataset[self._bands].isel(

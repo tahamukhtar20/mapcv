@@ -71,6 +71,10 @@ jobs:
     - name: Run pytest with branch coverage
       run: uv run pytest --cov=mapcv --cov-branch --cov-report=term --cov-report=xml --cov-fail-under=65
 
+    - name: End-to-end user journey (real CLI, wizard, generate, resume, split)
+      shell: bash
+      run: uv run python tests/e2e/journey.py --version "$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
+
     - name: Upload Python coverage
       if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
       uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

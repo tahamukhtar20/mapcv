@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  # Dry run: build and test every artifact on every platform, publish nothing.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,12 +14,15 @@ jobs:
   # ── Version consistency check ─────────────────────────────────────────────────
   check-version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Verify the tag points at a commit on main
+        if: github.event_name == 'push'
         run: |
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -26,17 +31,20 @@ jobs:
           fi
       - name: Verify CHANGELOG.md has a dated section for this version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           python scripts/changelog_section.py "$VERSION" > /dev/null
           if ! grep -Eq "^## \[${VERSION//./\\.}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
             echo "::error::Date the CHANGELOG.md heading, e.g. '## [${VERSION}] - $(date +%F)'"
             exit 1
           fi
       - name: Verify tag matches pyproject.toml and Cargo.toml
+        id: versions
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
           PYPROJECT=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           CARGO=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          # A dry run (no tag) checks the version files against each other.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then TAG="${GITHUB_REF_NAME#v}"; else TAG="$PYPROJECT"; fi
+          echo "version=$PYPROJECT" >> "$GITHUB_OUTPUT"
 
           echo "Tag:          $TAG"
           echo "pyproject.toml: $PYPROJECT"
@@ -52,24 +60,34 @@ jobs:
           fi
           echo "All versions match: $TAG"
 
-  # ── Linux (manylinux, x86-64) ────────────────────────────────────────────────
+  # ── Linux: glibc (manylinux) and musl (Alpine), x86-64 and aarch64 ───────────
+  # aarch64 builds natively on ARM runners; Docker on Apple Silicon, Graviton and
+  # Raspberry Pi use these wheels.
   linux:
     needs: check-version
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64, libc: manylinux, manylinux: auto, sdist: --sdist }
+          - { runner: ubuntu-24.04-arm, target: aarch64, libc: manylinux, manylinux: auto, sdist: "" }
+          - { runner: ubuntu-latest, target: x86_64, libc: musllinux, manylinux: musllinux_1_2, sdist: "" }
+          - { runner: ubuntu-24.04-arm, target: aarch64, libc: musllinux, manylinux: musllinux_1_2, sdist: "" }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
-          target: x86_64
-          manylinux: auto
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           command: build
           # abi3 (cp310-abi3): one wheel serves Python 3.10 and newer.
-          args: --release --locked --sdist -o dist
+          args: --release --locked ${{ matrix.sdist }} -o dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wheels-linux-x86_64
+          # wheels-linux-x86_64 also carries the sdist.
+          name: ${{ matrix.libc == 'manylinux' && 'wheels-linux' || 'wheels-musllinux' }}-${{ matrix.target }}
           path: dist
 
   # ── macOS (universal2 — runs on both Intel and Apple Silicon) ────────────────
@@ -115,17 +133,19 @@ jobs:
 
   # ── Test the wheels on every OS and the sdist before publishing ──────────────
   test-wheel:
-    needs: [linux, macos, windows]
+    needs: [check-version, linux, macos, windows]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         python: ["3.10", "3.14"]
         include:
           - { os: ubuntu-latest, python: "3.11" }
           - { os: ubuntu-latest, python: "3.12" }
           - { os: ubuntu-latest, python: "3.13" }
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -152,6 +172,11 @@ jobs:
           wheels = glob.glob("dist/*.whl")
           assert wheels, "no wheels built"
           assert all("-cp310-abi3-" in whl for whl in wheels), wheels
+          platforms = ("manylinux", "musllinux", "macosx", "win_amd64")
+          for tag in platforms:
+              assert any(tag in whl for whl in wheels), (tag, wheels)
+          for arch in ("x86_64", "aarch64"):
+              assert sum(arch in whl for whl in wheels) >= 2, (arch, wheels)
           for whl in wheels:
               with zipfile.ZipFile(whl) as zf:
                   name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
@@ -164,8 +189,7 @@ jobs:
           EOF
       - name: Install the built wheel and test dependencies
         run: |
-          # Pin the tag's version so pip cannot pick a newer release from PyPI.
-          VERSION="${GITHUB_REF_NAME#v}"
+          # Pin the version so pip cannot pick a newer release from PyPI.
           pip install --only-binary mapcv --find-links dist "mapcv==${VERSION}"
           python -c "import mapcv"
           if [ "${{ matrix.python }}" != "3.14" ]; then
@@ -176,6 +200,44 @@ jobs:
         run: |
           mv src src.unused
           pytest --cov=mapcv --cov-branch --cov-fail-under=65
+      - name: End-to-end user journey (installed CLI, wizard, generate, resume, split)
+        run: python tests/e2e/journey.py --version "$VERSION"
+      - name: Live quickstart with Esri imagery (dry run only)
+        if: github.event_name == 'workflow_dispatch' && matrix.python == '3.14'
+        continue-on-error: true
+        working-directory: examples/quickstart
+        run: |
+          mapcv generate mapcv.yaml --yes
+          mapcv info dataset
+
+  # Alpine (musl) has no glibc; run the musllinux wheels in a python:alpine container.
+  test-musl:
+    needs: [check-version, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64 }
+          - { runner: ubuntu-24.04-arm, target: aarch64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheels-musllinux-${{ matrix.target }}
+          path: dist
+      - name: Test the wheel on Alpine
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: >-
+          docker run --rm -e VERSION -v "$PWD:/src" -w /src
+          python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+          sh -euc 'pip install -q --require-hashes -r .github/requirements/release-test.txt
+          && pip install -q --only-binary :all: --find-links dist "mapcv==$VERSION"
+          && mv src src.unused && python -m pytest -q
+          && python tests/e2e/journey.py --version "$VERSION"'
 
   test-sdist:
     needs: [linux]
@@ -202,7 +264,8 @@ jobs:
 
   # ── Publish to PyPI (OIDC only; needs approval in the pypi environment) ──────
   publish-pypi:
-    needs: [test-wheel, test-sdist]
+    if: github.event_name == 'push'
+    needs: [test-wheel, test-musl, test-sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -220,6 +283,7 @@ jobs:
   # Build provenance for every wheel and the sdist: stored by GitHub (verify with
   # `gh attestation verify <file> --repo tahamukhtar20/mapcv`) and attached to the release.
   github-release:
+    if: github.event_name == 'push'
     needs: publish-pypi
     runs-on: ubuntu-latest
     permissions:

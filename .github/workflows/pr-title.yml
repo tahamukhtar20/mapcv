@@ -1,7 +1,8 @@
 name: PR title
 
+# pull_request (not pull_request_target): the check needs no secrets or write access.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, synchronize, reopened]
 
 permissions:

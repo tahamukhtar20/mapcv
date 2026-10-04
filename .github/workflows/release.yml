@@ -247,9 +247,9 @@ jobs:
           python scripts/changelog_section.py "${GITHUB_REF_NAME#v}" > release-notes.md
           cp "$BUNDLE" "mapcv-${GITHUB_REF_NAME#v}.intoto.jsonl"
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: |
-            dist/*
-            mapcv-*.intoto.jsonl
-          body_path: release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/* mapcv-*.intoto.jsonl
+          --repo "$GITHUB_REPOSITORY" --verify-tag
+          --title "$GITHUB_REF_NAME" --notes-file release-notes.md

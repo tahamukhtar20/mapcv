@@ -188,7 +188,10 @@ html {
 
 .hero h1 {
   font-size: clamp(2.6rem, 6vw, 4rem);
-  line-height: 1.05;
+  line-height: 1.15;
+  /* Gradient text is painted only inside the element's box; the bottom padding
+     keeps descenders (g, p, y) from being cut off. */
+  padding-bottom: 0.08em;
   background: linear-gradient(120deg, var(--sl-color-white) 30%, var(--sl-color-accent) 100%);
   -webkit-background-clip: text;
   background-clip: text;

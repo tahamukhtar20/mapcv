@@ -1,0 +1,4 @@
+# Generated datasets. Never commit them: they contain third-party imagery.
+dataset/
+dataset-*/
+.ipynb_checkpoints/

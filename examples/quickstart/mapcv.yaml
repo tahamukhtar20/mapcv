@@ -1,0 +1,38 @@
+# mapcv quickstart: building footprints over Amsterdam's Eastern Docklands.
+# Run from this folder (paths below are relative to it):
+#   mapcv plan mapcv.yaml && mapcv generate mapcv.yaml && mapcv info dataset
+#
+# Imagery: Esri World Imagery. Check Esri's terms before using or sharing the
+# result: https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md
+# Labels: © OpenStreetMap contributors, ODbL 1.0 (see README.md).
+
+region:                      # WGS-84 lon/lat; snapped outward to whole tiles
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: xyz
+  zoom: 18                   # ≈ 0.36 m/px at this latitude
+  source: esri_satellite
+  max_connections: 4         # small and polite: 77 tiles in total
+
+labels:
+  path: buildings.geojson
+  label_field: class         # every feature has class "building" -> mask value 1
+  # Try `label_field: building` for one class per OSM building type instead.
+
+sampler:
+  patch_size: 256            # one tile per patch at zoom 18
+  edge_strategy: drop        # the region is snapped to tiles, so nothing is dropped
+
+writer:
+  staging_dir: ./dataset
+  image_format: png
+
+split:
+  strategy: spatial          # whole blocks go to one split: no leakage between splits
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42

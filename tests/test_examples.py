@@ -19,6 +19,11 @@ _MAX_LABEL_BYTES = 300_000
 
 runner = CliRunner()
 
+# The sdist leaves examples/ out to stay small; these tests run from a git checkout.
+pytestmark = pytest.mark.skipif(
+    not _EXAMPLES.is_dir(), reason="examples/ is not shipped in the source distribution"
+)
+
 
 def test_documented_examples_exist() -> None:
     names = {path.parent.name for path in _CONFIGS}

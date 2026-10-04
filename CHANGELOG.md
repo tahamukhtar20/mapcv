@@ -4,62 +4,66 @@ All notable changes to this project will be documented in this file.
 
 ## [0.2.0] - Unreleased
 
-See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) for upgrade steps.
+mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 support, and fixes several ways 0.1 could silently produce wrong datasets. See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) before upgrading: configs and datasets need small changes.
 
-### Features
+### Highlights
 
-- Add optional EOPF Sentinel-2 L2A Zarr input (`pip install "mapcv[zarr]"`) with lazy window reads, band selection, resolution harmonization, native-CRS label alignment, and bands-first `float32` NPY output.
-- Add a discriminated `imagery` configuration block (`xyz` | `eopf_zarr`).
-- Add `labels.classes` for explicit label → class ID mapping, and read KML `<SimpleData>` labels (QGIS/ogr2ogr exports).
-- Upgrade manifests to version 2, recording source, product, bands, dtype, patch shape, CRS, affine transform, and sampler settings.
-- Compute sampling anchors over the whole raster, so patches cross former strip seams without loss or duplication.
-- Add a leakage-safe `spatial` split strategy (now the default) that keeps whole raster blocks in one split and leaves out train/val patches overlapping a held-out patch.
+- **EOPF Sentinel-2 L2A Zarr input** (`pip install "mapcv[zarr]"`): lazy windowed reads, band selection, 10/20/60 m harmonization on the product's own pixel grid, labels aligned in the native UTM CRS, and bands-first `float32` NPY patches.
+- **Leakage-safe splits by default.** The new `spatial` strategy keeps whole raster blocks in one split and leaves out train/val patches that overlap a held-out patch, so test scores are not inflated by shared pixels.
+- **Python 3.14 and one wheel per platform.** Stable-ABI (abi3) wheels for Linux x86-64, macOS and Windows cover Python 3.10 and newer.
+- **Bounded memory for large regions.** XYZ tiles are fetched per chunk instead of all at once; labels and resume compatibility are checked before the first download, and a resumed run fetches only the chunks it still needs.
+- **Stable class IDs.** Integer labels are used as mask values, other labels are numbered in sorted order, and `labels.classes` pins IDs explicitly.
+- **Manifest version 2** records the source, product, bands, dtype, patch shape, CRS, affine transform and sampler settings.
 
 ### Breaking changes
 
-- Remove the built-in `google_satellite` preset; configs that use it fail validation.
-- `sampler.mode: random` draws `random_count` patches in total rather than per strip.
-- 0.1.x (manifest v1) datasets can be split but not resumed by `mapcv generate`.
-- Resuming requires the same imagery, labels, and sampler settings.
-- `imagery.type` is required.
+- New `imagery:` block (`type: xyz` or `eopf_zarr`); `imagery.type` is required.
+- The built-in `google_satellite` and `osm` tile presets are removed (provider terms forbid bulk downloading); configs using them fail validation with an explanation.
 - The default split strategy is `spatial` instead of `stratified`.
-- Class IDs no longer depend on feature order: integer labels are used as IDs, other labels are numbered in sorted order.
+- Class IDs no longer follow feature order; set `labels.classes` to reproduce 0.1 IDs.
+- `sampler.mode: random` draws `random_count` patches in total rather than per strip, and grid patches may cross former strip seams.
+- 0.1 datasets (manifest v1) can still be split but not resumed; resuming any dataset requires the same imagery, labels and sampler settings.
+- `max_failed_ratio` applies to each chunk of tiles rather than the whole region.
+- Removed Python APIs: `download_region_strips`, `iter_tile_strips`, `TilesConfig` and `hello()`. `sample_patches` remains, and its metadata now includes `empty_ratio`.
+- The `zarr` extra supports Python 3.10–3.13 until its zarr 2 dependency ships Python 3.14 wheels.
 
 ### Deprecations
 
-- `region.zoom` and the `tiles` block, replaced by `imagery` with `type: xyz`. Both are removed in 0.3.0.
+- `region.zoom` and the `tiles` block are accepted with a deprecation notice and will be removed in 0.3.0.
 
-### Bug Fixes
+### Fixes
 
-- Save the manifest after every chunk and overwrite orphaned files from interrupted runs.
-- Snap EOPF reads to the product pixel grid so native-resolution bands are not resampled.
-- Accept Windows drive and `file:///C:/` EOPF paths.
-- Treat black-filled failed XYZ tiles as empty for `max_empty_ratio`.
-- Keep secrets out of manifests and `mapcv validate` output; reject EOPF URLs with credentials, query strings, or fragments at validation.
-- Report generation errors without a traceback.
-- `stratified` splits now stratify the train/val/test assignment by labeled fraction and dominant class, not only the subsample.
-- Name labeled-ratio folders exactly (`0.29` → `29/`, `0.125` → `12.5/`) and reject ratios outside (0, 1] or duplicates.
-- Overwrite stale split lists when splitting an empty manifest.
-- Reject more than 255 classes instead of wrapping KML class IDs to 0 or reusing IDs, and treat `3` and `3.0` as one class.
-- Reject non-WGS-84 GeoJSON `crs` members, truncated KML, and non-finite coordinates; accept spaces after commas in KML coordinates and keep polygons inside GeometryCollections.
-- Warn with counts when features are skipped (no polygon, no label, or unmapped label), and reject unsupported label file types up front.
-- Retry truncated tile responses and apply the failure policy instead of aborting the whole download; count non-image responses (HTML error pages, empty bodies) as failed tiles.
-- Honour `Retry-After` on 429/5xx with jittered backoff, identify requests with a contact URL in the User-Agent, and raise `ValueError` for an invalid policy or connection count.
-- Enforce `max_failed_ratio` for any capitalization of `lenient`, and validate `url_template` placeholders up front.
-- Fetch XYZ tiles per chunk instead of holding the whole region in memory, so labels and resume compatibility are checked before any download, memory stays bounded to about one chunk of tiles, and a resumed run downloads only the chunks it still needs. `max_failed_ratio` now applies to each chunk.
-- Warn when no label polygon intersects the imagery (for example swapped longitude/latitude).
+**Datasets and resume**
+- Save the manifest after every chunk and overwrite orphaned files from interrupted runs, so a resume can no longer pair entries with the wrong files.
+- Count black or failed XYZ tiles as empty for `max_empty_ratio` again.
+- `stratified` splits now stratify the train/val/test assignment (by labeled fraction and dominant class), not only the subsample; labeled-ratio folders are named exactly (`0.29` → `29/`) and stale split lists are overwritten.
+
+**Labels**
+- More than 255 classes is an error instead of wrapping KML IDs to background or reusing class 1; `3` and `3.0` are one class.
+- Read QGIS/ogr2ogr `<SimpleData>` labels, tolerate spaces after commas in coordinates, keep polygons inside GeometryCollections, and put the outer ring first.
+- Reject projected GeoJSON `crs` members, truncated KML, non-finite coordinates and unsupported label files (`.kmz`, `.shp`) instead of producing empty masks.
+- Warn with counts when features are skipped and when no label intersects the imagery.
+
+**Tile downloads**
+- Retry truncated responses and apply the failure policy instead of aborting the run; count HTML error pages and empty bodies as failed tiles.
+- Honour `Retry-After` with jittered backoff, identify requests with a contact URL, and enforce `max_failed_ratio` for any capitalization of `lenient`.
+- Validate `url_template` placeholders when the config loads (for example, a leftover `{s}`).
+
+**EOPF**
+- Accept Windows drive and `file:///C:/` paths; reject URLs with credentials, query strings or fragments at validation.
+
+**CLI and security**
+- Keep secrets out of manifests and `mapcv validate` output; show deprecation notices; report generation errors without a traceback; `mapcv init` links the provider guidance.
 
 ### Documentation
 
-- Add `PROVIDERS.md` on imagery licensing and credentials, and link it from `mapcv init`.
-- Add `MIGRATION.md` and matching website pages.
+- `PROVIDERS.md` on imagery licensing, provider terms and credentials; `MIGRATION.md`; matching website pages.
 
-### CI/CD
+### Packaging and CI
 
-- Support Python 3.14 by upgrading PyO3 to 0.29, and ship stable-ABI (abi3) wheels: one wheel per platform for Python 3.10 and newer. The optional `zarr` extra stays on Python 3.10–3.13 until its zarr 2 dependency ships Python 3.14 wheels.
-- Test Python 3.10–3.14, enforce branch coverage, and check wheel metadata before publishing.
-- Add a PR-title policy, grouped Dependabot updates, an EOPF smoke-test workflow, and issue/PR templates.
-- Publish project URLs and keywords on PyPI, set minimum versions for runtime dependencies, and slim the sdist from 4.5 MB to 0.2 MB.
+- PyO3 0.29, committed `Cargo.lock` and `--locked` builds; project URLs, keywords and dependency floors on PyPI; a 0.2 MB sdist (was 4.5 MB).
+- CI tests Python 3.10–3.14 with branch coverage; releases are cut only from `main`, test every wheel and the sdist, wait for approval before publishing, and use this changelog as release notes.
+- PR-title policy, grouped Dependabot updates, an EOPF smoke-test workflow and issue/PR templates.
 
 ## [0.1.0] - 2026-05-04
 

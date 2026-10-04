@@ -1,0 +1,189 @@
+---
+title: Use your dataset
+description: Load mapcv patches, masks, splits and the manifest in NumPy or PyTorch, handle NoData, and compute class weights.
+---
+
+import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`mapcv generate` leaves you a folder of plain files. This page shows how to read them. The format is specified in [Dataset format](/mapcv/reference/dataset-format/); here is the short version:
+
+<FileTree>
+- dataset/
+  - Images/ patch_0000000.png (RGB uint8) or .npy (bands-first float32)
+  - Masks/ patch_0000000.png (uint8: 0 = background, 1..255 = class)
+  - manifest.json class names, bands, CRS, per-patch stats
+  - splits/
+    - train.txt
+    - val.txt
+    - test.txt
+    - 10/labeled.txt, 10/unlabeled.txt, …
+</FileTree>
+
+## Read a split
+
+Each split file lists image file names, one per line. The mask has the same stem; take its exact name from the manifest because masks are always `.png`:
+
+```python
+import json
+from pathlib import Path
+
+root = Path("dataset")
+manifest = json.loads((root / "manifest.json").read_text())
+mask_of = {p["filename"]: p["mask_filename"] for p in manifest["patches"]}
+
+train = (root / "splits" / "train.txt").read_text().split()
+pairs = [(root / "Images" / name, root / "Masks" / mask_of[name]) for name in train]
+```
+
+## Load one patch with NumPy
+
+<Tabs syncKey="source">
+  <TabItem label="XYZ (PNG/JPG)">
+    ```python
+    import numpy as np
+    from PIL import Image
+
+    image_path, mask_path = pairs[0]
+    image = np.asarray(Image.open(image_path).convert("RGB"))   # (H, W, 3) uint8
+    mask = np.asarray(Image.open(mask_path))                    # (H, W) uint8
+    ```
+  </TabItem>
+  <TabItem label="Sentinel-2 (NPY)">
+    ```python
+    import numpy as np
+    from PIL import Image
+
+    image_path, mask_path = pairs[0]
+    image = np.load(image_path)                  # (bands, H, W) float32, order = manifest["bands"]
+    mask = np.asarray(Image.open(mask_path))     # (H, W) uint8
+    print(manifest["bands"])                     # e.g. ['b04', 'b03', 'b02', 'b08']
+    ```
+
+    Values are decoded surface reflectance (typically 0–1). Pixels without data are `NaN`.
+  </TabItem>
+</Tabs>
+
+## Class names
+
+`class_map` maps label values to mask IDs; `0` is always background. When the config had no `label_field`, `class_map` is empty and every polygon is `1`.
+
+```python
+names = {cid: name for name, cid in manifest["class_map"].items()}
+names.setdefault(0, "background")
+num_classes = max(names) + 1          # IDs need not be contiguous if you pinned them
+```
+
+## A PyTorch `Dataset`
+
+This class covers both sources, turns NoData into an ignore index, and also works for image-only datasets. The repository has a maintained copy in [`examples/scripts/torch_dataset.py`](https://github.com/tahamukhtar20/mapcv/tree/main/examples/scripts).
+
+```python title="mapcv_dataset.py"
+import json
+from pathlib import Path
+
+import numpy as np
+import torch
+from PIL import Image
+from torch.utils.data import Dataset
+
+IGNORE_INDEX = 255  # pass the same value to your loss, e.g. CrossEntropyLoss(ignore_index=255)
+
+
+class MapcvDataset(Dataset):
+    """Image/mask pairs from one split of a mapcv dataset."""
+
+    def __init__(self, root, split="train", ignore_nodata=True):
+        self.root = Path(root)
+        manifest = json.loads((self.root / "manifest.json").read_text())
+        mask_of = {p["filename"]: p["mask_filename"] for p in manifest["patches"]}
+        names = (self.root / "splits" / f"{split}.txt").read_text().split()
+        self.items = [(name, mask_of[name]) for name in names]
+        self.class_map = manifest["class_map"]
+        self.bands = manifest["bands"]
+        self.ignore_nodata = ignore_nodata
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, index):
+        image_name, mask_name = self.items[index]
+        path = self.root / "Images" / image_name
+        if path.suffix == ".npy":
+            image = np.load(path)                          # (bands, H, W) float32
+            nodata = np.isnan(image).any(axis=0)           # NaN = no data
+            image = np.nan_to_num(image, nan=0.0)
+        else:
+            rgb = np.asarray(Image.open(path).convert("RGB"))  # (H, W, 3) uint8
+            nodata = (rgb == 0).all(axis=-1)               # black = failed tile / padding
+            image = rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
+        image = torch.from_numpy(np.ascontiguousarray(image))
+
+        if mask_name is None:                              # image-only dataset
+            return image
+        mask = np.asarray(Image.open(self.root / "Masks" / mask_name), dtype=np.int64)
+        if self.ignore_nodata:
+            mask = np.where(nodata, IGNORE_INDEX, mask)
+        return image, torch.from_numpy(mask)
+```
+
+```python
+from torch.utils.data import DataLoader
+
+train = MapcvDataset("dataset", split="train")
+val = MapcvDataset("dataset", split="val")
+loader = DataLoader(train, batch_size=8, shuffle=True, num_workers=2)
+images, masks = next(iter(loader))   # (8, C, H, W) float32, (8, H, W) int64
+```
+
+Run against the [Buildings tutorial](/mapcv/tutorials/buildings-from-aerial-imagery/) dataset, `train[0]` gives a `(3, 256, 256)` image and a `(256, 256)` mask with values `{0, 1}`; against the [Sentinel-2 tutorial](/mapcv/tutorials/land-cover-from-sentinel-2/), a `(4, 128, 128)` image and values `{0, 1, 2, 3, 4}`. For a full training loop, see [Train a model on your dataset](/mapcv/tutorials/train-a-model/).
+
+## NoData and ignore pixels
+
+mapcv masks have no special "ignore" value: pixels outside the imagery are `0`, the same as background. Decide how to treat them in your loader:
+
+- **XYZ:** pixels that are black in all three channels come from failed tiles (`policy: lenient` or `ignore`), from `edge_strategy: pad`, or from the provider's own NoData. The class above maps them to `IGNORE_INDEX`. Real black roofs or shadows are rare but possible; set `ignore_nodata=False` if that matters more.
+- **Sentinel-2:** `NaN` marks missing data; replace it before feeding a network (the class uses `0`). Padded areas from `edge_strategy: pad` are `0`, not `NaN`, so prefer `edge_strategy: drop` for Sentinel-2 (the `sentinel2` template does).
+- To keep mostly-empty patches out entirely, set `sampler.max_empty_ratio` (for example `0.2`) when generating. Each manifest entry's `empty_ratio` tells you how empty a patch is.
+
+## Normalise inputs
+
+- **XYZ RGB:** divide by 255, then optionally apply ImageNet mean/std if you fine-tune an ImageNet-pretrained encoder.
+- **Sentinel-2:** compute per-band mean and standard deviation over the **train** split only (ignoring `NaN`), then standardise:
+
+```python
+import numpy as np
+
+stack = np.stack([np.load(image_path) for image_path, _ in pairs])   # (N, bands, H, W)
+mean = np.nanmean(stack, axis=(0, 2, 3))
+std = np.nanstd(stack, axis=(0, 2, 3))
+```
+
+## Class weights from the manifest
+
+Every manifest entry carries `per_class_pixel_counts`, so class frequencies need no image reads:
+
+```python
+from collections import Counter
+
+train_names = set(train)
+counts = Counter()
+for p in manifest["patches"]:
+    if p["filename"] in train_names:
+        counts.update({int(k): v for k, v in p["per_class_pixel_counts"].items()})
+total = sum(counts.values())
+weights = {cid: total / (len(counts) * n) for cid, n in sorted(counts.items())}
+```
+
+`mapcv info dataset` prints the same class shares over the whole dataset.
+
+## Semi-supervised subsets
+
+`splits/<percent>/labeled.txt` holds a random `<percent>` % of `train.txt`, and `unlabeled.txt` the rest. With the class above, `MapcvDataset("dataset", split="10/labeled")` loads the labeled 10 %; for the unlabeled part, use the images and ignore the masks. Change the fractions with `split.labeled_ratios` in the config or `mapcv split --labeled-ratios`.
+
+## Map predictions back to the ground
+
+Each patch's `row` and `col`, together with the manifest's `transform` and `crs`, give its footprint in map coordinates. A snippet is in [Dataset format → manifest](/mapcv/reference/dataset-format/#patch-entries). Use it to write predictions as georeferenced rasters with your GIS tool of choice.
+
+<Aside type="tip">
+Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.
+</Aside>

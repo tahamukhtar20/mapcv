@@ -1,0 +1,43 @@
+---
+title: Spatial leakage
+description: Why random patch-level splits overstate accuracy on map imagery, what mapcv's spatial split does about it, and what it cannot do for you.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A test set is supposed to tell you how a model does on data it has never seen. With map imagery, a random split of patches quietly breaks that promise.
+
+## Why random splits leak
+
+**Overlapping patches share pixels.** With `stride` smaller than `patch_size`, or with random sampling, two patches can contain the same pixels. If one lands in train and the other in test, the model is tested on pixels it was trained on.
+
+**Neighbouring patches share almost everything else.** Even without overlap, adjacent patches show the same buildings cut in half, the same field, the same roof material, the same acquisition date, sun angle and haze. Nearby things are more alike than distant things (spatial autocorrelation), so a test patch next to a train patch is far easier than a patch from a new area.
+
+A model can score well on such a split by recognising local context instead of learning the concept, and the score drops when it is deployed somewhere else. Kattenborn et al. showed this effect for convolutional neural networks on remote-sensing imagery: validation samples that are spatially autocorrelated with the training samples inflate the measured performance.
+
+> Kattenborn, T., Schiefer, F., Frey, J., Feilhauer, H., Mahecha, M. D., & Dormann, C. F. (2022). Spatially autocorrelated training and validation samples inflate performance assessment of convolutional neural networks. *ISPRS Open Journal of Photogrammetry and Remote Sensing*, 5, 100018. [doi:10.1016/j.ophoto.2022.100018](https://doi.org/10.1016/j.ophoto.2022.100018)
+
+## What mapcv does
+
+The default `split.strategy: spatial`:
+
+1. **Splits by area, not by patch.** The raster is divided into square blocks (`block_size`, 4 × `patch_size` by default) and each block goes entirely to train, val or test. Most neighbours of a test patch are therefore test patches too.
+2. **Removes overlap across splits.** Train or val patches whose footprint overlaps a test patch, and train patches overlapping a val patch, are left out of every list. No pixel appears in two splits.
+3. **Warns about leaky choices.** If you pick `stratified` or `random` for a dataset whose patches overlap or repeat, mapcv writes the split but warns that it leaks pixels.
+
+```text
+✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%)
+  69 train/val patch(es) overlapping a held-out patch were left out
+```
+
+The cost: some patches are discarded when patches overlap, and split ratios are approximate because blocks move as a whole. [Splits without leakage](/mapcv/guides/splits-without-leakage/) shows how to tune this.
+
+## What it cannot do
+
+- **Patches along block borders still touch.** A test block's edge patches sit next to train patches. Larger blocks make this a smaller share of the test set.
+- **One region is one distribution.** All blocks come from the same city or scene, date and sensor. A spatial split measures generalisation to *nearby* unseen areas. To claim more (another city, country or season), hold out a separate region: generate a second dataset with its own config and use it as the test set.
+- **Labels can leak too.** If labels were drawn by a model trained on the same area, or if a region's labels are systematically shifted, no split will reveal it.
+
+<Aside type="tip">
+When you report results, say how the split was made: strategy, block size in metres (block pixels × pixel size from `mapcv plan`), and seed. With those settings, anyone with the manifest can reproduce the split with `mapcv split`. The split settings are not stored in the dataset folder, so keep the config next to it.
+</Aside>

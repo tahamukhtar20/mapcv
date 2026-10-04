@@ -1,0 +1,163 @@
+---
+title: Train a model on your dataset
+description: Train a small U-Net on a mapcv dataset with PyTorch — loading splits, ignoring NoData, augmenting, and measuring IoU on a spatially held-out test set.
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This tutorial trains a small U-Net on a mapcv dataset in plain PyTorch. It works unchanged on the RGB building dataset from [Buildings from aerial imagery](/mapcv/tutorials/buildings-from-aerial-imagery/) and on the four-band dataset from [Land cover from Sentinel-2](/mapcv/tutorials/land-cover-from-sentinel-2/). The goal is a correct, honest baseline, not a state-of-the-art score.
+
+**You need:** a mapcv dataset with labels and splits, and `pip install torch numpy pillow`. A GPU helps but is not required for these small datasets.
+
+A notebook version is in the repository: [`examples/notebooks/02-train-a-segmentation-model.ipynb`](https://github.com/tahamukhtar20/mapcv/tree/main/examples/notebooks).
+
+<Steps>
+
+1. ### Load the splits
+
+   Save the `MapcvDataset` class from [Use your dataset](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) as `mapcv_dataset.py`. It reads `splits/<split>.txt`, returns `(image, mask)` tensors shaped `(C, H, W)` and `(H, W)`, and marks NoData pixels with `IGNORE_INDEX = 255`.
+
+   ```python
+   import torch
+   from torch import nn
+   from torch.utils.data import DataLoader
+
+   from mapcv_dataset import IGNORE_INDEX, MapcvDataset
+
+   root = "dataset"
+   train_ds = MapcvDataset(root, split="train")
+   val_ds = MapcvDataset(root, split="val")
+   test_ds = MapcvDataset(root, split="test")
+
+   in_channels = len(train_ds.bands)                                # 3 for RGB, 4 for b04/b03/b02/b08
+   num_classes = max(train_ds.class_map.values(), default=1) + 1    # + background
+   print(len(train_ds), len(val_ds), len(test_ds), in_channels, num_classes)
+   ```
+
+2. ### Normalise the inputs
+
+   The dataset class scales RGB to 0–1 and returns Sentinel-2 reflectance as is. Standardise each band with statistics from the **train** split only (this works for both):
+
+   ```python
+   stack = torch.stack([train_ds[i][0] for i in range(len(train_ds))])   # (N, C, H, W)
+   mean = stack.mean(dim=(0, 2, 3)).view(1, -1, 1, 1)
+   std = stack.std(dim=(0, 2, 3)).view(1, -1, 1, 1).clamp(min=1e-6)
+
+   def normalise(x):
+       return (x - mean.to(x.device)) / std.to(x.device)
+   ```
+
+   For a large dataset, compute the statistics on a sample instead of stacking everything.
+
+3. ### Define a small U-Net
+
+   ```python
+   def block(c_in, c_out):
+       return nn.Sequential(
+           nn.Conv2d(c_in, c_out, 3, padding=1), nn.BatchNorm2d(c_out), nn.ReLU(inplace=True),
+           nn.Conv2d(c_out, c_out, 3, padding=1), nn.BatchNorm2d(c_out), nn.ReLU(inplace=True),
+       )
+
+
+   class TinyUNet(nn.Module):
+       def __init__(self, in_channels, num_classes, width=32):
+           super().__init__()
+           self.enc1 = block(in_channels, width)
+           self.enc2 = block(width, width * 2)
+           self.enc3 = block(width * 2, width * 4)
+           self.pool = nn.MaxPool2d(2)
+           self.up2 = nn.ConvTranspose2d(width * 4, width * 2, 2, stride=2)
+           self.dec2 = block(width * 4, width * 2)
+           self.up1 = nn.ConvTranspose2d(width * 2, width, 2, stride=2)
+           self.dec1 = block(width * 2, width)
+           self.head = nn.Conv2d(width, num_classes, 1)
+
+       def forward(self, x):
+           e1 = self.enc1(x)
+           e2 = self.enc2(self.pool(e1))
+           e3 = self.enc3(self.pool(e2))
+           d2 = self.dec2(torch.cat([self.up2(e3), e2], dim=1))
+           d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+           return self.head(d1)
+   ```
+
+   Patch sizes must be divisible by 4 for this network; 128 and 256 are. For real projects, a pretrained encoder (for example from `segmentation-models-pytorch`) will do much better, especially on small datasets.
+
+4. ### Measure IoU
+
+   Intersection-over-union per class, from a confusion matrix that skips ignored pixels:
+
+   ```python
+   @torch.no_grad()
+   def per_class_iou(model, dataset, device):
+       confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
+       model.eval()
+       for x, y in DataLoader(dataset, batch_size=8):
+           pred = model(normalise(x.to(device))).argmax(dim=1).cpu()
+           keep = y != IGNORE_INDEX
+           confusion += torch.bincount(
+               y[keep] * num_classes + pred[keep], minlength=num_classes**2
+           ).reshape(num_classes, num_classes)
+       intersection = confusion.diag().float()
+       union = confusion.sum(0).float() + confusion.sum(1).float() - intersection
+       return intersection / union.clamp(min=1)
+   ```
+
+5. ### Train
+
+   ```python
+   device = "cuda" if torch.cuda.is_available() else "cpu"
+   model = TinyUNet(in_channels, num_classes).to(device)
+   optimiser = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+   loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
+   loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=2)
+
+   best = 0.0
+   for epoch in range(30):
+       model.train()
+       for x, y in loader:
+           # Flips and 90° rotations are label-preserving for overhead imagery.
+           if torch.rand(1) < 0.5:
+               x, y = x.flip(-1), y.flip(-1)
+           k = int(torch.randint(4, (1,)))
+           x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
+
+           x, y = normalise(x.to(device)), y.to(device)
+           loss = loss_fn(model(x), y)
+           optimiser.zero_grad()
+           loss.backward()
+           optimiser.step()
+
+       val_iou = per_class_iou(model, val_ds, device)
+       print(f"epoch {epoch:2d}  loss {loss.item():.3f}  val mIoU {val_iou.mean():.3f}")
+       if val_iou.mean() > best:
+           best = val_iou.mean().item()
+           torch.save(model.state_dict(), "best.pt")
+   ```
+
+   Use the val split to choose the checkpoint, learning rate and epochs. With rare classes (buildings were ~16 % of pixels), consider class weights from the manifest: see [Use your dataset → class weights](/mapcv/guides/use-your-dataset/#class-weights-from-the-manifest), then pass `weight=` to `CrossEntropyLoss`.
+
+6. ### Test once
+
+   ```python
+   model.load_state_dict(torch.load("best.pt"))
+   test_iou = per_class_iou(model, test_ds, device)
+   for cid, value in enumerate(test_iou.tolist()):
+       print(cid, f"{value:.3f}")
+   print("test mIoU", test_iou.mean().item())
+   ```
+
+   Report this number, computed once, after all choices were made on val. Because the default split is `spatial`, the test patches come from blocks of the map the model never saw, so the score is a fair estimate of how it does on new areas nearby (see [Spatial leakage](/mapcv/concepts/spatial-leakage/)).
+
+</Steps>
+
+<Aside type="caution" title="Tiny datasets give noisy scores">
+The tutorial datasets have a few dozen patches and only a handful in val and test. They are good for checking that the pipeline works, not for comparing models. Generate a larger region (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)) before drawing conclusions, and try several split seeds (`mapcv split dataset --seed 1`, `--seed 2`, …).
+</Aside>
+
+## Going further
+
+<CardGrid>
+  <LinkCard title="Semi-supervised training" description="Use splits/<percent>/labeled.txt and unlabeled.txt for label-budget experiments." href="/mapcv/guides/splits-without-leakage/#semi-supervised-subsets" />
+  <LinkCard title="Map predictions back" description="Turn patch predictions into georeferenced outputs with the manifest transform." href="/mapcv/reference/dataset-format/" />
+</CardGrid>

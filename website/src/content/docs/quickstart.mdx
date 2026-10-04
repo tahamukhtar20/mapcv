@@ -1,0 +1,235 @@
+---
+title: Quickstart
+description: Build a labeled building-segmentation dataset in five minutes with mapcv init, plan, generate and info.
+---
+
+import { Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
+
+In five minutes you will build a small, labeled dataset of building footprints over Amsterdam's Eastern Docklands: Esri aerial imagery at about 0.7 m per pixel, OpenStreetMap building polygons as labels, cut into 256 × 256 patches with a leakage-safe train/val/test split.
+
+You need Python 3.10+ and an internet connection. Everything below is real output from `mapcv` 0.2.0.
+
+<Steps>
+
+1. ### Install
+
+   ```bash
+   pip install mapcv
+   ```
+
+   Check it worked with `mapcv --version`. More options: [Installation](/mapcv/installation/).
+
+2. ### Get some labels
+
+   Make a working folder and download the example building outlines (959 OpenStreetMap polygons, © OpenStreetMap contributors, ODbL):
+
+   ```bash
+   mkdir buildings && cd buildings
+   curl -LO https://raw.githubusercontent.com/tahamukhtar20/mapcv/main/examples/quickstart/buildings.geojson
+   ```
+
+   Any polygon GeoJSON or KML in longitude/latitude works the same way; see [Prepare labels](/mapcv/guides/prepare-labels/).
+
+3. ### Write a config with `mapcv init`
+
+   `mapcv init` asks four questions. Give it the label file as the area, and press <kbd>Enter</kbd> to accept every default:
+
+   ```console
+   $ mapcv init
+   ╭─ mapcv init ─────────────────────────────────────────────────────────────────────────╮
+   │ Answer a few questions to get a working config. Press Enter to accept a default.     │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+   1/4 Imagery
+     esri       Esri World Imagery — sub-metre RGB (check Esri's terms)
+     sentinel2  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)
+     custom     your own XYZ tile URL
+   Imagery [esri/sentinel2/custom] (esri):
+
+   2/4 Area
+   Area: a bounding box west,south,east,north or a .geojson/.kml file: buildings.geojson
+   Using the extent of 959 polygon(s): 4.93504, 52.37121 → 4.95188, 52.37779
+     zoom    pixel size
+       15    2.92 m
+       16    1.46 m
+       17    0.73 m
+       18    0.36 m
+       19    0.18 m
+   Zoom (17):
+
+   3/4 Labels
+   Use buildings.geojson as the labels too? [y/n] (y):
+     field       example values
+     class       building
+     osm_id      way/1075729446, way/1075729447, way/1075731905, …
+     building    house, apartments, houseboat, yes, retail
+   Which field holds the class? (blank = every polygon is class 1) ():
+
+   4/4 Patches and output
+   Patch size in pixels (256):
+   Output folder (./dataset):
+   Split into train/val/test (spatial, no leakage)? [y/n] (y):
+
+   ✓ Wrote mapcv.yaml
+
+   Next
+     1. See what it will cost:  mapcv plan mapcv.yaml
+     2. Build the dataset:      mapcv generate mapcv.yaml
+   ```
+
+   The result is a short, commented YAML file you can edit and commit:
+
+   ```yaml title="mapcv.yaml"
+   region:
+     west: 4.935035
+     south: 52.371209
+     east: 4.951879
+     north: 52.377794
+
+   imagery:
+     type: xyz
+     zoom: 17
+     source: esri_satellite
+     max_connections: 4         # keep requests modest
+
+   labels:
+     path: "buildings.geojson"
+     label_field: null
+
+   sampler:
+     patch_size: 256
+     stride: 0                  # 0 = no overlap
+     mode: grid
+     edge_strategy: pad
+
+   writer:
+     staging_dir: "./dataset"
+     image_format: png
+
+   split:
+     strategy: spatial
+     test_ratio: 0.20
+     val_ratio: 0.10
+   ```
+
+   <Aside type="tip" title="No terminal prompts?">
+   In scripts and CI, start from a template instead: `mapcv init mapcv.yaml --template xyz` (or `--template sentinel2`), then edit the region and label path. Without a file name, `--template` prints the config to stdout.
+   </Aside>
+
+4. ### Check the cost with `mapcv plan`
+
+   `plan` reads the labels and does the tile math, but downloads nothing:
+
+   ```console
+   $ mapcv plan mapcv.yaml
+   ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────╮
+   │ Region   4.935035, 52.371209 → 4.951879, 52.377794  (≈ 1.1 × 0.7 km)                 │
+   │ Imagery  esri_satellite · zoom 17 (≈ 0.73 m/px)                                      │
+   │ Raster   1,792 × 1,280 px · 35 tiles (≈ 875.0 KB to download)                        │
+   │ Labels   buildings.geojson · 959 polygon(s) · every polygon is class 1               │
+   │ Patches  ≈ 35 × 256 px (grid, stride 256)                                            │
+   │ Output   dataset · png (≈ 3.9 MB)                                                    │
+   │ Split    spatial · test 0.2 · val 0.1                                                │
+   │ Memory   ≈ 18.4 MB per chunk                                                         │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+   Imagery terms are your responsibility: check the provider's license, attribution and
+   rate limits (https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
+
+   Looks right? Build it with mapcv generate mapcv.yaml
+   ```
+
+   Warnings appear under the panel, for example when label features are skipped. Sizes are estimates.
+
+5. ### Build it with `mapcv generate`
+
+   ```console
+   $ mapcv generate mapcv.yaml
+   ╭─ Plan for mapcv.yaml ─────────────────── (same panel as above) ──────────────────────╮
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:33 • eta 0:00:00
+   ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
+   │ Patches  35                                                                          │
+   │ Shape    256×256×3 uint8                                                             │
+   │ Tiles    35 fetched · 0 failed                                                       │
+   │ Splits   train 25 (71%) · val 3 (9%) · test 7 (20%)                                  │
+   │ Time     33s                                                                         │
+   │ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                          │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+     class         id    pixels
+     background     0     87.9%
+     labelled       1     12.1%
+
+   Next
+     • Inspect it:      mapcv info dataset
+     • Re-split it:     mapcv split dataset --strategy spatial
+     • Train on it:     https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/
+   ```
+
+   If the run is interrupted, run the same command again: finished chunks are kept and it resumes. Jobs over 20,000 tiles or 5 GB ask for confirmation first; pass `--yes` to skip the prompt.
+
+6. ### Inspect it with `mapcv info`
+
+   ```console
+   $ mapcv info dataset
+   ╭─ dataset ────────────────────────────────────────────────────────────────────────────╮
+   │ Source    xyz · esri_satellite                                                       │
+   │ Bands     red, green, blue                                                           │
+   │ Patches   35 · 256×256×3 uint8                                                       │
+   │ CRS       EPSG:3857                                                                  │
+   │ Splits    train 25 (71%) · val 3 (9%) · test 7 (20%)                                 │
+   │ Manifest  version 2                                                                  │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+     class         id    pixels
+     background     0     87.9%
+     labelled       1     12.1%
+   ```
+
+</Steps>
+
+## What you built
+
+<FileTree>
+- buildings/
+  - mapcv.yaml
+  - buildings.geojson
+  - dataset/
+    - Images/ 35 RGB PNG patches, 256 × 256
+      - patch_0000000.png
+      - …
+    - Masks/ 35 single-channel PNGs: 0 = background, 1 = building
+      - patch_0000000.png
+      - …
+    - manifest.json
+    - splits/
+      - train.txt
+      - val.txt
+      - test.txt
+      - 10/
+      - 20/
+      - 30/ labeled/unlabeled subsets of train
+</FileTree>
+
+Load a pair to check that the mask lines up:
+
+```python
+import numpy as np
+from PIL import Image
+
+name = open("dataset/splits/train.txt").read().split()[0]
+image = np.asarray(Image.open(f"dataset/Images/{name}"))   # (256, 256, 3) uint8
+mask = np.asarray(Image.open(f"dataset/Masks/{name}"))     # (256, 256) uint8, values 0/1
+print(name, image.shape, mask.shape, np.unique(mask))
+```
+
+<Aside>
+Your patch counts and split sizes can differ slightly if the example labels are refreshed. The download time depends on the tile server.
+</Aside>
+
+## Where next
+
+<CardGrid>
+  <LinkCard title="Use your dataset" description="Folder layout, loading splits, and a PyTorch Dataset." href="/mapcv/guides/use-your-dataset/" />
+  <LinkCard title="Buildings from aerial imagery" description="The same idea at zoom 18 with named classes, explained step by step." href="/mapcv/tutorials/buildings-from-aerial-imagery/" />
+  <LinkCard title="Land cover from Sentinel-2" description="Multispectral 10 m patches from an EOPF Zarr product." href="/mapcv/tutorials/land-cover-from-sentinel-2/" />
+  <LinkCard title="Configuration reference" description="Every field you can put in mapcv.yaml." href="/mapcv/reference/configuration/" />
+</CardGrid>

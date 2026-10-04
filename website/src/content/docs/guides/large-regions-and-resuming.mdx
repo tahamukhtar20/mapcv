@@ -1,0 +1,144 @@
+---
+title: Large regions and resuming
+description: Plan big jobs, keep memory bounded, survive network failures, and resume interrupted runs safely.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+mapcv is built so that a city-sized job behaves like a small one: it estimates first, works in chunks, saves progress after every chunk, and resumes with the same command.
+
+## 1. Plan first
+
+`mapcv plan` costs nothing and tells you whether the job is reasonable:
+
+```console
+$ mapcv plan big.yaml
+╭─ Plan for big.yaml ──────────────────────────────────────────────────────────────────────────────╮
+│ Region   4.7, 52.25 → 5.05, 52.45  (≈ 23.8 × 22.1 km)                                            │
+│ Imagery  esri_satellite · zoom 19 (≈ 0.18 m/px)                                                  │
+│ Raster   130,816 × 122,368 px · 244,258 tiles (≈ 6.1 GB to download)                             │
+│ Labels   none (image-only dataset)                                                               │
+│ Patches  ≈ 61,184 × 512 px (grid, stride 512)                                                    │
+│ Output   big · png (≈ 26.5 GB)                                                                   │
+│ Memory   ≈ 1.6 GB per chunk                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Things to check:
+
+- **Tiles and download size.** A quarter of a million tiles is a lot of requests to someone else's server. Check the provider's limits ([Providers & licensing](/mapcv/project/providers/)) and consider one zoom level lower: four times fewer tiles.
+- **Output size.** Estimates use typical compression; real PNGs of dense urban imagery can be larger.
+- **Memory per chunk.** See below.
+
+`mapcv generate --dry-run` prints the same plan and exits.
+
+### Large-job confirmation
+
+If a job has more than **20,000 tiles** or more than **5 GB** of estimated download plus output, `mapcv generate` asks before starting:
+
+```text
+This is a large job. Start it? [y/n] (n):
+```
+
+In a script or CI (no terminal), it refuses with exit code 2 instead:
+
+```text
+This is a large job. Re-run with --yes to confirm.
+```
+
+Pass `--yes` (`-y`) once you have read the plan. Add `-q` to drop progress bars from logs: `mapcv -q generate big.yaml --yes`.
+
+## 2. Keep memory bounded
+
+mapcv never holds the whole region in memory. Patch positions are computed once for the whole raster, then the raster is processed in **chunks of rows**, each spanning the full raster width:
+
+| Source | Chunk height | Set with |
+| --- | --- | --- |
+| XYZ | `strip_rows` × 256 px (default 4 → 1,024 px) | `imagery.strip_rows` |
+| Sentinel-2 | `chunk_rows` px (default 1,024) | `imagery.chunk_rows` |
+
+Each chunk reads a window one patch taller than the chunk (so patches that cross a chunk boundary are cut once, whole), rasterizes the labels for that window, writes the patches and saves the manifest. XYZ tiles are fetched per chunk and dropped once the window has moved past them.
+
+Peak memory therefore grows with the **width** of the region and the chunk height, not with its area. The plan's *Memory* line estimates it. If it is too high:
+
+- lower `imagery.strip_rows` (minimum `1`, i.e. 256 px) or `imagery.chunk_rows`, or
+- split a very wide region into several configs, each with its own `writer.staging_dir`.
+
+## 3. Survive failures
+
+**Flaky tile servers.** Every tile gets up to four attempts with backoff (respecting `Retry-After`). What happens to a tile that still fails depends on `imagery.policy`:
+
+- `lenient` (default) leaves it black and carries on, unless more than `max_failed_ratio` (5 %) of a chunk's tiles fail. Then the run stops:
+
+  ```text
+  Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold)
+  Fix the cause and run the same command again: finished chunks are kept and the run resumes.
+  ```
+
+- `strict` stops on the first failed tile, naming its URL (without query string).
+- `ignore` fills failed tiles with black and never stops. Combine it with `sampler.max_empty_ratio` to drop the resulting black patches, and watch the *Tiles … failed* count in the summary.
+
+**Interruptions.** `Ctrl-C`, a crash or a lost connection lose at most the chunk in progress: the manifest is written atomically after each chunk, and any files left over from the unfinished chunk are overwritten on resume.
+
+## 4. Resume
+
+Run the same command again:
+
+```console
+$ mapcv generate mapcv.yaml
+…
+Resuming: 30 patch(es) already written, 0 to go
+```
+
+mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches.
+
+### What must stay the same
+
+A resume is refused, **before** any imagery is read or written, if the existing manifest was produced with a different:
+
+| Recorded field | Changes when you edit… |
+| --- | --- |
+| `class_map` | `labels.label_field`, `labels.classes`, or the set of label values |
+| `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
+| `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY and PNG/JPG |
+| `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
+| `sampler` | any `sampler` field |
+
+```text
+Generation failed: dataset/manifest.json was generated with a different configuration
+(patch_shape, sampler); use a new writer.staging_dir or remove the old dataset
+```
+
+<Aside type="caution" title="That error is not fixed by re-running">
+After a mismatch, the CLI also prints its generic hint *"Fix the cause and run the same command again: finished chunks are kept and the run resumes."* For this error, the fix is to point `writer.staging_dir` at a new folder, or to undo the config change.
+</Aside>
+
+Settings that you **can** change between runs: `split` (it is recomputed), `max_connections`, `policy`, `max_failed_ratio`, `strip_rows`/`chunk_rows`, and `jpg_quality`.
+
+<Aside type="caution" title="Not detected by the resume check">
+The check compares settings, not file contents. Editing polygons in the label file (while keeping the same class values), or switching `image_format` between `png` and `jpg`, is **not** detected and would mix old and new patches in one folder. Use a new `staging_dir` after such changes.
+</Aside>
+
+### Datasets from mapcv 0.1
+
+0.1 manifests (version 1) used per-strip row numbers, so they cannot be resumed:
+
+```text
+dataset/manifest.json is a version-1 manifest from mapcv 0.1.x and cannot be resumed;
+generate into a new writer.staging_dir ('mapcv split' still reads it)
+```
+
+`mapcv split` and `mapcv info` still work on them. See [Migrating to 0.2](/mapcv/project/migration/).
+
+## Checklist for a big run
+
+<Steps>
+
+1. Generate a tiny version first (a few hundred metres) and look at the patches.
+2. `mapcv plan` the full config; check tiles, output size, memory and warnings.
+3. Confirm the provider's terms allow the volume.
+4. Run `mapcv generate --yes` under `nohup`, `tmux` or a job scheduler.
+5. If it stops, fix the cause and run the same command again.
+6. `mapcv info` the result.
+
+</Steps>

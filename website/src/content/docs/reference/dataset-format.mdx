@@ -1,0 +1,147 @@
+---
+title: Dataset format
+description: Folder layout, file naming, image and mask encoding, the manifest v2 JSON schema and the split files written by mapcv.
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the image encoding differs.
+
+<FileTree>
+- dataset/
+  - Images/
+    - patch_0000000.png XYZ: RGB PNG (or .jpg) · Sentinel-2: .npy
+    - patch_0000001.png
+    - …
+  - Masks/ only when the config has labels
+    - patch_0000000.png always PNG, same stem as the image
+    - …
+  - manifest.json
+  - splits/ only after a split
+    - train.txt
+    - val.txt
+    - test.txt
+    - 10/
+      - labeled.txt
+      - unlabeled.txt
+    - 20/
+    - 30/
+</FileTree>
+
+## Files
+
+**Naming.** Patches are numbered `patch_0000000` … in the order they were written (seven digits, zero-padded). The image and its mask share the stem; the mask is always `.png`, so with `image_format: jpg` or `npy` the extensions differ: `Images/patch_0000042.npy` ↔ `Masks/patch_0000042.png`. Use `mask_filename` from the manifest rather than guessing.
+
+| | XYZ (`png` / `jpg`) | Sentinel-2 (`npy`) |
+| --- | --- | --- |
+| Image | RGB, `uint8`, shape `(H, W, 3)` when decoded | NumPy array, `float32`, shape `(bands, H, W)` (bands-first) |
+| Band order | red, green, blue | exactly `imagery.bands` |
+| Values | 0–255 | decoded L2A surface reflectance (typically 0–1) |
+| NoData | black `(0, 0, 0)` pixels (failed tiles, padding, provider NoData) | `NaN` where the product has no data; `0` in padded areas |
+| Mask | single-channel PNG, `uint8`, `(H, W)` | same |
+
+**Masks.** `0` is background (no polygon) and `1..255` are class IDs from the manifest's `class_map`. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. mapcv does not write a separate "ignore" value: padded and NoData pixels are `0` in the mask. To ignore them in training, derive a validity mask from the image (all-black RGB, or `NaN` in any band) and set those mask pixels to your loss's ignore index. See [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
+
+## `manifest.json`
+
+A JSON object describing the dataset and every patch. Version 2 is written by mapcv 0.2; `Manifest.load` and `mapcv split`/`info` also read version 1 (0.1.x).
+
+```json title="dataset/manifest.json (first two patches)"
+{
+  "version": 2,
+  "class_map": { "building": 1 },
+  "source_type": "xyz",
+  "product_id": "esri_satellite",
+  "bands": ["red", "green", "blue"],
+  "dtype": "uint8",
+  "patch_shape": [256, 256, 3],
+  "crs": "EPSG:3857",
+  "transform": [0.5971642834779232, 0.0, 549582.2333704159,
+                0.0, -0.5971642834774684, 6868784.235762509],
+  "sampler": {
+    "patch_size": 256, "stride": 256, "mode": "grid", "edge_strategy": "drop",
+    "pad_mode": "zero", "max_empty_ratio": 1.0, "min_label_ratio": 0.0,
+    "random_seed": 42, "random_count": 100
+  },
+  "patches": [
+    {
+      "filename": "patch_0000000.png",
+      "mask_filename": "patch_0000000.png",
+      "row": 0,
+      "col": 0,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": { "1": 11438, "0": 54098 },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000001.png",
+      "mask_filename": "patch_0000001.png",
+      "row": 0,
+      "col": 256,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": { "1": 22456, "0": 43080 },
+      "empty_ratio": 0.0
+    }
+  ]
+}
+```
+
+### Top-level fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `version` | int | `2` (absent fields in a version-1 manifest take the defaults below) |
+| `class_map` | object | Label value → mask ID. Empty when every polygon is class 1 or there are no labels |
+| `source_type` | string | `"xyz"` or `"eopf_zarr"` |
+| `product_id` | string \| null | XYZ: the built-in source name, or `custom-xyz:<hostname>` for a `url_template` (the template itself is never stored). Sentinel-2: the product's file name |
+| `bands` | list of strings | Channel names in storage order: `red, green, blue` or the configured Sentinel-2 bands |
+| `dtype` | string \| null | `"uint8"` (XYZ) or `"float32"` (Sentinel-2) |
+| `patch_shape` | list of int | `[H, W, 3]` for PNG/JPG, `[bands, H, W]` for NPY |
+| `crs` | string \| null | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2 |
+| `transform` | 6 floats \| null | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
+| `sampler` | object \| null | The resolved `sampler` config (with `stride` filled in). Used for resume checks and spatial splits |
+| `patches` | list | One entry per patch, in file order |
+
+### Patch entries
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `filename` | string | Image file name in `Images/` |
+| `mask_filename` | string \| null | Mask file name in `Masks/`; `null` without labels |
+| `row`, `col` | int | Top-left pixel of the patch in the **whole raster** (version 2). Can point past the edge for `edge_strategy: pad` |
+| `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
+| `strip_index` | int | Index of the processing chunk that wrote the patch (kept under its 0.1 name) |
+| `per_class_pixel_counts` | object | Mask pixel count per class ID, as strings: `{"0": 54098, "1": 11438}`. Empty without labels |
+| `empty_ratio` | float | Fraction of empty pixels (black RGB, or all-NaN bands) in the patch, 0–1 |
+
+To get a patch's footprint in map coordinates:
+
+```python
+import json
+
+manifest = json.load(open("dataset/manifest.json"))
+a, b, c, d, e, f = manifest["transform"]
+size = manifest["sampler"]["patch_size"]
+patch = manifest["patches"][0]
+left, top = c + a * patch["col"], f + e * patch["row"]
+right, bottom = left + a * size, top + e * size
+print(manifest["crs"], (left, bottom, right, top))
+```
+
+<Aside>
+Version-1 manifests (mapcv 0.1) lack `sampler`, `crs` and `transform`, and their `row` is relative to a strip, not the raster. They can be split and inspected, but not resumed.
+</Aside>
+
+## Split files
+
+| File | Content |
+| --- | --- |
+| `splits/train.txt`, `val.txt`, `test.txt` | Image file names (`patch_0000123.png`), one per line |
+| `splits/<percent>/labeled.txt` | The first ⌈ratio × len(train)⌉ names of a shuffled `train.txt` |
+| `splits/<percent>/unlabeled.txt` | The rest of `train.txt` |
+
+`<percent>` is the labeled ratio as a percentage: `0.1` → `10/`, `0.125` → `12.5/`. The three main lists are disjoint. With the `spatial` strategy, some patches may be in **no** list: they overlapped a held-out patch and were left out of train/val (the count is reported as "overlapping patch(es) left out"). With `sample_limit`, patches outside the sample are in no list either.
+
+Files have no trailing newline, so read them with `.read().split()` or `.splitlines()` rather than counting lines with `wc -l`.

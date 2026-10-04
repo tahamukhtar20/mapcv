@@ -1,0 +1,16 @@
+---
+title: Changelog
+description: Release notes for every mapcv version, rendered from CHANGELOG.md.
+tableOfContents: false
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import { Content as Changelog } from '../../../../../CHANGELOG.md';
+
+<Aside type="note">
+Rendered from [`CHANGELOG.md`](https://github.com/tahamukhtar20/mapcv/blob/main/CHANGELOG.md) at build time. Releases are on [PyPI](https://pypi.org/project/mapcv/#history) and [GitHub](https://github.com/tahamukhtar20/mapcv/releases).
+</Aside>
+
+<div class="mapcv-changelog">
+  <Changelog />
+</div>

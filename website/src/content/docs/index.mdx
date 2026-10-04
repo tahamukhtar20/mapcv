@@ -1,51 +1,120 @@
 ---
-title: Home
-description: A high-performance satellite imagery dataset creation tool for computer vision.
+title: mapcv
+description: Turn a region and polygon labels into a ready-to-train semantic-segmentation dataset from aerial XYZ tiles or Sentinel-2, with leakage-safe splits and no GDAL.
 template: splash
 hero:
-  title: mapcv
-  tagline: A high-performance satellite imagery dataset creation tool for computer vision.
+  title: Map polygons in.<br/>Training data out.
+  tagline: >-
+    mapcv turns a region and polygon labels into a ready-to-train segmentation dataset
+    from aerial tiles or Sentinel-2, with spatial splits that don't leak.
+    <p><code class="mapcv-install">pip install mapcv</code></p>
   image:
     file: ../../assets/logo.svg
   actions:
-    - text: Get Started
-      link: /mapcv/introduction/
+    - text: Get started
+      link: /mapcv/quickstart/
       icon: right-arrow
       variant: primary
     - text: GitHub
       link: https://github.com/tahamukhtar20/mapcv
-      icon: external
-      variant: secondary
+      icon: github
+      variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, FileTree, LinkCard } from '@astrojs/starlight/components';
+import TerminalSteps from '../../components/TerminalSteps.astro';
 
-## What is mapcv?
+<p class="mapcv-eyebrow">Three commands</p>
 
-**mapcv** turns a bounding box and optional polygon labels into a ready-to-train image segmentation dataset.
-It reads XYZ map tiles or one EOPF Sentinel-2 L2A Zarr product, aligns KML or GeoJSON annotations, extracts fixed-size patches, and writes them to disk. Base XYZ support does not need GDAL; EOPF support is an optional install that brings in rasterio.
-## Features
+## From config to dataset in minutes
+
+<TerminalSteps />
+
+Real (trimmed) output from the [Quickstart](/mapcv/quickstart/): 959 OpenStreetMap building outlines in Amsterdam, Esri imagery at about 0.7 m per pixel, 35 labeled patches in half a minute.
+
+<p class="mapcv-eyebrow">Why mapcv</p>
+
+## Built for the dataset step, and only that
 
 <CardGrid>
-  <Card title="Rust-accelerated core" icon="rocket">
-    Tile stitching, polygon rasterization, and patch sampling all run in compiled Rust via PyO3, which is orders of magnitude faster than other implementations.
+  <Card title="No GDAL, Rust core" icon="seti:rust">
+    Tile math, fetching, rasterizing, sampling and patch encoding run in Rust. One wheel per
+    platform covers Python 3.10 and newer. `pip install` and go.
   </Card>
-  <Card title="Many tile sources" icon="external">
-    Built-in support for Esri and CartoDB endpoints, plus authorized custom XYZ URL templates.
+  <Card title="Leakage-safe splits" icon="approve-check">
+    The default `spatial` split keeps whole blocks of the map in one split and drops train/val
+    patches that overlap a test patch, so scores aren't inflated by shared pixels.
   </Card>
-  <Card title="Multispectral EOPF Zarr" icon="database">
-    Lazy Sentinel-2 L2A band selection, resolution harmonization, native projected CRS, and bands-first float32 NPY output.
+  <Card title="Aerial tiles or Sentinel-2" icon="seti:image">
+    Esri and CartoDB XYZ presets or your own tile URL, or one Sentinel-2 L2A EOPF Zarr product
+    with band selection at 10, 20 or 60 m.
   </Card>
-  <Card title="KML & GeoJSON labels" icon="pencil">
-    Parse polygon annotations directly from KML or GeoJSON files. Multiclass labels via a configurable field name. Automatic WGS-84 to imagery-CRS projection.
+  <Card title="Large regions, resumable" icon="puzzle">
+    `mapcv plan` estimates tiles, disk and memory first. Generation runs in chunks, saves the
+    manifest after each one, and picks up where it stopped.
   </Card>
-  <Card title="Flexible patch sampling" icon="setting">
-    Grid or random sampling with configurable stride, edge strategies (pad / drop / shift), and empty-patch filtering.
+  <Card title="ML-ready output" icon="seti:pipeline">
+    Image and mask patches with identical names, stable class IDs, a JSON manifest and plain-text
+    split lists. Load them with NumPy, PyTorch or anything else.
   </Card>
-  <Card title="Train / val / test splits" icon="list-format">
-    Stratified or random dataset splitting from the JSON manifest. Configurable labeled-data fractions for semi-supervised workflows.
+  <Card title="Honest about imagery rights" icon="information">
+    mapcv ships no presets for servers that forbid bulk downloads and keeps API keys out of
+    manifests. Licensing stays your call, and the docs tell you what to check.
   </Card>
-  <Card title="Simple CLI" icon="laptop">
-    Run the full pipeline with `mapcv generate config.yaml`. One command, one config file, ready-to-train output.
-  </Card>
+</CardGrid>
+
+<div class="mapcv-split">
+<div>
+
+<p class="mapcv-eyebrow">What you get</p>
+
+## A folder you can train on
+
+<FileTree>
+- dataset/
+  - Images/
+    - patch_0000000.png RGB patch (or bands-first float32 .npy)
+    - …
+  - Masks/
+    - patch_0000000.png same name, uint8 class IDs
+    - …
+  - manifest.json source, CRS, transform, class map, per-patch stats
+  - splits/
+    - train.txt
+    - val.txt
+    - test.txt
+    - 10/ labeled.txt and unlabeled.txt for semi-supervised work
+      - labeled.txt
+      - unlabeled.txt
+</FileTree>
+
+See [Dataset format](/mapcv/reference/dataset-format/) for every field.
+
+</div>
+<div>
+
+<p class="mapcv-eyebrow">How it compares</p>
+
+## Where mapcv fits
+
+mapcv does one job: it writes a static, reproducible segmentation dataset from map imagery and polygons.
+
+- **[TorchGeo](https://github.com/microsoft/torchgeo)** samples patches on the fly from GeoTIFFs inside PyTorch and ships many benchmark datasets. Pick it if your imagery already lives in rasters and you train in PyTorch.
+- **[Raster Vision](https://github.com/azavea/raster-vision)** covers the full workflow from data to trained model and prediction. Pick it if you want one framework end to end.
+- **GDAL/rasterio scripts** handle every raster format and projection. mapcv supports a deliberately narrow set of inputs (XYZ tiles, one Sentinel-2 EOPF product per run) so it can install without GDAL.
+
+The tools combine well: a mapcv dataset is plain files, so you can train it with any library.
+
+</div>
+</div>
+
+<p class="mapcv-eyebrow">Next</p>
+
+## Pick your path
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="Build a labeled dataset of buildings in five minutes." href="/mapcv/quickstart/" />
+  <LinkCard title="Tutorials" description="Buildings from aerial imagery, land cover from Sentinel-2, then train a model." href="/mapcv/tutorials/buildings-from-aerial-imagery/" />
+  <LinkCard title="Use your dataset" description="Load patches, masks and splits in NumPy or PyTorch." href="/mapcv/guides/use-your-dataset/" />
+  <LinkCard title="Configuration reference" description="Every YAML field, its default and how it is validated." href="/mapcv/reference/configuration/" />
 </CardGrid>

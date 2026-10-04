@@ -1,0 +1,113 @@
+---
+title: Troubleshooting
+description: Common mapcv errors and warnings, what they mean, and how to fix them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Messages below are quoted from mapcv 0.2.0. Use your browser's find (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd>) with a few words of your error.
+
+<Aside type="tip">
+Most problems show up in `mapcv plan`, which downloads nothing. Run it after every config change.
+</Aside>
+
+## Config errors
+
+mapcv lists every invalid field at once, then exits with code 1:
+
+```text
+Config error in bad1.yaml:
+  • region: region.west must be less than region.east
+  • imagery.source: the built-in 'google_satellite' source was removed in mapcv 0.2.0: Google does not
+permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
+  • labels.path: labels.path must be a .kml, .geojson, or .json file, got 'buildings.shp' (convert KMZ or
+Shapefiles to GeoJSON first)
+Fix the fields above, or start from a working config with mapcv init.
+```
+
+| Message | Fix |
+| --- | --- |
+| `Config file not found: …` | Check the path, or create one with `mapcv init` |
+| `imagery.type is required: 'xyz' or 'eopf_zarr'` | Add `type:` to the `imagery` block |
+| `region.west must be less than region.east` (or south/north) | Coordinates are swapped. The order is west, south, east, north in degrees |
+| `the built-in 'google_satellite' source was removed …` | Google's terms do not allow it. Choose another source ([Migrating to 0.2](/mapcv/project/migration/#google-imagery-preset)) |
+| `the built-in 'osm' source was removed …` | OSM's tile servers forbid bulk downloads. Use a commercial or self-hosted OSM tile service via `url_template`, or use OSM *data* as labels ([Prepare labels](/mapcv/guides/prepare-labels/#use-openstreetmap-data-as-labels)) |
+| `unknown tile source '…'; built-in sources: …` | Typo in `source`, or use `url_template` |
+| `imagery: provide either 'source' or 'url_template'` | Add one of them |
+| `url_template must contain {x}, {y} and {z}; missing …` | Add the placeholders |
+| `url_template has unsupported placeholder(s) {s} (replace {s} with one subdomain, e.g. 'a')` | Write e.g. `https://a.tile.example.com/{z}/{x}/{y}.png` |
+| `EOPF Zarr imagery requires writer.image_format='npy'` | Set `writer.image_format: npy` |
+| `XYZ imagery supports writer.image_format 'png' or 'jpg'` | `npy` is only for Sentinel-2 |
+| `labels.classes requires labels.label_field` | Name the property that holds the class |
+| `labels.classes['…'] must be an integer in 1..255` | IDs are mask values; 0 is background |
+| `imagery.path must not contain credentials, query strings, or fragments; …` | Only local or anonymous public products are supported. Download private products first |
+| `provide 'imagery' or legacy 'tiles', not both` | Remove the old `tiles` block |
+| `Input should be 'spatial', 'stratified' or 'random'` | Typo in `split.strategy` or `--strategy` |
+
+`Deprecated: 'tiles' and 'region.zoom' are deprecated; …` is a notice, not an error: the config still works in 0.2. Move the settings into `imagery` ([Migrating to 0.2](/mapcv/project/migration/)).
+
+<Aside type="caution" title="Typos in field names are ignored">
+Unknown keys are silently ignored, so `stide: 128` leaves `stride` at its default. `mapcv validate` prints the resolved settings: check them.
+</Aside>
+
+## Labels
+
+**`Warning: no label polygon intersects the imagery extent, so every mask will be background.`** The polygons don't overlap the region. Usually longitude and latitude are swapped in the file (`[52.37, 4.94]` instead of `[4.94, 52.37]`), the file is in a projected CRS without a `crs` member, or the region is elsewhere. Open the file in QGIS or geojson.io. This warning appears only during `generate`, after the imagery has been opened; `plan` does not catch it.
+
+**`GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.`** Some features were not used. Points and lines can't be rasterized as areas; features with an empty `label_field` value are skipped; with `labels.classes`, unlisted values are skipped too. If *all* features are skipped, check the spelling of `label_field`: `mapcv plan` shows `0 polygon(s)`. (`generate` prints this warning twice, once in the plan and once as a Python `UserWarning`.)
+
+**`labels.label_field '…' has N distinct values; masks support at most 255 classes.`** You picked an ID-like field (for example `osm_id`). Choose a category field, or map values with `labels.classes`.
+
+**`GeoJSON 'crs' … is not supported; mapcv reads GeoJSON as WGS-84 longitude/latitude (RFC 7946).`** Re-export the file in EPSG:4326 (`ogr2ogr -t_srs EPSG:4326`).
+
+**`Expected FeatureCollection or Feature, got: …`** The file is not GeoJSON features (for example a bare geometry). Wrap it in a Feature.
+
+**Unexpected class IDs.** Labels like `0, 1, 2` are numbered in sorted order (`1, 2, 3`) because `0` is not a valid class ID. Pin IDs with `labels.classes`. See [How class IDs are chosen](/mapcv/guides/prepare-labels/#how-class-ids-are-chosen).
+
+## Tile downloads (XYZ)
+
+**`Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold)`** More than `max_failed_ratio` of a chunk's tiles failed under `policy: lenient`. Look at one tile URL in a browser. Check the zoom (many servers have no tiles above 19), your key and quota, and `max_connections`. Then re-run: finished chunks are kept.
+
+**`HTTP 404 Not Found for URL: …`** (with `policy: strict`) The server has no tile there: wrong zoom, wrong `{x}`/`{y}` order in `url_template`, or the area is outside its coverage. 403/401 mean a missing or invalid key.
+
+**`Response for … is not an image (23867 bytes); the server may be returning an error page or rate-limiting`** The server answered with HTML or JSON. Common causes: rate limiting, a consent or login page, an expired key, or a template that points at a web page rather than a tile endpoint.
+
+**`XYZ tile sources must return 256x256 RGB-compatible images`** The server sends 512 px ("retina") tiles. Use its 256 px endpoint, or remove an `@2x` / `{r}` marker from the URL.
+
+**Black patches.** Under `lenient` or `ignore`, failed tiles become black; some providers also serve black or "no imagery" placeholder tiles at high zooms. Set `sampler.max_empty_ratio` (for example `0.1`) to drop mostly-black patches, and lower the zoom if many are affected.
+
+**Too slow / rate limited.** Lower `max_connections`. mapcv already retries with backoff and honours `Retry-After`.
+
+## Resuming
+
+**`… was generated with a different configuration (patch_shape, sampler); use a new writer.staging_dir or remove the old dataset`** The folder already holds a dataset built with other settings (the fields in brackets). Point `writer.staging_dir` at a new folder or undo the change. Re-running the same command will not help, despite the generic hint printed under the error. Details: [What must stay the same](/mapcv/guides/large-regions-and-resuming/#what-must-stay-the-same).
+
+**`… is a version-1 manifest from mapcv 0.1.x and cannot be resumed`** Generate into a new folder. `mapcv split` and `mapcv info` still read the old one.
+
+**`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles or 5 GB without a terminal. Read the plan, then pass `--yes`.
+
+## Sentinel-2 / EOPF
+
+**`EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'.`** Install the extra. If you already did and you are on **Python 3.14**: the extra's packages are skipped there because zarr 2's `numcodecs` has no Python 3.14 wheels. Use Python 3.10–3.13 for Sentinel-2 (for example `uv venv --python 3.13`).
+
+**`EOPF Zarr product not found: …`** The local path does not exist. Remote products must be `https://` or `s3://` URLs.
+
+**`requested region does not intersect the EOPF product`** The region is outside the product's footprint. Each product covers one ~110 km MGRS tile; pick a product whose footprint contains your region.
+
+**`EOPF variables not found: b10. Available variables: …`** Band names are `b01`–`b12` and `b8a`; L2A has no `b10`.
+
+**`Unable to open anonymous EOPF product '…': …`** The URL is wrong, not public, or the server is unreachable. Copy the product link again from the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) and make sure it ends in `.zarr` (the product, not one of its assets).
+
+**Long pause after the plan.** Opening a remote product reads its metadata over the network and can take a few minutes with no progress shown. The progress bar starts once reading begins.
+
+**Many patches skipped.** Swath edges and no-data areas are `NaN`; with `max_empty_ratio: 0.2`, patches more than 20 % empty are dropped. Move the region inside the footprint or choose another product.
+
+## Output and quiet mode
+
+**Nothing printed by `mapcv -q split`.** `--quiet` also hides the split summary. Drop `-q` or run `mapcv info` afterwards.
+
+**Garbled boxes in CI logs.** mapcv uses Rich; set `NO_COLOR=1` and a wide `COLUMNS` (for example `COLUMNS=120`) for plain, unwrapped logs, and add `-q` to drop progress bars.
+
+## Still stuck?
+
+Open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv --version`, `mapcv validate <config>` (it hides URLs and keys) and the full error. Remove API keys from anything you paste.

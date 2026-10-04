@@ -1,0 +1,25 @@
+ Usage: mapcv init [OPTIONS] [output]
+
+ Create a config: answer a few questions, or start from a template.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│   output      <path>  Where to write the config (guided default: mapcv.yaml;         │
+│                       otherwise stdout).                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --template     -t                      <xyz|sentinel2>  Write a ready-made example   │
+│                                                         instead of asking.           │
+│ --interactive      --no-interactive                     Ask questions (default: when │
+│                                                         run in a terminal without    │
+│                                                         --template).                 │
+│ --force        -f                                       Overwrite an existing file.  │
+│ --help         -h                                       Show this message and exit.  │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv init                         guided, writes mapcv.yaml
+
+ mapcv init my.yaml --template sentinel2   a ready-made example
+
+

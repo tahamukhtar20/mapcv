@@ -1,0 +1,14 @@
+ Usage: mapcv info [OPTIONS] {staging_dir}
+
+ Summarize a generated dataset: source, shapes, class balance and splits.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --help  -h        Show this message and exit.                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Example: mapcv info dataset/
+
+

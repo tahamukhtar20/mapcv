@@ -5,7 +5,7 @@ description: Build a labeled building-segmentation dataset in five minutes with 
 
 import { Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
 
-In five minutes you will build a small, labeled dataset of building footprints over Amsterdam's Eastern Docklands: Esri aerial imagery at about 0.7 m per pixel, OpenStreetMap building polygons as labels, cut into 256 × 256 patches with a leakage-safe train/val/test split.
+In five minutes you will build a small, labeled dataset of building footprints over Amsterdam's Eastern Docklands: Esri aerial imagery at about 0.36 m per pixel, OpenStreetMap building polygons as labels, cut into 256 × 256 patches with a leakage-safe train/val/test split.
 
 You need Python 3.10+ and an internet connection. Everything below is real output from `mapcv` 0.2.0.
 
@@ -21,7 +21,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
 
 2. ### Get some labels
 
-   Make a working folder and download the example building outlines (959 OpenStreetMap polygons, © OpenStreetMap contributors, ODbL):
+   Make a working folder and download the example building outlines (967 OpenStreetMap polygons, © OpenStreetMap contributors, ODbL):
 
    ```bash
    mkdir buildings && cd buildings
@@ -32,7 +32,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
 
 3. ### Write a config with `mapcv init`
 
-   `mapcv init` asks four questions. Give it the label file as the area, and press <kbd>Enter</kbd> to accept every default:
+   `mapcv init` asks four questions and writes `mapcv.yaml`. Type the answers shown after the prompts below; press <kbd>Enter</kbd> for the others to accept the default:
 
    ```console
    $ mapcv init
@@ -47,23 +47,21 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    Imagery [esri/sentinel2/custom] (esri):
 
    2/4 Area
-   Area: a bounding box west,south,east,north or a .geojson/.kml file: buildings.geojson
-   Using the extent of 959 polygon(s): 4.93504, 52.37121 → 4.95188, 52.37779
+   Area: a bounding box west,south,east,north or a .geojson/.kml file: 4.9375,52.3725,4.9515,52.3780
      zoom    pixel size
        15    2.92 m
        16    1.46 m
        17    0.73 m
        18    0.36 m
        19    0.18 m
-   Zoom (17):
+   Zoom (17): 18
 
    3/4 Labels
-   Use buildings.geojson as the labels too? [y/n] (y):
+   Label file (.geojson/.kml; blank for an image-only dataset): buildings.geojson
      field       example values
      class       building
-     osm_id      way/1075729446, way/1075729447, way/1075731905, …
      building    house, apartments, houseboat, yes, retail
-   Which field holds the class? (blank = every polygon is class 1) ():
+   Which field holds the class? (blank = every polygon is class 1) (): class
 
    4/4 Patches and output
    Patch size in pixels (256):
@@ -77,24 +75,24 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      2. Build the dataset:      mapcv generate mapcv.yaml
    ```
 
-   The result is a short, commented YAML file you can edit and commit:
+   The area can also be a `.geojson` or `.kml` file: mapcv then uses the extent of its polygons and offers the same file as labels. The result is a short, commented YAML file you can edit and commit:
 
    ```yaml title="mapcv.yaml"
    region:
-     west: 4.935035
-     south: 52.371209
-     east: 4.951879
-     north: 52.377794
+     west: 4.937500
+     south: 52.372500
+     east: 4.951500
+     north: 52.378000
 
    imagery:
      type: xyz
-     zoom: 17
+     zoom: 18
      source: esri_satellite
      max_connections: 4         # keep requests modest
 
    labels:
-     path: "buildings.geojson"
-     label_field: null
+     path: 'buildings.geojson'
+     label_field: class
 
    sampler:
      patch_size: 256
@@ -103,7 +101,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      edge_strategy: pad
 
    writer:
-     staging_dir: "./dataset"
+     staging_dir: './dataset'
      image_format: png
 
    split:
@@ -112,8 +110,10 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      val_ratio: 0.10
    ```
 
+   Relative paths are resolved against the folder that contains `mapcv.yaml`, so the config works from any directory.
+
    <Aside type="tip" title="No terminal prompts?">
-   In scripts and CI, start from a template instead: `mapcv init mapcv.yaml --template xyz` (or `--template sentinel2`), then edit the region and label path. Without a file name, `--template` prints the config to stdout.
+   In scripts and CI, start from a template instead: `mapcv init --template xyz` writes `mapcv.yaml` (or pass another path), `--template sentinel2` gives a Sentinel-2 example, and `--stdout` prints the template instead of writing it. Edit the region and label path afterwards.
    </Aside>
 
 4. ### Check the cost with `mapcv plan`
@@ -123,14 +123,14 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    ```console
    $ mapcv plan mapcv.yaml
    ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────╮
-   │ Region   4.935035, 52.371209 → 4.951879, 52.377794  (≈ 1.1 × 0.7 km)                 │
-   │ Imagery  esri_satellite · zoom 17 (≈ 0.73 m/px)                                      │
-   │ Raster   1,792 × 1,280 px · 35 tiles (≈ 875.0 KB to download)                        │
-   │ Labels   buildings.geojson · 959 polygon(s) · every polygon is class 1               │
-   │ Patches  ≈ 35 × 256 px (grid, stride 256)                                            │
-   │ Output   dataset · png (≈ 3.9 MB)                                                    │
+   │ Region   4.9375, 52.3725 → 4.9515, 52.378  (≈ 1.0 × 0.6 km)                          │
+   │ Imagery  esri_satellite · zoom 18 (≈ 0.36 m/px)                                      │
+   │ Raster   2,816 × 1,792 px · 77 tiles (≈ 1.9 MB to download)                          │
+   │ Labels   buildings.geojson · 967 polygon(s) · classes: building → 1                  │
+   │ Patches  ≈ 77 × 256 px (grid, stride 256)                                            │
+   │ Output   dataset · png (≈ 8.6 MB)                                                    │
    │ Split    spatial · test 0.2 · val 0.1                                                │
-   │ Memory   ≈ 18.4 MB per chunk                                                         │
+   │ Memory   ≈ 28.8 MB per chunk                                                         │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
    Imagery terms are your responsibility: check the provider's license, attribution and
    rate limits (https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
@@ -138,7 +138,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    Looks right? Build it with mapcv generate mapcv.yaml
    ```
 
-   Warnings appear under the panel, for example when label features are skipped. Sizes are estimates.
+   Warnings appear under the panel, for example when label features are skipped or no polygon falls inside the region. Sizes are estimates.
 
 5. ### Build it with `mapcv generate`
 
@@ -146,18 +146,18 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    $ mapcv generate mapcv.yaml
    ╭─ Plan for mapcv.yaml ─────────────────── (same panel as above) ──────────────────────╮
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
-     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:33 • eta 0:00:00
+     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:21 • eta 0:00:00
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
-   │ Patches  35                                                                          │
+   │ Patches  77                                                                          │
    │ Shape    256×256×3 uint8                                                             │
-   │ Tiles    35 fetched · 0 failed                                                       │
-   │ Splits   train 25 (71%) · val 3 (9%) · test 7 (20%)                                  │
-   │ Time     33s                                                                         │
+   │ Tiles    77 fetched · 0 failed                                                       │
+   │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                                │
+   │ Time     21s                                                                         │
    │ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                          │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
      class         id    pixels
-     background     0     87.9%
-     labelled       1     12.1%
+     background     0     81.0%
+     building       1     19.0%
 
    Next
      • Inspect it:      mapcv info dataset
@@ -174,14 +174,14 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    ╭─ dataset ────────────────────────────────────────────────────────────────────────────╮
    │ Source    xyz · esri_satellite                                                       │
    │ Bands     red, green, blue                                                           │
-   │ Patches   35 · 256×256×3 uint8                                                       │
+   │ Patches   77 · 256×256×3 uint8                                                       │
    │ CRS       EPSG:3857                                                                  │
-   │ Splits    train 25 (71%) · val 3 (9%) · test 7 (20%)                                 │
+   │ Splits    train 52 (68%) · val 8 (10%) · test 17 (22%)                               │
    │ Manifest  version 2                                                                  │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
      class         id    pixels
-     background     0     87.9%
-     labelled       1     12.1%
+     background     0     81.0%
+     building       1     19.0%
    ```
 
 </Steps>
@@ -193,10 +193,10 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
   - mapcv.yaml
   - buildings.geojson
   - dataset/
-    - Images/ 35 RGB PNG patches, 256 × 256
+    - Images/ 77 RGB PNG patches, 256 × 256
       - patch_0000000.png
       - …
-    - Masks/ 35 single-channel PNGs: 0 = background, 1 = building
+    - Masks/ 77 single-channel PNGs: 0 = background, 1 = building
       - patch_0000000.png
       - …
     - manifest.json
@@ -204,6 +204,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
       - train.txt
       - val.txt
       - test.txt
+      - split.json settings and counts of this split
       - 10/
       - 20/
       - 30/ labeled/unlabeled subsets of train
@@ -229,7 +230,7 @@ Your patch counts and split sizes can differ slightly if the example labels are 
 
 <CardGrid>
   <LinkCard title="Use your dataset" description="Folder layout, loading splits, and a PyTorch Dataset." href="/mapcv/guides/use-your-dataset/" />
-  <LinkCard title="Buildings from aerial imagery" description="The same idea at zoom 18 with named classes, explained step by step." href="/mapcv/tutorials/buildings-from-aerial-imagery/" />
+  <LinkCard title="Buildings from aerial imagery" description="The same dataset explained field by field, then with many classes." href="/mapcv/tutorials/buildings-from-aerial-imagery/" />
   <LinkCard title="Land cover from Sentinel-2" description="Multispectral 10 m patches from an EOPF Zarr product." href="/mapcv/tutorials/land-cover-from-sentinel-2/" />
   <LinkCard title="Configuration reference" description="Every field you can put in mapcv.yaml." href="/mapcv/reference/configuration/" />
 </CardGrid>

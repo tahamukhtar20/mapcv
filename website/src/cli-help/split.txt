@@ -11,7 +11,7 @@
 │ --val-ratio               <float>  Fraction of the remaining patches for validation. │
 │                                    [default: 0.1]                                    │
 │ --labeled-ratios          <float>  Labeled fractions of train for semi-supervised    │
-│                                    lists (repeatable).                               │
+│                                    lists (repeatable). Default: 0.1 0.2 0.3.         │
 │ --seed                    <int>    Random seed. [default: 42]                        │
 │ --strategy                <str>    spatial (leakage-safe blocks) | stratified |      │
 │                                    random.                                           │

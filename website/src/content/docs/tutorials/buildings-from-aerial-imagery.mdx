@@ -15,7 +15,7 @@ The finished files live in the repository under [`examples/quickstart`](https://
 
 1. ### Get the labels
 
-   Labels are polygons in longitude/latitude. This tutorial uses OpenStreetMap buildings exported to GeoJSON (959 features, each with `class: building` and the OSM `building` tag):
+   Labels are polygons in longitude/latitude. This tutorial uses OpenStreetMap buildings exported to GeoJSON (967 features, each with `class: building` and the OSM `building` tag):
 
    ```bash
    mkdir docklands && cd docklands
@@ -85,7 +85,7 @@ The finished files live in the repository under [`examples/quickstart`](https://
    │ Region   4.9375, 52.3725 → 4.9515, 52.378  (≈ 1.0 × 0.6 km)                          │
    │ Imagery  esri_satellite · zoom 18 (≈ 0.36 m/px)                                      │
    │ Raster   2,816 × 1,792 px · 77 tiles (≈ 1.9 MB to download)                          │
-   │ Labels   buildings.geojson · 959 polygon(s) · classes: building → 1                  │
+   │ Labels   buildings.geojson · 967 polygon(s) · classes: building → 1                  │
    │ Patches  ≈ 77 × 256 px (grid, stride 256)                                            │
    │ Output   dataset · png (≈ 8.6 MB)                                                    │
    │ Split    spatial · test 0.2 · val 0.1                                                │
@@ -99,21 +99,21 @@ The finished files live in the repository under [`examples/quickstart`](https://
 
    ```console
    $ mapcv generate mapcv.yaml
-     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:07 • eta 0:00:00
+     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:06 • eta 0:00:00
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
    │ Patches  77                                                                          │
    │ Shape    256×256×3 uint8                                                             │
    │ Tiles    77 fetched · 0 failed                                                       │
    │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                                │
-   │ Time     7s                                                                          │
+   │ Time     6s                                                                          │
    │ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                          │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
      class         id    pixels
-     background     0     84.3%
-     building       1     15.7%
+     background     0     81.0%
+     building       1     19.0%
    ```
 
-   About 16 % of pixels are building: a typical class imbalance to keep in mind when you pick a loss.
+   About 19 % of pixels are building: a typical class imbalance to keep in mind when you pick a loss.
 
    <FileTree>
    - dataset/
@@ -167,7 +167,7 @@ The finished files live in the repository under [`examples/quickstart`](https://
    `mapcv plan` shows the IDs it will use. Text labels are numbered in sorted order:
 
    ```text
-   Labels   buildings.geojson · 959 polygon(s) · classes: apartments → 1, church → 2,
+   Labels   buildings.geojson · 967 polygon(s) · classes: apartments → 1, church → 2,
             commercial → 3, garage → 4, house → 5, houseboat → 6, hut → 7, industrial →
             8, residential → 9, retail → 10, school → 11, service → 12, shed → 13, wall
             → 14, yes → 15
@@ -185,8 +185,8 @@ The finished files live in the repository under [`examples/quickstart`](https://
    If you forget the new `staging_dir`, `generate` stops before downloading anything:
 
    ```text
-   Generation failed: dataset/manifest.json was generated with a different configuration
-   (class_map); use a new writer.staging_dir or remove the old dataset
+   Cannot resume: dataset/manifest.json was generated with a different configuration
+   (class_map, labels); use a new writer.staging_dir or remove the old dataset
    ```
 
 </Steps>

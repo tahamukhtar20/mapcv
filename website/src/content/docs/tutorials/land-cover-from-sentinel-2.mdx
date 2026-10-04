@@ -96,28 +96,28 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────╮
    │ Region   5.4, 51.975 → 5.5, 52.035  (≈ 6.9 × 6.6 km)                                 │
    │ Imagery  Sentinel-2 L2A (EOPF) · 4 bands (≈ 10.00 m/px)                              │
-   │ Raster   686 × 664 px                                                                │
+   │ Raster   709 × 692 px                                                                │
    │ Labels   landuse.geojson · 643 polygon(s) · classes: built_up → 1, farmland → 2,     │
    │          forest → 3, water → 4                                                       │
    │ Patches  ≈ 25 × 128 px (grid, stride 128)                                            │
    │ Output   dataset · npy (≈ 6.6 MB)                                                    │
    │ Split    spatial · test 0.2 · val 0.1                                                │
-   │ Memory   ≈ 15.5 MB per chunk                                                         │
+   │ Memory   ≈ 16.7 MB per chunk                                                         │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
    ```
 
-   For Sentinel-2 the raster size is estimated from the region; the real size is known once the product is opened.
+   For Sentinel-2 the raster size is computed on the region's UTM grid; the product's exact grid is known once it is opened.
 
 6. ### Generate
 
    ```console
    $ mapcv generate mapcv.yaml
-     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 1/1 chunks • 0:02:12 • eta 0:00:00
+     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 1/1 chunks • 0:01:11 • eta 0:00:00
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
    │ Patches  25                                                                          │
    │ Shape    4×128×128 float32                                                           │
    │ Splits   train 18 (72%) · val 2 (8%) · test 5 (20%)                                  │
-   │ Time     5m 35s                                                                      │
+   │ Time     1m 47s                                                                      │
    │ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                          │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
      class         id    pixels
@@ -129,7 +129,9 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    ```
 
    <Aside type="note" title="Be patient after the plan">
-   mapcv first opens the remote product to find its CRS and pixel grid, then crops it to your region. That can take a few minutes without visible progress. The progress bar appears once the bands are being read. A local copy of the product is much faster.
+   mapcv first opens the remote product to find its CRS and pixel grid, then crops it to your region; an "Opening imagery…" spinner shows meanwhile. That can take a minute or more. A local copy of the product is much faster.
+
+   Remote reads can time out (`Generation failed: 408, message='Request Time-out', …`). Run the same command again: finished chunks are kept, and a chunk with a failed band read is never written.
    </Aside>
 
    About a quarter of the pixels are background: land that none of the four classes covers.

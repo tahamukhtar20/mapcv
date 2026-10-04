@@ -3,8 +3,7 @@
  Create a config: answer a few questions, or start from a template.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
-│   output      <path>  Where to write the config (guided default: mapcv.yaml;         │
-│                       otherwise stdout).                                             │
+│   output      <path>  Where to write the config. [default: mapcv.yaml]               │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --template     -t                      <xyz|sentinel2>  Write a ready-made example   │
@@ -13,12 +12,16 @@
 │                                                         run in a terminal without    │
 │                                                         --template).                 │
 │ --force        -f                                       Overwrite an existing file.  │
+│ --stdout                                                Print the template instead   │
+│                                                         of writing.                  │
 │ --help         -h                                       Show this message and exit.  │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 
  Examples:
 
  mapcv init                         guided, writes mapcv.yaml
+
+ mapcv init --template xyz --stdout   print a template
 
  mapcv init my.yaml --template sentinel2   a ready-made example
 

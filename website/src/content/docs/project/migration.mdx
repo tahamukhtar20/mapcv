@@ -13,13 +13,14 @@ The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/m
 
 <Steps>
 
-1. Run `mapcv validate` on each 0.1 config. Deprecation notices and errors tell you what to change.
-2. Move `region.zoom` and `tiles` into an `imagery: {type: xyz, zoom: …}` block.
-3. Replace `google_satellite` or `osm` sources ([Providers & licensing](/mapcv/project/providers/)).
-4. If you rely on 0.1 class IDs, pin them with `labels.classes`.
-5. If you used `sampler.mode: random`, raise `random_count`: it is now a total, not per strip.
-6. Generate into a **new** `writer.staging_dir`; 0.1 datasets can be split but not resumed.
-7. Decide on splits: the default is now `spatial`. Set `strategy: stratified` to keep a patch-level split.
+1. Run `mapcv validate` on each 0.1 config. Deprecation notices and errors tell you what to change, including unknown keys that 0.2 now rejects.
+2. If a config is not in the same folder as its data, check its relative paths: they now resolve against the config file's folder.
+3. Move `region.zoom` and `tiles` into an `imagery: {type: xyz, zoom: …}` block.
+4. Replace `google_satellite` or `osm` sources ([Providers & licensing](/mapcv/project/providers/)).
+5. If you rely on 0.1 class IDs, pin them with `labels.classes`.
+6. If you used `sampler.mode: random`, raise `random_count`: it is now a total, not per strip.
+7. Generate into a **new** `writer.staging_dir`; 0.1 datasets can be split but not resumed.
+8. Decide on splits: the default is now `spatial`. Set `strategy: stratified` to keep a patch-level split.
 
 </Steps>
 
@@ -42,6 +43,14 @@ imagery:
 
 Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a deprecation notice (a `FutureWarning`). `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom`, and is otherwise ignored with a notice. This compatibility path will be removed in 0.3.0. `imagery.type` is required.
 
+## Stricter configs
+
+Unknown keys are now errors: a typo such as `stide:` or an option from a newer mapcv stops validation instead of being ignored. Remove keys that 0.2 does not know; `mapcv validate` names each one. An XYZ `imagery` block takes either `source` or `url_template`, not both.
+
+Relative paths (`labels.path`, `writer.staging_dir`, a local EOPF `imagery.path`) now resolve against the folder that contains the config file, not the directory you run mapcv from. Configs kept next to their data are unaffected; otherwise use absolute paths.
+
+`mapcv init` writes `mapcv.yaml` unless you give it a path. Use `mapcv init --stdout` to print the config instead.
+
 ## Google imagery preset
 
 The built-in `google_satellite` preset has been removed, and configs that still use it fail validation with a pointer to this guide. mapcv cannot determine whether a use of Google imagery is licensed for downloading, caching, or machine-learning dataset creation. Authorized custom XYZ templates remain supported through `imagery.url_template`; do not put credentials or signed query strings in committed YAML.
@@ -56,7 +65,7 @@ EOPF Sentinel-2 L2A input requires `pip install "mapcv[zarr]"` and `writer.image
 
 New datasets use manifest version 2. It records the source type, product identifier, bands, dtype, patch shape, CRS, and dataset affine transform. Patch rows and columns are global raster coordinates. Version 1 manifests remain readable by `mapcv split`, but **0.1.x datasets cannot be resumed by `mapcv generate`**: their row coordinates were per strip, while 0.2 uses global coordinates. Generate into a new `writer.staging_dir` instead.
 
-Resuming any dataset now requires the same imagery, labels, and sampler settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
+Resuming any dataset now requires the same imagery, label file, label settings, sampler and writer settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
 
 ## Sampling changes
 

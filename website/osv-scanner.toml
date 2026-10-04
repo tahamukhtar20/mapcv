@@ -1,0 +1,8 @@
+# Accepted advisories for the docs site's build dependencies (read by OSV-Scanner
+# and OpenSSF Scorecard). Revisit when a fixed version is released.
+
+[[IgnoredVulns]]
+id = "GHSA-ch52-4w7c-c8xp"
+reason = """http-cache-semantics, pulled in by Astro's build tooling, has no fixed
+release. The site is built to static files in CI and never serves cached HTTP
+responses to users, so the max-stale issue cannot be reached."""

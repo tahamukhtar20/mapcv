@@ -229,8 +229,14 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         resumed_patches = len(manifest.patches)
         anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
-        anchors = [anchor for anchor in anchors if anchor not in completed_anchors]
-        chunks = _group_anchors(anchors, source.metadata.chunk_rows)
+        # Number chunks over the whole raster so a resumed run records the same
+        # chunk index for each patch as an uninterrupted one.
+        chunks = []
+        for chunk_index, group in enumerate(_group_anchors(anchors, source.metadata.chunk_rows)):
+            remaining = [anchor for anchor in group if anchor not in completed_anchors]
+            if remaining:
+                chunks.append((chunk_index, remaining))
+        to_go = sum(len(group) for _, group in chunks)
         if resumed_patches and not chunks:
             _console.print(
                 f"[dim]Nothing left to do: all {resumed_patches} patch(es) are already "
@@ -238,12 +244,11 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             )
         elif resumed_patches:
             _console.print(
-                f"[dim]Resuming: {resumed_patches} patch(es) already written, "
-                f"{len(anchors)} to go[/dim]"
+                f"[dim]Resuming: {resumed_patches} patch(es) already written, {to_go} to go[/dim]"
             )
         with _chunk_progress(disable=not chunks) as progress:
             task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
-            for chunk_index, chunk_anchors in enumerate(chunks):
+            for chunk_index, chunk_anchors in chunks:
                 images, masks, metadata = _process_anchor_chunk(
                     source, chunk_anchors, config, geometries
                 )
@@ -266,6 +271,14 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             warnings.warn(
                 f"{failed} of {requested} tiles failed; check the tile URL, your network and "
                 "imagery.policy (failed tiles are left empty or black).",
+                UserWarning,
+                stacklevel=2,
+            )
+        elif failed and config.sampler.max_empty_ratio >= 1.0:
+            warnings.warn(
+                f"{failed} tile(s) failed and were filled with black; patches that include them "
+                "were kept, with labels over black pixels. Set sampler.max_empty_ratio below 1 "
+                "(for example 0.5) to drop such patches.",
                 UserWarning,
                 stacklevel=2,
             )

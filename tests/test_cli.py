@@ -8,6 +8,7 @@ from typing import Any, Optional
 import pytest
 from typer.testing import CliRunner
 
+import mapcv
 from mapcv.cli import app
 from mapcv.writer import Manifest
 
@@ -287,6 +288,19 @@ def test_generate_reports_runtime_errors_without_traceback(
     assert "does not intersect" in result.output
 
 
+def test_generate_interrupt_says_how_to_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupt(*args: Any, **kwargs: Any) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("mapcv.cli.run_generate", interrupt)
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path))])
+    assert result.exit_code == 130
+    assert "Interrupted" in result.output
+    assert "run the same command again to resume" in result.output
+
+
 def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
     p = _write_config(tmp_path)
     p.write_text(
@@ -329,6 +343,28 @@ def test_version_flag() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.output.startswith("mapcv ")
+    assert result.output.strip() == f"mapcv {mapcv.__version__}"
+
+
+@pytest.mark.parametrize(
+    ("command", "argument"),
+    [
+        ("init", "[OUTPUT]"),
+        ("plan", "CONFIG_PATH"),
+        ("generate", "CONFIG_PATH"),
+        ("validate", "CONFIG_PATH"),
+        ("info", "STAGING_DIR"),
+        ("split", "STAGING_DIR"),
+    ],
+)
+def test_help_usage_names_arguments(command: str, argument: str) -> None:
+    # Explicit metavars keep argument names uppercase across Typer versions
+    # (Typer 0.27 wraps required ones in braces: {CONFIG_PATH}).
+    result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "120", "NO_COLOR": "1"})
+    assert result.exit_code == 0
+    usage = next(line for line in result.output.splitlines() if "Usage:" in line)
+    assert f"mapcv {command} [OPTIONS]" in usage
+    assert argument in usage
 
 
 def test_plan_shows_estimates(tmp_path: Path) -> None:

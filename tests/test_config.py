@@ -269,6 +269,11 @@ def test_relative_paths_resolve_from_the_config_folder(tmp_path: Path) -> None:
     assert MapcvConfig.from_yaml(_write(sub, absolute)).writer.staging_dir == tmp_path / "abs"
 
 
+def test_from_yaml_accepts_a_string_path(tmp_path: Path) -> None:
+    path = _write(tmp_path, _MINIMAL)
+    assert MapcvConfig.from_yaml(str(path)) == MapcvConfig.from_yaml(path)
+
+
 @pytest.mark.parametrize(
     ("original", "typo"),
     [("patch_size: 256", "patch_size: 256\n  stide: 128"), ("zoom: 16", "zoom: 16\n  sorce: x")],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any, List, Tuple
 
@@ -125,3 +126,50 @@ def test_generate_warns_when_labels_miss_the_imagery(
 
     with pytest.warns(UserWarning, match="no label polygon intersects"):
         run_generate(config)
+
+
+def test_resumed_run_records_the_same_chunk_indices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources: List[FakeRasterSource] = []
+
+    def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
+        sources.append(FakeRasterSource())
+        return sources[-1]
+
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", open_source)
+    config = _config(tmp_path)
+    run_generate(config)
+    manifest_path = config.writer.staging_dir / "manifest.json"
+    complete = Manifest.load(manifest_path)
+    assert [entry["strip_index"] for entry in complete.patches] == [0, 0, 1, 1, 2, 2]
+
+    # Simulate an interruption after the first chunk.
+    partial = Manifest.load(manifest_path)
+    partial.patches = partial.patches[:2]
+    partial.save(manifest_path)
+    run_generate(config)
+
+    assert sources[1].windows == [(2, 5, 0, 5), (4, 7, 0, 5)]
+    assert Manifest.load(manifest_path).patches == complete.patches
+
+
+@pytest.mark.parametrize(("max_empty_ratio", "warns"), [(1.0, True), (0.5, False)])
+def test_generate_warns_when_failed_tiles_stay_in_patches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_empty_ratio: float, warns: bool
+) -> None:
+    def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
+        source = FakeRasterSource()
+        source.tiles_requested = 10  # type: ignore[attr-defined]
+        source.tiles_failed = 1  # type: ignore[attr-defined]
+        return source
+
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", open_source)
+    config = _config(tmp_path)
+    config.sampler.max_empty_ratio = max_empty_ratio
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_generate(config)
+
+    assert any("filled with black" in str(w.message) for w in caught) is warns

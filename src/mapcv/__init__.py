@@ -2,6 +2,9 @@
 mapcv - A satellite imagery dataset creation tool for segmentation.
 """
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
+
 from mapcv._mapcv_rs import bounds, snap_bbox
 from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
@@ -39,7 +42,13 @@ from mapcv.writer import (
     write_patches,
 )
 
+try:
+    __version__ = _package_version("mapcv")
+except PackageNotFoundError:  # running from a source tree without installing
+    __version__ = "0+unknown"
+
 __all__ = [
+    "__version__",
     "GenerateResult",
     "Plan",
     "plan",

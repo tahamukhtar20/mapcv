@@ -5,8 +5,9 @@
 //! from `<SchemaData><SimpleData name="...">` (the form GDAL, QGIS and ogr2ogr
 //! write). Class IDs are assigned by the Python caller.
 
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesRef, BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 
 /// A single ring: list of `(lng, lat)` pairs.
 pub type Ring = Vec<(f64, f64)>;
@@ -27,18 +28,30 @@ pub struct KmlResult {
 const MIN_RING_POINTS: usize = 3;
 
 fn local_name(e: &BytesStart<'_>) -> String {
-    String::from_utf8_lossy(e.local_name().as_ref()).into_owned()
+    e.local_name().as_ref().to_owned()
 }
 
 fn name_attribute(e: &BytesStart<'_>) -> Result<Option<String>, String> {
     for attr in e.attributes().flatten() {
-        if attr.key.local_name().as_ref() == b"name" {
-            let raw = String::from_utf8_lossy(&attr.value);
-            let value = quick_xml::escape::unescape(&raw).map_err(|err| err.to_string())?;
+        if attr.key.local_name().as_ref() == "name" {
+            let value = attr
+                .normalized_value(XmlVersion::Implicit1_0)
+                .map_err(|err| err.to_string())?;
             return Ok(Some(value.into_owned()));
         }
     }
     Ok(None)
+}
+
+/// Resolve a character reference (`&#38;`) or predefined entity (`&amp;`).
+fn resolve_reference(e: &BytesRef<'_>) -> Result<String, String> {
+    if let Some(ch) = e.resolve_char_ref().map_err(|err| err.to_string())? {
+        return Ok(ch.to_string());
+    }
+    let name: &str = e;
+    resolve_predefined_entity(name)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("unknown XML entity '&{name};'"))
 }
 
 /// Mutable parser state for the placemark being read.
@@ -78,6 +91,19 @@ impl PlacemarkState {
         Ok(())
     }
 
+    /// Append character data to the coordinates or label being captured.
+    ///
+    /// Label text is joined exactly, so `A &amp; B` stays `A & B`. Coordinate
+    /// pieces are separated by a space so adjacent CDATA blocks cannot merge.
+    fn push_text(&mut self, text: &str) {
+        if self.capture_coords {
+            self.coords.push_str(text);
+            self.coords.push(' ');
+        } else if self.capture_value {
+            self.value.push_str(text);
+        }
+    }
+
     fn finish_polygon(&mut self) {
         let holes = std::mem::take(&mut self.holes);
         if let Some(outer) = self.outer.take() {
@@ -98,7 +124,8 @@ impl PlacemarkState {
 #[allow(clippy::too_many_lines)]
 pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, String> {
     let mut reader = Reader::from_reader(data);
-    reader.config_mut().trim_text(true);
+    // Untrimmed: entity references arrive as separate events, and trimming each
+    // text piece would drop the spaces in a label such as `A &amp; B`.
 
     let mut polygons: Vec<(Vec<Polygon>, Option<String>)> = Vec::new();
     let mut skipped_non_polygon = 0usize;
@@ -150,7 +177,7 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
             }
             Ok(Event::End(ref e)) => {
                 depth = depth.saturating_sub(1);
-                let tag = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let tag = e.local_name().as_ref().to_owned();
                 if !state.in_placemark {
                     buf.clear();
                     continue;
@@ -179,28 +206,11 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
                     _ => {}
                 }
             }
-            Ok(Event::Text(ref e)) => {
+            Ok(Event::Text(ref e)) => state.push_text(&e.xml10_content()),
+            Ok(Event::CData(ref e)) => state.push_text(&e.xml10_content()),
+            Ok(Event::GeneralRef(ref e)) => {
                 if state.capture_coords || state.capture_value {
-                    let text = e.unescape().map_err(|err| err.to_string())?;
-                    let target = if state.capture_coords {
-                        &mut state.coords
-                    } else {
-                        &mut state.value
-                    };
-                    target.push_str(&text);
-                    target.push(' ');
-                }
-            }
-            Ok(Event::CData(ref e)) => {
-                if state.capture_coords || state.capture_value {
-                    let text = std::str::from_utf8(e.as_ref()).map_err(|err| err.to_string())?;
-                    let target = if state.capture_coords {
-                        &mut state.coords
-                    } else {
-                        &mut state.value
-                    };
-                    target.push_str(text);
-                    target.push(' ');
+                    state.push_text(&resolve_reference(e)?);
                 }
             }
             Ok(Event::Eof) => break,
@@ -287,6 +297,24 @@ mod tests {
         ));
         let result = parse_kml(kml.as_bytes(), Some("a&b")).unwrap();
         assert_eq!(result.polygons[0].1.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn keeps_spaces_around_entities_in_labels() {
+        let kml = placemark(&format!(
+            r#"<ExtendedData><Data name="kind"><value> Rock &amp; Roll &#35;1 </value></Data></ExtendedData>{SQUARE}"#
+        ));
+        let result = parse_kml(kml.as_bytes(), Some("kind")).unwrap();
+        assert_eq!(result.polygons[0].1.as_deref(), Some("Rock & Roll #1"));
+    }
+
+    #[test]
+    fn rejects_unknown_entities() {
+        let kml = placemark(&format!(
+            r#"<ExtendedData><Data name="kind"><value>a &nbsp; b</value></Data></ExtendedData>{SQUARE}"#
+        ));
+        let err = parse_kml(kml.as_bytes(), Some("kind")).err().unwrap();
+        assert!(err.contains("&nbsp;"), "{err}");
     }
 
     #[test]

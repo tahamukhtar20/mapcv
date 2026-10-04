@@ -333,7 +333,7 @@ class EOPFZarrRasterSource:
             if sys.version_info >= (3, 14):
                 raise RuntimeError(
                     "Sentinel-2 (EOPF Zarr) support needs Python 3.10-3.13: its zarr dependency "
-                    "has no Python 3.14 wheels yet, so the mapcv[zarr] extra installs nothing "
+                    "has no Python 3.14 wheels, so the mapcv[zarr] extra installs nothing "
                     "on 3.14. Use a Python 3.13 environment for Sentinel-2."
                 ) from exc
             raise RuntimeError(

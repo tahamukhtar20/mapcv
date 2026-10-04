@@ -142,7 +142,7 @@ Run against the [Buildings tutorial](/mapcv/tutorials/buildings-from-aerial-imag
 mapcv masks have no special "ignore" value: pixels outside the imagery are `0`, the same as background. Decide how to treat them in your loader:
 
 - **XYZ:** pixels that are black in all three channels come from failed tiles (`policy: lenient` or `ignore`), from `edge_strategy: pad`, or from the provider's own NoData. The class above maps them to `IGNORE_INDEX`. Real black roofs or shadows are rare but possible; set `ignore_nodata=False` if that matters more.
-- **Sentinel-2:** `NaN` marks missing data; replace it before feeding a network (the class uses `0`). Padded areas from `edge_strategy: pad` are `0`, not `NaN`, so prefer `edge_strategy: drop` for Sentinel-2 (the `sentinel2` template does).
+- **Sentinel-2:** `NaN` marks missing data. mapcv treats a pixel as valid only when **every** selected band has data, and the class above does the same (`NaN` in any band → ignore). Replace `NaN` before feeding a network (the class uses `0`). Padded areas from `edge_strategy: pad` are `0`, not `NaN`, so prefer `edge_strategy: drop` for Sentinel-2 (the `sentinel2` template does).
 - To keep mostly-empty patches out entirely, set `sampler.max_empty_ratio` (for example `0.2`) when generating. Each manifest entry's `empty_ratio` tells you how empty a patch is.
 
 ## Normalise inputs

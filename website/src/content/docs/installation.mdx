@@ -42,10 +42,10 @@ The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich and PyY
 
 | Extra | Install | Adds | Python |
 | --- | --- | --- | --- |
-| `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, pyproj, s3fs | 3.10 – 3.13 |
+| `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
 
 <Aside type="caution" title="Sentinel-2 and Python 3.14">
-The `zarr` extra depends on zarr 2, whose `numcodecs` dependency has no Python 3.14 wheels. On Python 3.14, `pip install "mapcv[zarr]"` succeeds but installs **none** of the extra packages, and a Sentinel-2 run then fails with *"EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'"*. Use Python 3.10 – 3.13 for Sentinel-2.
+The `zarr` extra depends on zarr 2, whose `numcodecs` dependency has no Python 3.14 wheels. On Python 3.14, `pip install "mapcv[zarr]"` succeeds but installs **none** of the extra packages; a Sentinel-2 run then stops with a message explaining that Sentinel-2 support needs Python 3.10–3.13. Use a Python 3.13 environment for Sentinel-2.
 </Aside>
 
 ## Verify

@@ -25,8 +25,8 @@ mapcv writes `splits/train.txt`, `val.txt` and `test.txt` at the end of `generat
 
 ```console
 $ mapcv split overlap
-✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%)
-  69 train/val patch(es) overlapping a held-out patch were left out
+✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%) · 69
+overlapping patch(es) left out
 ```
 
 That example used `stride: 128` with 256 px patches (heavy overlap) on a small raster. Without overlap (`stride` = `patch_size`, the default) nothing is left out.
@@ -46,7 +46,8 @@ Check the achieved shares in the summary or with `mapcv info`, and adjust `block
 If you choose `stratified` or `random` on a dataset whose patches overlap (`stride < patch_size`) or repeat (`mode: random`), mapcv still writes the split and warns:
 
 ```text
-UserWarning: Patches overlap or repeat, so a 'random' split leaks pixels between train and test; use strategy 'spatial'.
+⚠  Patches overlap or repeat, so a 'random' split leaks pixels between train and test;
+use strategy 'spatial'.
 ```
 
 Even without overlap, adjacent patches share buildings, fields and lighting, so patch-level splits usually report optimistic scores. mapcv does not warn about that case.
@@ -61,7 +62,7 @@ mapcv split dataset --block-size 2048 --seed 7
 mapcv split dataset --strategy stratified --test-ratio 0.15
 ```
 
-The command reads only `manifest.json`, overwrites `train/val/test.txt`, and (re)writes the labeled subsets. It does not read the `split` block of your YAML.
+The command reads only `manifest.json`, overwrites `train/val/test.txt` and `split.json`, and (re)writes the labeled subsets. It does not read the `split` block of your YAML; `split.json` records which settings produced the current lists.
 
 ## Semi-supervised subsets
 

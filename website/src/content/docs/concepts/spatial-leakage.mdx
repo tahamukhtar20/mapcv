@@ -26,8 +26,8 @@ The default `split.strategy: spatial`:
 3. **Warns about leaky choices.** If you pick `stratified` or `random` for a dataset whose patches overlap or repeat, mapcv writes the split but warns that it leaks pixels.
 
 ```text
-✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%)
-  69 train/val patch(es) overlapping a held-out patch were left out
+✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%) · 69
+overlapping patch(es) left out
 ```
 
 The cost: some patches are discarded when patches overlap, and split ratios are approximate because blocks move as a whole. [Splits without leakage](/mapcv/guides/splits-without-leakage/) shows how to tune this.
@@ -39,5 +39,5 @@ The cost: some patches are discarded when patches overlap, and split ratios are 
 - **Labels can leak too.** If labels were drawn by a model trained on the same area, or if a region's labels are systematically shifted, no split will reveal it.
 
 <Aside type="tip">
-When you report results, say how the split was made: strategy, block size in metres (block pixels × pixel size from `mapcv plan`), and seed. With those settings, anyone with the manifest can reproduce the split with `mapcv split`. The split settings are not stored in the dataset folder, so keep the config next to it.
+When you report results, say how the split was made: strategy, block size in metres (block pixels × pixel size from `mapcv plan`), and seed. mapcv records them in `splits/split.json`, so anyone with the manifest can reproduce the split with `mapcv split`.
 </Aside>

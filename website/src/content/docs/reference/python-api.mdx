@@ -35,7 +35,7 @@ class MapcvConfig(BaseModel):
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
 ```
 
-Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. Validation errors raise `pydantic.ValidationError`; legacy 0.1 layouts emit a `FutureWarning`. Field reference: [Configuration](/mapcv/reference/configuration/).
+Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; legacy 0.1 layouts emit a `FutureWarning`. Field reference: [Configuration](/mapcv/reference/configuration/).
 
 Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig`, `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
 
@@ -75,7 +75,7 @@ A dataclass:
 def run_generate(config: MapcvConfig) -> GenerateResult
 ```
 
-Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 
@@ -97,7 +97,7 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/`, prints a one-line summary and returns the counts (`train`, `val`, `test`, `dropped`). Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
 
 ### `split_dataset`
 
@@ -105,7 +105,7 @@ Reads `staging_dir/manifest.json`, writes `staging_dir/splits/`, prints a one-li
 def split_dataset(manifest: Manifest, config: SplitterConfig, output_dir: Path) -> dict[str, int]
 ```
 
-The same, for a manifest you already have in memory; writes the lists to `output_dir` and prints nothing. Emits a `UserWarning` when a non-spatial split leaks overlapping patches, or when a manifest without patch size forces a fallback from `spatial` to `stratified`.
+The same, for a manifest you already have in memory; writes the lists and `split.json` (settings, the strategy actually used, and counts) to `output_dir` and prints nothing. Emits a `UserWarning` when a non-spatial split leaks overlapping patches, or when a manifest without patch size forces a fallback from `spatial` to `stratified`.
 
 ### `SplitterConfig`
 
@@ -138,10 +138,12 @@ class Manifest(BaseModel):
     crs: str | None = None
     transform: tuple[float, float, float, float, float, float] | None = None
     sampler: dict[str, Any] | None = None
+    labels: dict[str, Any] | None = None    # label settings + sha256 of the label file
+    writer: dict[str, Any] | None = None    # image_format, jpg_quality
     patches: list[ManifestEntry] = []
 
     @classmethod
-    def load(cls, path: Path) -> Manifest: ...   # version 1 or 2
+    def load(cls, path: Path) -> Manifest: ...   # version 1 or 2; newer raises ManifestMismatchError
     def save(self, path: Path) -> None: ...       # atomic write
 ```
 
@@ -152,12 +154,12 @@ A `TypedDict` (plain `dict` at runtime) with `filename`, `mask_filename`, `row`,
 ### `ManifestMismatchError`
 
 ```python
-from mapcv.writer import ManifestMismatchError   # not re-exported from `mapcv`
+from mapcv import ManifestMismatchError
 
 class ManifestMismatchError(ValueError): ...
 ```
 
-Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, or one created with a different class map, source, product, bands, dtype, patch shape, CRS, transform or sampler. The message names the fields that differ.
+Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, or one created with a different class map, source, product, bands, dtype, patch shape, CRS, transform, sampler, label settings or label-file contents, or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
 
 ## Building blocks
 
@@ -255,4 +257,4 @@ The built-in XYZ sources and their URL templates. `resolve_url_template(url_temp
 
 ### Writer internals
 
-`load_or_create_manifest(path, class_map, *, source_type, product_id, bands, dtype, patch_shape, crs, transform, sampler)` and `write_patches(image_patches, mask_patches, meta, config, manifest, strip_index=0)` are the functions `run_generate` uses to resume-check and write patches. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.
+`load_or_create_manifest(path, class_map, *, source_type, product_id, bands, dtype, patch_shape, crs, transform, sampler, labels, writer)` and `write_patches(image_patches, mask_patches, meta, config, manifest, strip_index=0)` are the functions `run_generate` uses to resume-check and write patches. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.

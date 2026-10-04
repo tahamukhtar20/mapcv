@@ -53,5 +53,5 @@ A mapcv dataset is made of other people's data. Credit each source as its terms 
 | Esri World Imagery and other XYZ providers | As required by the provider's terms; see [Providers & licensing](/mapcv/project/providers/) |
 
 <Aside>
-In a methods section, also state the split strategy, block size and seed from your config, so others can reproduce your train/val/test partition from the manifest with `mapcv split`. mapcv does not store the split settings in the dataset folder, so keep your config with the data.
+In a methods section, also state the split strategy, block size and seed from your config, so others can reproduce your train/val/test partition from the manifest with `mapcv split`. mapcv records them in `splits/split.json`.
 </Aside>

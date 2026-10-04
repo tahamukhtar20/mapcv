@@ -76,18 +76,25 @@ Peak memory therefore grows with the **width** of the region and the chunk heigh
   ```
 
 - `strict` stops on the first failed tile, naming its URL (without query string).
-- `ignore` fills failed tiles with black and never stops. Combine it with `sampler.max_empty_ratio` to drop the resulting black patches, and watch the *Tiles … failed* count in the summary.
+- `ignore` fills failed tiles with black and never stops. Combine it with `sampler.max_empty_ratio` to drop the resulting black patches, and watch the *Tiles … failed* count in the summary. If more than half of the tiles fail (under any policy that lets the run finish), mapcv warns:
+
+  ```text
+  ⚠  2 of 2 tiles failed; check the tile URL, your network and imagery.policy (failed tiles are
+  left empty or black).
+  ```
+
+**Sentinel-2 read errors.** A remote read that times out is reported as `Generation failed: …` with the server's message, and a band that comes back empty while the other bands have data fails the chunk instead of writing patches full of `NaN`. In both cases, run the same command again to continue from that chunk.
 
 **Interruptions.** `Ctrl-C`, a crash or a lost connection lose at most the chunk in progress: the manifest is written atomically after each chunk, and any files left over from the unfinished chunk are overwritten on resume.
 
 ## 4. Resume
 
-Run the same command again:
+Run the same command again. Under the plan, mapcv prints `Resuming: <n> patch(es) already written, <m> to go` and continues.
 
-```console
-$ mapcv generate mapcv.yaml
-…
-Resuming: 30 patch(es) already written, 0 to go
+If everything is already written, mapcv says so and only refreshes the splits and the summary:
+
+```text
+Nothing left to do: all 77 patch(es) are already written.
 ```
 
 mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches.
@@ -99,25 +106,23 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | Recorded field | Changes when you edit… |
 | --- | --- |
 | `class_map` | `labels.label_field`, `labels.classes`, or the set of label values |
+| `labels` | any `labels` setting, or the **contents** of the label file (a SHA-256 hash is recorded) |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
 | `sampler` | any `sampler` field |
+| `writer` | `image_format` (including `png` ↔ `jpg`) or `jpg_quality` |
+
+Moving the label file is fine as long as its contents stay the same. A refused resume looks like this, here after a single byte was added to the label file:
 
 ```text
-Generation failed: dataset/manifest.json was generated with a different configuration
-(patch_shape, sampler); use a new writer.staging_dir or remove the old dataset
+Cannot resume: dataset/manifest.json was generated with a different configuration
+(labels); use a new writer.staging_dir or remove the old dataset
 ```
 
-<Aside type="caution" title="That error is not fixed by re-running">
-After a mismatch, the CLI also prints its generic hint *"Fix the cause and run the same command again: finished chunks are kept and the run resumes."* For this error, the fix is to point `writer.staging_dir` at a new folder, or to undo the config change.
-</Aside>
+Re-running does not help: point `writer.staging_dir` at a new folder, or undo the change.
 
-Settings that you **can** change between runs: `split` (it is recomputed), `max_connections`, `policy`, `max_failed_ratio`, `strip_rows`/`chunk_rows`, and `jpg_quality`.
-
-<Aside type="caution" title="Not detected by the resume check">
-The check compares settings, not file contents. Editing polygons in the label file (while keeping the same class values), or switching `image_format` between `png` and `jpg`, is **not** detected and would mix old and new patches in one folder. Use a new `staging_dir` after such changes.
-</Aside>
+Settings that you **can** change between runs: `split` (it is recomputed), `max_connections`, `policy`, `max_failed_ratio`, and `strip_rows`/`chunk_rows`.
 
 ### Datasets from mapcv 0.1
 
@@ -129,6 +134,8 @@ generate into a new writer.staging_dir ('mapcv split' still reads it)
 ```
 
 `mapcv split` and `mapcv info` still work on them. See [Migrating to 0.2](/mapcv/project/migration/).
+
+In the other direction, a manifest written by a newer mapcv (a higher manifest `version`) is refused with *"was written by a newer mapcv (manifest version N); upgrade mapcv to read it"*.
 
 ## Checklist for a big run
 

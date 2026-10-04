@@ -5,7 +5,7 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks. `region`, `imagery`, `sampler` and `writer` are required; `labels` and `split` are optional. Unknown keys are ignored. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks. `region`, `imagery`, `sampler` and `writer` are required; `labels` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
 region:   { … }   # where (required)
@@ -96,7 +96,7 @@ Selects exactly one imagery source with the required `type` key: `xyz` or `eopf_
 
 **Validation:**
 
-- At least one of `source` or `url_template` is required. If both are set, `url_template` is used for downloading.
+- Exactly one of `source` or `url_template` is required; setting both is an error.
 - `source` must be a built-in name. The 0.1 presets `google_satellite` and `osm` were removed and fail with an explanation ([why](/mapcv/project/migration/#google-imagery-preset)).
 - `url_template` must be `http(s)`, must contain `{x}`, `{y}` and `{z}`, and may contain no other placeholder. A `{s}` subdomain placeholder is rejected: replace it with one subdomain, for example `a`.
 - Tiles must decode to 256 × 256 images (PNG, JPEG, WebP or GIF).
@@ -123,7 +123,7 @@ Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `"eopf_zarr"` | required | Selects one EOPF Sentinel-2 L2A product |
-| `path` | string | required | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product |
+| `path` | string | required | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
 | `resolution` | `10` \| `20` \| `60` | `10` | Output grid in metres; every band is harmonised onto it |
 | `bands` | list of strings | all 12 | Variables to read, **in output order**. Default: `b01 b02 b03 b04 b05 b06 b07 b08 b8a b09 b11 b12` |
 | `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
@@ -141,7 +141,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. Relative paths are resolved from the directory you run `mapcv` in |
+| `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. A relative path is resolved against the config file's folder |
 | `label_field` | string \| null | `null` | Feature property holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
@@ -172,7 +172,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 | `drop` | Only patches that fit entirely inside | Positions clamped so patches fit |
 | `shift` | Like `drop`, plus one last patch shifted inward to cover the remaining edge (may overlap its neighbour) | Same as `drop` |
 
-**Empty pixels:** for XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty when every band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
+**Empty pixels:** for XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty unless every band has data, i.e. when any band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
 
 <Aside>
 Random mode can draw the same position more than once, and random patches overlap. Use the `spatial` split with it (the default); mapcv warns if you choose `stratified` or `random`.
@@ -182,7 +182,7 @@ Random mode can draw the same position more than once, and random patches overla
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `staging_dir` | path | required | Output folder. Created if needed. Re-running into a folder with a compatible `manifest.json` resumes |
+| `staging_dir` | path | required | Output folder, created if needed; a relative path is resolved against the config file's folder. Re-running into a folder with a compatible `manifest.json` resumes |
 | `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`) |
 | `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
 

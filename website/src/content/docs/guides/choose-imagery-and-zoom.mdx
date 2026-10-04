@@ -63,7 +63,7 @@ imagery:
   max_connections: 4
 ```
 
-The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. If both `source` and `url_template` are set, the template is used.
+The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. Use either `source` or `url_template`, not both.
 
 ### Keep API keys out of YAML
 

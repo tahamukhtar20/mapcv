@@ -21,6 +21,7 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
     - train.txt
     - val.txt
     - test.txt
+    - split.json settings and counts of the split
     - 10/
       - labeled.txt
       - unlabeled.txt
@@ -63,6 +64,11 @@ A JSON object describing the dataset and every patch. Version 2 is written by ma
     "pad_mode": "zero", "max_empty_ratio": 1.0, "min_label_ratio": 0.0,
     "random_seed": 42, "random_count": 100
   },
+  "labels": {
+    "label_field": "class", "classes": null, "all_touched": false,
+    "sha256": "a1bfc9b00f10d47298fca03c087a1373f6d5af02810a514cd97b3a056d0bded4"
+  },
+  "writer": { "image_format": "png", "jpg_quality": 95 },
   "patches": [
     {
       "filename": "patch_0000000.png",
@@ -102,6 +108,8 @@ A JSON object describing the dataset and every patch. Version 2 is written by ma
 | `crs` | string \| null | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2 |
 | `transform` | 6 floats \| null | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
 | `sampler` | object \| null | The resolved `sampler` config (with `stride` filled in). Used for resume checks and spatial splits |
+| `labels` | object \| null | The `labels` settings (without the path) plus the `sha256` of the label file, so a resume notices edited labels. `null` without labels |
+| `writer` | object \| null | `image_format` and `jpg_quality` (without the folder), so a resume notices a format change |
 | `patches` | list | One entry per patch, in file order |
 
 ### Patch entries
@@ -114,7 +122,7 @@ A JSON object describing the dataset and every patch. Version 2 is written by ma
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `strip_index` | int | Index of the processing chunk that wrote the patch (kept under its 0.1 name) |
 | `per_class_pixel_counts` | object | Mask pixel count per class ID, as strings: `{"0": 54098, "1": 11438}`. Empty without labels |
-| `empty_ratio` | float | Fraction of empty pixels (black RGB, or all-NaN bands) in the patch, 0–1 |
+| `empty_ratio` | float | Fraction of empty pixels (black RGB, or NaN in any band) in the patch, 0–1 |
 
 To get a patch's footprint in map coordinates:
 
@@ -131,7 +139,7 @@ print(manifest["crs"], (left, bottom, right, top))
 ```
 
 <Aside>
-Version-1 manifests (mapcv 0.1) lack `sampler`, `crs` and `transform`, and their `row` is relative to a strip, not the raster. They can be split and inspected, but not resumed.
+Version-1 manifests (mapcv 0.1) lack `sampler`, `crs`, `transform`, `labels` and `writer`, and their `row` is relative to a strip, not the raster. They can be split and inspected, but not resumed. A manifest with a higher `version` than your mapcv supports is refused with a message to upgrade.
 </Aside>
 
 ## Split files
@@ -141,7 +149,29 @@ Version-1 manifests (mapcv 0.1) lack `sampler`, `crs` and `transform`, and their
 | `splits/train.txt`, `val.txt`, `test.txt` | Image file names (`patch_0000123.png`), one per line |
 | `splits/<percent>/labeled.txt` | The first ⌈ratio × len(train)⌉ names of a shuffled `train.txt` |
 | `splits/<percent>/unlabeled.txt` | The rest of `train.txt` |
+| `splits/split.json` | The split settings (`SplitterConfig`), the strategy actually used, and the `train`/`val`/`test`/`dropped` counts |
 
 `<percent>` is the labeled ratio as a percentage: `0.1` → `10/`, `0.125` → `12.5/`. The three main lists are disjoint. With the `spatial` strategy, some patches may be in **no** list: they overlapped a held-out patch and were left out of train/val (the count is reported as "overlapping patch(es) left out"). With `sample_limit`, patches outside the sample are in no list either.
 
-Files have no trailing newline, so read them with `.read().split()` or `.splitlines()` rather than counting lines with `wc -l`.
+Each list has one name per line and ends with a newline, so `wc -l` counts patches.
+
+```json title="dataset/splits/split.json"
+{
+  "settings": {
+    "test_ratio": 0.2,
+    "val_ratio": 0.1,
+    "labeled_ratios": [0.1, 0.2, 0.3],
+    "seed": 42,
+    "strategy": "spatial",
+    "block_size": null,
+    "sample_limit": null
+  },
+  "strategy_used": "spatial",
+  "train": 52,
+  "val": 8,
+  "test": 17,
+  "dropped": 0
+}
+```
+
+`strategy_used` differs from `settings.strategy` only when a `spatial` split of a mapcv 0.1 manifest fell back to `stratified`.

@@ -101,7 +101,7 @@ def download_region(
 
     if _in_jupyter():
         print(f"Fetching {total} tiles...", end=" ", flush=True)
-        results, failed_count = fetch_tiles_rs(
+        results, failed_count, _ = fetch_tiles_rs(
             target_tiles,
             template,
             callback=lambda _: None,
@@ -117,7 +117,7 @@ def download_region(
             def progress_callback(completed: int) -> None:
                 progress.update(task_id, completed=completed)
 
-            results, failed_count = fetch_tiles_rs(
+            results, failed_count, _ = fetch_tiles_rs(
                 target_tiles,
                 template,
                 callback=progress_callback,

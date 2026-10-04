@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Protocol, Set, Tuple
+from collections import Counter
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -128,6 +129,8 @@ class XYZRasterSource:
         self._attempted: Set[Tuple[int, int]] = set()
         self.tiles_requested = 0
         self.tiles_failed = 0
+        self.failure_causes: Counter[str] = Counter()
+        self.failure_example: Optional[str] = None
         self._min_x = min(tile.x for tile in target_tiles)
         self._max_x = max(tile.x for tile in target_tiles)
         self._min_y = min(tile.y for tile in target_tiles)
@@ -212,7 +215,7 @@ class XYZRasterSource:
             return
         self._attempted.update(missing)
         config = self._config
-        results, failed = fetch_tiles(
+        results, failed, (causes, example) = fetch_tiles(
             [PyTileIndex(x, y, self._zoom) for x, y in missing],
             self._template,
             max_connections=config.max_connections,
@@ -221,8 +224,19 @@ class XYZRasterSource:
         )
         self.tiles_requested += len(missing)
         self.tiles_failed += failed
+        self.failure_causes.update(dict(causes))
+        if example and self.failure_example is None:
+            self.failure_example = example
         for tile, payload in results:
             self._tiles[(tile.x, tile.y)] = payload
+
+    @property
+    def failure_reasons(self) -> str:
+        """Failed tiles so far by cause, most common first, with one example."""
+        if not self.failure_causes:
+            return ""
+        counts = ", ".join(f"{n} x {cause}" for cause, n in self.failure_causes.most_common())
+        return f"{counts} (e.g. {self.failure_example})" if self.failure_example else counts
 
     def close(self) -> None:
         """Drop cached tiles."""

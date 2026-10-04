@@ -312,10 +312,12 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         manifest.save(manifest_path)
         requested = int(getattr(source, "tiles_requested", 0))
         failed = int(getattr(source, "tiles_failed", 0))
+        reasons = str(getattr(source, "failure_reasons", "") or "")
+        why = f" Causes: {reasons}." if reasons else ""
         if requested and failed / requested > _FAILED_TILES_WARNING:
             warnings.warn(
                 f"{failed} of {requested} tiles failed; check the tile URL, your network and "
-                "imagery.policy (failed tiles are left empty or black).",
+                f"imagery.policy (failed tiles are left empty or black).{why}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -323,7 +325,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             warnings.warn(
                 f"{failed} tile(s) failed and were filled with black; patches that include them "
                 "were kept, with labels over black pixels. Set sampler.max_empty_ratio below 1 "
-                "(for example 0.5) to drop such patches.",
+                f"(for example 0.5) to drop such patches.{why}",
                 UserWarning,
                 stacklevel=2,
             )

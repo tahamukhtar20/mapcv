@@ -367,6 +367,13 @@ h1#_top {
   height: auto;
 }
 
+/* The overview is laid out vertically to fit the text column and phones. */
+.mapcv-diagram svg.overview {
+  min-width: 0;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
 .mapcv-diagram svg .box {
   fill: var(--sl-color-gray-6);
   stroke: var(--sl-color-gray-4);

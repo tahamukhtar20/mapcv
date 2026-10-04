@@ -1,0 +1,57 @@
+---
+title: Citing mapcv
+description: How to cite the mapcv software and the data sources of a dataset you built with it.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+If mapcv helped you build a dataset for published work, please cite the software and the version you used (`mapcv --version`). A DOI will be added for each release; until a release has one, cite the repository URL and version.
+
+<Tabs>
+  <TabItem label="BibTeX">
+    ```bibtex
+    @software{mukhtar_mapcv,
+      author  = {Mukhtar, Muhammad Taha},
+      title   = {mapcv: segmentation datasets from map imagery and polygon labels},
+      version = {0.2.0},
+      year    = {2026},
+      url     = {https://github.com/tahamukhtar20/mapcv},
+      license = {MIT}
+    }
+    ```
+  </TabItem>
+  <TabItem label="CFF">
+    ```yaml
+    cff-version: 1.2.0
+    message: "If you use this software, please cite it as below."
+    title: "mapcv: segmentation datasets from map imagery and polygon labels"
+    type: software
+    authors:
+      - family-names: Mukhtar
+        given-names: Muhammad Taha
+    version: 0.2.0
+    license: MIT
+    repository-code: "https://github.com/tahamukhtar20/mapcv"
+    url: "https://tahamukhtar20.github.io/mapcv/"
+    ```
+  </TabItem>
+  <TabItem label="Text">
+    Mukhtar, M. T. (2026). *mapcv: segmentation datasets from map imagery and polygon labels* (Version 0.2.0) [Computer software]. https://github.com/tahamukhtar20/mapcv
+  </TabItem>
+</Tabs>
+
+Adjust `version` and `year` to the release you used.
+
+## Cite your data, too
+
+A mapcv dataset is made of other people's data. Credit each source as its terms require, for example:
+
+| Source | Typical credit |
+| --- | --- |
+| Copernicus Sentinel-2 | "Contains modified Copernicus Sentinel data [year]" |
+| OpenStreetMap labels | "© OpenStreetMap contributors", data under the ODbL |
+| Esri World Imagery and other XYZ providers | As required by the provider's terms; see [Providers & licensing](/mapcv/project/providers/) |
+
+<Aside>
+In a methods section, also state the split strategy, block size and seed from your config, so others can reproduce your train/val/test partition from the manifest with `mapcv split`. mapcv records them in `splits/split.json`.
+</Aside>

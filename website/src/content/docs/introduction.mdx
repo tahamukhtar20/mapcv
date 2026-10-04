@@ -1,69 +1,55 @@
 ---
 title: Introduction
-description: What mapcv is, how it works, and when to use it.
+description: What mapcv does, who it is for, and what you get out of it.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import PipelineDiagram from '../../components/PipelineDiagram.astro';
 
-**mapcv** turns a bounding box and optional polygon labels into a ready-to-train satellite imagery dataset for semantic segmentation. You give it a geographic region, an XYZ or EOPF Sentinel-2 L2A source, and optionally a KML or GeoJSON annotation file. It reads the imagery, aligns and rasterizes labels, extracts fixed-size patches, and writes everything to disk.
+**mapcv turns a region and polygon labels into a ready-to-train semantic-segmentation dataset.** You describe *where* (a longitude/latitude box), *what imagery* (XYZ map tiles or a Sentinel-2 L2A product) and, optionally, *what to label* (a GeoJSON or KML file). mapcv fetches the imagery, burns the polygons into masks on exactly the same pixel grid, cuts fixed-size patches, and writes them with a manifest and leakage-safe train/val/test splits.
 
-To keep installation light, the core XYZ pipeline does not depend on GDAL. The optional `mapcv[zarr]` extra for EOPF Sentinel-2 pulls in rasterio, which ships its own GDAL wheels. Tile stitching, rasterization, and patch sampling are powered by Rust, while the Python layer handles orchestration, configuration, and access via the CLI or API.
+<PipelineDiagram variant="overview" />
 
----
+## Why it exists
 
-## Key concepts
+Building a segmentation dataset from map imagery usually means stitching tiles by hand, fighting coordinate systems, installing GDAL, and writing a one-off split script that quietly leaks neighbouring pixels between train and test. mapcv is a **data-creation-first** tool: one YAML file, three commands, and the result is plain files on disk.
 
-- **Bounding box**: The target area in WGS-84 (longitude/latitude). mapcv expands these coordinates outward to align with the nearest tile grid so no downloaded tiles are partially cut off.
-- **Resolution**: XYZ uses a zoom level. EOPF Sentinel-2 uses a harmonized 10, 20, or 60 metre grid while preserving the product's native projected CRS.
-- **Chunks**: Sampling anchors are generated globally, then imagery is read in row chunks with a patch halo so seam patches are neither lost nor duplicated.
-- **Patches**: Fixed-size square crops extracted from the stitched image. Each patch has a matching mask file of the same name.
-- **Class IDs**: Mask pixels are `0` (background) or `1..255` (class). When `label_field` is `null`, all polygons get `class_id = 1`. When a field name is given, integer labels in 1..255 are used as IDs, other labels get IDs in sorted order, and `labels.classes` sets them explicitly.
+- **No GDAL.** The core is Rust (tile math, tile fetching, rasterizing, patch sampling and encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ imagery.
+- **Correct by default.** Labels are reprojected into the imagery's own CRS, class IDs are stable across files, and the default split keeps spatially close patches together.
+- **Honest estimates.** `mapcv plan` tells you how many tiles, patches, megabytes and how much memory a run needs before anything is downloaded.
+- **Resumable.** The manifest is saved after every chunk. If a run stops, the same command continues it.
 
----
+## Who it is for
 
-## When to use mapcv
+- Computer-vision and ML researchers who need a segmentation dataset for a specific place, without becoming GIS specialists.
+- Remote-sensing practitioners who want multispectral Sentinel-2 patches as plain `float32` arrays.
+- Anyone teaching or benchmarking who needs a dataset that can be regenerated from a config file.
 
-- You have polygon annotations (KML or GeoJSON) and want pixel-level segmentation masks.
-- You want image-only patches (unlabeled) — just omit the `labels` section.
-- You need a reproducible pipeline that goes from a config file to a ready-to-train dataset in one command.
-- You need selected Sentinel-2 L2A reflectance bands as bands-first `float32` NPY patches.
+## What you get
 
----
+| Output | What it is |
+| --- | --- |
+| `Images/patch_0000000.png` | RGB patch from XYZ tiles (`.jpg` optional), or a bands-first `float32` `.npy` for Sentinel-2 |
+| `Masks/patch_0000000.png` | `uint8` mask with the same name: `0` = background, `1..255` = class IDs |
+| `manifest.json` | Source, bands, CRS, affine transform, class map, sampler settings and per-patch statistics |
+| `splits/train.txt`, `val.txt`, `test.txt` | One image filename per line |
+| `splits/<percent>/labeled.txt` | Optional labeled/unlabeled subsets of `train` for semi-supervised learning |
 
-## Quick start guide
+Details: [Dataset format](/mapcv/reference/dataset-format/).
 
-Get up and running with `mapcv` and generate your first dataset in three simple steps.
+## What mapcv does not do
 
-### 1. Install mapcv
+mapcv 0.2 deliberately keeps a narrow scope. It does **not** search catalogues (STAC), mosaic several scenes, mask clouds, write GeoTIFFs, connect to Google Earth Engine, or authenticate to private buckets. It reads one Sentinel-2 product per run, and XYZ sources must serve standard 256 × 256 tiles.
 
-Install the latest version of mapcv using pip.
+<Aside type="caution" title="Imagery rights are yours to check">
+mapcv processes imagery; it does not grant you the right to download, cache, train on or share it. Read [Providers & licensing](/mapcv/project/providers/) before you generate a dataset from someone else's tiles.
+</Aside>
 
-```bash
-pip install mapcv
-```
+## Where to go next
 
-### 2. Configure your dataset
-
-Generate a template configuration file and customize it to fit your needs:
-```bash
-mapcv init my_dataset.yaml
-```
-> **Note**: For details on all available settings, check out the [Configuration Reference](/mapcv/configuration) page.
-
-### 3. Generate the dataset
-
-Once your configuration file is ready, run the following command to start the generation process:
-
-```bash
-mapcv generate my_dataset.yaml
-```
-
-That's it! Your generated dataset will be saved to the output directory you specified in your configuration file.
-
----
-
-## Citation
-
-If you use mapcv in your research, please consider citing it.
-
-*(Citation information will be added after publication.)*
+<CardGrid>
+  <LinkCard title="Install mapcv" description="pip, extras, Python versions and shell completion." href="/mapcv/installation/" />
+  <LinkCard title="Quickstart" description="Your first dataset in five minutes." href="/mapcv/quickstart/" />
+  <LinkCard title="How mapcv works" description="The pipeline stage by stage." href="/mapcv/concepts/how-mapcv-works/" />
+  <LinkCard title="Spatial leakage" description="Why random splits overstate accuracy on map data." href="/mapcv/concepts/spatial-leakage/" />
+</CardGrid>

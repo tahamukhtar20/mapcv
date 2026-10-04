@@ -1,53 +1,97 @@
 ---
 title: Installation
-description: Install mapcv from PyPI or build from source.
+description: Install mapcv from PyPI, add Sentinel-2 support, verify the install and enable shell completion.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-## PyPI
+## Install
 
-```bash
-pip install mapcv
-```
+<Tabs syncKey="installer">
+  <TabItem label="pip">
+    ```bash
+    python -m pip install mapcv
+    ```
+  </TabItem>
+  <TabItem label="uv">
+    ```bash
+    uv pip install mapcv
+    # or, in a uv project:
+    uv add mapcv
+    ```
+  </TabItem>
+  <TabItem label="pipx (CLI only)">
+    ```bash
+    pipx install mapcv
+    ```
+  </TabItem>
+</Tabs>
 
-Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
+mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built wheel per platform covers every supported Python version:
 
-For EOPF Sentinel-2 L2A Zarr input, install the optional dependencies:
+| Platform | Wheel |
+| --- | --- |
+| Linux x86-64 | yes |
+| macOS | yes |
+| Windows | yes |
+| Other (for example Linux aarch64) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
 
-```bash
-pip install "mapcv[zarr]"
-```
+The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich and PyYAML. There is no GDAL, rasterio or PROJ dependency for XYZ imagery.
 
-The `zarr` extra currently supports Python 3.10–3.13: its zarr 2 dependency has no Python 3.14 wheels yet.
+## Optional extras
 
-The base installation does not include xarray, Dask, Zarr, pyproj, or remote-filesystem clients.
+| Extra | Install | Adds | Python |
+| --- | --- | --- | --- |
+| `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
 
----
-
-## Building from source
-
-You need [Rust](https://rustup.rs/) and `maturin`.
-
-```bash
-git clone https://github.com/tahamukhtar20/mapcv
-cd mapcv
-pip install maturin
-maturin develop --release
-```
-
-`--release` enables Rust optimizations. Omitting it builds a debug binary that is significantly slower.
-
-<Aside type="note">
-Building from source requires a Rust toolchain (stable). Install it with `rustup` (see [rustup.rs](https://rustup.rs/)).
+<Aside type="caution" title="Sentinel-2 and Python 3.14">
+The `zarr` extra depends on zarr 2, whose `numcodecs` dependency has no Python 3.14 wheels. On Python 3.14, `pip install "mapcv[zarr]"` succeeds but installs **none** of the extra packages; a Sentinel-2 run then stops with a message explaining that Sentinel-2 support needs Python 3.10–3.13. Use a Python 3.13 environment for Sentinel-2.
 </Aside>
 
----
+## Verify
 
-## Verifying the install
-
-```bash
-mapcv --help
+```console
+$ mapcv --version
+mapcv 0.2.0
 ```
 
-You should see the list of available commands. If the command is not found, make sure the Python environment where you installed mapcv is active.
+`mapcv --help` (or `mapcv -h`) lists the commands, grouped in the order you use them: **1. Build a dataset** (`init`, `plan`, `generate`), **2. Use a dataset** (`info`, `split`) and **3. Utilities** (`validate`). If the shell says `command not found`, activate the environment you installed into, or run `python -m pip show mapcv` to see where it went.
+
+## Shell completion
+
+mapcv's CLI is built with Typer, which can install tab completion for bash, zsh, fish and PowerShell:
+
+```bash
+mapcv --install-completion   # install for the current shell, then restart it
+mapcv --show-completion      # print the script, to install it yourself
+```
+
+## Build from source
+
+Use this for development or on platforms without a wheel.
+
+<Steps>
+
+1. Install [Rust](https://rustup.rs/) (stable) and Python 3.10+.
+
+2. Clone the repository:
+
+   ```bash
+   git clone https://github.com/tahamukhtar20/mapcv
+   cd mapcv
+   ```
+
+3. Build and install into the active environment. `--release` turns on Rust optimisations; debug builds are much slower.
+
+   ```bash
+   python -m pip install maturin
+   maturin develop --release
+   ```
+
+   Contributors use `uv sync --extra dev && uv run maturin develop` instead; see [Contributing](/mapcv/project/contributing/).
+
+</Steps>
+
+## Next
+
+Head to the [Quickstart](/mapcv/quickstart/) to build your first dataset.

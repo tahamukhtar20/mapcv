@@ -1,0 +1,167 @@
+---
+title: CLI
+description: Every mapcv command and option, with the real --help output, behaviour notes and exit codes.
+---
+
+import { Code } from '@astrojs/starlight/components';
+import mainHelp from '../../../cli-help/main.txt?raw';
+import initHelp from '../../../cli-help/init.txt?raw';
+import planHelp from '../../../cli-help/plan.txt?raw';
+import generateHelp from '../../../cli-help/generate.txt?raw';
+import infoHelp from '../../../cli-help/info.txt?raw';
+import splitHelp from '../../../cli-help/split.txt?raw';
+import validateHelp from '../../../cli-help/validate.txt?raw';
+import version from '../../../cli-help/version.txt?raw';
+
+The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits and `validate` to check a config. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
+
+| Command | What it does | Touches the network |
+| --- | --- | --- |
+| [`mapcv init`](#mapcv-init) | Write a config, guided or from a template | no |
+| [`mapcv plan`](#mapcv-plan) | Estimate tiles, patches, disk and memory | no |
+| [`mapcv generate`](#mapcv-generate) | Build or resume the dataset | yes |
+| [`mapcv info`](#mapcv-info) | Summarize a dataset folder | no |
+| [`mapcv split`](#mapcv-split) | Rewrite train/val/test lists from the manifest | no |
+| [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
+
+## Global options
+
+<Code code={mainHelp} lang="text" title="mapcv --help" />
+
+| Option | Meaning |
+| --- | --- |
+| `--version`, `-V` | Print `mapcv <version>` and exit |
+| `--quiet`, `-q` | Hide progress bars and progress messages. Put it **before** the command: `mapcv -q generate mapcv.yaml` |
+| `--install-completion` | Install tab completion for the current shell |
+| `--show-completion` | Print the completion script |
+| `--help`, `-h` | Show help; works on every command |
+
+`--quiet` hides the progress bars, the "Opening imagery" spinner and the resume message. Plans, warnings, errors and summaries (including the `mapcv split` summary line) are still printed.
+
+## `mapcv init`
+
+<Code code={initHelp} lang="text" title="mapcv init --help" />
+
+- Writes `mapcv.yaml` in the current folder, or the `output` path you give.
+- **Guided** (default in an interactive terminal without `--template`): four steps (imagery, area, labels, patches and output). The area can be a bounding box `west,south,east,north` or a `.geojson`/`.json`/`.kml` file, whose polygon extent becomes the region; the wizard then offers to use the same file as labels and lists its attribute fields with example values (fields with more than 255 distinct values, such as IDs, are left out).
+- **Template** (`--template xyz` or `--template sentinel2`, or whenever stdin/stdout is not a terminal): writes a fully commented example. Add `--stdout` to print the template instead of writing a file.
+- An existing file is never overwritten without `--force` (the guided mode asks first):
+
+  ```console
+  $ mapcv init --template xyz
+  mapcv.yaml already exists. Use --force.
+  ```
+- The written file is validated. If it needs edits (for example, a custom tile URL entered in the wizard without `{x}`, `{y}` and `{z}`), mapcv still writes it and lists the fields to fix.
+
+```console
+$ mapcv init                               # guided, writes mapcv.yaml
+$ mapcv init s2.yaml -t sentinel2          # Sentinel-2 template into s2.yaml
+$ mapcv init --template xyz --stdout       # print the XYZ template
+```
+
+## `mapcv plan`
+
+<Code code={planHelp} lang="text" title="mapcv plan --help" />
+
+Loads the config, parses the label file and estimates the run without downloading imagery. The panel shows the region size in km, ground resolution, raster size, tile count and download size (XYZ), label polygons and the class map, patch count, output size, split settings and memory per chunk. Warnings follow the panel: skipped label features, a missing label file, labels that don't intersect the region, or no patch fitting the region.
+
+Estimates use typical tile and file sizes. For Sentinel-2 the raster size is computed on the UTM grid of the region (with the `zarr` extra installed); the product's exact grid is known only once it is opened, so the real size can differ by a few pixels.
+
+## `mapcv generate`
+
+<Code code={generateHelp} lang="text" title="mapcv generate --help" />
+
+1. Prints the same plan as `mapcv plan`. With `--dry-run` it stops here.
+2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
+3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest after each chunk.
+4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files written, the class balance, and next steps.
+
+Warnings (skipped label features, labels outside the imagery, split leakage, more than half of the tiles failing) are printed once each, as `⚠` lines. Failures are reported as one `Generation failed: …` message without a traceback, followed by a hint to re-run; a refused resume is reported as `Cannot resume: …` instead.
+
+**Resuming:** run the same command again. Patches already in the manifest are skipped, and XYZ tiles are only fetched for chunks still to do. When everything is already written it prints `Nothing left to do: all 77 patch(es) are already written.` Resuming refuses a folder made with different imagery, labels (including edits to the label file), sampler or writer settings, by mapcv 0.1, or by a newer mapcv (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)).
+
+```console
+$ mapcv generate mapcv.yaml
+$ mapcv generate mapcv.yaml --dry-run
+$ mapcv -q generate mapcv.yaml --yes      # CI: no prompts, no progress bars
+```
+
+## `mapcv info`
+
+<Code code={infoHelp} lang="text" title="mapcv info --help" />
+
+Reads `manifest.json` (version 1 or 2) and `splits/` and prints the source and product, bands, patch count and shape, CRS, how many patches are padded, split sizes, manifest version and per-class pixel shares.
+
+```console
+$ mapcv info dataset
+╭─ dataset ────────────────────────────────────────────────────────────────────────────╮
+│ Source    xyz · esri_satellite                                                       │
+│ Bands     red, green, blue                                                           │
+│ Patches   77 · 256×256×3 uint8                                                       │
+│ CRS       EPSG:3857                                                                  │
+│ Splits    train 52 (68%) · val 8 (10%) · test 17 (22%)                               │
+│ Manifest  version 2                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+  class         id    pixels
+  background     0     81.0%
+  building       1     19.0%
+```
+
+## `mapcv split`
+
+<Code code={splitHelp} lang="text" title="mapcv split --help" />
+
+Rewrites `STAGING_DIR/splits/` (including `split.json`, which records the settings and counts) from the manifest only; images are never opened, so it takes seconds even for large datasets. Options mirror the [`split` config block](/mapcv/reference/configuration/#split); the split settings in your YAML are **not** read.
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `--test-ratio` | `0.2` | Fraction of all patches for test |
+| `--val-ratio` | `0.1` | Fraction of the rest for validation |
+| `--labeled-ratios` | `0.1 0.2 0.3` | Repeat the option for several values: `--labeled-ratios 0.05 --labeled-ratios 0.25` |
+| `--seed` | `42` | |
+| `--strategy` | `spatial` | `spatial`, `stratified` or `random` |
+| `--block-size` | auto | Pixels; default 4 × patch size, smaller on small rasters |
+| `--sample-limit` | none | Split a subsample of this many patches |
+
+```console
+$ mapcv split dataset --block-size 512 --labeled-ratios 0.05 --labeled-ratios 0.25
+✓ Splits written to dataset/splits: train 52 (68%) · val 8 (10%) · test 17 (22%)
+
+$ mapcv split overlap --strategy random
+⚠  Patches overlap or repeat, so a 'random' split leaks pixels between train and test;
+use strategy 'spatial'.
+✓ Splits written to overlap/splits: train 196 (72%) · val 22 (8%) · test 55 (20%)
+```
+
+Old `splits/<percent>/` folders for ratios you no longer request are left in place.
+
+## `mapcv validate`
+
+<Code code={validateHelp} lang="text" title="mapcv validate --help" />
+
+Parses the YAML and runs every field check, prints the resolved settings, and warns if `labels.path` does not exist. It reads neither the label file nor any imagery; use `mapcv plan` for that.
+
+```console
+$ mapcv validate bad.yaml
+Config error in bad.yaml:
+  • region: region.west must be less than region.east
+  • imagery.source: the built-in 'google_satellite' source was removed in mapcv 0.2.0: Google
+does not permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
+  • labels.path: labels.path must be a .kml, .geojson, or .json file, got 'buildings.shp'
+(convert KMZ or Shapefiles to GeoJSON first)
+Fix the fields above, or start from a working config with mapcv init.
+
+$ mapcv validate unknown.yaml
+Config error in unknown.yaml:
+  • imagery: imagery: set 'source' or 'url_template', not both
+  • sampler.stide: Extra inputs are not permitted
+Fix the fields above, or start from a working config with mapcv init.
+```
+
+## Exit codes
+
+| Code | When |
+| --- | --- |
+| `0` | Success (also `generate --dry-run`, and `init` when the written file still needs edits) |
+| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, or a declined large-job prompt |
+| `2` | Large job without a terminal and without `--yes`; also invalid command-line usage |

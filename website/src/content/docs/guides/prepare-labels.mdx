@@ -1,0 +1,136 @@
+---
+title: Prepare labels
+description: Get polygon labels into a GeoJSON or KML file mapcv can read — from QGIS, ogr2ogr, Python or OpenStreetMap — and choose class IDs.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+mapcv burns **polygons** from one label file into the masks. This page covers what that file must look like, how to export it from common tools, and how class IDs are chosen.
+
+## What mapcv accepts
+
+| | Requirement |
+| --- | --- |
+| File type | `.geojson`, `.json` or `.kml`. Not `.kmz`, Shapefile or GeoPackage (convert them, below) |
+| Coordinates | WGS-84 **longitude, latitude** (EPSG:4326), in that order, as RFC 7946 GeoJSON requires |
+| Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection`. Points and lines are skipped with a warning |
+| GeoJSON shape | A `FeatureCollection` or a single `Feature`. A `crs` member is allowed only if it names WGS-84 (`CRS84`, `EPSG:4326`); projected CRSs are rejected |
+| KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write) |
+
+mapcv reprojects the polygons into the imagery's CRS itself (Web Mercator for XYZ, the product's UTM zone for Sentinel-2), so never reproject labels to match the imagery.
+
+## Configure labels
+
+```yaml
+labels:
+  path: landuse.geojson     # relative to this config file's folder
+  label_field: class        # property holding the class; omit for "every polygon is 1"
+  classes:                  # optional: pin IDs (needs label_field)
+    built_up: 1
+    farmland: 2
+    forest: 3
+    water: 4
+  all_touched: false        # true also burns pixels the outline merely touches
+```
+
+### How class IDs are chosen
+
+1. **No `label_field`:** every polygon is `1`; `class_map` in the manifest is empty. Good for one-class problems such as buildings.
+2. **`label_field` with integer labels 1–255:** the integers are the IDs. `"3"`, `3` and `3.0` are the same class.
+3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`. The result does not depend on feature order, so two files with the same classes get the same IDs.
+4. **`classes` given:** exactly those IDs (1–255); features whose label is not listed are skipped. Use it to merge classes (`{house: 1, apartments: 1}`), to keep IDs stable across datasets, or to match an existing model.
+
+Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
+
+<Aside type="caution" title="A label of 0 changes the numbering">
+Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`. Remove such features or set `classes` explicitly.
+</Aside>
+
+Always check the result with `mapcv plan`, which prints the class map and any skipped features before anything is downloaded:
+
+```text
+│ Labels   landuse.geojson · 643 polygon(s) · classes: built_up → 1, farmland → 2,     │
+│          forest → 3, water → 4                                                       │
+```
+
+### Skipped features
+
+Features are skipped, and counted in a warning, when they have no polygon geometry, no value in `label_field`, or a value missing from `classes`:
+
+```text
+⚠  GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.
+```
+
+Where polygons overlap, the feature that comes **later** in the file wins. Put fine classes after coarse ones (for example buildings after land use) if they overlap.
+
+## Export from common tools
+
+<Tabs>
+  <TabItem label="QGIS">
+    1. Right-click the layer → **Export → Save Features As…**
+    2. Format **GeoJSON** (or **Keyhole Markup Language [KML]**).
+    3. CRS **EPSG:4326 - WGS 84**.
+    4. Keep the attribute you want as `label_field` among the exported fields.
+
+    QGIS writes KML attributes as `<SimpleData>`, which mapcv reads.
+  </TabItem>
+  <TabItem label="ogr2ogr (GDAL)">
+    ```bash
+    # Shapefile / GeoPackage / anything GDAL reads -> WGS-84 GeoJSON
+    ogr2ogr -f GeoJSON -t_srs EPSG:4326 labels.geojson input.shp
+    ogr2ogr -f GeoJSON -t_srs EPSG:4326 labels.geojson input.gpkg layer_name
+
+    # KMZ is a zip with a KML inside
+    unzip -p labels.kmz doc.kml > labels.kml
+    ```
+    You only need GDAL for this one-off conversion; mapcv itself doesn't use it.
+  </TabItem>
+  <TabItem label="GeoPandas">
+    ```python
+    import geopandas as gpd
+
+    gdf = gpd.read_file("input.gpkg")
+    gdf = gdf.to_crs(4326)
+    gdf = gdf[gdf.geom_type.isin(["Polygon", "MultiPolygon"])]
+    gdf[["landuse", "geometry"]].to_file("labels.geojson", driver="GeoJSON")
+    ```
+  </TabItem>
+  <TabItem label="Google Earth / My Maps">
+    Draw polygons, then export the folder as KML (not KMZ). Put the class into a data field, or leave `label_field` unset for a single class. mapcv handles the non-standard KML that Google Earth writes.
+  </TabItem>
+</Tabs>
+
+## Use OpenStreetMap data as labels
+
+OpenStreetMap is a common source of building, road and land-use polygons. Its data is licensed under the [ODbL](https://www.openstreetmap.org/copyright): credit "© OpenStreetMap contributors" when you share a dataset made from it.
+
+Some ways to get a GeoJSON for a small area:
+
+- **[osmnx](https://osmnx.readthedocs.io/)** (Python), for example:
+
+  ```python
+  import osmnx as ox
+
+  # bbox is (west, south, east, north) in osmnx 2.x
+  gdf = ox.features_from_bbox(bbox=(4.9375, 52.3725, 4.9515, 52.3780), tags={"building": True})
+  gdf = gdf[gdf.geom_type.isin(["Polygon", "MultiPolygon"])][["building", "geometry"]]
+  gdf.to_file("buildings.geojson", driver="GeoJSON")
+  ```
+
+- **[Overpass Turbo](https://overpass-turbo.eu/)** in the browser: run a query, then **Export → GeoJSON**.
+- **[QuackOSM](https://github.com/kraina-ai/quackosm)** or **[osmium](https://osmcode.org/osmium-tool/)** for large areas from a `.osm.pbf` extract, without hammering public APIs.
+
+The example label files in the repository were made this way; see [`examples/`](https://github.com/tahamukhtar20/mapcv/tree/main/examples).
+
+<Aside>
+OSM tags are messy: `building=yes` is the most common building "type", and land-use polygons overlap. Map raw tags to the classes you care about (in your export script, or with `labels.classes`) rather than using every tag value as a class.
+</Aside>
+
+## Common problems
+
+- **All masks are background** and `generate` warns *"no label polygon intersects the imagery extent"*: the polygons are outside the region, or longitude and latitude are swapped (coordinates like `[52.37, 4.94]` instead of `[4.94, 52.37]`). Check in QGIS or [geojson.io](https://geojson.io/).
+- **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326.
+- **`labels.path must be a .kml, .geojson, or .json file`**: convert KMZ, Shapefile or GeoPackage as shown above.
+- **Masks look shifted on tall buildings:** footprints are traced at ground level while aerial imagery shows roofs displaced by perspective. That is a property of the data, not a reprojection error.
+
+More in [Troubleshooting](/mapcv/guides/troubleshooting/).

@@ -1,0 +1,151 @@
+---
+title: Choose imagery and zoom
+description: Pick an imagery source and resolution — XYZ presets, zoom levels and pixel sizes, Sentinel-2 bands and resolutions, and custom tile URLs without leaking API keys.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+mapcv reads two kinds of imagery. Choose by what your model needs to see:
+
+| | XYZ tiles | Sentinel-2 L2A (EOPF Zarr) |
+| --- | --- | --- |
+| Pixel size | ~0.1–40 m, set by `zoom` | 10, 20 or 60 m |
+| Channels | RGB (3 × `uint8`) | Up to 12 spectral bands (`float32` reflectance) |
+| Good for | Buildings, roads, trees, solar panels, anything you can see at sub-metre scale | Land cover, crops, water, vegetation indices, change over large areas |
+| Licensing | Provider-specific; often restrictive | Free and open Copernicus data |
+| Install | `pip install mapcv` | `pip install "mapcv[zarr]"` (Python 3.10–3.13) |
+
+## XYZ tiles
+
+### Built-in sources
+
+| `source` | Content |
+| --- | --- |
+| `esri_satellite` | Esri World Imagery (aerial/satellite photos) |
+| `esri_topo` | Esri World Topographic Map |
+| `esri_street` | Esri World Street Map |
+| `cartodb_positron` | CARTO light basemap |
+| `cartodb_dark_matter` | CARTO dark basemap |
+
+Basemaps (topo, street, CARTO) are rendered maps, not photos; they are mostly useful for map-style tasks or as a quick test. These names are conveniences, not licences: check [Providers & licensing](/mapcv/project/providers/) before you download.
+
+### Zoom and pixel size
+
+Each zoom level halves the pixel size and **quadruples** the number of tiles. Ground resolution in Web Mercator depends on latitude: about 156 543 × cos(latitude) / 2<sup>zoom</sup> metres per pixel.
+
+| Zoom | Equator | 30° | 45° | 52° (Amsterdam) | 60° | Tiles per km² at 45° |
+| --- | --- | --- | --- | --- | --- | --- |
+| 14 | 9.55 m | 8.27 m | 6.76 m | 5.88 m | 4.78 m | ~0.3 |
+| 15 | 4.78 m | 4.14 m | 3.38 m | 2.94 m | 2.39 m | ~1.3 |
+| 16 | 2.39 m | 2.07 m | 1.69 m | 1.47 m | 1.19 m | ~5 |
+| 17 | 1.19 m | 1.03 m | 0.84 m | 0.74 m | 0.60 m | ~21 |
+| 18 | 0.60 m | 0.52 m | 0.42 m | 0.37 m | 0.30 m | ~86 |
+| 19 | 0.30 m | 0.26 m | 0.21 m | 0.18 m | 0.15 m | ~340 |
+| 20 | 0.15 m | 0.13 m | 0.11 m | 0.09 m | 0.07 m | ~1,370 |
+
+`mapcv init` prints this table for your area's latitude, and `mapcv plan` shows the exact pixel size and tile count for your region.
+
+Rules of thumb:
+
+- An object should span at least a few pixels. Single buildings work from zoom 17 (~1 m); cars and solar panels need 19 or more.
+- The source must actually have imagery at that zoom. Above the native resolution, providers upsample (blurry) or return errors or placeholder tiles. Look at a few patches before scaling up.
+- Patch size and zoom together set the **context** a model sees: a 256 px patch at zoom 18 covers about 100 m; at zoom 16, about 400 m.
+
+### Your own tile URL
+
+Use `url_template` for any server that speaks the standard `{z}/{x}/{y}` scheme and returns 256 × 256 tiles:
+
+```yaml
+imagery:
+  type: xyz
+  zoom: 16
+  url_template: "https://tiles.example.com/imagery/{z}/{x}/{y}.jpg"
+  max_connections: 4
+```
+
+The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. Use either `source` or `url_template`, not both.
+
+### Keep API keys out of YAML
+
+Many commercial tile services put a key in the URL. mapcv never writes `url_template` into the manifest (it records only `custom-xyz:<hostname>`) and shows only the host in its output, but your YAML file is yours to protect. Two patterns:
+
+<Tabs>
+  <TabItem label="Template file + envsubst">
+    Commit a template with a placeholder, generate the real config locally, and ignore it in git:
+
+    ```yaml title="mapcv.template.yaml"
+    imagery:
+      type: xyz
+      zoom: 17
+      url_template: "https://tiles.example.com/{z}/{x}/{y}.jpg?key=${TILE_API_KEY}"
+    ```
+
+    ```bash
+    export TILE_API_KEY=…            # from your secret store
+    envsubst '$TILE_API_KEY' < mapcv.template.yaml > mapcv.local.yaml
+    echo mapcv.local.yaml >> .gitignore
+    mapcv generate mapcv.local.yaml
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    Load the committed YAML and inject the URL at run time:
+
+    ```python
+    import os
+    from pathlib import Path
+
+    import yaml
+    from mapcv import MapcvConfig, plan, run_generate
+
+    raw = yaml.safe_load(Path("mapcv.yaml").read_text())
+    raw["imagery"]["url_template"] = (
+        "https://tiles.example.com/{z}/{x}/{y}.jpg?key=" + os.environ["TILE_API_KEY"]
+    )
+    config = MapcvConfig.model_validate(raw)
+    print(plan(config).tiles)
+    run_generate(config)
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside type="caution">
+Don't paste keys into shell history, notebooks you share, or bug reports. mapcv's error messages strip query strings from tile URLs, but other tools may not.
+</Aside>
+
+### Be a polite client
+
+- Keep `max_connections` low (mapcv's default is `16`; `mapcv init` writes `4`). Raise it only if the provider allows it.
+- mapcv retries failures with backoff, honours `Retry-After`, and identifies itself with a `mapcv/<version>` user agent that links to the project.
+- Run `mapcv plan` first and stay within the provider's quotas.
+
+## Sentinel-2 L2A
+
+mapcv reads one Sentinel-2 Level-2A product per run in the ESA **EOPF Zarr** format, from a local copy or an anonymous `https://` or `s3://` URL. You can browse products in the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) and use the product (`.zarr`) link as `imagery.path`.
+
+### Bands
+
+| Band | Name | Native resolution |
+| --- | --- | --- |
+| `b01` | Coastal aerosol | 60 m |
+| `b02` | Blue | 10 m |
+| `b03` | Green | 10 m |
+| `b04` | Red | 10 m |
+| `b05`, `b06`, `b07` | Red edge | 20 m |
+| `b08` | NIR | 10 m |
+| `b8a` | Narrow NIR | 20 m |
+| `b09` | Water vapour | 60 m |
+| `b11`, `b12` | SWIR | 20 m |
+
+`imagery.bands` defaults to all twelve, in the order above. List them in the order you want them stored; `[b04, b03, b02, b08]` gives red, green, blue, NIR.
+
+### Resolution
+
+`imagery.resolution` (10, 20 or 60) is the output grid; the EOPF reader resamples bands with a different native resolution onto it, on the product's own pixel grid. 10 m keeps the four 10 m bands sharp; 20 m is the native grid for red-edge and SWIR; 60 m is mainly for quick tests.
+
+Output patches are bands-first `float32` NumPy arrays with decoded reflectance and `NaN` for no data; use `writer.image_format: npy` and usually `edge_strategy: drop` and `max_empty_ratio: 0.2`. Patches keep the product's UTM CRS (see [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/)).
+
+### Limits
+
+One product per run: no mosaicking, cloud masking, catalogue search or time series. Private buckets and URLs with credentials, query strings or fragments are rejected. Choose a product with low cloud cover over your region (the STAC browser shows `eo:cloud_cover`), and check that the region falls inside the product's footprint: swath edges contain no-data areas.
+
+The [Land cover from Sentinel-2](/mapcv/tutorials/land-cover-from-sentinel-2/) tutorial walks through a complete example.

@@ -1,0 +1,14 @@
+ Usage: mapcv validate [OPTIONS] {config_path}
+
+ Check a config without reading labels or imagery (use plan for estimates).
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    config_path      <path>  Path to the YAML config. [required]                    │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --help  -h        Show this message and exit.                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Example: mapcv validate mapcv.yaml
+
+

@@ -1,0 +1,62 @@
+---
+// Three-step "init → plan → generate" walkthrough for the landing page.
+// Output is real `mapcv` 0.2.0 output from the Quickstart run, trimmed.
+const steps = [
+  {
+    title: 'init',
+    text: 'Answer four questions, or start from a template.',
+    term: `<span class="p">$</span> <span class="c">mapcv init</span>
+<span class="k">1/4 Imagery</span>
+Imagery [esri/sentinel2/custom] (esri):
+<span class="k">2/4 Area</span>
+Area: 4.9375,52.3725,4.9515,52.3780
+Zoom (17): 18
+<span class="k">3/4 Labels</span>
+Label file: buildings.geojson
+Which field holds the class? (): class
+<span class="k">4/4 Patches and output</span> <span class="d">…</span>
+<span class="g">✓</span> Wrote <span class="c">mapcv.yaml</span>`,
+  },
+  {
+    title: 'plan',
+    text: 'See tiles, patches, disk and memory before downloading anything.',
+    term: `<span class="p">$</span> <span class="c">mapcv plan mapcv.yaml</span>
+<span class="d">╭─ Plan for mapcv.yaml ─────────</span>
+<span class="k">Imagery</span>  esri_satellite · zoom 18
+         <span class="d">(≈ 0.36 m/px)</span>
+<span class="k">Raster</span>   2,816 × 1,792 px · 77 tiles
+<span class="k">Labels</span>   967 polygon(s)
+         classes: building → 1
+<span class="k">Patches</span>  ≈ 77 × 256 px
+<span class="k">Output</span>   dataset · png <span class="d">(≈ 8.6 MB)</span>`,
+  },
+  {
+    title: 'generate',
+    text: 'Fetch, rasterize, cut patches and split, with a summary at the end.',
+    term: `<span class="p">$</span> <span class="c">mapcv generate mapcv.yaml</span>
+<span class="d">Reading imagery and writing patches</span>
+<span class="k">━━━━━━━━━━━━━━━━━━━━</span> 2/2 chunks
+<span class="g">╭─ Dataset ready ───────────────</span>
+<span class="g">Patches</span>  77
+<span class="g">Shape</span>    256×256×3 uint8
+<span class="g">Splits</span>   train 52 · val 8 · test 17
+<span class="g">Time</span>     21s
+  building   1   19.0%`,
+  },
+];
+---
+
+<div class="mapcv-steps not-content">
+  {
+    steps.map((step, index) => (
+      <section class="mapcv-step">
+        <header>
+          <span>{index + 1}</span>
+          <b>{step.title}</b>
+        </header>
+        <p>{step.text}</p>
+        <pre class="mapcv-term" set:html={step.term} />
+      </section>
+    ))
+  }
+</div>

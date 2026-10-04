@@ -5,6 +5,8 @@ on:
     branches: ["main"]
     paths:
       - "website/**"
+      # The Changelog page renders CHANGELOG.md at build time.
+      - "CHANGELOG.md"
   workflow_dispatch:
 
 permissions:

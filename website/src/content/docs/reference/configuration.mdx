@@ -1,0 +1,220 @@
+---
+title: Configuration
+description: Every field of the mapcv YAML config, with types, defaults, allowed values and validation rules.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+A mapcv config is one YAML file with six top-level blocks. `region`, `imagery`, `sampler` and `writer` are required; `labels` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+
+```yaml
+region:   { … }   # where (required)
+imagery:  { … }   # which pixels (required)
+labels:   { … }   # which polygons (optional: omit for an image-only dataset)
+sampler:  { … }   # how to cut patches (required)
+writer:   { … }   # where and how to write (required)
+split:    { … }   # train/val/test lists (optional: omit to skip splitting)
+```
+
+<Tabs>
+  <TabItem label="XYZ example">
+    ```yaml
+    region: { west: 4.9375, south: 52.3725, east: 4.9515, north: 52.3780 }
+    imagery:
+      type: xyz
+      zoom: 18
+      source: esri_satellite
+      max_connections: 4
+    labels:
+      path: buildings.geojson
+      label_field: class
+    sampler:
+      patch_size: 256
+    writer:
+      staging_dir: ./dataset
+    split:
+      strategy: spatial
+    ```
+  </TabItem>
+  <TabItem label="Sentinel-2 example">
+    ```yaml
+    region: { west: 5.40, south: 51.975, east: 5.50, north: 52.035 }
+    imagery:
+      type: eopf_zarr
+      path: /data/S2A_MSIL2A_….zarr
+      resolution: 10
+      bands: [b04, b03, b02, b08]
+    labels:
+      path: landuse.geojson
+      label_field: class
+      classes: { built_up: 1, farmland: 2, forest: 3, water: 4 }
+    sampler:
+      patch_size: 128
+      edge_strategy: drop
+      max_empty_ratio: 0.2
+    writer:
+      staging_dir: ./dataset
+      image_format: npy
+    split:
+      strategy: spatial
+    ```
+  </TabItem>
+</Tabs>
+
+## `region`
+
+The area of interest as a WGS-84 longitude/latitude bounding box.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `west` | float | required | Western longitude in degrees |
+| `south` | float | required | Southern latitude in degrees |
+| `east` | float | required | Eastern longitude in degrees |
+| `north` | float | required | Northern latitude in degrees |
+| `zoom` | int, 1–22 | — | **Deprecated** (0.1 layout). Use `imagery.zoom`; see [Legacy configs](#legacy-01-configs) |
+
+**Validation:** `west < east` and `south < north`. A box that crosses the antimeridian is not supported.
+
+For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. For Sentinel-2 it is reprojected into the product's CRS and expanded outward to the product's pixel edges. See [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/).
+
+## `imagery`
+
+Selects exactly one imagery source with the required `type` key: `xyz` or `eopf_zarr`.
+
+### XYZ tiles (`type: xyz`)
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `"xyz"` | required | Selects XYZ tiles |
+| `zoom` | int, 1–22 | required | Tile zoom level. Pixel size ≈ 156 543 × cos(latitude) / 2<sup>zoom</sup> m |
+| `source` | string | — | A built-in source: `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, `cartodb_dark_matter` |
+| `url_template` | string | — | Your own `http://` or `https://` URL with `{z}`, `{x}` and `{y}` |
+| `max_connections` | int ≥ 1 | `16` | Concurrent tile requests. Keep this low for shared servers; `mapcv init` writes `4` |
+| `policy` | `strict` \| `lenient` \| `ignore` | `lenient` | What happens to a tile that still fails after retries (see below) |
+| `max_failed_ratio` | float, 0–1 | `0.05` | Under `lenient`, the run stops if more than this fraction of a chunk's tiles fail |
+| `strip_rows` | int ≥ 1 | `4` | Tile rows per processing chunk (4 rows = 1,024 px). Lower it to reduce memory on very wide regions |
+
+**Validation:**
+
+- Exactly one of `source` or `url_template` is required; setting both is an error.
+- `source` must be a built-in name. The 0.1 presets `google_satellite` and `osm` were removed and fail with an explanation ([why](/mapcv/project/migration/#google-imagery-preset)).
+- `url_template` must be `http(s)`, must contain `{x}`, `{y}` and `{z}`, and may contain no other placeholder. A `{s}` subdomain placeholder is rejected: replace it with one subdomain, for example `a`.
+- Tiles must decode to 256 × 256 images (PNG, JPEG, WebP or GIF).
+- `writer.image_format` must be `png` or `jpg`.
+
+**Failure policy.** Each tile is tried up to four times (three retries with backoff that honours `Retry-After` up to 30 s). Connection errors, timeouts, truncated bodies, HTTP 429 and 5xx are retried; other 4xx responses and non-image bodies (for example an HTML error page) fail immediately. A tile that still fails is then handled by `policy`:
+
+| `policy` | Failed tile | `max_failed_ratio` |
+| --- | --- | --- |
+| `strict` | Stops the run with an error | not used |
+| `lenient` | Left out; its pixels are black and count as empty | enforced per chunk |
+| `ignore` | Filled with a black tile | never enforced |
+
+Requests identify themselves with the user agent `mapcv/<version> (+https://github.com/tahamukhtar20/mapcv)`.
+
+<Aside type="caution">
+Built-in names are conveniences, not licences. Check the provider's terms before downloading; see [Providers & licensing](/mapcv/project/providers/). Keep API keys out of committed YAML: mapcv never writes `url_template` into the manifest, but your config file is your responsibility.
+</Aside>
+
+### Sentinel-2 L2A EOPF Zarr (`type: eopf_zarr`)
+
+Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `"eopf_zarr"` | required | Selects one EOPF Sentinel-2 L2A product |
+| `path` | string | required | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
+| `resolution` | `10` \| `20` \| `60` | `10` | Output grid in metres; every band is harmonised onto it |
+| `bands` | list of strings | all 12 | Variables to read, **in output order**. Default: `b01 b02 b03 b04 b05 b06 b07 b08 b8a b09 b11 b12` |
+| `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+
+**Validation:**
+
+- `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Windows paths (`C:\data\S2.zarr`, `file:///C:/data/S2.zarr`) work.
+- `bands` must be non-empty and without duplicates; names are lower-cased (`B04` → `b04`). Unknown band names fail when the product is opened, with a list of what is available.
+- `writer.image_format` must be `npy`.
+- The region must intersect the product.
+
+## `labels`
+
+Optional. Without it you get an image-only dataset (no `Masks/`).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. A relative path is resolved against the config file's folder |
+| `label_field` | string \| null | `null` | Feature property holding the class. `null`: every polygon is class `1` |
+| `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
+| `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
+
+**How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
+
+**Validation:** suffix must be `.kml`, `.geojson` or `.json` (convert KMZ or Shapefiles first); `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+
+## `sampler`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `patch_size` | int > 0 | required | Side of each square patch in pixels |
+| `stride` | int ≥ 0 | `0` | Step between grid patches. `0` means `patch_size` (no overlap); smaller values overlap |
+| `mode` | `grid` \| `random` | `grid` | Regular grid, or `random_count` random positions |
+| `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |
+| `pad_mode` | `zero` \| `reflect` | `zero` | How `pad` fills the missing part of an edge patch |
+| `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
+| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels |
+| `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
+| `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk) |
+
+**Edge strategies:**
+
+| `edge_strategy` | Grid behaviour | Random behaviour |
+| --- | --- | --- |
+| `pad` | Patches start at every stride step inside the raster; the part outside is filled by `pad_mode` and the patch is marked `padded` | Positions anywhere in the raster; may be padded |
+| `drop` | Only patches that fit entirely inside | Positions clamped so patches fit |
+| `shift` | Like `drop`, plus one last patch shifted inward to cover the remaining edge (may overlap its neighbour) | Same as `drop` |
+
+**Empty pixels:** for XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty unless every band has data, i.e. when any band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
+
+<Aside>
+Random mode can draw the same position more than once, and random patches overlap. Use the `spatial` split with it (the default); mapcv warns if you choose `stratified` or `random`.
+</Aside>
+
+## `writer`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `staging_dir` | path | required | Output folder, created if needed; a relative path is resolved against the config file's folder. Re-running into a folder with a compatible `manifest.json` resumes |
+| `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`) |
+| `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
+
+Masks are always single-channel PNG. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
+
+**Validation:** XYZ needs `png` or `jpg`; EOPF needs `npy`.
+
+## `split`
+
+Optional. When present, `mapcv generate` writes split lists at the end; `mapcv split` can redo them later with different settings.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `strategy` | `spatial` \| `stratified` \| `random` | `spatial` | `spatial` assigns whole raster blocks to one split and drops train/val patches overlapping a held-out patch. `stratified` and `random` split individual patches |
+| `test_ratio` | float, 0–1 | `0.20` | Fraction of patches for `test.txt` |
+| `val_ratio` | float, 0–1 | `0.10` | Fraction of the **remaining** patches for `val.txt` |
+| `block_size` | int ≥ 1 | auto | `spatial` block side in pixels. Default 4 × `patch_size`, reduced (never below `patch_size`) so the raster has at least 10 blocks |
+| `labeled_ratios` | list of floats in (0, 1] | `[0.10, 0.20, 0.30]` | Write `splits/<percent>/labeled.txt` and `unlabeled.txt` subsets of train for each ratio. `[]` writes none |
+| `seed` | int | `42` | Seed for shuffling blocks or patches |
+| `sample_limit` | int ≥ 1 | — | Split only this many patches (subsampled, keeping the stratum mix unless `strategy: random`) |
+
+**Validation:** ratios within bounds; `labeled_ratios` may not contain duplicates (after conversion to folder names such as `0.125` → `12.5`). With `spatial`, the achieved ratios are approximate because whole blocks move together. See [Splits without leakage](/mapcv/guides/splits-without-leakage/).
+
+## Legacy 0.1 configs
+
+The 0.1 layout (`region.zoom` plus a `tiles:` block) still loads in 0.2 with a deprecation notice and is converted to `imagery: {type: xyz, zoom: …, …}`. It will be removed in 0.3.0.
+
+```console
+$ mapcv validate legacy.yaml
+Deprecated: 'tiles' and 'region.zoom' are deprecated; move them into an 'imagery' block with type: xyz
+and zoom (see MIGRATION.md). Removed in mapcv 0.3.0.
+✓ legacy.yaml is a valid config.
+```
+
+`tiles` and `imagery` together are an error. `region.zoom` next to an `imagery` block fills a missing `imagery.zoom`, and is otherwise ignored with a notice. Full guide: [Migrating to 0.2](/mapcv/project/migration/).

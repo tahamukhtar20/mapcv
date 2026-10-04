@@ -1,0 +1,63 @@
+---
+title: How mapcv works
+description: The generation pipeline stage by stage — plan, windowed imagery, labels in the raster CRS, rasterization, global anchors, chunks, writer and manifest, split.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import PipelineDiagram from '../../../components/PipelineDiagram.astro';
+
+`mapcv generate` runs eight stages. Knowing them makes the config options, the plan and the resume rules easy to reason about.
+
+<PipelineDiagram variant="detailed" />
+
+## 1. Config
+
+The YAML file is parsed into Pydantic models ([reference](/mapcv/reference/configuration/)). Every field is checked before anything else happens, including cross-field rules such as "Sentinel-2 needs `npy` output" and the 0.1 compatibility layer.
+
+## 2. Plan
+
+`mapcv plan` and the first part of `generate` estimate the job from the config alone: the raster size (exact for XYZ, approximate for Sentinel-2), tiles, patch count, output size and memory per chunk. The label file is parsed here too, so a wrong `label_field`, skipped features or labels outside the region show up before any download. Jobs above 20,000 tiles or 5 GB ask for confirmation.
+
+## 3. Open the imagery as a windowed source
+
+Both sources are opened as a *windowed raster*: an object that knows its size, CRS, affine transform and bands, and can read any rectangle of pixels on demand.
+
+- **XYZ:** the region is expanded to whole tiles at `zoom`. The raster is the grid of those tiles in Web Mercator (EPSG:3857), 256 px per tile. Nothing is downloaded at this point; tiles are fetched when a window needs them.
+- **Sentinel-2:** the product is opened lazily with the EOPF xarray backend at the chosen `resolution` and `bands`. The region is reprojected into the product's UTM CRS, expanded to the product's pixel edges, and cropped. Pixels are read when a window needs them.
+
+## 4. Labels into the raster CRS
+
+Label polygons are read in WGS-84 longitude/latitude and transformed into the raster's CRS: Web Mercator for XYZ, the product's UTM zone for Sentinel-2. The imagery is never resampled to fit the labels. If no polygon intersects the raster, mapcv warns that every mask will be background.
+
+Class IDs are assigned here from `label_field` and `classes` ([rules](/mapcv/guides/prepare-labels/#how-class-ids-are-chosen)).
+
+## 5. Global anchors
+
+Patch positions (top-left *anchors*) are computed **once for the whole raster**, by the Rust sampler: a regular grid with `stride`, or `random_count` seeded random positions, with the `edge_strategy` applied only at the raster's outer edges. Because anchors don't depend on how the raster is chunked, the same config always yields the same patches, and patches can sit across chunk boundaries.
+
+On a resume, anchors already in the manifest are removed here.
+
+## 6. Chunks
+
+Anchors are grouped by row into chunks (`strip_rows` × 256 px for XYZ, `chunk_rows` for Sentinel-2). For each chunk, mapcv:
+
+1. reads one window covering all of the chunk's patches, across the full raster width (for XYZ, this is when tiles are fetched, with retries and the failure `policy`);
+2. builds a validity mask (non-black RGB for XYZ; for Sentinel-2, pixels where every band has data), and for Sentinel-2 stops with a resume hint if one band came back empty while the others have data;
+3. rasterizes the label polygons into a `uint8` mask for the window, in Rust, using the pixel-centre rule (or `all_touched`);
+4. cuts the patches, pads edge patches if needed, measures their empty fraction, and drops those above `max_empty_ratio` or below `min_label_ratio`.
+
+Only one chunk's window is in memory at a time, plus its tiles. That is why memory grows with the region's width, not its area.
+
+## 7. Write and save the manifest
+
+Patches are encoded in parallel in Rust (PNG/JPG) or saved as NumPy arrays (NPY), with masks as PNG. Each patch gets a manifest entry with its global `row`/`col`, padding flag, empty fraction and per-class pixel counts. The manifest is written atomically **after every chunk**, which makes the run resumable at chunk granularity.
+
+Before the first chunk, the existing manifest (if any) is compared with what this config would produce (class map, source, bands, dtype, patch shape, CRS, transform, sampler, label settings and a hash of the label file, writer settings) and a mismatch stops the run.
+
+## 8. Split
+
+If the config has a `split` block, the split lists (and `split.json`, recording the settings) are computed from the manifest alone, by default with spatial blocks so that test patches come from parts of the map that train never sees. `mapcv split` re-runs only this stage.
+
+<Aside>
+Where the work happens: tile math, HTTP fetching, KML parsing, polygon rasterization, anchor generation and PNG/JPG patch encoding are Rust (via PyO3). Orchestration, configuration, GeoJSON parsing, tile decoding (Pillow), reprojection (Shapely, and pyproj for Sentinel-2) and the EOPF reader are Python. No stage needs GDAL.
+</Aside>

@@ -1,0 +1,55 @@
+---
+title: Coordinates and grids
+description: How mapcv goes from a longitude/latitude box to a pixel grid — Web Mercator tiles for XYZ, the product's UTM grid for Sentinel-2 — and how labels and patches line up with it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+You give mapcv everything in **longitude/latitude** (WGS-84, EPSG:4326). The pixels, however, live on a projected grid that depends on the imagery. mapcv's job is to put labels on that grid exactly, without resampling the imagery.
+
+## Input: longitude, latitude
+
+- `region` is `west, south, east, north` in degrees.
+- Label coordinates are `[longitude, latitude]` (x before y), as GeoJSON requires. A swapped file produces polygons somewhere else entirely, which mapcv reports as *"no label polygon intersects the imagery extent"*.
+- Regions crossing the antimeridian (180°) are not supported; `west` must be less than `east`.
+
+## XYZ: the Web Mercator tile grid
+
+XYZ services cut the world, projected to Web Mercator (EPSG:3857), into 2<sup>zoom</sup> × 2<sup>zoom</sup> tiles of 256 × 256 pixels. Tile `x` counts from the antimeridian eastward, `y` from the top (about 85.05° N) southward.
+
+**Snapping.** mapcv finds every tile that touches your region and uses the whole tiles, so the raster is the region expanded outward to tile edges. For example, at zoom 17 the box `4.883, 52.371 → 4.896, 52.378` becomes `4.88068, 52.37057 → 4.89716, 52.37895`. Nothing is cropped, and no tile is resampled. `mapcv.snap_bbox(west, south, east, north, zoom)` shows the expanded box.
+
+**Raster.** The tiles form one virtual raster: width and height are multiples of 256, the CRS is `EPSG:3857`, and the affine transform maps pixel `(col, row)` to metres. Its pixel size is exact in projected metres (156 543.03 / 2<sup>zoom</sup>) but on the ground it shrinks with latitude by cos(latitude): 0.60 m at the equator and 0.37 m in Amsterdam at zoom 18. A 256 px patch therefore covers less ground at high latitudes, and shapes are locally correct but areas are not comparable across latitudes.
+
+## Sentinel-2: the product's UTM grid
+
+Each Sentinel-2 L2A product is delivered on a 10/20/60 m grid in a UTM zone (for example EPSG:32631, UTM 31N). mapcv keeps that grid:
+
+1. The region is reprojected from lon/lat into the product's CRS (densified, so curved edges are covered).
+2. The resulting box is expanded **outward to the product's pixel edges** at the chosen resolution. Without this step the reader would build a grid offset by a fraction of a pixel and silently resample every band.
+3. The cropped product is the raster; its transform comes from the product's own pixel coordinates.
+
+Pixels are square metres on the ground (10 m is 10 m), which makes Sentinel-2 patches comparable across latitudes within a zone.
+
+## Labels on the grid
+
+Polygons are reprojected from lon/lat into the raster CRS (a closed-form Web Mercator transform for XYZ, pyproj for UTM) and then rasterized with the raster's affine transform:
+
+- The transform maps a pixel's **top-left corner**: `x = a·col + b·row + c`, `y = d·col + e·row + f` (rasterio's convention). For north-up rasters `b = d = 0` and `e` is negative.
+- A pixel is labeled when its **centre** `(col + 0.5, row + 0.5)` falls inside a polygon, the same rule as rasterio's default. With `labels.all_touched: true`, every pixel the outline touches is labeled too, which thickens thin features such as roads.
+- Polygon holes are respected; where polygons overlap, the later feature in the file wins.
+
+<Aside>
+mapcv's tile math, transforms and rasterization are checked against the GDAL stack (mercantile, rasterio) in its golden-file test suite, so masks match what a GDAL-based pipeline would produce.
+</Aside>
+
+## Patches in map coordinates
+
+Every manifest entry stores the patch's top-left pixel as `row` and `col` in the **whole raster**, and the manifest stores the raster's `crs` and `transform`. A patch's footprint is therefore:
+
+```text
+left   = c + a · col          top    = f + e · row
+right  = left + a · size      bottom = top + e · size
+```
+
+in `crs` units. Use it to place predictions back on a map, or to build your own spatial cross-validation folds. A Python snippet is in [Dataset format](/mapcv/reference/dataset-format/#patch-entries).

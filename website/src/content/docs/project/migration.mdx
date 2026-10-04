@@ -1,0 +1,79 @@
+---
+title: Migrating to 0.2
+description: What changed between mapcv 0.1 and 0.2 and how to update configs, datasets and code.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+<Aside type="note">
+The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) from the repository. If the two ever differ, `MIGRATION.md` is authoritative.
+</Aside>
+
+## Checklist
+
+<Steps>
+
+1. Run `mapcv validate` on each 0.1 config. Deprecation notices and errors tell you what to change.
+2. Move `region.zoom` and `tiles` into an `imagery: {type: xyz, zoom: …}` block.
+3. Replace `google_satellite` or `osm` sources ([Providers & licensing](/mapcv/project/providers/)).
+4. If you rely on 0.1 class IDs, pin them with `labels.classes`.
+5. If you used `sampler.mode: random`, raise `random_count`: it is now a total, not per strip.
+6. Generate into a **new** `writer.staging_dir`; 0.1 datasets can be split but not resumed.
+7. Decide on splits: the default is now `spatial`. Set `strategy: stratified` to keep a patch-level split.
+
+</Steps>
+
+## Imagery configuration
+
+The imagery source is now a discriminated `imagery` block. Move the XYZ zoom out of `region` and replace `tiles` with `imagery`:
+
+```yaml
+region:
+  west: 4.883
+  south: 52.371
+  east: 4.896
+  north: 52.378
+
+imagery:
+  type: xyz
+  zoom: 17
+  source: esri_satellite
+```
+
+Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a deprecation notice (a `FutureWarning`). `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom`, and is otherwise ignored with a notice. This compatibility path will be removed in 0.3.0. `imagery.type` is required.
+
+## Google imagery preset
+
+The built-in `google_satellite` preset has been removed, and configs that still use it fail validation with a pointer to this guide. mapcv cannot determine whether a use of Google imagery is licensed for downloading, caching, or machine-learning dataset creation. Authorized custom XYZ templates remain supported through `imagery.url_template`; do not put credentials or signed query strings in committed YAML.
+
+## OpenStreetMap preset
+
+The built-in `osm` preset has also been removed. OpenStreetMap data is open (ODbL), but the OpenStreetMap Foundation's tile servers run on donated capacity and their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) forbids bulk downloading, which is what dataset generation does. To use OSM-styled tiles, point `imagery.url_template` at a commercial OSM tile service whose terms allow it (with your API key kept out of committed YAML) or at a tile server you host. To use OSM *features* as labels, export them (for example with Overpass or QuackOSM) to GeoJSON and pass them as `labels.path`, with ODbL attribution.
+
+## EOPF output and manifests
+
+EOPF Sentinel-2 L2A input requires `pip install "mapcv[zarr]"` and `writer.image_format: npy`. Each image patch has shape `(bands, height, width)` and decoded `float32` values. Band order is exactly the order configured in `imagery.bands`.
+
+New datasets use manifest version 2. It records the source type, product identifier, bands, dtype, patch shape, CRS, and dataset affine transform. Patch rows and columns are global raster coordinates. Version 1 manifests remain readable by `mapcv split`, but **0.1.x datasets cannot be resumed by `mapcv generate`**: their row coordinates were per strip, while 0.2 uses global coordinates. Generate into a new `writer.staging_dir` instead.
+
+Resuming any dataset now requires the same imagery, labels, and sampler settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
+
+## Sampling changes
+
+Anchors are now computed once over the whole raster instead of per strip:
+
+- `sampler.mode: random` draws `random_count` patches **in total**. In 0.1 it drew `random_count` per strip, so the same config now yields fewer patches; raise `random_count` to compensate.
+- Grid patches can cross the old strip seams, and `edge_strategy` applies only at the raster's outer edges. Patch positions and counts can therefore differ from a 0.1 run over the same region.
+- For XYZ, all-black pixels (including tiles that failed under `policy: lenient` or `ignore`) count as empty for `max_empty_ratio`, as in 0.1.
+
+## Splitting
+
+The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × `patch_size` by default, set with `split.block_size`) go to one split, and train/val patches that overlap a held-out patch are left out. Random patch-level splits overstate accuracy when patches overlap or neighbour each other. Set `strategy: stratified` or `random` to keep a patch-level split; mapcv warns when that leaks overlapping pixels. Manifests from 0.1 do not record the patch size, so `spatial` falls back to `stratified` unless `block_size` is set.
+
+## Class IDs
+
+With `labels.label_field`, class IDs used to follow the order labels first appeared in the file, so the same classes could get different IDs in different files. Now integer labels in 1..255 are used as their own IDs and other labels are numbered in sorted order. Set `labels.classes` (for example `{building: 1, road: 2}`) to pin IDs explicitly, for instance to match a dataset created with 0.1.
+
+## Removed Python APIs
+
+`download_region_strips`, `iter_tile_strips`, `TilesConfig` and the `hello()` stub are removed; `mapcv generate` reads imagery in chunks without them. `download_region`, `stitch_region` and `sample_patches` remain for in-memory workflows.

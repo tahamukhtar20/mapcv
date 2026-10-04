@@ -1,0 +1,75 @@
+---
+title: Contributing
+description: Set up a development environment, run the tests and linters, follow the code conventions, and work on these docs.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Bug reports, documentation fixes, examples and code are all welcome. This page summarises [`CONTRIBUTING.md`](https://github.com/tahamukhtar20/mapcv/blob/main/CONTRIBUTING.md), which has the full conventions and the release process. Please also read the [Code of Conduct](https://github.com/tahamukhtar20/mapcv/blob/main/CODE_OF_CONDUCT.md).
+
+## Development setup
+
+mapcv is a Python package with a Rust extension built by [maturin](https://www.maturin.rs/). You need Python 3.10+, [Rust](https://rustup.rs/) and [uv](https://docs.astral.sh/uv/).
+
+<Steps>
+
+1. Fork and clone the repository, then install the development dependencies and build the extension:
+
+   ```bash
+   uv sync --extra dev
+   uv run maturin develop
+   ```
+
+   Re-run `uv run maturin develop` after every change to Rust code (`src/*.rs`). Add `--extra zarr` to work on Sentinel-2 support (Python 3.10–3.13).
+
+2. Install the pre-commit hooks (`cargo fmt`, `clippy`, `ruff`, `mypy` and `pytest` run before each commit):
+
+   ```bash
+   pip install pre-commit
+   pre-commit install
+   ```
+
+</Steps>
+
+## Tests and linters
+
+```bash
+uv run pytest                 # tests
+uv run ruff format . && uv run ruff check .
+uv run mypy --strict .
+cargo fmt && cargo clippy
+```
+
+The live Sentinel-2 test is opt-in: set `MAPCV_EOPF_URL` to a public product and run `uv run pytest -m eopf_live`.
+
+## Conventions in brief
+
+- **Python:** sources in `src/mapcv/`, tests in `tests/test_<module>.py`; every file starts with a one-line docstring and `from __future__ import annotations`; full type annotations with `typing` forms (`Dict`, `List`, `Optional`); plain-prose docstrings; comments explain *why*; `ruff` (line length 100) and `mypy --strict` must pass.
+- **Rust:** one module per file with a `//!` header; `///` docs on public items with `# Errors` / `# Panics` sections; public functions return `Result<T, String>`; no `unwrap()`/`expect()` in public functions; named constants instead of magic numbers.
+- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `ci:`, `chore:`, `test:`). They drive the changelog. PRs are squash-merged.
+
+## Submitting a change
+
+1. For anything substantial, open an [issue](https://github.com/tahamukhtar20/mapcv/issues) first to discuss it.
+2. Create a branch (`git checkout -b feat/your-feature-name`), commit with the pre-commit checks passing.
+3. Open a pull request against `main` that explains the problem and the solution and links related issues.
+
+## Working on these docs
+
+The site is [Astro Starlight](https://starlight.astro.build/) in `website/`, deployed to GitHub Pages from `main`.
+
+```bash
+cd website
+npm ci
+npm run dev        # http://localhost:4321/mapcv/
+npm run build      # also fails on broken internal links
+```
+
+- Pages are MDX files in `website/src/content/docs/`, organised as Get started, Tutorials, How-to guides (`guides/`), Reference, Concepts and Project. The sidebar is defined in `website/astro.config.mjs`.
+- The CLI reference embeds `--help` snapshots from `website/src/cli-help/`. After changing the CLI, refresh them with `website/scripts/update-cli-help.sh` (set `MAPCV="uv run mapcv"` to use the development build).
+- The Changelog page renders `CHANGELOG.md` directly; the Migration and Providers pages mirror `MIGRATION.md` and `PROVIDERS.md`, so update both places together.
+- Terminal output on the site is real output, trimmed. When behaviour changes, re-run the commands and paste the new output rather than editing it by hand.
+
+<Aside>
+Internal links must include the `/mapcv/` base and a trailing slash, for example `[Quickstart](/mapcv/quickstart/)`. The `starlight-links-validator` plugin checks them during `npm run build`.
+</Aside>

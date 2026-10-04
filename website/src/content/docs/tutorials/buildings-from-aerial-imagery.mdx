@@ -1,0 +1,200 @@
+---
+title: Buildings from aerial imagery
+description: Build a building-footprint segmentation dataset from Esri aerial tiles and OpenStreetMap polygons, then explore and vary it.
+---
+
+import { Aside, Steps, LinkCard, FileTree } from '@astrojs/starlight/components';
+
+This tutorial builds a building-segmentation dataset over Amsterdam's Eastern Docklands at about **0.36 m per pixel**, using Esri World Imagery tiles and building outlines from OpenStreetMap. Along the way you will learn how a config is put together, what `plan` and `generate` tell you, and how to switch from one class to many.
+
+**Time:** about 15 minutes. **You need:** `pip install mapcv`, plus `matplotlib` for the optional visual check.
+
+The finished files live in the repository under [`examples/quickstart`](https://github.com/tahamukhtar20/mapcv/tree/main/examples/quickstart). This page is self-contained, so you can also follow it from scratch.
+
+<Steps>
+
+1. ### Get the labels
+
+   Labels are polygons in longitude/latitude. This tutorial uses OpenStreetMap buildings exported to GeoJSON (967 features, each with `class: building` and the OSM `building` tag):
+
+   ```bash
+   mkdir docklands && cd docklands
+   curl -LO https://raw.githubusercontent.com/tahamukhtar20/mapcv/main/examples/quickstart/buildings.geojson
+   ```
+
+   To label your own area with OSM data, see [Prepare labels → OpenStreetMap](/mapcv/guides/prepare-labels/#use-openstreetmap-data-as-labels). OSM data is © OpenStreetMap contributors under the ODbL, which asks you to credit it when you share the result.
+
+2. ### Write the config
+
+   Save this as `mapcv.yaml` next to the GeoJSON. Each block is explained below.
+
+   ```yaml title="mapcv.yaml"
+   region:                      # WGS-84 lon/lat; snapped outward to whole tiles
+     west: 4.9375
+     south: 52.3725
+     east: 4.9515
+     north: 52.3780
+
+   imagery:
+     type: xyz
+     zoom: 18                   # ≈ 0.36 m/px at this latitude
+     source: esri_satellite
+     max_connections: 4         # small and polite
+
+   labels:
+     path: buildings.geojson
+     label_field: class         # every feature has class "building" -> mask value 1
+
+   sampler:
+     patch_size: 256            # one tile per patch at zoom 18
+     edge_strategy: drop        # the region is snapped to tiles, so nothing is dropped
+
+   writer:
+     staging_dir: ./dataset
+     image_format: png
+
+   split:
+     strategy: spatial          # whole blocks go to one split: no leakage between splits
+     test_ratio: 0.20
+     val_ratio: 0.10
+     seed: 42
+   ```
+
+   - **`region`** is the area to cover, in degrees. mapcv expands it outward to whole 256 px tiles, so the raster is slightly larger than the box.
+   - **`imagery`** picks the source. `zoom: 18` is roughly 0.36 m per pixel here; each zoom level halves the pixel size and quadruples the tile count. See [Choose imagery and zoom](/mapcv/guides/choose-imagery-and-zoom/).
+   - **`labels.label_field`** names the GeoJSON property that holds the class. With a single value (`building`), it becomes class `1`; omit the field and every polygon is class `1` too, but the manifest then records no class names.
+   - **`sampler`** cuts `patch_size` squares on a grid. `stride` defaults to the patch size, so patches don't overlap.
+   - **`split`** writes train/val/test lists. `spatial` assigns whole blocks of the map to one split, which is what you want for honest test scores (see [Spatial leakage](/mapcv/concepts/spatial-leakage/)).
+
+3. ### Validate and plan
+
+   `mapcv validate` checks the YAML without touching the network or the label file; `mapcv plan` also reads the labels and estimates the job:
+
+   ```console
+   $ mapcv validate mapcv.yaml
+   ✓ mapcv.yaml is a valid config.
+   Region   4.9375, 52.3725 → 4.9515, 52.378 (W, S → E, N)
+   Imagery  XYZ esri_satellite · zoom 18
+   Labels   buildings.geojson · field: class
+   Patches  256 px · grid · stride 256 · edges: drop
+   Output   dataset · png
+   Split    spatial · test 0.2 · val 0.1 of the remaining 0.8
+
+   $ mapcv plan mapcv.yaml
+   ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────╮
+   │ Region   4.9375, 52.3725 → 4.9515, 52.378  (≈ 1.0 × 0.6 km)                          │
+   │ Imagery  esri_satellite · zoom 18 (≈ 0.36 m/px)                                      │
+   │ Raster   2,816 × 1,792 px · 77 tiles (≈ 1.9 MB to download)                          │
+   │ Labels   buildings.geojson · 967 polygon(s) · classes: building → 1                  │
+   │ Patches  ≈ 77 × 256 px (grid, stride 256)                                            │
+   │ Output   dataset · png (≈ 8.6 MB)                                                    │
+   │ Split    spatial · test 0.2 · val 0.1                                                │
+   │ Memory   ≈ 28.8 MB per chunk                                                         │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+   ```
+
+   Read the plan before every real run. `classes: building → 1` confirms the label field is right; a wrong field name shows up here as skipped features instead of as empty masks after a download.
+
+4. ### Generate
+
+   ```console
+   $ mapcv generate mapcv.yaml
+     Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:06 • eta 0:00:00
+   ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
+   │ Patches  77                                                                          │
+   │ Shape    256×256×3 uint8                                                             │
+   │ Tiles    77 fetched · 0 failed                                                       │
+   │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                                │
+   │ Time     6s                                                                          │
+   │ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                          │
+   ╰──────────────────────────────────────────────────────────────────────────────────────╯
+     class         id    pixels
+     background     0     81.0%
+     building       1     19.0%
+   ```
+
+   About 19 % of pixels are building: a typical class imbalance to keep in mind when you pick a loss.
+
+   <FileTree>
+   - dataset/
+     - Images/ 77 × patch_0000000.png … (RGB)
+     - Masks/ 77 × patch_0000000.png … (0 = background, 1 = building)
+     - manifest.json
+     - splits/
+       - train.txt 52 names
+       - val.txt 8 names
+       - test.txt 17 names
+       - 10/ 20/ 30/ labeled/unlabeled subsets of train
+   </FileTree>
+
+5. ### Look at a few patches
+
+   Overlay masks on images to check alignment:
+
+   ```python title="look.py"
+   import matplotlib.pyplot as plt
+   import numpy as np
+   from PIL import Image
+
+   names = open("dataset/splits/train.txt").read().split()[:4]
+   fig, axes = plt.subplots(1, len(names), figsize=(4 * len(names), 4))
+   for ax, name in zip(axes, names):
+       image = np.asarray(Image.open(f"dataset/Images/{name}"))
+       mask = np.asarray(Image.open(f"dataset/Masks/{name}"))
+       ax.imshow(image)
+       ax.imshow(np.ma.masked_equal(mask, 0), alpha=0.45, cmap="autumn")
+       ax.set_title(name)
+       ax.axis("off")
+   plt.tight_layout()
+   plt.show()
+   ```
+
+   Outlines should sit on roofs. OSM footprints are drawn on many different imagery sources, so expect small offsets on tall buildings (the aerial photo shows them leaning).
+
+6. ### Try more classes
+
+   The GeoJSON also carries the OSM `building` tag (`house`, `apartments`, `houseboat`, …). Point `label_field` at it and **write to a new folder**, because a dataset's class map can't change on resume:
+
+   ```yaml
+   labels:
+     path: buildings.geojson
+     label_field: building
+
+   writer:
+     staging_dir: ./dataset-types
+   ```
+
+   `mapcv plan` shows the IDs it will use. Text labels are numbered in sorted order:
+
+   ```text
+   Labels   buildings.geojson · 967 polygon(s) · classes: apartments → 1, church → 2,
+            commercial → 3, garage → 4, house → 5, houseboat → 6, hut → 7, industrial →
+            8, residential → 9, retail → 10, school → 11, service → 12, shed → 13, wall
+            → 14, yes → 15
+   ```
+
+   To group or pin classes, add `labels.classes`; labels not listed are skipped (with a warning):
+
+   ```yaml
+   labels:
+     path: buildings.geojson
+     label_field: building
+     classes: {house: 1, apartments: 2, houseboat: 3}
+   ```
+
+   If you forget the new `staging_dir`, `generate` stops before downloading anything:
+
+   ```text
+   Cannot resume: dataset/manifest.json was generated with a different configuration
+   (class_map, labels); use a new writer.staging_dir or remove the old dataset
+   ```
+
+</Steps>
+
+## Attribution
+
+If you publish this dataset or a model trained on it, credit the sources: imagery by Esri World Imagery (check Esri's current terms for your use case first) and labels © OpenStreetMap contributors (ODbL). See [Providers & licensing](/mapcv/project/providers/).
+
+## Next
+
+<LinkCard title="Train a model on your dataset" description="Turn these folders into a PyTorch training loop." href="/mapcv/tutorials/train-a-model/" />

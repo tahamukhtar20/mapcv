@@ -1,0 +1,260 @@
+---
+title: Python API
+description: The public mapcv Python API — configs, planning, generation, splitting, manifests and the in-memory building blocks — with exact signatures.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything the CLI does is available from Python. The high-level functions take the same configuration as the YAML file; the lower-level functions let you build your own pipeline in memory. All names below are importable from `mapcv` unless noted.
+
+```python
+import mapcv
+from pathlib import Path
+
+config = mapcv.MapcvConfig.from_yaml(Path("mapcv.yaml"))
+estimate = mapcv.plan(config)                 # no download
+print(estimate.patches, estimate.tiles, estimate.is_large)
+result = mapcv.run_generate(config)           # builds or resumes the dataset
+print(result.new_patches, result.split_counts)
+```
+
+## Configuration
+
+### `MapcvConfig`
+
+```python
+class MapcvConfig(BaseModel):
+    region: RegionConfig
+    imagery: XYZImageryConfig | EOPFZarrImageryConfig   # chosen by imagery.type
+    labels: LabelsConfig | None = None
+    sampler: SamplerConfig
+    writer: WriterConfig
+    split: SplitterConfig | None = None
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> MapcvConfig: ...
+```
+
+Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; legacy 0.1 layouts emit a `FutureWarning`. Field reference: [Configuration](/mapcv/reference/configuration/).
+
+Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig`, `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
+
+## Planning and generation
+
+### `plan`
+
+```python
+def plan(config: MapcvConfig) -> Plan
+```
+
+Estimates a run without downloading imagery (it does read the label file). Raises `ValueError`, `RuntimeError` or `OSError` for problems it can detect.
+
+### `Plan`
+
+A dataclass:
+
+| Attribute | Type | Meaning |
+| --- | --- | --- |
+| `region_km` | `(float, float)` | Approximate width and height of the region |
+| `imagery` | `str` | Human-readable source description |
+| `resolution_m` | `float` | Ground resolution in metres per pixel |
+| `raster_px` | `(int, int)` | Raster `(width, height)` |
+| `patches` | `int` | Estimated patch count |
+| `patch_size` | `int` | From the sampler |
+| `tiles` | `int \| None` | XYZ tile count (`None` for Sentinel-2) |
+| `download_bytes` | `int \| None` | Rough download size (XYZ only) |
+| `output_bytes` | `int` | Rough size on disk |
+| `chunk_memory_bytes` | `int` | Rough peak memory per chunk |
+| `labels` | `LabelSummary \| None` | `path`, `polygons`, `classes`, `warnings` |
+| `warnings` | `list[str]` | Messages to show the user |
+| `is_large` | `bool` (property) | More than 20,000 tiles or 5 GB; the CLI asks before starting such jobs |
+
+### `run_generate`
+
+```python
+def run_generate(config: MapcvConfig) -> GenerateResult
+```
+
+Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+
+### `GenerateResult`
+
+| Attribute | Type | Meaning |
+| --- | --- | --- |
+| `staging_dir` | `Path` | Output folder |
+| `manifest` | `Manifest` | The final manifest (all patches, including resumed ones) |
+| `new_patches` | `int` | Patches written by this call |
+| `split_counts` | `dict[str, int] \| None` | `train`, `val`, `test`, `dropped`; `None` without a `split` block |
+| `tiles_requested` | `int` | XYZ tiles requested in this call (0 for Sentinel-2) |
+| `tiles_failed` | `int` | Of those, how many failed |
+| `seconds` | `float` | Wall-clock time |
+
+## Splitting
+
+### `run_split`
+
+```python
+def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
+```
+
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+
+### `split_dataset`
+
+```python
+def split_dataset(manifest: Manifest, config: SplitterConfig, output_dir: Path) -> dict[str, int]
+```
+
+The same, for a manifest you already have in memory; writes the lists and `split.json` (settings, the strategy actually used, and counts) to `output_dir` and prints nothing. Emits a `UserWarning` when a non-spatial split leaks overlapping patches, or when a manifest without patch size forces a fallback from `spatial` to `stratified`.
+
+### `SplitterConfig`
+
+```python
+class SplitterConfig(BaseModel):
+    test_ratio: float = 0.20           # 0..1
+    val_ratio: float = 0.10            # 0..1, of the remainder
+    labeled_ratios: list[float] = [0.10, 0.20, 0.30]   # each in (0, 1]
+    seed: int = 42
+    strategy: Literal["spatial", "stratified", "random"] = "spatial"
+    block_size: int | None = None      # >= 1; default 4 x patch size (auto-shrunk)
+    sample_limit: int | None = None    # >= 1
+```
+
+See [Splits without leakage](/mapcv/guides/splits-without-leakage/).
+
+## Manifests
+
+### `Manifest`
+
+```python
+class Manifest(BaseModel):
+    version: int = 2
+    class_map: dict[str, int]
+    source_type: str = "xyz"
+    product_id: str | None = None
+    bands: list[str] = []
+    dtype: str | None = None
+    patch_shape: list[int] = []
+    crs: str | None = None
+    transform: tuple[float, float, float, float, float, float] | None = None
+    sampler: dict[str, Any] | None = None
+    labels: dict[str, Any] | None = None    # label settings + sha256 of the label file
+    writer: dict[str, Any] | None = None    # image_format, jpg_quality
+    patches: list[ManifestEntry] = []
+
+    @classmethod
+    def load(cls, path: Path) -> Manifest: ...   # version 1 or 2; newer raises ManifestMismatchError
+    def save(self, path: Path) -> None: ...       # atomic write
+```
+
+### `ManifestEntry`
+
+A `TypedDict` (plain `dict` at runtime) with `filename`, `mask_filename`, `row`, `col`, `padded`, `strip_index`, `per_class_pixel_counts` and `empty_ratio`. Meanings: [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
+
+### `ManifestMismatchError`
+
+```python
+from mapcv import ManifestMismatchError
+
+class ManifestMismatchError(ValueError): ...
+```
+
+Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, or one created with a different class map, source, product, bands, dtype, patch shape, CRS, transform, sampler, label settings or label-file contents, or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
+
+## Building blocks
+
+These work on in-memory arrays and are useful for notebooks or custom pipelines. The XYZ path below reproduces what `generate` does for one small region:
+
+```python
+from pathlib import Path
+from mapcv import (SamplerConfig, parse_geojson, rasterize, sample_patches,
+                   stitch_region, transform_to_mercator)
+
+image, transform = stitch_region(4.9375, 52.3725, 4.9515, 52.3780, zoom=17,
+                                 source="esri_satellite", max_connections=4)
+# image: (1024, 1536, 3) uint8; transform: Web Mercator affine
+
+geometries, class_map = parse_geojson(Path("buildings.geojson").read_bytes(), label_field="class")
+geometries = [(transform_to_mercator(g), cid) for g, cid in geometries]   # into EPSG:3857
+mask = rasterize(geometries, image.shape[:2], transform)                  # (1024, 1536) uint8
+
+patches, masks, meta = sample_patches(image, mask, SamplerConfig(patch_size=256, edge_strategy="drop"))
+# patches: (24, 256, 256, 3); masks: (24, 256, 256); meta[0] == {'row': 0, 'col': 0, 'padded': False, 'empty_ratio': 0.0}
+```
+
+<Aside type="caution">
+`stitch_region` holds the whole region in memory. For anything bigger than a few thousand pixels a side, use `run_generate`, which works in chunks.
+</Aside>
+
+### `parse_geojson`, `parse_kml`
+
+```python
+def parse_geojson(data: bytes, label_field: str | None = None,
+                  classes: dict[str, int] | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+def parse_kml(data: bytes, label_field: str | None = None,
+              classes: dict[str, int] | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+```
+
+Parse file **bytes** into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. Class IDs follow the [labels rules](/mapcv/reference/configuration/#labels). Skipped features raise a `UserWarning` with counts. `parse_geojson` accepts a `FeatureCollection` or a single `Feature` and rejects projected `crs` members; `parse_kml` reads `<Data>` and `<SimpleData>` fields.
+
+### `transform_to_mercator`
+
+```python
+def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry
+```
+
+Reprojects a WGS-84 shapely geometry to Web Mercator (EPSG:3857), the CRS of XYZ rasters.
+
+### `rasterize`
+
+```python
+def rasterize(geometries: Iterable[tuple[BaseGeometry, int]], out_shape: tuple[int, int],
+              transform: tuple[float, float, float, float, float, float],
+              all_touched: bool = False) -> np.ndarray   # uint8, shape out_shape
+```
+
+Burns polygons into a `uint8` mask of shape `(height, width)`. Geometries must already be in the raster's CRS; `transform` maps `(col, row)` to `(x, y)` like rasterio's `Affine`. Pixels are filled when their centre is inside a polygon (or when touched, with `all_touched=True`); later geometries overwrite earlier ones; non-polygons are ignored. Class IDs must be 1–255, otherwise `ValueError`.
+
+### `sample_patches`
+
+```python
+def sample_patches(image: np.ndarray, mask: np.ndarray | None,
+                   config: SamplerConfig) -> tuple[np.ndarray, np.ndarray | None, list[PatchMeta]]
+```
+
+Cuts patches from an in-memory `(H, W)` or `(H, W, C)` image (channels last) following `config` (grid or random, edge strategy, empty and label filters; all-zero pixels count as empty). Returns `(N, ps, ps[, C])` images, `(N, ps, ps)` masks or `None`, and per-patch `{"row", "col", "padded", "empty_ratio"}`. `sample_patches_at_anchors(image, mask, anchors, config, *, row_offset=0, col_offset=0, valid_mask=None)` does the same at explicit top-left anchors.
+
+### `download_region`, `stitch_region`
+
+```python
+def download_region(west: float, south: float, east: float, north: float, zoom: int,
+                    url_template: str | None = None, source: str | None = None,
+                    max_connections: int = 16, policy: str = "lenient",
+                    snap_to_tiles: bool = True, max_failed_ratio: float = 0.05,
+                    ) -> list[tuple[PyTileIndex, bytes]]
+
+def stitch_region(west: float, south: float, east: float, north: float, zoom: int,
+                  url_template: str | None = None, source: str | None = None,
+                  max_connections: int = 16, policy: str = "lenient",
+                  max_failed_ratio: float = 0.05,
+                  ) -> tuple[np.ndarray, tuple[float, float, float, float, float, float]]
+```
+
+`download_region` fetches the encoded tiles for a box (expanded to whole tiles by default) and returns `(tile, bytes)` pairs; tile objects have `x`, `y` and `z`. `stitch_region` also decodes and stitches them into one `(H, W, 3)` `uint8` image and returns its Web Mercator affine transform. `policy` and `max_failed_ratio` behave as in the [config](/mapcv/reference/configuration/#xyz-tiles-type-xyz); `RuntimeError` if too many tiles fail. Both print a progress bar (a one-line message in Jupyter).
+
+### `URL_TEMPLATES`
+
+```python
+URL_TEMPLATES: dict[str, str]
+# keys: esri_satellite, esri_topo, esri_street, cartodb_positron, cartodb_dark_matter
+```
+
+The built-in XYZ sources and their URL templates. `resolve_url_template(url_template, source)` returns the template `generate` would use.
+
+### Tile math
+
+`snap_bbox(west, south, east, north, zoom)` returns the box expanded to whole tiles (an object with `west`, `south`, `east`, `north`); `bounds(x, y, z)` returns a tile's lon/lat box.
+
+### Writer internals
+
+`load_or_create_manifest(path, class_map, *, source_type, product_id, bands, dtype, patch_shape, crs, transform, sampler, labels, writer)` and `write_patches(image_patches, mask_patches, meta, config, manifest, strip_index=0)` are the functions `run_generate` uses to resume-check and write patches. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.

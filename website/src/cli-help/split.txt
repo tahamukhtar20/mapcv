@@ -1,0 +1,31 @@
+ Usage: mapcv split [OPTIONS] {staging_dir}
+
+ Re-split an existing dataset from its manifest; no images are read.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --test-ratio              <float>  Fraction of patches held out for testing.         │
+│                                    [default: 0.2]                                    │
+│ --val-ratio               <float>  Fraction of the remaining patches for validation. │
+│                                    [default: 0.1]                                    │
+│ --labeled-ratios          <float>  Labeled fractions of train for semi-supervised    │
+│                                    lists (repeatable). Default: 0.1 0.2 0.3.         │
+│ --seed                    <int>    Random seed. [default: 42]                        │
+│ --strategy                <str>    spatial (leakage-safe blocks) | stratified |      │
+│                                    random.                                           │
+│                                    [default: spatial]                                │
+│ --block-size              <int>    Spatial block size in pixels (default: 4 × patch  │
+│                                    size).                                            │
+│ --sample-limit            <int>    Use at most this many patches.                    │
+│ --help            -h               Show this message and exit.                       │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv split dataset/
+
+ mapcv split dataset/ --strategy spatial --block-size 2048 --test-ratio 0.15
+
+

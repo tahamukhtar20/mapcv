@@ -1,0 +1,64 @@
+---
+title: FAQ
+description: Short answers to common questions about mapcv.
+---
+
+### Do I need GDAL?
+
+No. mapcv's tile math, fetching, rasterization and patch writing are in Rust, and it reads GeoJSON and KML itself. You may still find GDAL's `ogr2ogr` handy to convert Shapefiles or GeoPackages to GeoJSON once ([Prepare labels](/mapcv/guides/prepare-labels/#export-from-common-tools)).
+
+### Which Python versions are supported?
+
+Python 3.10–3.14 for the base package. Sentinel-2 support (`mapcv[zarr]`) works on 3.10–3.13, because its zarr 2 dependency has no Python 3.14 wheels.
+
+### Can I use Google, Bing or OpenStreetMap tiles?
+
+mapcv has no presets for them: Google's and the OpenStreetMap Foundation's terms do not allow bulk downloading for this purpose. You can point `imagery.url_template` at any tile service you are authorised to use in this way. OpenStreetMap *data* is a good source of labels. See [Providers & licensing](/mapcv/project/providers/).
+
+### Can I use my own GeoTIFF or drone orthomosaic?
+
+Not directly: mapcv reads XYZ tiles and Sentinel-2 EOPF Zarr products. If you can serve your raster as standard 256 px XYZ tiles (for example with a local tile server), `url_template` works with `http://localhost/...`.
+
+### Can I make an image-only dataset?
+
+Yes. Leave out the `labels` block. You get `Images/`, a manifest and splits, but no `Masks/`.
+
+### Can I make an object-detection dataset?
+
+No, mapcv writes segmentation masks. Bounding boxes can be derived from the masks (connected components) or from your polygons, using the manifest's transform to convert coordinates.
+
+### How do I get several classes?
+
+Put the class in a property of each feature and set `labels.label_field` to its name. Pin IDs with `labels.classes`. See [How class IDs are chosen](/mapcv/guides/prepare-labels/#how-class-ids-are-chosen).
+
+### What value marks "ignore" in the masks?
+
+None. Masks use `0` for background, including padded and NoData pixels. Derive an ignore mask from the image (black RGB or `NaN` bands) in your loader ([how](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels)).
+
+### Why are my split percentages not exactly 70/10/20?
+
+The default `spatial` split moves whole blocks of the map, and drops train/val patches that overlap test patches. On small datasets that shifts the shares. Smaller `block_size` or another `seed` gets closer ([guide](/mapcv/guides/splits-without-leakage/#choosing-block_size)).
+
+### Can I change the split after generating?
+
+Yes, in seconds: `mapcv split dataset --strategy … --test-ratio …`. It reads only the manifest.
+
+### My run stopped. Do I start over?
+
+No. Run the same `mapcv generate` command; it resumes after the last completed chunk ([details](/mapcv/guides/large-regions-and-resuming/)).
+
+### Can I add more area to an existing dataset?
+
+Only if the new config produces the same raster grid, sampler and class map; otherwise resuming is refused. In practice, generate the new area into its own folder and combine the split lists in your loader.
+
+### Can I use several Sentinel-2 products, or a time series?
+
+One product per run. Generate one dataset per product (each in its own `staging_dir`) and combine them yourself. mapcv does not mosaic scenes or mask clouds.
+
+### Can I read private S3 buckets or signed URLs?
+
+No. EOPF paths must be local files or anonymous public `https://`/`s3://` URLs; credentials and query strings are rejected. Download the product first if it is private.
+
+### Where are the docs for mapcv 0.1?
+
+0.1 configs mostly still work with a deprecation notice. The [migration guide](/mapcv/project/migration/) lists every change.

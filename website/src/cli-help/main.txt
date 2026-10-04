@@ -1,0 +1,29 @@
+ Usage: mapcv [OPTIONS] COMMAND [ARGS]...
+
+ Turn a region and polygon labels into a ready-to-train segmentation dataset.
+
+ Start with mapcv init, check the cost with mapcv plan, then build with mapcv generate.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --version             -V        Show the mapcv version and exit.                     │
+│ --quiet               -q        Hide progress output; still show errors and          │
+│                                 summaries.                                           │
+│ --install-completion            Install completion for the current shell.            │
+│ --show-completion               Show completion for the current shell, to copy it or │
+│                                 customize the installation.                          │
+│ --help                -h        Show this message and exit.                          │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ 1. Build a dataset ─────────────────────────────────────────────────────────────────╮
+│ init      Create a config: answer a few questions, or start from a template.         │
+│ plan      Estimate tiles, patches, disk and memory for a config without downloading. │
+│ generate  Download imagery, rasterize labels and write patches, masks, manifest and  │
+│           splits.                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ 2. Use a dataset ───────────────────────────────────────────────────────────────────╮
+│ info      Summarize a generated dataset: source, shapes, class balance and splits.   │
+│ split     Re-split an existing dataset from its manifest; no images are read.        │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ 3. Utilities ───────────────────────────────────────────────────────────────────────╮
+│ validate  Check a config without reading labels or imagery (use plan for estimates). │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+

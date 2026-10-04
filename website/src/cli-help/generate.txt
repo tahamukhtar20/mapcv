@@ -1,0 +1,22 @@
+ Usage: mapcv generate [OPTIONS] {config_path}
+
+ Download imagery, rasterize labels and write patches, masks, manifest and splits.
+
+ Re-running the same command resumes an interrupted run.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    config_path      <path>  Path to the YAML config. [required]                    │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --yes      -y        Don't ask before large downloads.                               │
+│ --dry-run            Only show the plan, like mapcv plan.                            │
+│ --help     -h        Show this message and exit.                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv generate mapcv.yaml
+
+ mapcv generate mapcv.yaml --yes   (no prompt for large jobs, for CI)
+
+

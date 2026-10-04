@@ -80,7 +80,7 @@ zarr = [
     "xarray-eopf>=0.2.9,<0.3; python_version >= '3.11' and python_version < '3.14'",
     "xarray>=2024.10; python_version < '3.14'",
     "dask[array]>=2024.10; python_version < '3.14'",
-    "numba>=0.61; python_version < '3.14'",
+    "numba>=0.68; python_version < '3.14'",  # 0.68 is the first to support numpy 2.5
     "zarr>=2.18,<3; python_version < '3.14'",
     "pyproj>=3.6; python_version < '3.14'",
     "s3fs>=2024.10; python_version < '3.14'",

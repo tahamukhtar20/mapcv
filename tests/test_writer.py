@@ -453,3 +453,27 @@ def test_manifest_round_trip_with_entries(tmp_path: Path) -> None:
         assert orig["filename"] == reloaded["filename"]
         assert orig["row"] == reloaded["row"]
         assert orig["empty_ratio"] == reloaded["empty_ratio"]
+
+
+def test_manifest_from_a_newer_mapcv_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text('{"version": 99, "class_map": {}, "patches": []}')
+    with pytest.raises(ManifestMismatchError, match="newer mapcv"):
+        Manifest.load(path)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [{"labels": {"sha256": "other"}}, {"writer": {"image_format": "jpg", "jpg_quality": 95}}],
+)
+def test_resume_detects_label_edits_and_writer_changes(
+    tmp_path: Path, changed: Dict[str, Any]
+) -> None:
+    path = tmp_path / "manifest.json"
+    original: Dict[str, Any] = {
+        "labels": {"sha256": "abc"},
+        "writer": {"image_format": "png", "jpg_quality": 95},
+    }
+    Manifest(class_map={}, **original).save(path)
+    with pytest.raises(ManifestMismatchError):
+        load_or_create_manifest(path, {}, **{**original, **changed})

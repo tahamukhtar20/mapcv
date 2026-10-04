@@ -61,8 +61,9 @@ def test_eopf_estimate_uses_resolution() -> None:
     estimate = plan(config)
     width, height = estimate.raster_px
     width_km, height_km = region_size_km(10.0, 45.0, 10.1, 45.1)
-    assert width == pytest.approx(width_km * 100, rel=0.01)
-    assert height == pytest.approx(height_km * 100, rel=0.01)
+    # UTM grid (with pyproj) and the km approximation agree within a few pixels.
+    assert width == pytest.approx(width_km * 100, rel=0.03)
+    assert height == pytest.approx(height_km * 100, rel=0.03)
     assert estimate.tiles is None
 
 
@@ -97,3 +98,13 @@ def test_helpers() -> None:
     assert ground_resolution_m(17, 0.0) == pytest.approx(1.194, rel=1e-3)
     assert human_bytes(999) == "999 B"
     assert human_bytes(1_500_000) == "1.5 MB"
+
+
+def test_labels_outside_the_region_are_flagged(tmp_path: Path) -> None:
+    labels = tmp_path / "far.geojson"
+    labels.write_text(
+        '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},'
+        '"geometry":{"type":"Polygon","coordinates":[[[10,45],[10.1,45],[10.1,45.1],[10,45]]]}}]}'
+    )
+    estimate = plan(_config(labels={"path": str(labels)}))
+    assert any("no label polygon intersects the region" in w for w in estimate.warnings)

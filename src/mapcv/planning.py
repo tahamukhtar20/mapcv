@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Tuple
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, XYZImageryConfig
+from shapely.geometry import box
+
 from mapcv.labels import parse_geojson, parse_kml
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
@@ -87,13 +89,28 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, in
 
 
 def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[int, int]:
-    width_km, height_km = region_size_km(
-        config.region.west, config.region.south, config.region.east, config.region.north
+    """Raster size in the product's UTM grid, snapped outward to whole pixels."""
+    region = config.region
+    res = imagery.resolution
+    try:
+        from pyproj import Transformer
+    except ImportError:  # without the zarr extra: kilometre approximation
+        width_km, height_km = region_size_km(region.west, region.south, region.east, region.north)
+        return (
+            max(1, math.ceil(height_km * 1000 / res)),
+            max(1, math.ceil(width_km * 1000 / res)),
+        )
+    lon = (region.west + region.east) / 2
+    lat = (region.south + region.north) / 2
+    zone = min(60, int((lon + 180) // 6) + 1)
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    left, bottom, right, top = transformer.transform_bounds(
+        region.west, region.south, region.east, region.north, densify_pts=21
     )
-    return (
-        max(1, math.ceil(height_km * 1000 / imagery.resolution)),
-        max(1, math.ceil(width_km * 1000 / imagery.resolution)),
-    )
+    cols = math.ceil(right / res) - math.floor(left / res)
+    rows = math.ceil(top / res) - math.floor(bottom / res)
+    return max(1, rows), max(1, cols)
 
 
 def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
@@ -121,12 +138,15 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
             geometries, class_map = parse_kml(data, labels.label_field, labels.classes)
         else:
             geometries, class_map = parse_geojson(data, labels.label_field, labels.classes)
-    return LabelSummary(
-        str(labels.path),
-        len(geometries),
-        class_map,
-        [str(warning.message) for warning in caught],
-    )
+    messages = [str(warning.message) for warning in caught]
+    region = config.region
+    area = box(region.west, region.south, region.east, region.north)
+    if geometries and not any(geometry.intersects(area) for geometry, _ in geometries):
+        messages.append(
+            "no label polygon intersects the region, so every mask would be background. "
+            "Check that labels are longitude/latitude (not swapped) and cover the region."
+        )
+    return LabelSummary(str(labels.path), len(geometries), class_map, messages)
 
 
 def plan(config: MapcvConfig) -> Plan:

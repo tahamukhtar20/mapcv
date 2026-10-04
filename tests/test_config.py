@@ -201,7 +201,8 @@ def test_labels_and_split_sections_parse(tmp_path: Path) -> None:
         + "split:\n  test_ratio: 0.2\n  val_ratio: 0.1\n"
     )
     config = MapcvConfig.from_yaml(_write(tmp_path, content))
-    assert config.labels is not None and config.labels.path == Path("labels.kml")
+    # Relative paths resolve against the config file's folder.
+    assert config.labels is not None and config.labels.path == tmp_path / "labels.kml"
     assert config.split is not None and config.split.test_ratio == 0.2
 
 
@@ -252,4 +253,35 @@ def test_nonexistent_file_raises(tmp_path: Path) -> None:
 def test_url_template_is_validated(tmp_path: Path, template: str, message: str) -> None:
     content = _MINIMAL.replace("source: esri_satellite", f'url_template: "{template}"')
     with pytest.raises(ValueError, match=message):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_relative_paths_resolve_from_the_config_folder(tmp_path: Path) -> None:
+    sub = tmp_path / "configs"
+    sub.mkdir()
+    content = _MINIMAL.replace("staging_dir: ./output", "staging_dir: ../data/out") + (
+        "labels:\n  path: labels.geojson\n"
+    )
+    config = MapcvConfig.from_yaml(_write(sub, content))
+    assert config.writer.staging_dir == tmp_path / "data" / "out"
+    assert config.labels is not None and config.labels.path == sub / "labels.geojson"
+    absolute = _MINIMAL.replace("staging_dir: ./output", f"staging_dir: {tmp_path / 'abs'}")
+    assert MapcvConfig.from_yaml(_write(sub, absolute)).writer.staging_dir == tmp_path / "abs"
+
+
+@pytest.mark.parametrize(
+    ("original", "typo"),
+    [("patch_size: 256", "patch_size: 256\n  stide: 128"), ("zoom: 16", "zoom: 16\n  sorce: x")],
+)
+def test_unknown_keys_are_rejected(tmp_path: Path, original: str, typo: str) -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL.replace(original, typo)))
+
+
+def test_source_and_url_template_are_exclusive(tmp_path: Path) -> None:
+    content = _MINIMAL.replace(
+        "source: esri_satellite",
+        'source: esri_satellite\n  url_template: "https://t.example.com/{z}/{x}/{y}.png"',
+    )
+    with pytest.raises(ValueError, match="not both"):
         MapcvConfig.from_yaml(_write(tmp_path, content))

@@ -8,13 +8,16 @@ from typing_extensions import NotRequired, TypedDict
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 
 
 class SamplerConfig(BaseModel):
     """Configuration for patch sampling from an image strip."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     patch_size: int = Field(gt=0)
     stride: int = Field(default=0, ge=0)

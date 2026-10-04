@@ -1,0 +1,45 @@
+# mapcv Sentinel-2 example: 4-band land-cover patches near Amerongen (Utrecht, NL).
+# Needs the optional extra (Python 3.10–3.13):  pip install "mapcv[zarr]"
+# Run from this folder (paths below are relative to it):
+#   mapcv plan mapcv.yaml && mapcv generate mapcv.yaml && mapcv info dataset
+#
+# Imagery: Copernicus Sentinel-2 L2A (ESA EOPF Zarr sample service), free and open data.
+# Labels: © OpenStreetMap contributors, ODbL 1.0 (see README.md).
+
+region:                      # WGS-84 lon/lat, inside the product's footprint
+  west: 5.400
+  south: 51.975
+  east: 5.500
+  north: 52.035
+
+imagery:
+  type: eopf_zarr
+  # S2A, 13 May 2025, MGRS tile 31UFT, 0.03 % cloud cover. Found via the EOPF STAC API:
+  # https://stac.core.eopf.eodc.eu/collections/sentinel-2-l2a/items/S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716
+  path: https://objectstore.eodc.eu:2222/e05ab01a9d56408d82ac32d69a5aae2a:202505-s02msil2a/13/products/cpm_v256/S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716.zarr
+  resolution: 10             # metres; the 10 m bands are b02, b03, b04 and b08
+  bands: [b04, b03, b02, b08]   # red, green, blue, near-infrared, in this order
+
+labels:
+  path: landuse.geojson
+  label_field: class
+  classes:                   # pin the mask values instead of relying on sorted order
+    built_up: 1
+    farmland: 2
+    forest: 3
+    water: 4
+
+sampler:
+  patch_size: 128            # 1.28 km per patch at 10 m
+  edge_strategy: drop
+  max_empty_ratio: 0.2       # skip patches with more than 20 % NoData (NaN)
+
+writer:
+  staging_dir: ./dataset
+  image_format: npy          # float32, bands-first: (4, 128, 128)
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42

@@ -19,6 +19,14 @@ imagery:
 
 Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a deprecation notice (a `FutureWarning`). `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom`, and is otherwise ignored with a notice. This compatibility path will be removed in 0.3.0. `imagery.type` is required.
 
+## Stricter configs
+
+Unknown keys are now errors: a typo such as `stide:` or an option from a newer mapcv stops validation instead of being ignored. Remove keys that 0.2 does not know; `mapcv validate` names each one. An XYZ `imagery` block takes either `source` or `url_template`, not both.
+
+Relative paths (`labels.path`, `writer.staging_dir`, a local EOPF `imagery.path`) now resolve against the folder that contains the config file, not the directory you run mapcv from. Configs kept next to their data are unaffected; otherwise use absolute paths.
+
+`mapcv init` writes `mapcv.yaml` unless you give it a path. Use `mapcv init --stdout` to print the config instead.
+
 ## Google imagery preset
 
 The built-in `google_satellite` preset has been removed, and configs that still use it fail validation with a pointer to this guide. mapcv cannot determine whether a use of Google imagery is licensed for downloading, caching, or machine-learning dataset creation. Authorized custom XYZ templates remain supported through `imagery.url_template`; do not put credentials or signed query strings in committed YAML.
@@ -33,7 +41,7 @@ EOPF Sentinel-2 L2A input requires `pip install "mapcv[zarr]"` and `writer.image
 
 New datasets use manifest version 2. It records the source type, product identifier, bands, dtype, patch shape, CRS, and dataset affine transform. Patch rows and columns are global raster coordinates. Version 1 manifests remain readable by `mapcv split`, but **0.1.x datasets cannot be resumed by `mapcv generate`**: their row coordinates were per strip, while 0.2 uses global coordinates. Generate into a new `writer.staging_dir` instead.
 
-Resuming any dataset now requires the same imagery, labels, and sampler settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
+Resuming any dataset now requires the same imagery, label file, label settings, sampler and writer settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
 
 ## Sampling changes
 
@@ -50,6 +58,7 @@ The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × 
 ## Class IDs
 
 With `labels.label_field`, class IDs used to follow the order labels first appeared in the file, so the same classes could get different IDs in different files. Now integer labels in 1..255 are used as their own IDs and other labels are numbered in sorted order. Set `labels.classes` (for example `{building: 1, road: 2}`) to pin IDs explicitly, for instance to match a dataset created with 0.1.
+
 ## Removed Python APIs
 
 `download_region_strips`, `iter_tile_strips`, `TilesConfig` and the `hello()` stub are removed; `mapcv generate` reads imagery in chunks without them. `download_region`, `stitch_region` and `sample_patches` remain for in-memory workflows.

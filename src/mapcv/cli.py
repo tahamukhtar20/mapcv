@@ -13,8 +13,6 @@ import sys
 import warnings
 from collections import Counter
 from enum import Enum
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
 from urllib.parse import urlsplit
@@ -26,6 +24,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
+import mapcv
 from mapcv import pipeline
 from mapcv._mapcv_rs import parse_kml_rs
 from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
@@ -58,10 +57,7 @@ _PROVIDERS_URL = "https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md"
 
 
 def _version() -> str:
-    try:
-        return package_version("mapcv")
-    except PackageNotFoundError:  # pragma: no cover - only when run from a raw checkout
-        return "unknown"
+    return mapcv.__version__
 
 
 def _version_callback(value: bool) -> None:
@@ -675,7 +671,9 @@ def _wizard() -> str:
     ),
 )
 def init(
-    output: Path = typer.Argument(Path("mapcv.yaml"), help="Where to write the config."),
+    output: Path = typer.Argument(
+        Path("mapcv.yaml"), metavar="OUTPUT", help="Where to write the config."
+    ),
     template: Optional[Template] = typer.Option(
         None, "--template", "-t", help="Write a ready-made example instead of asking."
     ),
@@ -733,7 +731,7 @@ def init(
     epilog="Example: [cyan]mapcv plan mapcv.yaml[/cyan]",
 )
 def plan(
-    config_path: Path = typer.Argument(..., help="Path to the YAML config."),
+    config_path: Path = typer.Argument(..., metavar="CONFIG_PATH", help="Path to the YAML config."),
 ) -> None:
     """Estimate tiles, patches, disk and memory for a config [bold]without downloading[/bold]."""
     config = _load_config(config_path)
@@ -755,7 +753,7 @@ def plan(
     ),
 )
 def generate(
-    config_path: Path = typer.Argument(..., help="Path to the YAML config."),
+    config_path: Path = typer.Argument(..., metavar="CONFIG_PATH", help="Path to the YAML config."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before large downloads."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Only show the plan, like [bold]mapcv plan[/bold]."
@@ -791,6 +789,12 @@ def generate(
             _show_warnings(caught, shown)
             _console.print(f"[red]Cannot resume:[/red] {exc}")
             raise typer.Exit(code=1)
+        except KeyboardInterrupt:
+            _console.print(
+                "\n[yellow]Interrupted.[/yellow] Finished chunks are saved; run the same "
+                "command again to resume."
+            )
+            raise typer.Exit(code=130)
         except Exception as exc:  # noqa: BLE001 - any failure gets the same resume advice
             _show_warnings(caught, shown)
             detail = str(exc) or type(exc).__name__
@@ -807,7 +811,9 @@ def generate(
 
 @app.command(rich_help_panel="2. Use a dataset", epilog="Example: [cyan]mapcv info dataset/[/cyan]")
 def info(
-    staging_dir: Path = typer.Argument(..., help="Dataset directory containing manifest.json."),
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
 ) -> None:
     """Summarize a generated dataset: source, shapes, class balance and splits."""
     manifest_path = staging_dir / "manifest.json"
@@ -854,7 +860,9 @@ def info(
     ),
 )
 def split(
-    staging_dir: Path = typer.Argument(..., help="Dataset directory containing manifest.json."),
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
     test_ratio: float = typer.Option(0.20, help="Fraction of patches held out for testing."),
     val_ratio: float = typer.Option(0.10, help="Fraction of the remaining patches for validation."),
     labeled_ratios: Optional[List[float]] = typer.Option(
@@ -909,7 +917,7 @@ def split(
     rich_help_panel="3. Utilities", epilog="Example: [cyan]mapcv validate mapcv.yaml[/cyan]"
 )
 def validate(
-    config_path: Path = typer.Argument(..., help="Path to the YAML config."),
+    config_path: Path = typer.Argument(..., metavar="CONFIG_PATH", help="Path to the YAML config."),
 ) -> None:
     """Check a config without reading labels or imagery (use [bold]plan[/bold] for estimates)."""
     config = _load_config(config_path)

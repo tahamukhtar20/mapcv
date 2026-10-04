@@ -41,6 +41,8 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 - Save the manifest after every chunk and overwrite orphaned files from interrupted runs, so a resume can no longer pair entries with the wrong files.
 - Count black or failed XYZ tiles as empty for `max_empty_ratio` again.
 - Refuse to resume when the label file or the writer settings changed, and refuse manifests written by a newer mapcv.
+- A resumed run records the same chunk index for each patch as an uninterrupted one; Ctrl-C during `generate` says how to resume.
+- Warn when failed tiles were filled with black inside kept patches (`sampler.max_empty_ratio: 1`), where masks still carry labels.
 - Record how a split was made in `splits/split.json`; split lists end with a newline.
 - `stratified` splits now stratify the train/val/test assignment (by labeled fraction and dominant class), not only the subsample; labeled-ratio folders are named exactly (`0.29` → `29/`) and stale split lists are overwritten.
 
@@ -65,6 +67,7 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 
 **CLI and security**
 - Print each warning once, also under `--quiet`; warn when most tiles fail under `policy: ignore`; say why a resume was refused.
+- `mapcv.__version__`, and uppercase argument names in `--help` with Typer 0.27.
 - Keep secrets out of manifests and `mapcv validate` output; show deprecation notices; report generation errors without a traceback; `mapcv init` links the provider guidance.
 
 ### Documentation

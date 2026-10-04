@@ -334,7 +334,7 @@ class Template(str, Enum):
 
 
 _HEADER = f"""\
-# mapcv config — docs: {_DOCS_URL}/reference/configuration/
+# mapcv config - docs: {_DOCS_URL}/reference/configuration/
 # Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
 # You are responsible for the imagery provider's license, attribution and rate limits:
 # {_PROVIDERS_URL}
@@ -351,10 +351,10 @@ region:                      # WGS-84 lon/lat bounding box
 
 imagery:
   type: xyz
-  zoom: 17                   # ≈ 1 m/px here; each zoom level halves the pixel size
+  zoom: 17                   # ~ 1 m/px here; each zoom level halves the pixel size
   source: esri_satellite     # or url_template: "https://.../{z}/{x}/{y}.png"
   max_connections: 4         # keep requests modest; respect the provider's limits
-  policy: lenient            # strict | lenient | ignore — what to do with failed tiles
+  policy: lenient            # strict | lenient | ignore - what to do with failed tiles
   max_failed_ratio: 0.05
 
 # labels:                    # omit for an image-only dataset
@@ -366,7 +366,7 @@ sampler:
   patch_size: 256
   stride: 0                  # 0 = patch_size (no overlap); smaller = overlapping patches
   mode: grid                 # grid | random
-  edge_strategy: pad         # pad | drop | shift — patches at the raster edge
+  edge_strategy: pad         # pad | drop | shift - patches at the raster edge
   max_empty_ratio: 1.0       # skip patches with more empty (black/NoData) pixels than this
 
 writer:
@@ -385,7 +385,7 @@ split:                       # remove to skip splitting
 _SENTINEL2_TEMPLATE = (
     _HEADER
     + """
-# Needs the optional extra: pip install "mapcv[zarr]"   (Python 3.10–3.13)
+# Needs the optional extra: pip install "mapcv[zarr]"   (Python 3.10-3.13)
 
 region:                      # WGS-84 lon/lat bounding box inside the product
   west: 10.00
@@ -682,7 +682,7 @@ def init(
         ):
             _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
             raise typer.Exit(code=1)
-    target.write_text(text)
+    target.write_text(text, encoding="utf-8")
     try:
         MapcvConfig.from_yaml(target)
     except ValidationError as exc:

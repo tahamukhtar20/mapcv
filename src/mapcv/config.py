@@ -291,5 +291,5 @@ class MapcvConfig(BaseModel):
     @classmethod
     def from_yaml(cls, path: Path) -> "MapcvConfig":
         """Load and validate a mapcv YAML file."""
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
         return cls.model_validate(data)

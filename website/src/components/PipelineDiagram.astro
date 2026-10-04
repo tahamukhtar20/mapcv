@@ -1,0 +1,122 @@
+---
+// Pipeline diagrams. `overview` = inputs → mapcv → outputs (Introduction);
+// `detailed` = the eight generation stages (How mapcv works).
+interface Props {
+  variant?: 'overview' | 'detailed';
+}
+const { variant = 'overview' } = Astro.props;
+
+const inputs = [
+  ['Region', 'lon/lat bounding box'],
+  ['Imagery', 'XYZ tiles · Sentinel-2 Zarr'],
+  ['Labels (optional)', 'GeoJSON / KML polygons'],
+];
+const stages = ['plan', 'fetch', 'rasterize', 'patch', 'split'];
+const outputs = [
+  ['Images/', 'PNG · JPG · NPY patches'],
+  ['Masks/', 'uint8 class-ID PNGs'],
+  ['manifest.json + splits/', 'metadata · train/val/test'],
+];
+
+const detailed = [
+  ['1  Config', 'validate the YAML'],
+  ['2  Plan', 'size, tiles, warnings'],
+  ['3  Open imagery', 'XYZ tiles or EOPF Zarr'],
+  ['4  Labels → raster CRS', 'EPSG:3857 or product UTM'],
+  ['5  Global anchors', 'grid / random, whole raster'],
+  ['6  Chunks', 'read · rasterize · cut'],
+  ['7  Write', 'files + manifest per chunk'],
+  ['8  Split', 'train / val / test lists'],
+];
+const W = 170;
+const H = 58;
+const xs = [10, 200, 390, 580];
+const pos = (i: number) =>
+  i < 4 ? { x: xs[i], y: 20 } : { x: xs[7 - i], y: 150 };
+---
+
+<figure class="mapcv-diagram not-content">
+  {
+    variant === 'overview' ? (
+      <svg viewBox="0 0 760 200" role="img" aria-labelledby="pipeline-overview-title">
+        <title id="pipeline-overview-title">
+          Region, imagery and labels go into mapcv, which plans, fetches, rasterizes, cuts patches
+          and splits, producing images, masks, a manifest and split lists.
+        </title>
+        <defs>
+          <marker id="ah-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" class="arrowhead" />
+          </marker>
+        </defs>
+        {inputs.map(([title, sub], i) => (
+          <g>
+            <rect class="box" x="10" y={20 + i * 60} width="170" height="44" rx="8" />
+            <text x="22" y={38 + i * 60}>{title}</text>
+            <text class="sub" x="22" y={54 + i * 60}>{sub}</text>
+            <path class="arrow" d={`M180,${42 + i * 60} L218,100`} marker-end="url(#ah-o)" />
+          </g>
+        ))}
+        <rect class="box accent" x="220" y="20" width="340" height="164" rx="12" />
+        <text x="240" y="48" style="font-weight:700;font-size:16px">mapcv</text>
+        <text class="sub" x="240" y="66">one YAML config · Rust core · no GDAL</text>
+        {stages.map((stage, i) => (
+          <g>
+            <rect class="box" x={232 + i * 64} y="92" width="56" height="34" rx="6" />
+            <text x={260 + i * 64} y="113" text-anchor="middle" style="font-size:11.5px">{stage}</text>
+            {i < stages.length - 1 && (
+              <path class="arrow" d={`M${288 + i * 64},109 L${295 + i * 64},109`} marker-end="url(#ah-o)" />
+            )}
+          </g>
+        ))}
+        <text class="sub" x="240" y="160">resumable · chunked · leakage-safe splits</text>
+        {outputs.map(([title, sub], i) => (
+          <g>
+            <path class="arrow" d={`M560,100 L582,${42 + i * 60}`} marker-end="url(#ah-o)" />
+            <rect class="box" x="584" y={20 + i * 60} width="170" height="44" rx="8" />
+            <text x="596" y={38 + i * 60}>{title}</text>
+            <text class="sub" x="596" y={54 + i * 60}>{sub}</text>
+          </g>
+        ))}
+      </svg>
+    ) : (
+      <svg viewBox="0 0 760 230" role="img" aria-labelledby="pipeline-detailed-title">
+        <title id="pipeline-detailed-title">
+          The eight generation stages: config, plan, open imagery, labels to raster CRS, global
+          anchors, chunked read rasterize and cut, write files and manifest, split.
+        </title>
+        <defs>
+          <marker id="ah-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" class="arrowhead" />
+          </marker>
+        </defs>
+        {detailed.map(([title, sub], i) => {
+          const { x, y } = pos(i);
+          return (
+            <g>
+              <rect class={i === 5 ? 'box accent' : 'box'} x={x} y={y} width={W} height={H} rx="8" />
+              <text x={x + 12} y={y + 24}>{title}</text>
+              <text class="sub" x={x + 12} y={y + 43}>{sub}</text>
+            </g>
+          );
+        })}
+        {[0, 1, 2].map((i) => (
+          <path class="arrow" d={`M${xs[i] + W},49 L${xs[i + 1] - 2},49`} marker-end="url(#ah-d)" />
+        ))}
+        <path class="arrow" d={`M${xs[3] + W / 2},78 L${xs[3] + W / 2},148`} marker-end="url(#ah-d)" />
+        {[3, 2, 1].map((i) => (
+          <path class="arrow" d={`M${xs[i]},179 L${xs[i - 1] + W + 2},179`} marker-end="url(#ah-d)" />
+        ))}
+        <text class="sub" x={xs[1] + 4} y="226">
+          the manifest is saved after every chunk, so a rerun resumes at stage 6
+        </text>
+      </svg>
+    )
+  }
+  <figcaption>
+    {
+      variant === 'overview'
+        ? 'From a config file to a dataset folder. Labels are optional; without them you get an image-only dataset.'
+        : 'Stages 6–7 repeat for each chunk of raster rows, so memory is bounded by one chunk (full raster width × chunk rows), not by the whole region.'
+    }
+  </figcaption>
+</figure>

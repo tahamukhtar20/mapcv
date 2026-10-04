@@ -142,8 +142,9 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
 
 /// Fetch satellite tiles concurrently from a URL template.
 ///
-/// Returns a list of `(PyTileIndex, bytes)` pairs for successfully fetched
-/// tiles (and, with the `ignore` policy, black `NoData`-filled tiles).
+/// Returns `(tiles, failed, reasons)`: `(PyTileIndex, bytes)` pairs for successfully
+/// fetched tiles (and, with the `ignore` policy, black `NoData`-filled tiles), the
+/// number of failed tiles, and a one-line summary of why they failed (empty if none).
 /// Under the `lenient` policy, raises `RuntimeError` if the fraction of
 /// failed tiles exceeds `max_failed_ratio`; `ignore` never enforces it.
 #[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
@@ -157,7 +158,7 @@ fn fetch_tiles(
     max_connections: usize,
     policy: &str,
     max_failed_ratio: f64,
-) -> PyResult<(Vec<FetchedTile>, usize)> {
+) -> PyResult<(Vec<FetchedTile>, usize, String)> {
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -169,7 +170,7 @@ fn fetch_tiles(
 
     let total = rust_tiles.len();
 
-    let (results, failed) = fetcher::fetch_tiles(
+    let (results, failed, failures) = fetcher::fetch_tiles(
         py,
         rust_tiles,
         url_template,
@@ -181,9 +182,12 @@ fn fetch_tiles(
     let lenient = policy.eq_ignore_ascii_case("lenient");
     if lenient && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold)",
+            "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold): {}. \
+             If the provider is busy or rate-limiting, try again later or lower \
+             imagery.max_connections; raise imagery.max_failed_ratio to accept gaps.",
             100.0 * failed as f64 / total as f64,
             100.0 * max_failed_ratio,
+            failures.describe(),
         )));
     }
 
@@ -197,7 +201,7 @@ fn fetch_tiles(
         })
         .collect();
 
-    Ok((results_py, failed))
+    Ok((results_py, failed, failures.describe()))
 }
 
 /// Generate grid (or sliding-window) patch anchor positions.

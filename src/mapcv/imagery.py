@@ -128,6 +128,7 @@ class XYZRasterSource:
         self._attempted: Set[Tuple[int, int]] = set()
         self.tiles_requested = 0
         self.tiles_failed = 0
+        self.failure_reasons = ""
         self._min_x = min(tile.x for tile in target_tiles)
         self._max_x = max(tile.x for tile in target_tiles)
         self._min_y = min(tile.y for tile in target_tiles)
@@ -212,7 +213,7 @@ class XYZRasterSource:
             return
         self._attempted.update(missing)
         config = self._config
-        results, failed = fetch_tiles(
+        results, failed, reasons = fetch_tiles(
             [PyTileIndex(x, y, self._zoom) for x, y in missing],
             self._template,
             max_connections=config.max_connections,
@@ -221,6 +222,8 @@ class XYZRasterSource:
         )
         self.tiles_requested += len(missing)
         self.tiles_failed += failed
+        if reasons:
+            self.failure_reasons = reasons
         for tile, payload in results:
             self._tiles[(tile.x, tile.y)] = payload
 

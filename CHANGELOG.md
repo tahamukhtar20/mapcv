@@ -53,6 +53,7 @@ mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 s
 - Warn with counts when features are skipped and when no label intersects the imagery.
 
 **Tile downloads**
+- Say why tiles failed: errors and warnings group failures by cause (HTTP status, timeout, non-image response) with one example URL.
 - Retry truncated responses and apply the failure policy instead of aborting the run; count HTML error pages and empty bodies as failed tiles.
 - Honour `Retry-After` with jittered backoff, identify requests with a contact URL, and enforce `max_failed_ratio` for any capitalization of `lenient`.
 - Validate `url_template` placeholders when the config loads (for example, a leftover `{s}`).

@@ -426,6 +426,11 @@ split:
 _TEMPLATES = {Template.xyz: _XYZ_TEMPLATE, Template.sentinel2: _SENTINEL2_TEMPLATE}
 
 
+def _yaml_str(value: str) -> str:
+    """Single-quoted YAML scalar: backslashes (Windows paths) stay literal."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _ask_bbox_or_file() -> Tuple[Tuple[float, float, float, float], Optional[Path]]:
     while True:
         answer = Prompt.ask(
@@ -547,7 +552,7 @@ def _wizard() -> str:
         bands = Prompt.ask("Bands", choices=["rgbn", "all"], default="rgbn", console=_console)
         imagery_lines = [
             "  type: eopf_zarr",
-            f'  path: "{product}"',
+            f"  path: {_yaml_str(product)}",
             f"  resolution: {resolution}",
         ]
         if bands == "rgbn":
@@ -566,7 +571,7 @@ def _wizard() -> str:
                 "Tile URL with {z}, {x}, {y} [dim](keep API keys out of shared files)[/dim]",
                 console=_console,
             )
-            source_line = f'  url_template: "{template}"'
+            source_line = f"  url_template: {_yaml_str(template)}"
         else:
             source_line = "  source: esri_satellite"
         imagery_lines = [
@@ -595,7 +600,7 @@ def _wizard() -> str:
     label_lines: List[str] = []
     if labels_path is not None:
         field = _ask_label_field(labels_path) if labels_path.exists() else None
-        label_lines = ["labels:", f'  path: "{labels_path}"']
+        label_lines = ["labels:", f"  path: {_yaml_str(str(labels_path))}"]
         label_lines.append(f"  label_field: {field}" if field else "  label_field: null")
 
     _console.print("\n[bold cyan]4/4 Patches and output[/bold cyan]")
@@ -626,7 +631,7 @@ def _wizard() -> str:
         f"  edge_strategy: {edge}",
         "",
         "writer:",
-        f'  staging_dir: "{staging}"',
+        f"  staging_dir: {_yaml_str(staging)}",
         f"  image_format: {image_format}",
     ]
     if do_split:

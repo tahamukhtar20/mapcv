@@ -418,3 +418,14 @@ def test_init_wizard_builds_a_config_from_a_label_file(tmp_path: Path) -> None:
     assert config.labels is not None and config.labels.label_field == "kind"
     assert config.split is not None and config.split.strategy == "spatial"
     assert config.region.west == pytest.approx(74.3)
+
+
+@pytest.mark.parametrize(
+    "value", [r"C:\Users\runner\aoi.geojson", "it's here", "https://t.example.com/{z}/{x}/{y}.png"]
+)
+def test_wizard_yaml_strings_round_trip(value: str) -> None:
+    import yaml
+
+    from mapcv.cli import _yaml_str
+
+    assert yaml.safe_load(f"key: {_yaml_str(value)}")["key"] == value

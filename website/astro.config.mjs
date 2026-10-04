@@ -42,9 +42,6 @@ export default defineConfig({
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/tahamukhtar20/mapcv' },
       ],
-      editLink: {
-        baseUrl: 'https://github.com/tahamukhtar20/mapcv/edit/main/website/',
-      },
       lastUpdated: false,
       disable404Route: true,
       plugins: [starlightLinksValidator({ errorOnLocalLinks: true })],

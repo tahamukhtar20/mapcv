@@ -2,12 +2,12 @@
  * mapcv docs theme.
  * Accent: the sky-blue polygon of the logo (#38BDF8) over its deep-ocean tiles (#0D1117 / #0E2538).
  */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..600&family=Space+Grotesk:wght@500..700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;0,900;1,400&family=JetBrains+Mono:wght@400..600&display=swap');
 
 :root {
-  --sl-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sl-font: 'Lato', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --sl-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --mapcv-font-display: 'Space Grotesk', var(--sl-font);
+  --mapcv-font-display: 'Lato', var(--sl-font);
   --mapcv-radius: 10px;
   --mapcv-polygon: #38bdf8;
 

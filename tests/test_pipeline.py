@@ -123,6 +123,5 @@ def test_generate_warns_when_labels_miss_the_imagery(
     config = _config(tmp_path)
     config.labels = LabelsConfig(path=labels)
 
-    run_generate(config)
-
-    assert "no label polygon intersects" in capsys.readouterr().out
+    with pytest.warns(UserWarning, match="no label polygon intersects"):
+        run_generate(config)

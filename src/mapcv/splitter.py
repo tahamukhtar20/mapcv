@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import warnings
@@ -9,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import DefaultDict, Dict, Hashable, List, Literal, Optional, Sequence, Set, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mapcv.writer import Manifest, ManifestEntry
 
@@ -23,6 +24,9 @@ class SplitterConfig(BaseModel):
     ``stratified`` and ``random`` split individual patches and are only
     leakage-free when patches neither overlap nor repeat.
     """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     test_ratio: float = Field(default=0.20, ge=0.0, le=1.0)
     val_ratio: float = Field(default=0.10, ge=0.0, le=1.0)
@@ -43,6 +47,11 @@ class SplitterConfig(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("labeled_ratios must not contain duplicates")
         return ratios
+
+
+def _write_list(path: Path, names: Sequence[str]) -> None:
+    """One filename per line, newline-terminated."""
+    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8")
 
 
 def ratio_dirname(ratio: float) -> str:
@@ -281,21 +290,25 @@ def split_dataset(
     train_files = [entry["filename"] for entry in train]
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "test.txt").write_text("\n".join(test_files))
-    (output_dir / "val.txt").write_text("\n".join(val_files))
-    (output_dir / "train.txt").write_text("\n".join(train_files))
+    _write_list(output_dir / "test.txt", test_files)
+    _write_list(output_dir / "val.txt", val_files)
+    _write_list(output_dir / "train.txt", train_files)
 
     rng.shuffle(train_files)
     for ratio in config.labeled_ratios:
         ratio_dir = output_dir / ratio_dirname(ratio)
         ratio_dir.mkdir(parents=True, exist_ok=True)
         l_size = math.ceil(len(train_files) * ratio)
-        (ratio_dir / "labeled.txt").write_text("\n".join(train_files[:l_size]))
-        (ratio_dir / "unlabeled.txt").write_text("\n".join(train_files[l_size:]))
+        _write_list(ratio_dir / "labeled.txt", train_files[:l_size])
+        _write_list(ratio_dir / "unlabeled.txt", train_files[l_size:])
 
-    return {
+    counts = {
         "train": len(train_files),
         "val": len(val_files),
         "test": len(test_files),
         "dropped": dropped,
     }
+    # Record how the lists were made, so a split can be reproduced or audited later.
+    record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
+    (output_dir / "split.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return counts

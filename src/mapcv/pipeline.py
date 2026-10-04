@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +57,7 @@ class GenerateResult:
     seconds: float
 
 
-def _chunk_progress() -> Progress:
+def _chunk_progress(disable: bool = False) -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -66,21 +68,8 @@ def _chunk_progress() -> Progress:
         TextColumn("• eta"),
         TimeRemainingColumn(),
         console=_console,
+        disable=disable,
     )
-
-
-def _print_split_summary(counts: Dict[str, int], splits_dir: Path) -> None:
-    total = counts["train"] + counts["val"] + counts["test"]
-    shares = " · ".join(
-        f"{name} {counts[name]:,} ({counts[name] / total:.0%})" if total else f"{name} 0"
-        for name in ("train", "val", "test")
-    )
-    _console.print(f"[green]✓[/green] Splits written to [bold]{splits_dir}[/bold]: {shares}")
-    if counts["dropped"]:
-        _console.print(
-            f"[dim]  {counts['dropped']:,} train/val patch(es) overlapping a held-out patch "
-            "were left out[/dim]"
-        )
 
 
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
@@ -136,6 +125,23 @@ def _parse_labels(
     return transformed, class_map
 
 
+LABELS_MISS_MESSAGE = (
+    "no label polygon intersects the imagery extent, so every mask will be background. "
+    "Check that labels are longitude/latitude (not swapped) and cover the configured region."
+)
+# Above this share of failed tiles a run is very likely misconfigured.
+_FAILED_TILES_WARNING = 0.5
+
+
+def _labels_fingerprint(config: MapcvConfig) -> Optional[Dict[str, Any]]:
+    """Label settings plus a hash of the label file, so resume notices edits."""
+    if config.labels is None:
+        return None
+    settings = config.labels.model_dump(mode="json", exclude={"path"})
+    settings["sha256"] = hashlib.sha256(config.labels.path.read_bytes()).hexdigest()
+    return settings
+
+
 def _raster_bounds(source: WindowedRasterSource) -> Tuple[float, float, float, float]:
     a, _, c, _, e, f = source.metadata.transform
     xs = (c, c + a * source.metadata.width)
@@ -150,11 +156,7 @@ def _warn_if_labels_miss_raster(
         return
     extent = box(*_raster_bounds(source))
     if not any(geometry.intersects(extent) for geometry, _ in geometries):
-        _console.print(
-            "[yellow]Warning:[/yellow] no label polygon intersects the imagery extent, so "
-            "every mask will be background. Check that labels are longitude/latitude "
-            "(not swapped) and cover the configured region."
-        )
+        warnings.warn(LABELS_MISS_MESSAGE, UserWarning, stacklevel=2)
 
 
 def _process_anchor_chunk(
@@ -199,7 +201,8 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     staging.mkdir(parents=True, exist_ok=True)
     manifest_path = staging / _MANIFEST_FILENAME
 
-    source = open_raster_source(config.region, config.imagery)
+    with _console.status("Opening imagery…"):
+        source = open_raster_source(config.region, config.imagery)
     try:
         geometries, class_map = _parse_labels(config, source.metadata.crs)
         _warn_if_labels_miss_raster(geometries, source)
@@ -219,6 +222,8 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             crs=source.metadata.crs,
             transform=source.metadata.transform,
             sampler=config.sampler.model_dump(mode="json"),
+            labels=_labels_fingerprint(config),
+            writer=config.writer.model_dump(mode="json", exclude={"staging_dir"}),
         )
 
         resumed_patches = len(manifest.patches)
@@ -226,12 +231,17 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
         anchors = [anchor for anchor in anchors if anchor not in completed_anchors]
         chunks = _group_anchors(anchors, source.metadata.chunk_rows)
-        if resumed_patches:
+        if resumed_patches and not chunks:
+            _console.print(
+                f"[dim]Nothing left to do: all {resumed_patches} patch(es) are already "
+                "written.[/dim]"
+            )
+        elif resumed_patches:
             _console.print(
                 f"[dim]Resuming: {resumed_patches} patch(es) already written, "
                 f"{len(anchors)} to go[/dim]"
             )
-        with _chunk_progress() as progress:
+        with _chunk_progress(disable=not chunks) as progress:
             task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
             for chunk_index, chunk_anchors in enumerate(chunks):
                 images, masks, metadata = _process_anchor_chunk(
@@ -252,6 +262,13 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         manifest.save(manifest_path)
         requested = int(getattr(source, "tiles_requested", 0))
         failed = int(getattr(source, "tiles_failed", 0))
+        if requested and failed / requested > _FAILED_TILES_WARNING:
+            warnings.warn(
+                f"{failed} of {requested} tiles failed; check the tile URL, your network and "
+                "imagery.policy (failed tiles are left empty or black).",
+                UserWarning,
+                stacklevel=2,
+            )
     finally:
         source.close()
 
@@ -282,6 +299,4 @@ def run_split(
     manifest = Manifest.load(manifest_path)
     cfg = split_config or SplitterConfig()
     splits_dir = staging_dir / _SPLITS_SUBDIR
-    counts = split_dataset(manifest, cfg, splits_dir)
-    _print_split_summary(counts, splits_dir)
-    return counts
+    return split_dataset(manifest, cfg, splits_dir)

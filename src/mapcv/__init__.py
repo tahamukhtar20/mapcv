@@ -32,6 +32,7 @@ from mapcv.sampler import SamplerConfig, sample_patches, sample_patches_at_ancho
 from mapcv.splitter import SplitterConfig, split_dataset
 from mapcv.writer import (
     Manifest,
+    ManifestMismatchError,
     ManifestEntry,
     WriterConfig,
     load_or_create_manifest,
@@ -55,6 +56,7 @@ __all__ = [
     "ClassMap",
     "GeomWithClass",
     "Manifest",
+    "ManifestMismatchError",
     "ManifestEntry",
     "WriterConfig",
     "download_region",

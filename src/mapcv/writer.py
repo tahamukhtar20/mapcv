@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 import numpy as np
 import numpy.typing as npt
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from mapcv._mapcv_rs import write_patches_rs
@@ -26,6 +27,9 @@ Transform = Tuple[float, float, float, float, float, float]
 
 class WriterConfig(BaseModel):
     """Configuration for writing patches to disk."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     staging_dir: Path
     image_format: Literal["png", "jpg", "npy"] = "png"
@@ -62,12 +66,25 @@ class Manifest(BaseModel):
     crs: Optional[str] = None
     transform: Optional[Transform] = None
     sampler: Optional[Dict[str, Any]] = None
+    labels: Optional[Dict[str, Any]] = None
+    writer: Optional[Dict[str, Any]] = None
     patches: List[ManifestEntry] = Field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
-        """Deserialize a version-1 or version-2 manifest from JSON."""
-        return cls.model_validate_json(path.read_text(encoding="utf-8"))
+        """Deserialize a version-1 or version-2 manifest from JSON.
+
+        Raises:
+            ManifestMismatchError: The manifest was written by a newer mapcv.
+        """
+        text = path.read_text(encoding="utf-8")
+        version = json.loads(text).get("version", 1)
+        if isinstance(version, int) and version > MANIFEST_VERSION:
+            raise ManifestMismatchError(
+                f"{path} was written by a newer mapcv (manifest version {version}); "
+                "upgrade mapcv to read it"
+            )
+        return cls.model_validate_json(text)
 
     def save(self, path: Path) -> None:
         """Atomically serialize the manifest to indented JSON."""
@@ -90,6 +107,8 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> List[str]:
         "patch_shape",
         "crs",
         "sampler",
+        "labels",
+        "writer",
     )
     mismatches = [name for name in fields if getattr(manifest, name) != getattr(expected, name)]
     if manifest.transform is None or expected.transform is None:
@@ -115,12 +134,15 @@ def load_or_create_manifest(
     crs: Optional[str] = None,
     transform: Optional[Transform] = None,
     sampler: Optional[Dict[str, Any]] = None,
+    labels: Optional[Dict[str, Any]] = None,
+    writer: Optional[Dict[str, Any]] = None,
 ) -> Manifest:
     """Load a resumable manifest from ``path`` or create a version-2 manifest.
 
     Raises:
         ManifestMismatchError: The existing manifest is version 1, or was
-            generated with different imagery, labels, or sampler settings.
+            generated with different imagery, labels (file contents included),
+            sampler, or writer settings.
     """
     expected = Manifest(
         class_map=class_map,
@@ -132,6 +154,8 @@ def load_or_create_manifest(
         crs=crs,
         transform=transform,
         sampler=sampler,
+        labels=labels,
+        writer=writer,
     )
     if not path.exists():
         return expected

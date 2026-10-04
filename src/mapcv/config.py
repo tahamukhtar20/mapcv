@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import warnings
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import unquote, urlsplit
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mapcv.downloader import URL_TEMPLATES
 from mapcv.labels import _normalize_label
@@ -114,6 +115,27 @@ def _validate_url_template(template: Optional[str]) -> Optional[str]:
     return template
 
 
+def _join(base: Path, value: object) -> object:
+    """``base / value`` for a relative path string, else ``value`` unchanged."""
+    if not isinstance(value, str) or not value or Path(value).expanduser().is_absolute():
+        return value
+    return os.path.normpath(base / value)
+
+
+def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
+    labels = data.get("labels")
+    if isinstance(labels, dict) and "path" in labels:
+        labels["path"] = _join(base, labels["path"])
+    writer = data.get("writer")
+    if isinstance(writer, dict) and "staging_dir" in writer:
+        writer["staging_dir"] = _join(base, writer["staging_dir"])
+    imagery = data.get("imagery")
+    if isinstance(imagery, dict) and isinstance(imagery.get("path"), str):
+        path = imagery["path"]
+        if urlsplit(path).scheme == "" and eopf_local_path(path) is not None:
+            imagery["path"] = _join(base, path)
+
+
 def _warn_deprecated(message: str) -> None:
     # FutureWarning, not DeprecationWarning: this targets end users editing YAML,
     # and Python hides DeprecationWarning raised outside __main__ by default.
@@ -122,6 +144,9 @@ def _warn_deprecated(message: str) -> None:
 
 class RegionConfig(BaseModel):
     """Geographic bounding box in WGS-84 degrees."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     west: float
     south: float
@@ -141,6 +166,9 @@ class RegionConfig(BaseModel):
 class XYZImageryConfig(BaseModel):
     """XYZ tile imagery source and fetch settings."""
 
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["xyz"] = "xyz"
     zoom: int = Field(ge=1, le=22)
     source: Optional[str] = None
@@ -157,11 +185,16 @@ class XYZImageryConfig(BaseModel):
     def _require_source_or_template(self) -> "XYZImageryConfig":
         if self.source is None and self.url_template is None:
             raise ValueError("imagery: provide either 'source' or 'url_template'")
+        if self.source is not None and self.url_template is not None:
+            raise ValueError("imagery: set 'source' or 'url_template', not both")
         return self
 
 
 class EOPFZarrImageryConfig(BaseModel):
     """One local or anonymous public Sentinel-2 L2A EOPF Zarr product."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["eopf_zarr"] = "eopf_zarr"
     path: str
@@ -194,6 +227,9 @@ class LabelsConfig(BaseModel):
     ``classes`` maps label values to mask IDs (1..255). Without it, integer
     labels in 1..255 are used as-is and other labels get IDs in sorted order.
     """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     path: Path
     label_field: Optional[str] = None
@@ -234,6 +270,9 @@ class LabelsConfig(BaseModel):
 
 class MapcvConfig(BaseModel):
     """Full mapcv pipeline configuration."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
 
     region: RegionConfig
     imagery: ImageryConfig
@@ -290,6 +329,13 @@ class MapcvConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: Path) -> "MapcvConfig":
-        """Load and validate a mapcv YAML file."""
+        """Load and validate a mapcv YAML file.
+
+        Relative paths in the file (``labels.path``, ``writer.staging_dir`` and a
+        local ``imagery.path``) are resolved against the file's folder, so a
+        config works from any working directory.
+        """
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            _resolve_relative_paths(data, path.parent)
         return cls.model_validate(data)

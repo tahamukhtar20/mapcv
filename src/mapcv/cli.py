@@ -16,7 +16,7 @@ from enum import Enum
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
 from urllib.parse import urlsplit
 
 import typer
@@ -29,12 +29,12 @@ from rich.table import Table
 from mapcv import pipeline
 from mapcv._mapcv_rs import parse_kml_rs
 from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
-from mapcv.labels import parse_geojson, parse_kml
+from mapcv.labels import MAX_CLASS_ID, parse_geojson, parse_kml
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
-from mapcv.writer import Manifest
+from mapcv.writer import Manifest, ManifestMismatchError
 
 app = typer.Typer(
     name="mapcv",
@@ -130,6 +130,19 @@ def _load_config(config_path: Path) -> MapcvConfig:
                 warning.message, warning.category, warning.filename, warning.lineno
             )
     return config
+
+
+def _show_warnings(caught: List[warnings.WarningMessage], shown: Set[str]) -> None:
+    """Print captured warnings once each, in mapcv's style (also under --quiet)."""
+    for warning in caught:
+        message = str(warning.message)
+        if message in shown:
+            continue
+        shown.add(message)
+        if issubclass(warning.category, FutureWarning):
+            _console.print(f"[yellow]Deprecated:[/yellow] {message}")
+        else:
+            _console.print(f"[yellow]⚠[/yellow]  {message}")
 
 
 def _redact_url(url: str) -> str:
@@ -255,7 +268,7 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
     if not manifest.class_map:
-        names.setdefault("1", "labelled")
+        names.setdefault("1", "labeled")
     return names
 
 
@@ -308,7 +321,13 @@ def _print_result(result: GenerateResult) -> None:
         table.add_row("Splits", _split_line(result.split_counts))
     minutes, seconds = divmod(int(result.seconds), 60)
     table.add_row("Time", f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s")
-    table.add_row("Files", f"{result.staging_dir}/ (Images/, Masks/, manifest.json, splits/)")
+    written = ["Images/"]
+    if any(entry["mask_filename"] for entry in manifest.patches):
+        written.append("Masks/")
+    written.append("manifest.json")
+    if result.split_counts is not None:
+        written.append("splits/")
+    table.add_row("Files", f"{result.staging_dir}/ ({', '.join(written)})")
     _console.print(
         Panel(table, title="[bold]Dataset ready[/bold]", title_align="left", border_style="green")
     )
@@ -488,10 +507,11 @@ def label_fields(path: Path, max_values: int = 5) -> Dict[str, List[str]]:
             for key, value in (feature.get("properties") or {}).items():
                 if value is not None and not isinstance(value, (dict, list)):
                     values.setdefault(key, Counter())[str(value)] += 1
+    # Fields with more distinct values than a mask can hold (ids, names) can't be classes.
     return {
         name: [value for value, _ in counter.most_common(max_values)]
         for name, counter in values.items()
-        if counter
+        if counter and len(counter) <= MAX_CLASS_ID
     }
 
 
@@ -650,14 +670,12 @@ def _wizard() -> str:
     epilog=(
         "Examples:\n\n"
         "  [cyan]mapcv init[/cyan]                         guided, writes mapcv.yaml\n\n"
+        "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
         "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example"
     ),
 )
 def init(
-    output: Optional[Path] = typer.Argument(
-        None,
-        help="Where to write the config (guided default: mapcv.yaml; otherwise stdout).",
-    ),
+    output: Path = typer.Argument(Path("mapcv.yaml"), help="Where to write the config."),
     template: Optional[Template] = typer.Option(
         None, "--template", "-t", help="Write a ready-made example instead of asking."
     ),
@@ -667,6 +685,7 @@ def init(
         help="Ask questions (default: when run in a terminal without --template).",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing file."),
+    stdout: bool = typer.Option(False, "--stdout", help="Print the template instead of writing."),
 ) -> None:
     """Create a config: answer a few questions, or start from a template."""
     guided = (
@@ -674,12 +693,14 @@ def init(
         if interactive is not None
         else template is None and sys.stdin.isatty() and sys.stdout.isatty()
     )
-    text = _wizard() if guided else _TEMPLATES[template or Template.xyz]
-    target = output if output is not None else (Path("mapcv.yaml") if guided else None)
-
-    if target is None:
-        typer.echo(text, nl=False)
+    if stdout:
+        typer.echo(_TEMPLATES[template or Template.xyz], nl=False)
         return
+    target = output
+    if target.exists() and not force and not guided:
+        _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
+        raise typer.Exit(code=1)
+    text = _wizard() if guided else _TEMPLATES[template or Template.xyz]
     if target.exists() and not force:
         if not (
             guided
@@ -761,15 +782,25 @@ def generate(
             raise typer.Exit(code=2)
         if not Confirm.ask("This is a large job. Start it?", default=False, console=_console):
             raise typer.Exit(code=1)
-    try:
-        result = run_generate(config)
-    except (ValueError, RuntimeError, OSError) as exc:
-        _console.print(f"[red]Generation failed:[/red] {exc}")
-        _console.print(
-            "[dim]Fix the cause and run the same command again: finished chunks are kept "
-            "and the run resumes.[/dim]"
-        )
-        raise typer.Exit(code=1)
+    shown = set(estimate.warnings)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            result = run_generate(config)
+        except ManifestMismatchError as exc:
+            _show_warnings(caught, shown)
+            _console.print(f"[red]Cannot resume:[/red] {exc}")
+            raise typer.Exit(code=1)
+        except Exception as exc:  # noqa: BLE001 - any failure gets the same resume advice
+            _show_warnings(caught, shown)
+            detail = str(exc) or type(exc).__name__
+            _console.print(f"[red]Generation failed:[/red] {detail}")
+            _console.print(
+                "[dim]Fix the cause and run the same command again: finished chunks are "
+                "kept and the run resumes.[/dim]"
+            )
+            raise typer.Exit(code=1)
+    _show_warnings(caught, shown)
     if result is not None:
         _print_result(result)
 
@@ -827,7 +858,9 @@ def split(
     test_ratio: float = typer.Option(0.20, help="Fraction of patches held out for testing."),
     val_ratio: float = typer.Option(0.10, help="Fraction of the remaining patches for validation."),
     labeled_ratios: Optional[List[float]] = typer.Option(
-        None, help="Labeled fractions of train for semi-supervised lists (repeatable)."
+        None,
+        help="Labeled fractions of train for semi-supervised lists (repeatable). "
+        "Default: 0.1 0.2 0.3.",
     ),
     seed: int = typer.Option(42, help="Random seed."),
     strategy: str = typer.Option(
@@ -858,11 +891,18 @@ def split(
         for line in _format_validation_error(exc):
             _console.print(line)
         raise typer.Exit(code=1)
-    try:
-        run_split(staging_dir, cfg)
-    except FileNotFoundError as exc:
-        _console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            counts = run_split(staging_dir, cfg)
+        except (FileNotFoundError, ManifestMismatchError) as exc:
+            _console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+    _show_warnings(caught, set())
+    _console.print(
+        f"[green]✓[/green] Splits written to [bold]{staging_dir / 'splits'}[/bold]: "
+        f"{_split_line(counts)}"
+    )
 
 
 @app.command(

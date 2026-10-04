@@ -137,3 +137,41 @@ def test_transform_geometry_to_projected_crs() -> None:
 
     assert transformed.x == pytest.approx(expected_x)
     assert transformed.y == pytest.approx(expected_y)
+
+
+def test_eopf_band_that_comes_back_empty_fails_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "S2_TEST.zarr"
+    product.mkdir()
+
+    def dataset_with_failed_band(*args: Any, **kwargs: Any) -> xr.Dataset:
+        dataset = _dataset()
+        dataset["b04"] = dataset["b04"] * np.nan  # e.g. a timed-out chunk read
+        return dataset
+
+    monkeypatch.setattr(xr, "open_dataset", dataset_with_failed_band)
+    source = EOPFZarrRasterSource(
+        _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
+    )
+    with pytest.raises(RuntimeError, match="band b04 returned no data"):
+        source.read_window(0, source.metadata.height, 0, source.metadata.width)
+
+
+def test_eopf_pixel_is_invalid_when_any_band_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "S2_TEST.zarr"
+    product.mkdir()
+
+    def dataset_with_one_hole(*args: Any, **kwargs: Any) -> xr.Dataset:
+        dataset = _dataset().compute()
+        dataset["b04"][0, 0] = np.nan
+        return dataset
+
+    monkeypatch.setattr(xr, "open_dataset", dataset_with_one_hole)
+    source = EOPFZarrRasterSource(
+        _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
+    )
+    _, valid = source.read_window(0, source.metadata.height, 0, source.metadata.width)
+    assert not valid[0, 0] and valid.sum() == valid.size - 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -295,6 +296,27 @@ def _snap_bounds_to_grid(
     )
 
 
+def _check_band_coverage(
+    finite: npt.NDArray[np.bool_], bands: List[str], row_start: int, row_stop: int
+) -> None:
+    """Fail when a band is empty where other bands have data.
+
+    Remote Zarr reads that time out can come back as all-NaN chunks for one
+    band while the others are fine; writing such patches would silently corrupt
+    the dataset. Real NoData (outside the swath) is empty in every band at once.
+    """
+    has_any = np.any(finite, axis=-1)
+    if not has_any.any():
+        return
+    for index, band in enumerate(bands):
+        if not np.any(finite[..., index] & has_any):
+            raise RuntimeError(
+                f"band {band} returned no data for rows {row_start}-{row_stop} while other "
+                "bands did; the read probably failed (e.g. a network timeout). Run the same "
+                "command again to resume from this chunk."
+            )
+
+
 class EOPFZarrRasterSource:
     """Lazy window reader for one Sentinel-2 L2A EOPF Zarr product."""
 
@@ -308,6 +330,12 @@ class EOPFZarrRasterSource:
             import xarray as xr
             from pyproj import Transformer
         except ImportError as exc:
+            if sys.version_info >= (3, 14):
+                raise RuntimeError(
+                    "Sentinel-2 (EOPF Zarr) support needs Python 3.10-3.13: its zarr dependency "
+                    "has no Python 3.14 wheels yet, so the mapcv[zarr] extra installs nothing "
+                    "on 3.14. Use a Python 3.13 environment for Sentinel-2."
+                ) from exc
             raise RuntimeError(
                 "EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'."
             ) from exc
@@ -419,7 +447,10 @@ class EOPFZarrRasterSource:
         image = np.asarray(array_data, dtype=np.float32)
         if image.ndim != 3 or image.shape[-1] != len(self._bands):
             raise ValueError("selected EOPF variables must resolve to two-dimensional y/x rasters")
-        valid = np.any(np.isfinite(image), axis=-1)
+        finite = np.isfinite(image)
+        _check_band_coverage(finite, self._bands, row_start, row_stop)
+        # A pixel is only usable when every requested band has data.
+        valid = np.all(finite, axis=-1)
         return image, valid
 
     def close(self) -> None:

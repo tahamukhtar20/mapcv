@@ -106,7 +106,7 @@ def test_validate_warns_missing_labels_path(tmp_path: Path) -> None:
 
 
 def test_init_prints_to_stdout(tmp_path: Path) -> None:
-    result = runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["init", "--stdout"])
     assert result.exit_code == 0
     assert "patch_size" in result.output
     assert "region" in result.output
@@ -429,3 +429,72 @@ def test_wizard_yaml_strings_round_trip(value: str) -> None:
     from mapcv.cli import _yaml_str
 
     assert yaml.safe_load(f"key: {_yaml_str(value)}")["key"] == value
+
+
+def test_init_writes_mapcv_yaml_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init", "--template", "sentinel2"])
+    assert result.exit_code == 0
+    assert "eopf_zarr" in (tmp_path / "mapcv.yaml").read_text(encoding="utf-8")
+
+
+def test_generate_reports_resume_mismatch_without_resume_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv.writer import ManifestMismatchError
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise ManifestMismatchError("dataset was generated with a different configuration")
+
+    monkeypatch.setattr("mapcv.cli.run_generate", refuse)
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path))])
+    assert result.exit_code == 1
+    assert "Cannot resume" in result.output
+    assert "resumes" not in result.output
+
+
+def test_generate_reports_unexpected_errors_and_warnings_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import warnings
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        warnings.warn("something odd", UserWarning)
+        warnings.warn("something odd", UserWarning)
+        raise TimeoutError("408 Request Timeout")
+
+    monkeypatch.setattr("mapcv.cli.run_generate", fail)
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path))])
+    assert result.exit_code == 1
+    assert "408 Request Timeout" in result.output
+    assert result.output.count("something odd") == 1
+    assert "Traceback" not in result.output
+
+
+def test_split_writes_settings_and_prints_summary(tmp_path: Path) -> None:
+    staging = tmp_path / "out"
+    _write_manifest(staging)
+    result = runner.invoke(app, ["--quiet", "split", str(staging), "--strategy", "random"])
+    assert result.exit_code == 0
+    assert "train" in result.output and "test" in result.output
+    assert (staging / "splits" / "split.json").exists()
+    assert (staging / "splits" / "train.txt").read_text().endswith("\n")
+
+
+def test_wizard_hides_id_like_fields(tmp_path: Path) -> None:
+    import json as _json
+
+    from mapcv.cli import label_fields
+
+    square = [[[0, 0], [1, 0], [1, 1], [0, 0]]]
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"osm_id": i, "kind": "roof" if i % 2 else "road"},
+            "geometry": {"type": "Polygon", "coordinates": square},
+        }
+        for i in range(300)
+    ]
+    path = tmp_path / "labels.geojson"
+    path.write_text(_json.dumps({"type": "FeatureCollection", "features": features}))
+    assert set(label_fields(path)) == {"kind"}

@@ -313,7 +313,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         requested = int(getattr(source, "tiles_requested", 0))
         failed = int(getattr(source, "tiles_failed", 0))
         reasons = str(getattr(source, "failure_reasons", "") or "")
-        why = f" Most recent failures: {reasons}." if reasons else ""
+        why = f" Causes: {reasons}." if reasons else ""
         if requested and failed / requested > _FAILED_TILES_WARNING:
             warnings.warn(
                 f"{failed} of {requested} tiles failed; check the tile URL, your network and "

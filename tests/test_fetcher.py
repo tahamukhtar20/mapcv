@@ -157,16 +157,17 @@ def test_fetch_tiles_reports_why_tiles_failed(httpserver: Any) -> None:
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     tiles = [PyTileIndex(x, 1, 14) for x in (1, 2, 3)]
 
-    _, failed, reasons = fetch_tiles(tiles, url_template, policy="ignore")
+    _, failed, (causes, example) = fetch_tiles(tiles, url_template, policy="ignore")
 
     assert failed == 3
-    assert reasons.startswith("2 x HTTP 410 Gone, 1 x response is not an image (e.g. ")
+    assert dict(causes) == {"HTTP 410 Gone": 2, "response is not an image": 1}
+    assert example is not None and "/tile/14/" in example
 
 
 def test_fetch_tiles_reasons_empty_without_failures(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(PNG_1, status=200)
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    assert fetch_tiles([PyTileIndex(1, 1, 14)], url_template)[2] == ""
+    assert fetch_tiles([PyTileIndex(1, 1, 14)], url_template)[2] == ([], None)
 
 
 def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:

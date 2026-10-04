@@ -79,6 +79,18 @@ impl FailureSummary {
         self.example.get_or_insert(failure.message);
     }
 
+    /// Failed-tile counts per cause.
+    #[must_use]
+    pub fn counts(&self) -> Vec<(String, usize)> {
+        self.counts.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    /// The first failure's full message, if any tile failed.
+    #[must_use]
+    pub fn example(&self) -> Option<String> {
+        self.example.clone()
+    }
+
     /// One line such as `8 x HTTP 503 Service Unavailable, 2 x request timed out
     /// (e.g. HTTP 503 ... for URL: ...)`, most common first; empty without failures.
     #[must_use]

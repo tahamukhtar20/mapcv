@@ -31,21 +31,23 @@ jobs:
           - { os: windows-latest, python: "3.14" }
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     # On PATH for PyO3's build script (cargo clippy); runners default to a newer Python.
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ matrix.python }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v10.2.0
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       with:
         python-version: ${{ matrix.python }}
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       with:
         components: clippy, rustfmt
 
@@ -71,7 +73,7 @@ jobs:
 
     - name: Upload Python coverage
       if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         files: coverage.xml
         token: ${{ secrets.CODECOV_TOKEN }}

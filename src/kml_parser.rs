@@ -323,10 +323,13 @@ mod tests {
     fn counts_non_polygon_placemarks_and_drops_degenerate_rings() {
         let kml = placemark("<Point><coordinates>0,0</coordinates></Point>");
         let result = parse_kml(kml.as_bytes(), None).unwrap();
-        assert!(result.polygons.is_empty());
+        assert_eq!(result.polygons, Vec::new());
         assert_eq!(result.skipped_non_polygon, 1);
 
         let kml = placemark("<Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 1,1</coordinates></LinearRing></outerBoundaryIs></Polygon>");
-        assert!(parse_kml(kml.as_bytes(), None).unwrap().polygons.is_empty());
+        assert_eq!(
+            parse_kml(kml.as_bytes(), None).unwrap().polygons,
+            Vec::new()
+        );
     }
 }

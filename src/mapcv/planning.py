@@ -1,0 +1,205 @@
+"""Dry-run planning: estimate the size and cost of a dataset before generating it."""
+
+from __future__ import annotations
+
+import math
+import warnings
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
+from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, XYZImageryConfig
+from mapcv.labels import parse_geojson, parse_kml
+
+# Earth radius used by Web Mercator; ground resolution at zoom z is
+# 2 * pi * R * cos(lat) / (256 * 2**z) metres per pixel.
+_EARTH_RADIUS_M = 6_378_137.0
+_TILE_PX = 256
+# Typical encoded sizes, used only for rough estimates.
+_XYZ_TILE_BYTES = 25_000
+_PNG_COMPRESSION = 0.55
+_JPG_COMPRESSION = 0.15
+_MASK_COMPRESSION = 0.05
+
+# Jobs above either threshold ask for confirmation before downloading.
+LARGE_JOB_TILES = 20_000
+LARGE_JOB_BYTES = 5 * 1024**3
+
+
+@dataclass
+class LabelSummary:
+    """What the configured label file contains."""
+
+    path: str
+    polygons: int
+    classes: Dict[str, int]
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Plan:
+    """Estimated size and cost of generating a dataset from a config."""
+
+    region_km: Tuple[float, float]
+    imagery: str
+    resolution_m: float
+    raster_px: Tuple[int, int]
+    patches: int
+    patch_size: int
+    tiles: Optional[int]
+    download_bytes: Optional[int]
+    output_bytes: int
+    chunk_memory_bytes: int
+    labels: Optional[LabelSummary]
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def is_large(self) -> bool:
+        """Whether the job is big enough to confirm before downloading."""
+        return (self.tiles or 0) > LARGE_JOB_TILES or (
+            self.download_bytes or 0
+        ) + self.output_bytes > LARGE_JOB_BYTES
+
+
+def ground_resolution_m(zoom: int, latitude: float) -> float:
+    """Web Mercator ground resolution in metres per pixel at *latitude*."""
+    circumference = 2 * math.pi * _EARTH_RADIUS_M * math.cos(math.radians(latitude))
+    return float(circumference / (_TILE_PX * 2**zoom))
+
+
+def region_size_km(west: float, south: float, east: float, north: float) -> Tuple[float, float]:
+    """Approximate (width, height) of a lon/lat box in kilometres."""
+    mid_lat = math.radians((south + north) / 2)
+    width = (east - west) * 111.320 * math.cos(mid_lat)
+    height = (north - south) * 110.574
+    return width, height
+
+
+def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, int, int]:
+    region = config.region
+    snapped = snap_bbox(region.west, region.south, region.east, region.north, imagery.zoom)
+    eps = 1e-9
+    top_left = tile(snapped.west + eps, snapped.north - eps, imagery.zoom)
+    bottom_right = tile(snapped.east - eps, snapped.south + eps, imagery.zoom)
+    cols = bottom_right.x - top_left.x + 1
+    rows = bottom_right.y - top_left.y + 1
+    return rows * _TILE_PX, cols * _TILE_PX, rows * cols
+
+
+def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[int, int]:
+    width_km, height_km = region_size_km(
+        config.region.west, config.region.south, config.region.east, config.region.north
+    )
+    return (
+        max(1, math.ceil(height_km * 1000 / imagery.resolution)),
+        max(1, math.ceil(width_km * 1000 / imagery.resolution)),
+    )
+
+
+def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
+    sampler = config.sampler
+    if sampler.mode == "random":
+        return sampler.random_count
+    return len(
+        grid_sample_anchors(
+            height, width, sampler.patch_size, sampler.stride, sampler.edge_strategy
+        )
+    )
+
+
+def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
+    """Parse the configured label file and summarize it, or ``None`` without labels."""
+    labels = config.labels
+    if labels is None:
+        return None
+    if not labels.path.exists():
+        return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
+    data = labels.path.read_bytes()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", UserWarning)
+        if labels.path.suffix.lower() == ".kml":
+            geometries, class_map = parse_kml(data, labels.label_field, labels.classes)
+        else:
+            geometries, class_map = parse_geojson(data, labels.label_field, labels.classes)
+    return LabelSummary(
+        str(labels.path),
+        len(geometries),
+        class_map,
+        [str(warning.message) for warning in caught],
+    )
+
+
+def plan(config: MapcvConfig) -> Plan:
+    """Estimate a generation run without downloading any imagery."""
+    imagery = config.imagery
+    region = config.region
+    region_km = region_size_km(region.west, region.south, region.east, region.north)
+    plan_warnings: List[str] = []
+    patch_size = config.sampler.patch_size
+
+    tiles: Optional[int] = None
+    download: Optional[int] = None
+    if isinstance(imagery, XYZImageryConfig):
+        height, width, tiles = _xyz_raster(config, imagery)
+        download = tiles * _XYZ_TILE_BYTES
+        resolution = ground_resolution_m(imagery.zoom, (region.south + region.north) / 2)
+        name = imagery.source or "custom XYZ template"
+        description = f"{name} · zoom {imagery.zoom}"
+        channels, bytes_per_value = 3, 1
+        chunk_rows = imagery.strip_rows * _TILE_PX
+    else:
+        height, width = _eopf_raster(config, imagery)
+        resolution = float(imagery.resolution)
+        description = f"Sentinel-2 L2A (EOPF) · {len(imagery.bands)} bands"
+        channels, bytes_per_value = len(imagery.bands), 4
+        chunk_rows = imagery.chunk_rows
+
+    patches = _patch_count(height, width, config)
+    pixels_per_patch = patch_size * patch_size
+    image_format = config.writer.image_format
+    if image_format == "npy":
+        image_bytes = channels * pixels_per_patch * bytes_per_value
+    elif image_format == "jpg":
+        image_bytes = int(3 * pixels_per_patch * _JPG_COMPRESSION)
+    else:
+        image_bytes = int(3 * pixels_per_patch * _PNG_COMPRESSION)
+    mask_bytes = int(pixels_per_patch * _MASK_COMPRESSION) if config.labels else 0
+    output = patches * (image_bytes + mask_bytes)
+    window_rows = min(height, chunk_rows + patch_size)
+    # Window, validity mask, label mask and extracted patches each hold a copy.
+    chunk_memory = window_rows * width * (channels * bytes_per_value * 2 + 2)
+
+    labels = summarize_labels(config)
+    if labels is not None:
+        plan_warnings.extend(labels.warnings)
+    if patches == 0:
+        plan_warnings.append(
+            "no patch fits the region with these sampler settings; enlarge the region or "
+            "use edge_strategy: pad"
+        )
+    if resolution > patch_size * 10:
+        plan_warnings.append("each patch covers more than 10 km; consider a higher zoom")
+
+    return Plan(
+        region_km=region_km,
+        imagery=description,
+        resolution_m=resolution,
+        raster_px=(width, height),
+        patches=patches,
+        patch_size=patch_size,
+        tiles=tiles,
+        download_bytes=download,
+        output_bytes=output,
+        chunk_memory_bytes=chunk_memory,
+        labels=labels,
+        warnings=plan_warnings,
+    )
+
+
+def human_bytes(size: float) -> str:
+    """Format a byte count, e.g. ``1.5 GB``."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1000 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1000
+    return f"{size:.1f} TB"

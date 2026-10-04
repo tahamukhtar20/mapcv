@@ -29,6 +29,7 @@ class SplitterConfig(BaseModel):
     labeled_ratios: List[float] = Field(default_factory=lambda: [0.10, 0.20, 0.30])
     seed: int = 42
     strategy: Literal["spatial", "stratified", "random"] = "spatial"
+    # Default: 4 x patch size, smaller for small rasters (at least 10 blocks).
     block_size: Optional[int] = Field(default=None, ge=1)
     sample_limit: Optional[int] = Field(default=None, ge=1)
 
@@ -145,13 +146,28 @@ def _overlapping(
     return overlapping
 
 
+# Enough blocks that each split can get several of them.
+_MIN_BLOCKS = 10
+
+
+def _default_block_size(entries: List[ManifestEntry], patch_size: int) -> int:
+    """4 x patch size, shrunk (to no less than one patch) so small rasters still
+    divide into at least ``_MIN_BLOCKS`` blocks."""
+    if not entries:
+        return 4 * patch_size
+    rows = max(entry["row"] for entry in entries) + patch_size
+    cols = max(entry["col"] for entry in entries) + patch_size
+    fitting = int(math.sqrt(rows * cols / _MIN_BLOCKS)) // patch_size * patch_size
+    return max(patch_size, min(4 * patch_size, fitting))
+
+
 def _spatial_split(
     entries: List[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
     patch_size: Optional[int],
 ) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry], int]:
-    block = config.block_size or 4 * (patch_size or 1)
+    block = config.block_size or _default_block_size(entries, patch_size or 1)
     blocks: DefaultDict[Tuple[int, int], List[ManifestEntry]] = defaultdict(list)
     for entry in entries:
         blocks[(entry["row"] // block, entry["col"] // block)].append(entry)

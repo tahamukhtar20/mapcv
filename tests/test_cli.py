@@ -318,3 +318,103 @@ def test_init_links_provider_guidance(tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", str(out)])
     assert result.exit_code == 0
     assert "PROVIDERS.md" in out.read_text()
+
+
+# ---------------------------------------------------------------------------
+# plan / generate guard / info / init templates and wizard / version
+# ---------------------------------------------------------------------------
+
+
+def test_version_flag() -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.output.startswith("mapcv ")
+
+
+def test_plan_shows_estimates(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["plan", str(_write_config(tmp_path))])
+    assert result.exit_code == 0
+    assert "Plan for config.yaml" in result.output
+    assert "tiles" in result.output
+    assert "mapcv generate" in result.output
+
+
+def test_generate_dry_run_does_not_generate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[bool] = []
+    monkeypatch.setattr("mapcv.cli.run_generate", lambda *a, **k: called.append(True))
+    result = runner.invoke(app, ["generate", str(_write_config(tmp_path)), "--dry-run"])
+    assert result.exit_code == 0
+    assert called == []
+
+
+def test_generate_large_job_needs_yes_without_a_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[bool] = []
+    monkeypatch.setattr("mapcv.cli.run_generate", lambda *a, **k: called.append(True))
+    config = _write_config(tmp_path)
+    config.write_text(config.read_text().replace("zoom: 16", "zoom: 19"))
+    result = runner.invoke(app, ["generate", str(config)])
+    assert result.exit_code == 2
+    assert "--yes" in result.output
+    assert called == []
+    result = runner.invoke(app, ["generate", str(config), "--yes"])
+    assert result.exit_code == 0
+    assert called == [True]
+
+
+def test_config_errors_name_the_field(tmp_path: Path) -> None:
+    config = _write_config(tmp_path)
+    config.write_text(config.read_text().replace("zoom: 16", "zoom: 40"))
+    result = runner.invoke(app, ["validate", str(config)])
+    assert result.exit_code == 1
+    assert "imagery.zoom" in result.output
+    assert "mapcv init" in result.output
+
+
+def test_info_summarizes_a_dataset(tmp_path: Path) -> None:
+    staging = tmp_path / "out"
+    _write_manifest(staging)
+    result = runner.invoke(app, ["info", str(staging)])
+    assert result.exit_code == 0
+    assert "20" in result.output
+    assert runner.invoke(app, ["info", str(tmp_path / "nope")]).exit_code == 1
+
+
+@pytest.mark.parametrize("template", ["xyz", "sentinel2"])
+def test_init_templates_write_parseable_configs(tmp_path: Path, template: str) -> None:
+    out = tmp_path / f"{template}.yaml"
+    result = runner.invoke(app, ["init", str(out), "--template", template])
+    assert result.exit_code == 0
+    from mapcv.config import MapcvConfig
+
+    MapcvConfig.from_yaml(out)
+
+
+def test_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
+    out = tmp_path / "mapcv.yaml"
+    out.write_text("keep me")
+    assert runner.invoke(app, ["init", str(out)]).exit_code == 1
+    assert out.read_text() == "keep me"
+    assert runner.invoke(app, ["init", str(out), "--force"]).exit_code == 0
+
+
+def test_init_wizard_builds_a_config_from_a_label_file(tmp_path: Path) -> None:
+    labels = tmp_path / "aoi.geojson"
+    labels.write_text(
+        '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"roof"},'
+        '"geometry":{"type":"Polygon","coordinates":[[[74.3,31.5],[74.31,31.5],'
+        "[74.31,31.51],[74.3,31.5]]]}}]}"
+    )
+    out = tmp_path / "mapcv.yaml"
+    answers = "\n".join(["esri", str(labels), "17", "y", "kind", "256", "./ds", "y"]) + "\n"
+    result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers)
+    assert result.exit_code == 0, result.output
+    from mapcv.config import MapcvConfig
+
+    config = MapcvConfig.from_yaml(out)
+    assert config.labels is not None and config.labels.label_field == "kind"
+    assert config.split is not None and config.split.strategy == "spatial"
+    assert config.region.west == pytest.approx(74.3)

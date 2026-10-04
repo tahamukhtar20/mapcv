@@ -2,7 +2,7 @@
 
 use crate::fetcher::{TILE_PX, TILE_PX_F};
 use crate::tile_math::{xy_bounds, TileIndex};
-use image::io::Reader as ImageReader;
+use image::ImageReader;
 use rayon::prelude::*;
 use std::io::Cursor;
 

@@ -121,7 +121,7 @@ fn encode_image(
     if format == "jpg" {
         let file = File::create(path).map_err(|e| e.to_string())?;
         let mut enc = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
-        enc.encode(data, ps, ps, image::ColorType::Rgb8)
+        enc.encode(data, ps, ps, image::ExtendedColorType::Rgb8)
             .map_err(|e| e.to_string())?;
     } else {
         let file = File::create(path).map_err(|e| e.to_string())?;

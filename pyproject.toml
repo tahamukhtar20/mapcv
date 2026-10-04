@@ -123,6 +123,8 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
+# The docs site's code blocks are API signature sketches, not runnable code.
+extend-exclude = ["website"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn zero_count_is_empty() {
         let anchors = random_anchors(100, 100, 32, 0, 42, "drop").unwrap();
-        assert!(anchors.is_empty());
+        assert_eq!(anchors, Vec::new());
     }
 
     #[test]

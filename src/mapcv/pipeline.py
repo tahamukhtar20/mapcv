@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 
@@ -10,7 +12,15 @@ import numpy as np
 import numpy.typing as npt
 from rich.console import Console
 from shapely.geometry import box
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
 from mapcv.config import MapcvConfig
@@ -32,28 +42,43 @@ _MANIFEST_FILENAME = "manifest.json"
 _SPLITS_SUBDIR = "splits"
 
 
+@dataclass
+class GenerateResult:
+    """Outcome of :func:`run_generate`."""
+
+    staging_dir: Path
+    manifest: Manifest
+    new_patches: int
+    split_counts: Optional[Dict[str, int]]
+    tiles_requested: int
+    tiles_failed: int
+    seconds: float
+
+
 def _chunk_progress() -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        "•",
+        MofNCompleteColumn(),
+        TextColumn("chunks •"),
         TimeElapsedColumn(),
+        TextColumn("• eta"),
+        TimeRemainingColumn(),
         console=_console,
     )
 
 
 def _print_split_summary(counts: Dict[str, int], splits_dir: Path) -> None:
     total = counts["train"] + counts["val"] + counts["test"]
-    shares = "  ".join(
-        f"{name}={counts[name]} ({counts[name] / total:.0%})" if total else f"{name}=0"
+    shares = " · ".join(
+        f"{name} {counts[name]:,} ({counts[name] / total:.0%})" if total else f"{name} 0"
         for name in ("train", "val", "test")
     )
-    _console.print(f"[green]Splits written to[/green] [bold]{splits_dir}[/bold]: {shares}")
+    _console.print(f"[green]✓[/green] Splits written to [bold]{splits_dir}[/bold]: {shares}")
     if counts["dropped"]:
         _console.print(
-            f"[dim]  {counts['dropped']} train/val patch(es) overlapping a held-out patch "
+            f"[dim]  {counts['dropped']:,} train/val patch(es) overlapping a held-out patch "
             "were left out[/dim]"
         )
 
@@ -94,7 +119,6 @@ def _parse_labels(
     if config.labels is None:
         return [], {}
 
-    _console.print("[bold]Parsing labels...[/bold]")
     data = config.labels.path.read_bytes()
     labels = config.labels
     if labels.path.suffix.lower() == ".kml":
@@ -109,8 +133,6 @@ def _parse_labels(
             (transform_geometry_to_crs(geometry, destination_crs), class_id)
             for geometry, class_id in raw
         ]
-    n_classes = len(class_map) if class_map else (1 if transformed else 0)
-    _console.print(f"[dim]  {len(transformed)} polygon(s), {n_classes} class(es)[/dim]")
     return transformed, class_map
 
 
@@ -170,8 +192,9 @@ def _process_anchor_chunk(
     return images, masks, metadata
 
 
-def run_generate(config: MapcvConfig) -> None:
+def run_generate(config: MapcvConfig) -> GenerateResult:
     """Generate a patch dataset from the configured imagery source."""
+    started = time.monotonic()
     staging = config.writer.staging_dir
     staging.mkdir(parents=True, exist_ok=True)
     manifest_path = staging / _MANIFEST_FILENAME
@@ -198,15 +221,19 @@ def run_generate(config: MapcvConfig) -> None:
             sampler=config.sampler.model_dump(mode="json"),
         )
 
+        resumed_patches = len(manifest.patches)
         anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
         anchors = [anchor for anchor in anchors if anchor not in completed_anchors]
         chunks = _group_anchors(anchors, source.metadata.chunk_rows)
-        _console.print(f"[bold]Processing {len(chunks)} imagery chunk(s)...[/bold]")
+        if resumed_patches:
+            _console.print(
+                f"[dim]Resuming: {resumed_patches} patch(es) already written, "
+                f"{len(anchors)} to go[/dim]"
+            )
         with _chunk_progress() as progress:
-            task = progress.add_task("Chunks", total=len(chunks))
+            task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
             for chunk_index, chunk_anchors in enumerate(chunks):
-                progress.update(task, description=f"Chunk {chunk_index + 1}/{len(chunks)}")
                 images, masks, metadata = _process_anchor_chunk(
                     source, chunk_anchors, config, geometries
                 )
@@ -223,30 +250,31 @@ def run_generate(config: MapcvConfig) -> None:
                 progress.advance(task)
 
         manifest.save(manifest_path)
-        requested = getattr(source, "tiles_requested", 0)
-        if requested:
-            failed = getattr(source, "tiles_failed", 0)
-            _console.print(f"[dim]  {requested} tile(s) fetched, {failed} failed[/dim]")
+        requested = int(getattr(source, "tiles_requested", 0))
+        failed = int(getattr(source, "tiles_failed", 0))
     finally:
         source.close()
 
-    total_patches = len(manifest.patches)
-    _console.print(
-        f"[green]Done.[/green] {total_patches} patch(es) written to [bold]{staging}[/bold]"
-    )
-
+    split_counts: Optional[Dict[str, int]] = None
     if config.split is not None:
-        _console.print("[bold]Splitting dataset...[/bold]")
-        splits_dir = staging / _SPLITS_SUBDIR
-        counts = split_dataset(manifest, config.split, splits_dir)
-        _print_split_summary(counts, splits_dir)
+        split_counts = split_dataset(manifest, config.split, staging / _SPLITS_SUBDIR)
+
+    return GenerateResult(
+        staging_dir=staging,
+        manifest=manifest,
+        new_patches=len(manifest.patches) - resumed_patches,
+        split_counts=split_counts,
+        tiles_requested=requested,
+        tiles_failed=failed,
+        seconds=time.monotonic() - started,
+    )
 
 
 def run_split(
     staging_dir: Path,
     split_config: Optional[SplitterConfig] = None,
-) -> None:
-    """Split an existing version-1 or version-2 dataset manifest."""
+) -> Dict[str, int]:
+    """Split an existing version-1 or version-2 dataset manifest; return split counts."""
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")
@@ -256,3 +284,4 @@ def run_split(
     splits_dir = staging_dir / _SPLITS_SUBDIR
     counts = split_dataset(manifest, cfg, splits_dir)
     _print_split_summary(counts, splits_dir)
+    return counts

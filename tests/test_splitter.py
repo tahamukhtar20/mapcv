@@ -400,3 +400,9 @@ def test_labeled_ratio_directory_names(tmp_path: Path, ratio: float, name: str) 
 def test_config_rejects_invalid_labeled_ratios(ratios: List[float]) -> None:
     with pytest.raises(ValueError):
         SplitterConfig(labeled_ratios=ratios)
+
+
+def test_default_block_shrinks_for_small_rasters(tmp_path: Path) -> None:
+    m = _grid_manifest(size=768, patch=256, stride=256)  # 3 x 3 patches
+    counts = split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
+    assert counts["test"] > 0 and counts["train"] > 0

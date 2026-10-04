@@ -25,6 +25,8 @@ from mapcv.labels import (
     parse_kml,
     transform_to_mercator,
 )
+from mapcv.pipeline import GenerateResult, run_generate, run_split
+from mapcv.planning import Plan, plan
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import SamplerConfig, sample_patches, sample_patches_at_anchors
 from mapcv.splitter import SplitterConfig, split_dataset
@@ -37,6 +39,11 @@ from mapcv.writer import (
 )
 
 __all__ = [
+    "GenerateResult",
+    "Plan",
+    "plan",
+    "run_generate",
+    "run_split",
     "URL_TEMPLATES",
     "LabelsConfig",
     "ImageryConfig",

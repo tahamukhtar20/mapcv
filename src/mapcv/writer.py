@@ -67,12 +67,12 @@ class Manifest(BaseModel):
     @classmethod
     def load(cls, path: Path) -> "Manifest":
         """Deserialize a version-1 or version-2 manifest from JSON."""
-        return cls.model_validate_json(path.read_text())
+        return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
     def save(self, path: Path) -> None:
         """Atomically serialize the manifest to indented JSON."""
         tmp_path = path.with_name(path.name + ".tmp")
-        tmp_path.write_text(self.model_dump_json(indent=2))
+        tmp_path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
         os.replace(tmp_path, path)
 
 

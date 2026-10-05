@@ -41,49 +41,68 @@ fn uniform(state: &mut u64, n: u64) -> u64 {
     ((u128::from(splitmix64(state)) * u128::from(n)) >> 64) as u64
 }
 
-/// Compute anchor positions along one dimension for grid sampling.
-fn dim_anchors(dim: usize, patch_size: usize, stride: usize, strategy: &str) -> Vec<usize> {
+/// Reject edge strategies other than `"pad"`, `"drop"` and `"shift"`.
+fn check_strategy(strategy: &str) -> Result<(), String> {
     match strategy {
-        "drop" => {
-            let mut v = Vec::new();
-            let mut p = 0usize;
-            while p + patch_size <= dim {
-                v.push(p);
-                p += stride;
+        "pad" | "drop" | "shift" => Ok(()),
+        other => Err(format!(
+            "edge_strategy must be 'pad', 'drop' or 'shift', got '{other}'"
+        )),
+    }
+}
+
+/// An empty vector with room for `n` items, or an error when that much memory
+/// cannot be allocated (instead of aborting the process).
+fn with_room<T>(n: usize, what: &str) -> Result<Vec<T>, String> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n)
+        .map_err(|_| allocation_error(n, what))?;
+    Ok(v)
+}
+
+fn allocation_error(n: usize, what: &str) -> String {
+    format!("cannot allocate {n} {what}; the request is too large")
+}
+
+/// Compute anchor positions along one dimension for grid sampling.
+///
+/// `dim`, `patch_size` and `stride` must be non-zero. Anchors are `i * stride`
+/// for a count computed up front, so huge strides or dimensions can neither
+/// overflow nor loop for long.
+fn dim_anchors(
+    dim: usize,
+    patch_size: usize,
+    stride: usize,
+    strategy: &str,
+) -> Result<Vec<usize>, String> {
+    // Anchors `p` with `p + patch_size <= dim`, i.e. patches fully inside the image.
+    let inside = if dim >= patch_size {
+        (dim - patch_size) / stride + 1
+    } else {
+        0
+    };
+    let count = match strategy {
+        "drop" | "shift" => inside,
+        // "pad": every stride step that starts inside the image (`p < dim`).
+        _ => (dim - 1) / stride + 1,
+    };
+    let mut v = with_room(count.saturating_add(1), "patch anchors")?;
+    // Each anchor is below `dim`, so `i * stride` cannot overflow.
+    v.extend((0..count).map(|i| i * stride));
+    if strategy == "shift" {
+        // Append a final anchor shifted inward if needed so that all
+        // pixels are covered by at least one patch.
+        if dim >= patch_size {
+            let last = dim - patch_size;
+            if v.last().copied().is_none_or(|q| q < last) {
+                v.push(last);
             }
-            v
-        }
-        "shift" => {
-            let mut v = Vec::new();
-            let mut p = 0usize;
-            while p + patch_size <= dim {
-                v.push(p);
-                p += stride;
-            }
-            // Append a final anchor shifted inward if needed so that all
-            // pixels are covered by at least one patch.
-            if dim >= patch_size {
-                let last = dim - patch_size;
-                if v.last().copied().is_none_or(|q| q < last) {
-                    v.push(last);
-                }
-            } else if v.is_empty() {
-                // Image smaller than patch_size: single anchor at 0.
-                v.push(0);
-            }
-            v
-        }
-        _ => {
-            // "pad" (default): anchor at every stride step while inside image.
-            let mut v = Vec::new();
-            let mut p = 0usize;
-            while p < dim {
-                v.push(p);
-                p += stride;
-            }
-            v
+        } else if v.is_empty() {
+            // Image smaller than patch_size: single anchor at 0.
+            v.push(0);
         }
     }
+    Ok(v)
 }
 
 /// Generate grid (or sliding-window) anchor positions.
@@ -92,7 +111,8 @@ fn dim_anchors(dim: usize, patch_size: usize, stride: usize, strategy: &str) -> 
 /// sampled with the given `stride` across an `height x width` image.
 ///
 /// # Errors
-/// Returns an error if `patch_size`, `stride`, `height`, or `width` is zero.
+/// Returns an error if `patch_size`, `stride`, `height`, or `width` is zero,
+/// if `strategy` is unknown, or if the anchors would not fit in memory.
 pub fn grid_anchors(
     height: usize,
     width: usize,
@@ -100,6 +120,7 @@ pub fn grid_anchors(
     stride: usize,
     strategy: &str,
 ) -> Result<Vec<(usize, usize)>, String> {
+    check_strategy(strategy)?;
     if patch_size == 0 {
         return Err("patch_size must be > 0".to_string());
     }
@@ -109,9 +130,16 @@ pub fn grid_anchors(
     if height == 0 || width == 0 {
         return Err("height and width must be > 0".to_string());
     }
-    let rows = dim_anchors(height, patch_size, stride, strategy);
-    let cols = dim_anchors(width, patch_size, stride, strategy);
-    let mut anchors = Vec::with_capacity(rows.len() * cols.len());
+    let rows = dim_anchors(height, patch_size, stride, strategy)?;
+    let cols = dim_anchors(width, patch_size, stride, strategy)?;
+    let total = rows.len().checked_mul(cols.len()).ok_or_else(|| {
+        format!(
+            "cannot allocate {} x {} patch anchors; the request is too large",
+            rows.len(),
+            cols.len()
+        )
+    })?;
+    let mut anchors = with_room(total, "patch anchors")?;
     for &row in &rows {
         for &col in &cols {
             anchors.push((row, col));
@@ -169,7 +197,8 @@ pub fn random_anchor_capacity(
 /// arguments.
 ///
 /// # Errors
-/// Returns an error if `patch_size`, `height`, or `width` is zero.
+/// Returns an error if `patch_size`, `height`, or `width` is zero, if
+/// `strategy` is unknown, or if `count` anchors would not fit in memory.
 pub fn random_anchors(
     height: usize,
     width: usize,
@@ -178,6 +207,7 @@ pub fn random_anchors(
     seed: u64,
     strategy: &str,
 ) -> Result<Vec<(usize, usize)>, String> {
+    check_strategy(strategy)?;
     let capacity = random_anchor_capacity(height, width, patch_size, strategy)? as u64;
     let cols = random_axis_len(width, patch_size, strategy) as u64;
     let wanted = (count as u64).min(capacity);
@@ -185,14 +215,22 @@ pub fn random_anchors(
         return Ok(Vec::new());
     }
     let mut state = seed;
+    // Sized with `try_reserve` so a request too large to hold is an error, not
+    // an allocation abort.
+    let wanted_len = wanted as usize;
     let mut flat: Vec<u64> = if wanted == capacity {
-        (0..capacity).collect()
+        let mut all = with_room(wanted_len, "random patch anchors")?;
+        all.extend(0..capacity);
+        all
     } else {
         // Floyd's algorithm: `wanted` distinct values from [0, capacity) in
         // O(wanted) time and memory. The Vec keeps insertion order so the
         // output never depends on hash iteration order.
-        let mut taken = std::collections::HashSet::with_capacity(wanted as usize);
-        let mut picked = Vec::with_capacity(wanted as usize);
+        let mut taken = std::collections::HashSet::new();
+        taken
+            .try_reserve(wanted_len)
+            .map_err(|_| allocation_error(wanted_len, "random patch anchors"))?;
+        let mut picked = with_room(wanted_len, "random patch anchors")?;
         for j in (capacity - wanted)..capacity {
             let t = uniform(&mut state, j + 1);
             let value = if taken.insert(t) {
@@ -211,10 +249,12 @@ pub fn random_anchors(
         let j = uniform(&mut state, i as u64 + 1) as usize;
         flat.swap(i, j);
     }
-    Ok(flat
-        .into_iter()
-        .map(|v| ((v / cols) as usize, (v % cols) as usize))
-        .collect())
+    let mut anchors = with_room(flat.len(), "random patch anchors")?;
+    anchors.extend(
+        flat.into_iter()
+            .map(|v| ((v / cols) as usize, (v % cols) as usize)),
+    );
+    Ok(anchors)
 }
 
 #[cfg(test)]
@@ -425,5 +465,78 @@ mod tests {
         assert!(random_anchors(10, 10, 0, 10, 42, "pad").is_err());
         assert!(random_anchor_capacity(10, 10, 0, "pad").is_err());
         assert!(random_anchors(0, 10, 4, 10, 42, "pad").is_err());
+    }
+
+    /// The step-by-step loop `dim_anchors` used before counting up front.
+    fn loop_anchors(dim: usize, patch_size: usize, stride: usize, strategy: &str) -> Vec<usize> {
+        let mut v = Vec::new();
+        let mut p = 0usize;
+        if strategy == "pad" {
+            while p < dim {
+                v.push(p);
+                p += stride;
+            }
+            return v;
+        }
+        while p + patch_size <= dim {
+            v.push(p);
+            p += stride;
+        }
+        if strategy == "shift" {
+            if dim >= patch_size {
+                let last = dim - patch_size;
+                if v.last().copied().is_none_or(|q| q < last) {
+                    v.push(last);
+                }
+            } else if v.is_empty() {
+                v.push(0);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn counted_anchors_match_the_stepping_loop() {
+        for strategy in ["pad", "drop", "shift"] {
+            for dim in 1..40 {
+                for patch_size in 1..20 {
+                    for stride in 1..20 {
+                        assert_eq!(
+                            dim_anchors(dim, patch_size, stride, strategy).unwrap(),
+                            loop_anchors(dim, patch_size, stride, strategy),
+                            "{strategy} dim={dim} ps={patch_size} stride={stride}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_strategy_errors() {
+        assert!(grid_anchors(10, 10, 4, 4, "wrap").is_err());
+        assert!(random_anchors(10, 10, 4, 1, 42, "Pad").is_err());
+    }
+
+    #[test]
+    fn huge_values_error_or_stay_small_instead_of_overflowing() {
+        // Strides near usize::MAX used to overflow `p += stride`.
+        let anchors = grid_anchors(10, 10, 5, usize::MAX, "drop").unwrap();
+        assert_eq!(anchors, vec![(0, 0)]);
+        let anchors =
+            grid_anchors(usize::MAX, usize::MAX, usize::MAX, usize::MAX, "shift").unwrap();
+        assert_eq!(anchors, vec![(0, 0)]);
+        // Grids and counts that cannot be allocated are errors, not aborts.
+        assert!(grid_anchors(usize::MAX, usize::MAX, 1, 1, "pad").is_err());
+        // A count above the raster's capacity is capped, not an allocation request.
+        assert_eq!(
+            random_anchors(10, 10, 4, usize::MAX, 42, "pad")
+                .unwrap()
+                .len(),
+            49
+        );
+        // Only a raster with too many positions to hold is an error.
+        assert!(random_anchors(1 << 30, 1 << 30, 1, usize::MAX, 42, "pad").is_err());
+        assert!(random_anchors(usize::MAX, usize::MAX, 1, 1, 42, "pad").is_err());
     }
 }

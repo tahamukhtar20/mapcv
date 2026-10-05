@@ -43,10 +43,11 @@ Fix the fields above, or start from a working config with mapcv init.
 | `labels.classes requires labels.label_field` | Name the property that holds the class |
 | `labels.classes['…'] must be an integer in 1..255` | IDs are mask values; 0 is background |
 | `imagery.path must not contain credentials, query strings, or fragments; …` | Only local or anonymous public products are supported. Download private products first |
-| `provide 'imagery' or legacy 'tiles', not both` | Remove the old `tiles` block |
+| `` `tiles:` was replaced by `imagery:` in mapcv 0.2 and removed in 0.3; … `` | Move the old `tiles` block under `imagery: {type: xyz, zoom: …, source: …}` and delete `region.zoom` |
+| `` `region.zoom` was moved to `imagery.zoom` in mapcv 0.2 and removed in 0.3; … `` | Delete `region.zoom` and set `imagery.zoom` |
 | `Input should be 'spatial', 'stratified' or 'random'` | Typo in `split.strategy` or `--strategy` |
 
-`Deprecated: 'tiles' and 'region.zoom' are deprecated; …` is a notice, not an error: the config still works in 0.2. Move the settings into `imagery` ([Migrating to 0.2](/mapcv/project/migration/)).
+The `tiles:` and `region.zoom` errors mean a 0.1 config: both layouts were removed in 0.3.0. See [Migrating to 0.2](/mapcv/project/migration/).
 
 Unknown keys are errors, reported with their full path:
 

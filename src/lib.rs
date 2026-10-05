@@ -15,10 +15,12 @@ pub mod sampler;
 pub mod stitcher;
 pub mod tile_math;
 
+use numpy::ndarray::{Dimension, Ix3, Ix4};
 use numpy::{
-    IntoPyArray, PyArray2, PyArray3, PyReadonlyArray3, PyReadonlyArray4, PyUntypedArrayMethods,
-    ToPyArray,
+    IntoPyArray, PyArray, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray, PyUntypedArray,
+    PyUntypedArrayMethods, ToPyArray,
 };
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use tile_math::{BBox, TileIndex};
 
@@ -26,6 +28,52 @@ use tile_math::{BBox, TileIndex};
 type FetchedTile = (PyTileIndex, Py<PyAny>);
 /// Failed-tile counts per cause and one example message.
 type FailureCauses = (Vec<(String, usize)>, Option<String>);
+
+/// Format an array shape the way numpy prints it, e.g. `(2, 4, 4, 3)`.
+fn fmt_shape(shape: &[usize]) -> String {
+    if let [single] = shape {
+        return format!("({single},)");
+    }
+    let dims: Vec<String> = shape.iter().map(ToString::to_string).collect();
+    format!("({})", dims.join(", "))
+}
+
+/// Borrow *obj* as a C-contiguous `uint8` array with `D` dimensions.
+///
+/// Raises `TypeError` when *obj* is not a numpy array and `ValueError` when its
+/// dtype, number of dimensions or memory layout is wrong, naming the argument
+/// and the expected `layout` so the caller can fix it.
+fn u8_array<'py, D: Dimension>(
+    obj: &Bound<'py, PyAny>,
+    name: &str,
+    layout: &str,
+) -> PyResult<PyReadonlyArray<'py, u8, D>> {
+    let untyped = obj.cast::<PyUntypedArray>().map_err(|_| {
+        let type_name = obj
+            .get_type()
+            .name()
+            .map_or_else(|_| "an unknown type".to_owned(), |n| n.to_string());
+        PyTypeError::new_err(format!(
+            "{name} must be a numpy array shaped {layout}, got {type_name}"
+        ))
+    })?;
+    let array = untyped.cast::<PyArray<u8, D>>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "{name} must be a uint8 array shaped {layout}, got a {} array with shape {}",
+            untyped.dtype(),
+            fmt_shape(untyped.shape())
+        ))
+    })?;
+    // A Fortran-ordered or strided view would be read in the wrong pixel order.
+    if !array.is_c_contiguous() {
+        return Err(PyValueError::new_err(format!(
+            "{name} must be C-contiguous; pass numpy.ascontiguousarray({name})"
+        )));
+    }
+    array
+        .try_readonly()
+        .map_err(|e| PyValueError::new_err(format!("{name} cannot be read: {e}")))
+}
 
 /// Python-visible XYZ tile index.
 #[pyclass(from_py_object)]
@@ -126,8 +174,8 @@ fn tiles(
     north: f64,
     zooms: Vec<u8>,
 ) -> PyResult<Vec<PyTileIndex>> {
-    let result = tile_math::tiles(west, south, east, north, &zooms)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let result =
+        tile_math::tiles(west, south, east, north, &zooms).map_err(PyValueError::new_err)?;
     Ok(result.into_iter().map(Into::into).collect())
 }
 
@@ -158,7 +206,7 @@ fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
 fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyResult<PyBBox> {
     tile_math::snap_bbox(west, south, east, north, zoom)
         .map(Into::into)
-        .map_err(pyo3::exceptions::PyValueError::new_err)
+        .map_err(PyValueError::new_err)
 }
 
 /// Fetch satellite tiles concurrently from a URL template.
@@ -180,6 +228,12 @@ fn fetch_tiles(
     policy: &str,
     max_failed_ratio: f64,
 ) -> PyResult<(Vec<FetchedTile>, usize, FailureCauses)> {
+    // NaN would make the threshold comparison below always false.
+    if !(0.0..=1.0).contains(&max_failed_ratio) {
+        return Err(PyValueError::new_err(format!(
+            "max_failed_ratio must be between 0 and 1, got {max_failed_ratio}"
+        )));
+    }
     let rust_tiles: Vec<TileIndex> = tiles
         .into_iter()
         .map(|t| TileIndex {
@@ -202,7 +256,7 @@ fn fetch_tiles(
 
     let lenient = policy.eq_ignore_ascii_case("lenient");
     if lenient && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
-        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+        return Err(PyRuntimeError::new_err(format!(
             "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold): {}. \
              If the provider is busy or rate-limiting, try again later or lower \
              imagery.max_connections; raise imagery.max_failed_ratio to accept gaps.",
@@ -240,7 +294,7 @@ fn grid_sample_anchors(
     edge_strategy: &str,
 ) -> PyResult<Vec<(usize, usize)>> {
     sampler::grid_anchors(height, width, patch_size, stride, edge_strategy)
-        .map_err(pyo3::exceptions::PyValueError::new_err)
+        .map_err(PyValueError::new_err)
 }
 
 /// Generate random patch anchor positions using a seeded PRNG.
@@ -262,7 +316,7 @@ fn random_sample_anchors(
     edge_strategy: &str,
 ) -> PyResult<Vec<(usize, usize)>> {
     sampler::random_anchors(height, width, patch_size, count, seed, edge_strategy)
-        .map_err(pyo3::exceptions::PyValueError::new_err)
+        .map_err(PyValueError::new_err)
 }
 
 /// Number of distinct anchors `random_sample_anchors` can return.
@@ -275,7 +329,7 @@ fn random_anchor_capacity(
     edge_strategy: &str,
 ) -> PyResult<usize> {
     sampler::random_anchor_capacity(height, width, patch_size, edge_strategy)
-        .map_err(pyo3::exceptions::PyValueError::new_err)
+        .map_err(PyValueError::new_err)
 }
 
 /// Burn `(polygon, class_id)` pairs into a uint8 mask of shape `(height, width)`.
@@ -305,28 +359,32 @@ fn rasterize(
     all_touched: bool,
 ) -> PyResult<Py<PyArray2<u8>>> {
     if width == 0 || height == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "width and height must be > 0",
-        ));
+        return Err(PyValueError::new_err("width and height must be > 0"));
     }
     let (a, b, c, d, e, f) = transform;
     let aff = rasterizer::Affine { a, b, c, d, e, f };
     let buf = rasterizer::rasterize(&polygons, width, height, aff, all_touched)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        .map_err(PyValueError::new_err)?;
     let arr = numpy::ndarray::Array2::from_shape_vec((height, width), buf)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok(arr.to_pyarray(py).unbind())
 }
 
 /// Write image and mask patches to disk in parallel using rayon.
 ///
-/// `image_patches` is a `(N, ps, ps, 3)` uint8 array.
-/// `mask_patches`  is an optional `(N, ps, ps)` uint8 array.
-/// `meta`          is a list of `(row, col, padded)` tuples.
+/// `image_patches` is a C-contiguous `(N, ps, ps, 3)` uint8 array.
+/// `mask_patches`  is an optional C-contiguous `(N, ps, ps)` uint8 array.
+/// `meta`          is a list of `(row, col, padded)` tuples, one per patch.
+/// `image_format`  is `"png"` or `"jpg"`; `jpg_quality` is in `1..=100`.
 ///
 /// Returns a list of `(filename, mask_filename, row, col, padded, strip_index,
 /// class_counts, empty_ratio)` in patch order. `class_counts` is a list of
 /// `(class_id, pixel_count)` pairs in ascending class-id order.
+///
+/// # Errors
+/// Raises `ValueError` when the arrays, `meta` or the format arguments do not
+/// describe the same `N` square RGB patches, and `RuntimeError` when a patch
+/// cannot be encoded or written.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
@@ -334,10 +392,10 @@ fn rasterize(
 )]
 #[pyfunction]
 #[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95))]
-fn write_patches_rs(
-    py: Python,
-    image_patches: PyReadonlyArray4<u8>,
-    mask_patches: Option<PyReadonlyArray3<u8>>,
+fn write_patches_rs<'py>(
+    py: Python<'py>,
+    image_patches: &Bound<'py, PyAny>,
+    mask_patches: Option<&Bound<'py, PyAny>>,
     meta: Vec<(usize, usize, bool)>,
     start_idx: usize,
     strip_index: usize,
@@ -357,17 +415,55 @@ fn write_patches_rs(
         f64,
     )>,
 > {
-    let img_data: Vec<u8> = image_patches
-        .as_slice()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
-        .to_vec();
-    let shape = image_patches.shape();
+    let images = u8_array::<Ix4>(image_patches, "image_patches", "(N, ps, ps, 3)")?;
+    let shape = images.shape();
     let (n_patches, patch_size) = (shape[0], shape[1]);
+    if shape[1] != shape[2] || shape[3] != 3 {
+        return Err(PyValueError::new_err(format!(
+            "image_patches must hold square RGB patches shaped (N, ps, ps, 3), got shape {}",
+            fmt_shape(shape)
+        )));
+    }
+    if patch_size == 0 {
+        return Err(PyValueError::new_err(format!(
+            "image_patches must have a patch size > 0, got shape {}",
+            fmt_shape(shape)
+        )));
+    }
+    if meta.len() != n_patches {
+        return Err(PyValueError::new_err(format!(
+            "meta has {} entries but image_patches holds {n_patches} patches",
+            meta.len()
+        )));
+    }
+    let masks = mask_patches
+        .map(|m| u8_array::<Ix3>(m, "mask_patches", "(N, ps, ps)"))
+        .transpose()?;
+    if let Some(ref m) = masks {
+        let expected = [n_patches, patch_size, patch_size];
+        if m.shape() != expected {
+            return Err(PyValueError::new_err(format!(
+                "mask_patches must be shaped {} to match image_patches, got shape {}",
+                fmt_shape(&expected),
+                fmt_shape(m.shape())
+            )));
+        }
+    }
+    patch_writer::check_format(image_format, jpg_quality).map_err(PyValueError::new_err)?;
+    if start_idx.checked_add(n_patches).is_none() {
+        return Err(PyValueError::new_err(format!(
+            "start_idx {start_idx} + {n_patches} patches overflows the patch index"
+        )));
+    }
 
-    let (msk_data, has_mask): (Vec<u8>, bool) = match mask_patches {
+    let img_data: Vec<u8> = images
+        .as_slice()
+        .map_err(|e| PyValueError::new_err(format!("image_patches cannot be read: {e}")))?
+        .to_vec();
+    let (msk_data, has_mask): (Vec<u8>, bool) = match masks {
         Some(ref m) => (
             m.as_slice()
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+                .map_err(|e| PyValueError::new_err(format!("mask_patches cannot be read: {e}")))?
                 .to_vec(),
             true,
         ),
@@ -395,7 +491,7 @@ fn write_patches_rs(
                 jpg_quality,
             )
         })
-        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        .map_err(PyRuntimeError::new_err)?;
 
     Ok(results
         .into_iter()
@@ -421,6 +517,11 @@ fn write_patches_rs(
 ///
 /// Accepts a list of `(PyTileIndex, bytes)` pairs as returned by `fetch_tiles`.
 /// Returns `(image_array, min_tile_x, min_tile_y)`.
+///
+/// # Errors
+/// Raises `ValueError` when tiles mix zoom levels or a tile does not decode to
+/// 256x256 pixels, and `RuntimeError` when a tile cannot be decoded or the
+/// canvas would be too large.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 fn stitch_tiles(
@@ -441,10 +542,12 @@ fn stitch_tiles(
         .into_iter()
         .map(|(t, bytes)| (t.x, t.y, t.z, bytes))
         .collect();
-    let (canvas, min_x, min_y, h, w) =
-        stitcher::stitch_tiles(&raw).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    let (canvas, min_x, min_y, h, w) = stitcher::stitch_tiles(&raw).map_err(|e| match e {
+        stitcher::StitchError::InvalidInput(msg) => PyValueError::new_err(msg),
+        stitcher::StitchError::Failed(msg) => PyRuntimeError::new_err(msg),
+    })?;
     let arr = numpy::ndarray::Array3::from_shape_vec((h, w, 3), canvas)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok((arr.into_pyarray(py).unbind(), min_x, min_y))
 }
 
@@ -477,7 +580,7 @@ fn parse_kml_rs(
     label_field: Option<&str>,
 ) -> PyResult<(Vec<(Vec<kml_parser::Polygon>, Option<String>)>, usize)> {
     let result = kml_parser::parse_kml(data, label_field)
-        .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("invalid KML: {err}")))?;
+        .map_err(|err| PyValueError::new_err(format!("invalid KML: {err}")))?;
     Ok((result.polygons, result.skipped_non_polygon))
 }
 

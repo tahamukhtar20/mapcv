@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+from pydantic import ValidationError
 
 from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
@@ -81,39 +82,45 @@ def test_xyz_config_loads(tmp_path: Path) -> None:
     assert config.sampler.patch_size == 256
 
 
-def test_legacy_tiles_config_is_normalized(tmp_path: Path) -> None:
-    with pytest.warns(FutureWarning, match="0.3.0"):
-        config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
-    assert isinstance(config.imagery, XYZImageryConfig)
-    assert config.imagery.zoom == 16
-    assert config.imagery.source == "esri_satellite"
-    assert config.region.zoom is None
+def test_legacy_tiles_block_is_rejected_with_migration_hint(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
+    message = str(excinfo.value)
+    assert "`tiles:` was replaced by `imagery:` in mapcv 0.2 and removed in 0.3" in message
+    assert "imagery: {type: xyz, zoom: ..., source: ...}" in message
+    assert "MIGRATION.md" in message
 
 
-def test_normalized_legacy_config_round_trips(tmp_path: Path) -> None:
-    with pytest.warns(FutureWarning):
-        config = MapcvConfig.from_yaml(_write(tmp_path, _LEGACY))
+@pytest.mark.parametrize("content", [_MINIMAL, _ZARR])
+def test_region_zoom_is_rejected_with_migration_hint(tmp_path: Path, content: str) -> None:
+    content = content.replace("  north: ", "  zoom: 12\n  north: ", 1)
+    with pytest.raises(ValidationError) as excinfo:
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+    message = str(excinfo.value)
+    assert "`region.zoom` was moved to `imagery.zoom` in mapcv 0.2 and removed in 0.3" in message
+    assert "MIGRATION.md" in message
+    assert "region" in excinfo.value.errors()[0]["loc"]
+
+
+def test_region_zoom_error_applies_to_region_config_directly() -> None:
+    with pytest.raises(ValidationError, match="removed in 0.3"):
+        RegionConfig.model_validate(
+            {"west": 74.2, "south": 31.4, "east": 74.4, "north": 31.6, "zoom": 16}
+        )
+
+
+def test_unknown_region_key_is_still_an_extra_forbidden_error(tmp_path: Path) -> None:
+    content = _MINIMAL.replace("  north: ", "  zoom_level: 12\n  north: ", 1)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_config_round_trips_without_warnings(tmp_path: Path) -> None:
+    config = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL))
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         again = MapcvConfig.model_validate(config.model_dump())
     assert again == config
-
-
-def test_region_zoom_fills_missing_imagery_zoom_with_warning(tmp_path: Path) -> None:
-    content = _MINIMAL.replace("  north: 31.60\n", "  north: 31.60\n  zoom: 15\n").replace(
-        "  zoom: 16\n", ""
-    )
-    with pytest.warns(FutureWarning, match="set imagery.zoom"):
-        config = MapcvConfig.from_yaml(_write(tmp_path, content))
-    assert isinstance(config.imagery, XYZImageryConfig)
-    assert config.imagery.zoom == 15
-
-
-@pytest.mark.parametrize("content", [_MINIMAL, _ZARR])
-def test_region_zoom_beside_imagery_warns_that_it_is_ignored(tmp_path: Path, content: str) -> None:
-    content = content.replace("  north: ", "  zoom: 12\n  north: ", 1)
-    with pytest.warns(FutureWarning, match="ignored"):
-        MapcvConfig.from_yaml(_write(tmp_path, content))
 
 
 def test_missing_imagery_type_has_clear_error(tmp_path: Path) -> None:

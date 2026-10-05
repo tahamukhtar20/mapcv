@@ -934,7 +934,7 @@ def _ask_label_raster(path_text: str, bbox: Tuple[float, float, float, float]) -
     """Describe a label raster, list its values and write ``labels`` lines that map them."""
     from mapcv.geotiff import GeoTiff
     from mapcv.imagery import geotiff_location
-    from mapcv.targets.raster_labels import _integer_nodata
+    from mapcv.targets.raster_labels import integer_nodata
 
     lines = ["labels:", "  type: raster", f"  path: {_yaml_str(path_text)}"]
     placeholder = lines + [
@@ -966,8 +966,12 @@ def _ask_label_raster(path_text: str, bbox: Tuple[float, float, float, float]) -
             "written, but generating will fail until the file is fixed.[/yellow]"
         )
         return placeholder
-    counts, sampled = _sample_label_values(tif, bbox)
-    nodata = _integer_nodata(info.nodata, info.dtype)
+    try:
+        counts, sampled = _sample_label_values(tif, bbox)
+    except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
+        _console.print(f"[yellow]Cannot read its values:[/yellow] {exc}. Edit labels.classes.")
+        return placeholder
+    nodata = integer_nodata(info.nodata, info.dtype)
     if nodata is not None:
         counts.pop(nodata, None)
     if not counts:

@@ -67,7 +67,7 @@ LABEL_RASTER_MISS_MESSAGE = (
 )
 
 
-def _integer_nodata(nodata: Optional[float], dtype: np.dtype[Any]) -> Optional[int]:
+def integer_nodata(nodata: Optional[float], dtype: np.dtype[Any]) -> Optional[int]:
     """The file's NoData value when an integer raster can hold it, else ``None``."""
     if nodata is None or not math.isfinite(nodata) or nodata != int(nodata):
         return None
@@ -162,7 +162,7 @@ class LabelRasterSampler:
 
             self._to_label = Transformer.from_crs(imagery_crs, self.crs, always_xy=True)
         self.nodata = (
-            labels.nodata if labels.nodata is not None else _integer_nodata(info.nodata, info.dtype)
+            labels.nodata if labels.nodata is not None else integer_nodata(info.nodata, info.dtype)
         )
         ignore = labels.ignore_index if labels.ignore_index is not None else 0
         self.ignore = ignore

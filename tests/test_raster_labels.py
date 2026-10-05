@@ -912,6 +912,20 @@ def test_labels_type_defaults_to_vector_and_explains_rasters() -> None:
         _config({"type": "raster", "path": "a.tif", "classes": {1: 1}, "label_field": "x"})
 
 
+def test_detection_refuses_raster_labels() -> None:
+    with pytest.raises(ValidationError, match="detection needs vector labels"):
+        MapcvConfig.model_validate(
+            {
+                "task": "detection",
+                "region": {"west": 3.0, "south": 48.8, "east": 3.01, "north": 48.81},
+                "imagery": {"type": "xyz", "zoom": 15, "source": "esri_satellite"},
+                "labels": {"type": "raster", "path": "lc.tif", "classes": {1: 1}},
+                "sampler": {"patch_size": 64},
+                "writer": {"staging_dir": "out"},
+            }
+        )
+
+
 def test_relative_label_raster_paths_resolve_but_urls_do_not(tmp_path: Path) -> None:
     base = (
         "region: {west: 3.0, south: 48.8, east: 3.01, north: 48.81}\n"

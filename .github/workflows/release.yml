@@ -189,12 +189,17 @@ jobs:
           EOF
       - name: Install the built wheel and test dependencies
         run: |
-          # Pin the version so pip cannot pick a newer release from PyPI.
+          # mapcv from dist only: the same version may already be on PyPI (a dry run
+          # of a released version), and pip would happily take that wheel instead.
+          pip install --no-index --no-deps --only-binary :all: --find-links dist "mapcv==${VERSION}"
+          # Then its dependencies from PyPI; the installed mapcv already satisfies the pin.
           pip install --only-binary mapcv --find-links dist "mapcv==${VERSION}"
+          python scripts/check_installed_wheel.py dist
           python -c "import mapcv"
           if [ "${{ matrix.python }}" != "3.14" ]; then
             pip install --only-binary mapcv --find-links dist "mapcv[zarr]==${VERSION}"
             python -c "import xarray; import xarray_eopf"
+            python scripts/check_installed_wheel.py dist
           fi
       - name: Run tests against the installed wheel
         run: |
@@ -235,7 +240,9 @@ jobs:
           docker run --rm -e VERSION -v "$PWD:/src" -w /src
           python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
           sh -euc 'pip install -q --require-hashes -r .github/requirements/release-test.txt
+          && pip install -q --no-index --no-deps --only-binary :all: --find-links dist "mapcv==$VERSION"
           && pip install -q --only-binary :all: --find-links dist "mapcv==$VERSION"
+          && python scripts/check_installed_wheel.py dist
           && mv src src.unused && python -m pytest -q
           && python tests/e2e/journey.py --version "$VERSION"'
 

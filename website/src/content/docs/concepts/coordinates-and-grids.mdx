@@ -45,11 +45,11 @@ mapcv's tile math, transforms and rasterization are checked against the GDAL sta
 
 ## Patches in map coordinates
 
-Every manifest entry stores the patch's top-left pixel as `row` and `col` in the **whole raster**, and the manifest stores the raster's `crs` and `transform`. A patch's footprint is therefore:
+Every manifest entry stores the patch's top-left pixel as `row` and `col` in the **whole raster**, and the manifest's source (`sources[0]`) stores the raster's `crs` and `transform`. A patch's footprint is therefore:
 
 ```text
 left   = c + a · col          top    = f + e · row
 right  = left + a · size      bottom = top + e · size
 ```
 
-in `crs` units. Use it to place predictions back on a map, or to build your own spatial cross-validation folds. A Python snippet is in [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
+in `crs` units. Use it to place predictions back on a map, or to build your own spatial cross-validation folds. `mapcv.Manifest.patch_bounds(entry)` computes it; a plain-Python snippet is in [Dataset format](/mapcv/reference/dataset-format/#georeferencing).

@@ -50,9 +50,9 @@ Only one chunk's window is in memory at a time, plus its tiles. That is why memo
 
 ## 7. Write and save the manifest
 
-Patches are encoded in parallel in Rust (PNG/JPG) or saved as NumPy arrays (NPY), with masks as PNG. Each patch gets a manifest entry with its global `row`/`col`, padding flag, empty fraction and per-class pixel counts. The manifest is written atomically **after every chunk**, which makes the run resumable at chunk granularity.
+Patches are encoded in parallel in Rust (PNG/JPG) or saved as NumPy arrays (NPY), with masks as PNG. Each patch gets a manifest entry with its global `row`/`col`, padding flag, the paths of its files and a summary (empty fraction and per-class pixel counts). The manifest is written atomically **after every chunk**, which makes the run resumable at chunk granularity.
 
-Before the first chunk, the existing manifest (if any) is compared with what this config would produce (class map, source, bands, dtype, patch shape, CRS, transform, sampler, label settings and a hash of the label file, writer settings) and a mismatch stops the run.
+Before the first chunk, the existing manifest (if any) is compared with what this config would produce (task, source, bands, dtype, patch shape, CRS, transform, class map, ignore value, label settings and a hash of the label file, sampler, writer settings) and a mismatch stops the run.
 
 ## 8. Split
 

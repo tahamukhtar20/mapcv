@@ -19,7 +19,9 @@ __all__ = [
 
 
 def create_target(config: MapcvConfig) -> Target:
-    """The target a configuration asks for: segmentation with labels, else image-only."""
+    """The target ``config.task`` asks for; without labels, patches carry no annotation."""
+    if config.task != "segmentation":  # the config only accepts supported tasks
+        raise ValueError(f"task '{config.task}' has no target")
     if config.labels is None:
         return ImageOnlyTarget()
     return SegmentationTarget(config.labels)

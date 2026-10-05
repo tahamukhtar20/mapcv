@@ -11,7 +11,7 @@ import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 - dataset/
   - Images/ patch_0000000.png (RGB uint8) or .npy (bands-first float32)
   - Masks/ patch_0000000.png (uint8: 0 = background, 1..255 = class)
-  - manifest.json class names, bands, CRS, per-patch stats
+  - manifest.json task, bands, CRS, class names, per-patch files and stats
   - splits/
     - train.txt
     - val.txt
@@ -21,7 +21,7 @@ import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Read a split
 
-Each split file lists image file names, one per line. The mask has the same stem; take its exact name from the manifest because masks are always `.png`:
+Each split file lists image file names, one per line. Each manifest entry's `files` maps `image` and `mask` to paths relative to the dataset folder; use them instead of building paths yourself (masks are always `.png`, whatever the image format):
 
 ```python
 import json
@@ -29,11 +29,15 @@ from pathlib import Path
 
 root = Path("dataset")
 manifest = json.loads((root / "manifest.json").read_text())
-mask_of = {p["filename"]: p["mask_filename"] for p in manifest["patches"]}
+files_of = {Path(p["files"]["image"]).name: p["files"] for p in manifest["patches"]}
 
 train = (root / "splits" / "train.txt").read_text().split()
-pairs = [(root / "Images" / name, root / "Masks" / mask_of[name]) for name in train]
+pairs = [(root / files_of[name]["image"], root / files_of[name]["mask"]) for name in train]
 ```
+
+<Aside>
+This page reads manifest version 3, written by mapcv 0.3. A dataset made by mapcv 0.2 has a version-2 manifest; `mapcv.Manifest.load(path)` reads either and returns version 3, and `mapcv.Manifest.load(path).save(path)` rewrites the file as version 3. See [Migrating](/mapcv/project/migration/#migrating-to-03).
+</Aside>
 
 ## Load one patch with NumPy
 
@@ -54,9 +58,9 @@ pairs = [(root / "Images" / name, root / "Masks" / mask_of[name]) for name in tr
     from PIL import Image
 
     image_path, mask_path = pairs[0]
-    image = np.load(image_path)                  # (bands, H, W) float32, order = manifest["bands"]
+    bands = manifest["sources"][0]["bands"]      # e.g. ['b04', 'b03', 'b02', 'b08']
+    image = np.load(image_path)                  # (bands, H, W) float32, in that order
     mask = np.asarray(Image.open(mask_path))     # (H, W) uint8
-    print(manifest["bands"])                     # e.g. ['b04', 'b03', 'b02', 'b08']
     ```
 
     Values are decoded surface reflectance (typically 0–1). Pixels without data are `NaN`.
@@ -65,10 +69,11 @@ pairs = [(root / "Images" / name, root / "Masks" / mask_of[name]) for name in tr
 
 ## Class names
 
-`class_map` maps label values to mask IDs; `0` is always background. When the config had no `label_field`, `class_map` is empty and every polygon is `1`.
+The manifest's `target.class_map` maps label values to mask IDs; `0` is always background. When the config had no `label_field`, `class_map` is empty and every polygon is `1`. An image-only dataset has `"target": null`.
 
 ```python
-names = {cid: name for name, cid in manifest["class_map"].items()}
+target = manifest["target"] or {}
+names = {cid: name for name, cid in target.get("class_map", {}).items()}
 names.setdefault(0, "background")
 num_classes = max(names) + 1          # IDs need not be contiguous if you pinned them
 ```
@@ -95,20 +100,21 @@ class MapcvDataset(Dataset):
     def __init__(self, root, split="train"):
         self.root = Path(root)
         manifest = json.loads((self.root / "manifest.json").read_text())
-        mask_of = {p["filename"]: p["mask_filename"] for p in manifest["patches"]}
+        files_of = {Path(p["files"]["image"]).name: p["files"] for p in manifest["patches"]}
         names = (self.root / "splits" / f"{split}.txt").read_text().split()
-        self.items = [(name, mask_of[name]) for name in names]
-        self.class_map = manifest["class_map"]
-        self.bands = manifest["bands"]
+        self.items = [files_of[name] for name in names]     # {"image": ..., "mask": ...}
+        target = manifest["target"] or {}                     # null for image-only datasets
+        self.class_map = target.get("class_map", {})
+        self.bands = manifest["sources"][0]["bands"]
         # Mask value for pixels without imagery (None if generated with ignore_index: null).
-        self.ignore_index = (manifest.get("labels") or {}).get("ignore_index")
+        self.ignore_index = target.get("ignore_index")
 
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, index):
-        image_name, mask_name = self.items[index]
-        path = self.root / "Images" / image_name
+        files = self.items[index]
+        path = self.root / files["image"]
         if path.suffix == ".npy":
             image = np.load(path)                          # (bands, H, W) float32
             image = np.nan_to_num(image, nan=0.0)          # NaN = no data (255 in the mask)
@@ -117,9 +123,9 @@ class MapcvDataset(Dataset):
             image = rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
         image = torch.from_numpy(np.ascontiguousarray(image))
 
-        if mask_name is None:                              # image-only dataset
+        if "mask" not in files:                            # image-only dataset
             return image
-        mask = np.asarray(Image.open(self.root / "Masks" / mask_name), dtype=np.int64)
+        mask = np.asarray(Image.open(self.root / files["mask"]), dtype=np.int64)
         return image, torch.from_numpy(mask)
 ```
 
@@ -142,10 +148,10 @@ Masks mark pixels that have no imagery under them with **`255`**, mapcv's defaul
 loss_fn = torch.nn.CrossEntropyLoss(ignore_index=255)
 ```
 
-- The manifest records the value under `labels.ignore_index`; the class above reads it from there.
+- The manifest records the value as `target.ignore_index`; the class above reads it from there.
 - A class can't use 255 while it is the ignore value. If you need 255 classes, set `labels.ignore_index` to an unused ID, or to `null` to write background (`0`) there as mapcv 0.2 did.
 - Sentinel-2 images still contain `NaN` where data is missing; replace it before feeding a network (the class uses `0`).
-- To keep mostly-empty patches out entirely, set `sampler.max_empty_ratio` (for example `0.2`) when generating. Each manifest entry's `empty_ratio` tells you how empty a patch is.
+- To keep mostly-empty patches out entirely, set `sampler.max_empty_ratio` (for example `0.2`) when generating. Each manifest entry's `summary.empty_ratio` tells you how empty a patch is.
 
 ## Normalise inputs
 
@@ -162,7 +168,7 @@ std = np.nanstd(stack, axis=(0, 2, 3))
 
 ## Class weights from the manifest
 
-Every manifest entry carries `per_class_pixel_counts`, so class frequencies need no image reads:
+Every manifest entry's `summary` carries `class_pixels`, the mask's pixel count per class ID, so class frequencies need no image reads:
 
 ```python
 from collections import Counter
@@ -170,8 +176,8 @@ from collections import Counter
 train_names = set(train)
 counts = Counter()
 for p in manifest["patches"]:
-    if p["filename"] in train_names:
-        counts.update({int(k): v for k, v in p["per_class_pixel_counts"].items() if k != "255"})
+    if Path(p["files"]["image"]).name in train_names:
+        counts.update({int(k): v for k, v in p["summary"]["class_pixels"].items() if k != "255"})
 total = sum(counts.values())
 weights = {cid: total / (len(counts) * n) for cid, n in sorted(counts.items())}
 ```
@@ -184,7 +190,7 @@ weights = {cid: total / (len(counts) * n) for cid, n in sorted(counts.items())}
 
 ## Map predictions back to the ground
 
-Each patch's `row` and `col`, together with the manifest's `transform` and `crs`, give its footprint in map coordinates. A snippet is in [Dataset format → manifest](/mapcv/reference/dataset-format/#patch-entries). Use it to write predictions as georeferenced rasters with your GIS tool of choice.
+Each patch's `row` and `col`, together with the source's `transform` and `crs`, give its footprint in map coordinates; `mapcv.Manifest.patch_transform(entry)` and `patch_bounds(entry)` compute them. A snippet is in [Dataset format → georeferencing](/mapcv/reference/dataset-format/#georeferencing). Use it to write predictions as georeferenced rasters with your GIS tool of choice.
 
 <Aside type="tip">
 Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.

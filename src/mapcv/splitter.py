@@ -13,7 +13,7 @@ from typing import DefaultDict, Dict, Hashable, List, Literal, Optional, Sequenc
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from mapcv.writer import Manifest, ManifestEntry
+from mapcv.manifest import Manifest, ManifestEntry
 
 
 class SplitterConfig(BaseModel):
@@ -52,7 +52,10 @@ class SplitterConfig(BaseModel):
 
 @dataclass(frozen=True)
 class SplitLists:
-    """Patch filenames per split, in the order they were written to ``<split>.txt``."""
+    """Patch names per split, in the order they were written to ``<split>.txt``.
+
+    A patch's name is the file name of its image (:meth:`Manifest.patch_name`).
+    """
 
     train: List[str]
     val: List[str]
@@ -61,7 +64,7 @@ class SplitLists:
 
 def _write_list(path: Path, names: Sequence[str]) -> None:
     """One filename per line, newline-terminated."""
-    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8")
+    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8", newline="\n")
 
 
 def ratio_dirname(ratio: float) -> str:
@@ -71,14 +74,15 @@ def ratio_dirname(ratio: float) -> str:
 
 def _class_counts(entry: ManifestEntry, ignore_key: Optional[str]) -> Dict[str, int]:
     """Per-class pixel counts without the ignore value (pixels with no imagery)."""
-    return {k: v for k, v in entry["per_class_pixel_counts"].items() if k != ignore_key}
+    counts = entry["summary"].get("class_pixels") or {}
+    return {k: v for k, v in counts.items() if k != ignore_key}
 
 
 def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> int:
     """Classify a manifest entry as 0 (empty), 1 (fully labeled), or 2 (mixed).
 
-    When a mask is present the classification uses per_class_pixel_counts; when
-    absent it falls back to empty_ratio from the image.
+    When a mask is present the classification uses the summary's class pixel
+    counts; when absent it falls back to the image's empty ratio.
     """
     counts = _class_counts(entry, ignore_key)
     if counts:
@@ -89,9 +93,10 @@ def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> i
         if has_labeled and not has_bg:
             return 1
         return 2
-    if entry["empty_ratio"] >= 1.0:
+    empty_ratio = entry["summary"].get("empty_ratio", 0.0)
+    if empty_ratio >= 1.0:
         return 0
-    if entry["empty_ratio"] <= 0.0:
+    if empty_ratio <= 0.0:
         return 1
     return 2
 
@@ -298,7 +303,7 @@ def _split(
     stacklevel: int,
 ) -> Tuple[Dict[str, int], SplitLists]:
     rng = random.Random(config.seed)
-    ignore = (manifest.labels or {}).get("ignore_index")
+    ignore = manifest.ignore_index
     ignore_key = str(ignore) if ignore is not None else None
     entries = _apply_sample_limit(manifest.patches, config, rng, ignore_key)
     patch_size, stride = _manifest_patch_geometry(manifest)
@@ -332,9 +337,9 @@ def _split(
         rng.shuffle(shuffled)
         test, val, train = _assign_groups([[entry] for entry in shuffled], config)
 
-    test_files = [entry["filename"] for entry in test]
-    val_files = [entry["filename"] for entry in val]
-    train_files = [entry["filename"] for entry in train]
+    test_files = [manifest.patch_name(entry) for entry in test]
+    val_files = [manifest.patch_name(entry) for entry in val]
+    train_files = [manifest.patch_name(entry) for entry in train]
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_list(output_dir / "test.txt", test_files)
@@ -359,5 +364,7 @@ def _split(
     }
     # Record how the lists were made, so a split can be reproduced or audited later.
     record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
-    (output_dir / "split.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "split.json").write_text(
+        json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     return counts, lists

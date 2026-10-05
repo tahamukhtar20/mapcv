@@ -66,9 +66,8 @@ class CheckReport:
 def tree_hash(dataset: Path) -> str:
     """One digest over every image, mask, the manifest and the split lists.
 
-    The manifest is hashed as parsed JSON with sorted keys: the order of the
-    ``per_class_pixel_counts`` keys varies from run to run (a Rust HashMap is
-    serialized in iteration order), which is not a difference in content.
+    The manifest is hashed as parsed JSON with sorted keys, so only its content
+    counts, not its formatting or key order.
     """
     digest = hashlib.sha256()
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
@@ -190,8 +189,9 @@ def check_dataset(
     lossy_output = scenario.image_format == "jpg"
     for entry in chosen:
         row, col = entry["row"], entry["col"]
-        image = _load_array(dataset / "Images" / entry["filename"])
-        mask = _load_array(dataset / "Masks" / entry["mask_filename"])
+        name = entry["files"]["image"]
+        image = _load_array(dataset / name)
+        mask = _load_array(dataset / entry["files"]["mask"])
         wanted = expected_image(row, col, scenario)
         difference = np.abs(image.astype(np.int16) - wanted.astype(np.int16))
         worst_image = max(worst_image, int(difference.max()))
@@ -199,9 +199,9 @@ def check_dataset(
         mean_image_sum += patch_mean
         if lossy_output:
             if patch_mean > JPEG_PATCH_TOLERANCE:
-                problems.append(f"{entry['filename']}: mean JPEG error {patch_mean:.1f}")
+                problems.append(f"{name}: mean JPEG error {patch_mean:.1f}")
         elif difference.max() != 0 and len(problems) < 20:
-            problems.append(f"{entry['filename']}: image differs from the served tiles")
+            problems.append(f"{name}: image differs from the served tiles")
         if reference is not None:
             wanted_mask = reference.mask(row, col)
             # Pixels without imagery (failed tiles, black) carry the ignore value.
@@ -209,7 +209,8 @@ def check_dataset(
             mask_wrong += int((wanted_mask != mask).sum())
             mask_total += mask.size
         values, counts = np.unique(mask, return_counts=True)
-        if {str(int(v)): int(n) for v, n in zip(values, counts)} != entry["per_class_pixel_counts"]:
+        counted = {str(int(v)): int(n) for v, n in zip(values, counts)}
+        if counted != entry["summary"].get("class_pixels"):
             count_bad += 1
 
     report.stats.update(
@@ -242,19 +243,32 @@ def _check_manifest(
     problems = report.problems
     if len(entries) != scenario.expected_patches():
         problems.append(f"{len(entries)} patches, expected {scenario.expected_patches()}")
+    if manifest.get("version") != 3 or manifest.get("task") != "segmentation":
+        problems.append(
+            f"manifest version {manifest.get('version')}, task {manifest.get('task')}; "
+            "expected version 3, segmentation"
+        )
+        return
+    (source,) = manifest["sources"]
+    target = manifest["target"] or {}
     pixel, west, north = _expected_transform()
-    a, _, c, _, e, f = manifest["transform"]
+    a, _, c, _, e, f = source["transform"]
     if not (
         math.isclose(a, pixel, rel_tol=1e-9)
         and math.isclose(e, -pixel, rel_tol=1e-9)
         and math.isclose(c, west, abs_tol=1e-6)
         and math.isclose(f, north, abs_tol=1e-6)
     ):
-        problems.append(f"manifest transform {manifest['transform']} is not the tile grid's")
-    if manifest.get("crs") != "EPSG:3857":
-        problems.append(f"manifest crs is {manifest.get('crs')}")
-    if manifest.get("class_map") != {name: i + 1 for i, name in enumerate(sorted(CLASSES))}:
-        problems.append(f"unexpected class map {manifest.get('class_map')}")
+        problems.append(f"manifest transform {source['transform']} is not the tile grid's")
+    if source.get("crs") != "EPSG:3857":
+        problems.append(f"manifest crs is {source.get('crs')}")
+    if target.get("class_map") != {name: i + 1 for i, name in enumerate(sorted(CLASSES))}:
+        problems.append(f"unexpected class map {target.get('class_map')}")
+    if target.get("ignore_index") != IGNORE_INDEX:
+        problems.append(f"manifest ignore_index is {target.get('ignore_index')}")
+    if any(set(entry["files"]) != {"image", "mask"} for entry in entries):
+        problems.append("a manifest entry does not list exactly an image and a mask file")
+        return
 
     keys = {(entry["row"], entry["col"]) for entry in entries}
     if len(keys) != len(entries):
@@ -265,9 +279,11 @@ def _check_manifest(
 
     images = sorted(path.name for path in (dataset / "Images").iterdir())
     masks = sorted(path.name for path in (dataset / "Masks").iterdir())
-    if images != sorted(entry["filename"] for entry in entries):
+    listed_images = sorted(entry["files"]["image"] for entry in entries)
+    listed_masks = sorted(entry["files"]["mask"] for entry in entries)
+    if ["Images/" + name for name in images] != listed_images:
         problems.append(f"manifest lists {len(entries)} images, Images/ holds {len(images)}")
-    if masks != sorted(entry["mask_filename"] for entry in entries):
+    if ["Masks/" + name for name in masks] != listed_masks:
         problems.append(f"manifest lists {len(entries)} masks, Masks/ holds {len(masks)}")
     leftovers = [p.name for p in dataset.rglob("*.tmp")]
     if leftovers:
@@ -298,7 +314,11 @@ def _check_splits(
     scenario: Scenario, dataset: Path, entries: List[Dict[str, Any]], report: CheckReport
 ) -> None:
     problems = report.problems
-    where = {entry["filename"]: (entry["row"], entry["col"]) for entry in entries}
+    # Split lists name a patch by its image's file name.
+    where = {
+        entry["files"]["image"].rsplit("/", 1)[-1]: (entry["row"], entry["col"])
+        for entry in entries
+    }
     lists: Dict[str, List[str]] = {}
     for name in SPLIT_NAMES:
         text = (dataset / "splits" / f"{name}.txt").read_text(encoding="utf-8")

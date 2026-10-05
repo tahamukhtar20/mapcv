@@ -172,12 +172,14 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    ```console
    $ mapcv info dataset
    ╭─ dataset ────────────────────────────────────────────────────────────────────────────╮
+   │ Task      segmentation                                                               │
    │ Source    xyz · esri_satellite                                                       │
    │ Bands     red, green, blue                                                           │
    │ Patches   77 · 256×256×3 uint8                                                       │
    │ CRS       EPSG:3857                                                                  │
+   │ Ignore    mask value 255 marks pixels without imagery                                │
    │ Splits    train 52 (68%) · val 8 (10%) · test 17 (22%)                               │
-   │ Manifest  version 2                                                                  │
+   │ Manifest  version 3                                                                  │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
      class         id    pixels
      background     0     81.0%

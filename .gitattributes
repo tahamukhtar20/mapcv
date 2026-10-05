@@ -1,0 +1,2 @@
+# Test fixtures are compared byte for byte (the label file is hashed); never convert line endings.
+tests/fixtures/** -text

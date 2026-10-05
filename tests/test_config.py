@@ -332,3 +332,27 @@ def test_classes_cannot_use_the_ignore_index(tmp_path: Path) -> None:
     labels = "labels:\n  path: l.geojson\n  label_field: kind\n  classes: {road: 255}\n"
     with pytest.raises(Exception, match="ignore_index"):
         MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels))
+
+
+def test_task_defaults_to_segmentation(tmp_path: Path) -> None:
+    assert MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL)).task == "segmentation"
+    explicit = MapcvConfig.from_yaml(_write(tmp_path, "task: segmentation\n" + _MINIMAL))
+    assert explicit.task == "segmentation"
+
+
+@pytest.mark.parametrize(
+    "task", ["detection", "instance", "classification", "change", "regression"]
+)
+def test_planned_tasks_are_not_supported_yet(tmp_path: Path, task: str) -> None:
+    with pytest.raises(ValidationError) as caught:
+        MapcvConfig.from_yaml(_write(tmp_path, f"task: {task}\n" + _MINIMAL))
+    message = str(caught.value)
+    assert f"task '{task}' is not supported yet" in message
+    assert "supported: segmentation" in message
+    assert "planned: detection, instance, classification, change, regression" in message
+
+
+@pytest.mark.parametrize("task", ["segmentaton", "Segmentation", 3])
+def test_unknown_tasks_are_rejected(tmp_path: Path, task: object) -> None:
+    with pytest.raises(ValidationError, match="task"):
+        MapcvConfig.from_yaml(_write(tmp_path, f"task: {task}\n" + _MINIMAL))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import numpy as np
 import numpy.typing as npt
@@ -10,11 +10,16 @@ import numpy.typing as npt
 from mapcv._patching import NullWindow
 from mapcv.imagery import RasterMetadata
 from mapcv.labels import ClassMap
+from mapcv.manifest import TargetRecord
 from mapcv.targets.base import Transform, WindowTarget
 
 
 class ImageOnlyTarget:
     """A target that annotates nothing."""
+
+    @property
+    def type(self) -> Optional[str]:
+        return None
 
     @property
     def class_map(self) -> ClassMap:
@@ -23,7 +28,7 @@ class ImageOnlyTarget:
     def prepare(self, source: RasterMetadata) -> None:
         return None
 
-    def fingerprint(self) -> Optional[Dict[str, Any]]:
+    def record(self) -> Optional[TargetRecord]:
         return None
 
     def window(

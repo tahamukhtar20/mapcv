@@ -76,8 +76,13 @@ def main() -> None:
     print(f"  split_counts     {result.split_counts}")
     print(f"  tiles            {result.tiles_requested} requested, {result.tiles_failed} failed")
     print(f"  seconds          {result.seconds:.1f}")
-    print(f"  class_map        {result.manifest.class_map}")
-    print(f"  patch_shape      {result.manifest.patch_shape} {result.manifest.dtype}")
+    manifest = result.manifest  # a mapcv.Manifest (manifest.json, version 3)
+    print(f"  task             {manifest.task}")
+    print(f"  class_map        {manifest.class_map}")
+    print(f"  patch_shape      {manifest.source.patch_shape} {manifest.source.dtype}")
+    if manifest.patches:
+        first = manifest.patches[0]
+        print(f"  first patch      {first['files']}, bounds {manifest.patch_bounds(first)}")
 
 
 if __name__ == "__main__":

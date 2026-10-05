@@ -3,7 +3,8 @@
 Copy this file into your project. It reads a mapcv dataset directory::
 
     dataset/
-      manifest.json        patch list, class map, bands, patch shape, CRS
+      manifest.json        version 3: task, sources (bands, CRS), target (class map,
+                           ignore index) and one entry per patch with its files
       Images/              patch_0000000.png | .jpg | .npy
       Masks/               patch_0000000.png (uint8 class ids, 0 = background,
                            255 = no imagery: pass ignore_index=255 to your loss)
@@ -12,6 +13,9 @@ Copy this file into your project. It reads a mapcv dataset directory::
 and yields one dict per patch::
 
     {"image": float32 (C, H, W), "mask": int64 (H, W), "filename": str}
+
+File paths come from each manifest entry's ``files`` (relative to the dataset
+folder), never from guessing names.
 
 PNG/JPG images are scaled to 0..1. NPY images (Sentinel-2) are returned as
 stored: decoded reflectance, bands-first, with NaN where the product has no
@@ -75,18 +79,28 @@ class MapcvDataset(_Base):
         if not manifest_path.exists():
             raise FileNotFoundError(f"{manifest_path} not found; run `mapcv generate` first")
         self.manifest: Dict[str, Any] = json.loads(manifest_path.read_text())
+        version = self.manifest.get("version", 1)
+        if version != 3:
+            raise ValueError(
+                f"{manifest_path} is manifest version {version}; this class reads version 3 "
+                "(mapcv 0.3). Upgrade it in place with mapcv: "
+                "mapcv.Manifest.load(path).save(path)"
+            )
 
-        class_map: Dict[str, int] = self.manifest.get("class_map") or {}
+        target: Dict[str, Any] = self.manifest.get("target") or {}
+        class_map: Dict[str, int] = target.get("class_map") or {}
+        # Mask value of pixels without imagery; pass it to the loss as ignore_index.
+        self.ignore_index: Optional[int] = target.get("ignore_index")
         patches: List[Dict[str, Any]] = self.manifest["patches"]
-        has_masks = any(patch.get("mask_filename") for patch in patches)
         # Without labels.label_field every polygon is class 1 and class_map is empty.
-        if not class_map and has_masks:
+        if not class_map and self.manifest.get("target"):
             class_map = {"foreground": 1}
         self.class_names: Dict[int, str] = {0: "background"}
         self.class_names.update({class_id: name for name, class_id in class_map.items()})
         self.num_classes = max(self.class_names) + 1
 
-        by_name = {patch["filename"]: patch for patch in patches}
+        # Split lists name each patch by its image's file name.
+        by_name = {Path(patch["files"]["image"]).name: patch for patch in patches}
         if split is None:
             self.patches = patches
         else:
@@ -100,20 +114,20 @@ class MapcvDataset(_Base):
         return len(self.patches)
 
     def __getitem__(self, index: int) -> Sample:
-        patch = self.patches[index]
+        files: Dict[str, str] = self.patches[index]["files"]
         sample: Sample = {
-            "image": self.load_image(patch["filename"]),
-            "filename": patch["filename"],
+            "image": self.load_image(files["image"]),
+            "filename": Path(files["image"]).name,
         }
-        if patch.get("mask_filename"):
-            sample["mask"] = self.load_mask(patch["mask_filename"])
+        if "mask" in files:
+            sample["mask"] = self.load_mask(files["mask"])
         if self.transform is not None:
             sample = self.transform(sample)
         return sample
 
-    def load_image(self, filename: str) -> npt.NDArray[np.float32]:
+    def load_image(self, path_in_dataset: str) -> npt.NDArray[np.float32]:
         """Read one image patch as float32, bands-first ``(C, H, W)``."""
-        path = self.root / "Images" / filename
+        path = self.root / path_in_dataset
         if path.suffix == ".npy":
             array: npt.NDArray[Any] = np.load(path, allow_pickle=False)
             return array.astype(np.float32, copy=False)
@@ -121,17 +135,20 @@ class MapcvDataset(_Base):
             rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
         return np.ascontiguousarray(rgb.transpose(2, 0, 1))
 
-    def load_mask(self, filename: str) -> npt.NDArray[np.int64]:
+    def load_mask(self, path_in_dataset: str) -> npt.NDArray[np.int64]:
         """Read one mask patch as int64 class ids ``(H, W)``."""
-        with Image.open(self.root / "Masks" / filename) as mask:
+        with Image.open(self.root / path_in_dataset) as mask:
             return np.asarray(mask, dtype=np.int64)
 
     def class_pixel_counts(self) -> Dict[str, int]:
         """Pixels per class name in this split, from the manifest (no images read)."""
         counts: Dict[str, int] = {}
         for patch in self.patches:
-            for class_id, pixels in patch["per_class_pixel_counts"].items():
-                name = self.class_names.get(int(class_id), f"class {class_id}")
+            for class_id, pixels in patch["summary"].get("class_pixels", {}).items():
+                if int(class_id) == self.ignore_index:
+                    name = "no imagery"
+                else:
+                    name = self.class_names.get(int(class_id), f"class {class_id}")
                 counts[name] = counts.get(name, 0) + int(pixels)
         return counts
 

@@ -43,6 +43,7 @@ class LabelSummary:
 class Plan:
     """Estimated size and cost of generating a dataset from a config."""
 
+    task: str
     region_km: Tuple[float, float]
     imagery: str
     resolution_m: float
@@ -184,7 +185,9 @@ def plan(config: MapcvConfig) -> Plan:
         image_bytes = int(3 * pixels_per_patch * _JPG_COMPRESSION)
     else:
         image_bytes = int(3 * pixels_per_patch * _PNG_COMPRESSION)
-    mask_bytes = int(pixels_per_patch * _MASK_COMPRESSION) if config.labels else 0
+    # Segmentation writes one PNG mask per patch when there are labels.
+    has_masks = config.task == "segmentation" and config.labels is not None
+    mask_bytes = int(pixels_per_patch * _MASK_COMPRESSION) if has_masks else 0
     output = patches * (image_bytes + mask_bytes)
     window_rows = min(height, chunk_rows + patch_size)
     # Window, validity mask, label mask and extracted patches each hold a copy.
@@ -207,6 +210,7 @@ def plan(config: MapcvConfig) -> Plan:
         plan_warnings.append("each patch covers more than 10 km; consider a higher zoom")
 
     return Plan(
+        task=config.task,
         region_km=region_km,
         imagery=description,
         resolution_m=resolution,

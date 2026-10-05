@@ -69,6 +69,10 @@
 //!   GDAL also drew any edge whose ends share a column or row that way, which
 //!   could miss pixels a diagonal edge crosses.
 //!
+//! mapcv's own output is identical on every platform (Rust never contracts
+//! floating-point operations into fused multiply-adds); rasterio may differ
+//! from it on tie cases on arm64, where GDAL is built with FMA contraction.
+//!
 //! Coordinate conventions match rasterio:
 //! - The affine transform maps `(col, row)` -> `(x, y)` in world coords.
 //! - Pixel `(col, row)` has its center at `(col + 0.5, row + 0.5)`.

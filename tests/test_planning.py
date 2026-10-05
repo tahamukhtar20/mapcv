@@ -52,6 +52,14 @@ def test_random_mode_uses_random_count() -> None:
     assert plan(config).patches == 37
 
 
+def test_random_mode_estimate_is_capped_at_the_distinct_positions() -> None:
+    config = _config(sampler={"patch_size": 256, "mode": "random", "random_count": 10**9})
+    estimate = plan(config)
+    width, height = estimate.raster_px
+    assert estimate.patches == (width - 255) * (height - 255)
+    assert any("distinct patch positions" in warning for warning in estimate.warnings)
+
+
 def test_eopf_estimate_uses_resolution() -> None:
     config = _config(
         region={"west": 10.0, "south": 45.0, "east": 10.1, "north": 45.1},

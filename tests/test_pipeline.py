@@ -247,3 +247,22 @@ def test_a_class_on_the_ignore_value_is_an_error(
     config = _labeled_config(tmp_path, _COVER_ALL.replace('"7"', '"255"'), label_field="kind")
     with pytest.raises(ValueError, match="labels.ignore_index"):
         run_generate(config)
+
+
+def test_global_random_anchors_are_distinct_and_warn_when_capped() -> None:
+    from mapcv.pipeline import _global_anchors
+    from mapcv.sampler import SamplerConfig
+
+    config = SamplerConfig(
+        patch_size=4, mode="random", random_count=500, random_seed=1, edge_strategy="drop"
+    )
+    with pytest.warns(UserWarning, match=r"only 49 distinct patch position"):
+        anchors = _global_anchors(10, 10, config)
+    assert len(anchors) == len(set(anchors)) == 49
+    with pytest.warns(UserWarning):
+        assert anchors == _global_anchors(10, 10, config)
+
+    enough = config.model_copy(update={"random_count": 20})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert len(_global_anchors(10, 10, enough)) == 20

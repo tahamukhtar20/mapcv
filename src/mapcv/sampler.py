@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, List, Literal, Optional, Sequence, Tuple
 
 from typing_extensions import NotRequired, TypedDict
@@ -10,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
+from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
 
 
 class SamplerConfig(BaseModel):
@@ -46,6 +47,42 @@ class PatchMeta(TypedDict):
     empty_ratio: NotRequired[float]
 
 
+def random_anchors_for(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
+    """Distinct random anchors for ``config``, warning when fewer than requested exist.
+
+    Anchors are sampled without replacement, so ``random_count`` is capped at
+    the number of distinct positions on the raster; asking for more returns
+    all of them and emits a ``UserWarning`` saying so.
+    """
+    anchors: List[Tuple[int, int]] = list(
+        random_sample_anchors(
+            height,
+            width,
+            config.patch_size,
+            config.random_count,
+            config.random_seed,
+            config.edge_strategy,
+        )
+    )
+    if len(anchors) < config.random_count:
+        warnings.warn(
+            f"sampler.random_count is {config.random_count} but only {len(anchors)} distinct "
+            f"patch position(s) exist on a {height}x{width} raster with patch_size "
+            f"{config.patch_size} and edge_strategy {config.edge_strategy!r}; "
+            f"using {'all of them' if anchors else 'none'}. Lower random_count or enlarge the "
+            "region" + ("." if anchors else " (or use edge_strategy: pad)."),
+            UserWarning,
+            stacklevel=3,
+        )
+    return anchors
+
+
+def random_patch_capacity(height: int, width: int, config: SamplerConfig) -> int:
+    """Number of patches ``random_count`` can actually yield on this raster."""
+    capacity = int(random_anchor_capacity(height, width, config.patch_size, config.edge_strategy))
+    return min(config.random_count, capacity)
+
+
 def sample_patches(
     image: npt.NDArray[Any],
     mask: Optional[npt.NDArray[np.uint8]],
@@ -61,11 +98,7 @@ def sample_patches(
     height, width = image.shape[:2]
     ps = config.patch_size
     if config.mode == "random":
-        anchors: List[Tuple[int, int]] = list(
-            random_sample_anchors(
-                height, width, ps, config.random_count, config.random_seed, config.edge_strategy
-            )
-        )
+        anchors: List[Tuple[int, int]] = random_anchors_for(height, width, config)
     else:
         anchors = list(grid_sample_anchors(height, width, ps, config.stride, config.edge_strategy))
     return sample_patches_at_anchors(image, mask, anchors, config)

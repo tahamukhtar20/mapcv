@@ -176,6 +176,8 @@ def load_or_create_manifest(
 
 
 def _class_counts(mask: npt.NDArray[np.uint8]) -> Dict[str, int]:
+    # ``np.unique`` returns the values sorted ascending, so keys are numerically
+    # ordered ("2" before "10") and identical runs serialise identically.
     values, counts = np.unique(mask, return_counts=True)
     return {str(int(value)): int(count) for value, count in zip(values, counts)}
 
@@ -291,7 +293,7 @@ def write_patches(
                 col=col,
                 padded=padded,
                 strip_index=chunk,
-                per_class_pixel_counts={key: int(value) for key, value in counts.items()},
+                per_class_pixel_counts={str(class_id): int(count) for class_id, count in counts},
                 empty_ratio=empty_ratio,
             )
         )

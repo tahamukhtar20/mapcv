@@ -4,7 +4,6 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ImageBuffer, Luma, Rgb};
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -23,8 +22,9 @@ pub struct PatchResult {
     pub padded: bool,
     /// Index of the strip this patch belongs to.
     pub strip_index: usize,
-    /// Pixel counts per class label (string key, e.g. `"0"`, `"1"`).
-    pub class_counts: HashMap<String, u64>,
+    /// `(class_id, pixel_count)` pairs for the classes present in the mask,
+    /// in ascending class-id order (empty when no mask was provided).
+    pub class_counts: Vec<(u8, u64)>,
     /// Fraction of all-zero (black) pixels in the image patch.
     pub empty_ratio: f64,
 }
@@ -90,7 +90,7 @@ pub fn write_patches(
                     &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
                 compute_class_counts(msk_slice)
             } else {
-                HashMap::new()
+                Vec::new()
             };
             let empty_ratio = compute_empty_ratio(img_slice, patch_size);
 
@@ -149,18 +149,19 @@ fn encode_mask(data: &[u8], patch_size: usize, path: &Path) -> Result<(), String
     img.write_with_encoder(enc).map_err(|e| e.to_string())
 }
 
-/// Count pixels by class label in *mask*, returning a `class_id -> count` map.
+/// Count pixels by class label in *mask*.
 ///
-/// Accumulates counts using raw `u8` keys to avoid per-pixel `String` allocation,
-/// then converts to `String` keys once at the end for the Python boundary.
-fn compute_class_counts(mask: &[u8]) -> HashMap<String, u64> {
-    let mut counts: HashMap<u8, u64> = HashMap::new();
+/// Uses a fixed-size 256-bin histogram (one bin per possible `u8` value), which
+/// avoids hashing per pixel and yields a deterministic order: the result lists
+/// `(class_id, count)` for every class present, in ascending class-id order.
+fn compute_class_counts(mask: &[u8]) -> Vec<(u8, u64)> {
+    let mut hist = [0u64; 256];
     for &v in mask {
-        *counts.entry(v).or_insert(0) += 1;
+        hist[usize::from(v)] += 1;
     }
-    counts
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
+    (0..=u8::MAX)
+        .zip(hist)
+        .filter(|&(_, count)| count > 0)
         .collect()
 }
 
@@ -172,4 +173,23 @@ fn compute_empty_ratio(img: &[u8], patch_size: usize) -> f64 {
         .filter(|&i| img[i * 3] == 0 && img[i * 3 + 1] == 0 && img[i * 3 + 2] == 0)
         .count();
     empty as f64 / n_pixels as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_class_counts;
+
+    #[test]
+    fn class_counts_are_ascending_and_skip_absent_classes() {
+        let mask = [10u8, 2, 255, 2, 0, 10, 10];
+        assert_eq!(
+            compute_class_counts(&mask),
+            vec![(0, 1), (2, 2), (10, 3), (255, 1)]
+        );
+    }
+
+    #[test]
+    fn class_counts_empty_mask() {
+        assert_eq!(compute_class_counts(&[]), Vec::<(u8, u64)>::new());
+    }
 }

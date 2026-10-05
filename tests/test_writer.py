@@ -434,6 +434,53 @@ def test_parallel_same_as_serial(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# write_patches: deterministic manifests
+# ---------------------------------------------------------------------------
+
+
+def _multi_class_patches() -> Tuple[
+    npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]
+]:
+    rng = np.random.default_rng(0)
+    img = rng.integers(1, 255, size=(32, 32, 3), dtype=np.uint8)
+    msk = rng.choice(np.array([0, 2, 10, 37, 100, 255], dtype=np.uint8), size=(32, 32))
+    cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
+    return sample_patches(img, msk, cfg)
+
+
+@pytest.mark.parametrize("image_format", ["png", "npy"])
+def test_manifest_json_byte_identical_across_runs(tmp_path: Path, image_format: Any) -> None:
+    imgs, msks, meta = _multi_class_patches()
+    manifests: List[bytes] = []
+    for run in ("run1", "run2"):
+        cfg = WriterConfig(staging_dir=tmp_path / run, image_format=image_format)
+        m = Manifest(class_map={"a": 2, "b": 10})
+        write_patches(imgs, msks, meta, cfg, m)
+        path = tmp_path / run / "manifest.json"
+        m.save(path)
+        manifests.append(path.read_bytes())
+    assert manifests[0] == manifests[1]
+
+
+@pytest.mark.parametrize("image_format", ["png", "npy"])
+def test_per_class_counts_keys_numerically_ordered(tmp_path: Path, image_format: Any) -> None:
+    img = _solid(8, 8)
+    msk = np.zeros((8, 8), dtype=np.uint8)
+    msk[0, :] = 10
+    msk[1, :] = 2
+    msk[2, :] = 255
+    msk[3, :] = 100
+    cfg_s = SamplerConfig(patch_size=8, edge_strategy="drop")
+    imgs, msks, meta = sample_patches(img, msk, cfg_s)
+    cfg_w = WriterConfig(staging_dir=tmp_path, image_format=image_format)
+    m = Manifest(class_map={})
+    write_patches(imgs, msks, meta, cfg_w, m)
+    counts = m.patches[0]["per_class_pixel_counts"]
+    assert list(counts) == ["0", "2", "10", "100", "255"]
+    assert counts == {"0": 32, "2": 8, "10": 8, "100": 8, "255": 8}
+
+
+# ---------------------------------------------------------------------------
 # Manifest round-trip with patch entries
 # ---------------------------------------------------------------------------
 

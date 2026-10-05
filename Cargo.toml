@@ -22,6 +22,8 @@ quick-xml = { version = "0.42", features = ["encoding"] }
 # GeoTIFF chunk codecs (src/geotiff); all but zstd are already used by `image`.
 bytemuck = "1"
 flate2 = "1"
+# Fast zlib compressor (the one `image` uses for PNG): GeoTIFF patches at level 0.
+fdeflate = "0.3"
 weezl = "0.1"
 zune-jpeg = "0.5"
 image-webp = "0.2"

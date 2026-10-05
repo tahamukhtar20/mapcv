@@ -561,6 +561,8 @@ def test_interrupted_mapcv_0_2_dataset_resumes_to_the_same_dataset(
     assert result.new_patches == len(lost)
     resumed = _tree(staging)
     assert resumed.pop("manifest.json") != original.pop("manifest.json")
+    assert "patches.geojson" in resumed and "patches.geojson" not in original
+    del resumed["patches.geojson"]  # the only file mapcv 0.3 adds to a dataset
     assert resumed == original  # images, masks and split lists as made by 0.2
     manifest = Manifest.load(staging / "manifest.json")
     assert manifest.version == 3 and manifest.upgraded_from is None

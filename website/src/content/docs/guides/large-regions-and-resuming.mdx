@@ -111,10 +111,10 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | `ignore_index` | `labels.ignore_index` |
 | `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
-| `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY and PNG/JPG |
+| `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY/TIF and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
 | `sampler` | any `sampler` field |
-| `writer` | `image_format` (including `png` ↔ `jpg`), `jpg_quality` or `jpg_subsampling` |
+| `writer` | `image_format` (including `png` ↔ `jpg`), `mask_format`, `world_files`, `jpg_quality` or `jpg_subsampling` (`footprints` may change) |
 
 In the [manifest](/mapcv/reference/dataset-format/#manifestjson) these are `task`, the `target` block, the `sources` block, `sampler` and `writer`.
 

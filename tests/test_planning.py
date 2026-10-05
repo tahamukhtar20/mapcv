@@ -116,3 +116,16 @@ def test_labels_outside_the_region_are_flagged(tmp_path: Path) -> None:
     )
     estimate = plan(_config(labels={"path": str(labels)}))
     assert any("no label polygon intersects the region" in w for w in estimate.warnings)
+
+
+def test_output_estimate_follows_the_writer_formats() -> None:
+    region = {"west": 10.0, "south": 45.0, "east": 10.1, "north": 45.1}
+    imagery = {"type": "eopf_zarr", "path": "/data/S2.zarr", "resolution": 10}
+
+    def output(**writer: str) -> int:
+        config = _config(region=region, imagery=imagery, writer={"staging_dir": "out", **writer})
+        return plan(config).output_bytes
+
+    npy, tif = output(image_format="npy"), output(image_format="tif")
+    assert 0.5 * npy < tif < npy  # deflate takes a fifth off float32 bands
+    assert output(image_format="npy", mask_format="npy") == output(image_format="npy")  # no labels

@@ -38,8 +38,8 @@ Fix the fields above, or start from a working config with mapcv init.
 | `sampler.stide: Extra inputs are not permitted` | An unknown key, usually a typo (here `stride`) or an option from a different mapcv version. Fix or remove the field named before the colon |
 | `url_template must contain {x}, {y} and {z}; missing …` | Add the placeholders |
 | `url_template has unsupported placeholder(s) {s} (replace {s} with one subdomain, e.g. 'a')` | Write e.g. `https://a.tile.example.com/{z}/{x}/{y}.png` |
-| `EOPF Zarr imagery requires writer.image_format='npy'` | Set `writer.image_format: npy` |
-| `XYZ imagery supports writer.image_format 'png' or 'jpg'` | `npy` is only for Sentinel-2 |
+| `EOPF Zarr imagery requires writer.image_format='npy' (or 'tif')` | Set `writer.image_format: npy` (or `tif` for georeferenced GeoTIFF patches) |
+| `XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'` | `npy` is only for Sentinel-2 |
 | `labels.classes requires labels.label_field` | Name the property that holds the class |
 | `labels.classes['…'] must be an integer in 1..255` | IDs are mask values; 0 is background |
 | `imagery.path must not contain credentials, query strings, or fragments; …` | Only local or anonymous public products are supported. Download private products first |

@@ -420,7 +420,9 @@ sampler:
 
 writer:
   staging_dir: ./dataset
-  image_format: png          # png | jpg
+  image_format: png          # png | jpg | tif (GeoTIFF)
+  # mask_format: png        # png | npy | tif - masks as PNG, NumPy or GeoTIFF
+  # world_files: false      # .pgw/.jgw next to PNG/JPG patches, for QGIS
 
 split:                       # remove to skip splitting
   strategy: spatial          # spatial (no leakage between splits) | stratified | random
@@ -463,7 +465,8 @@ sampler:
 
 writer:
   staging_dir: ./dataset
-  image_format: npy          # Sentinel-2 patches are float32, bands-first (bands, h, w)
+  image_format: npy          # npy | tif; Sentinel-2 patches are float32, bands-first (bands, h, w)
+  # mask_format: png        # png | npy | tif
 
 split:
   strategy: spatial

@@ -421,18 +421,22 @@ class MapcvConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_source_writer_pair(self) -> "MapcvConfig":
         if isinstance(self.imagery, EOPFZarrImageryConfig):
-            if self.writer.image_format != "npy":
-                raise ValueError("EOPF Zarr imagery requires writer.image_format='npy'")
+            if self.writer.image_format not in ("npy", "tif"):
+                raise ValueError("EOPF Zarr imagery requires writer.image_format='npy' (or 'tif')")
         elif isinstance(self.imagery, GeoTiffImageryConfig):
             bands = self.imagery.bands
-            if self.writer.image_format != "npy" and bands is not None and len(bands) not in (1, 3):
+            if (
+                self.writer.image_format not in ("npy", "tif")
+                and bands is not None
+                and len(bands) not in (1, 3)
+            ):
                 raise ValueError(
                     f"imagery.bands selects {len(bands)} bands, but writer.image_format "
                     f"'{self.writer.image_format}' writes 1 or 3 bands of uint8; select 1 or 3 "
-                    "bands or set writer.image_format: npy"
+                    "bands or set writer.image_format: npy (or tif)"
                 )
         elif self.writer.image_format == "npy":
-            raise ValueError("XYZ imagery supports writer.image_format 'png' or 'jpg'")
+            raise ValueError("XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'")
         if isinstance(self.imagery, XYZImageryConfig):
             limit = WEB_MERCATOR_MAX_LATITUDE
             if self.region.north > limit or self.region.south < -limit:

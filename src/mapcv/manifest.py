@@ -179,11 +179,19 @@ class Manifest(BaseModel):
 
         Derived from the source transform and the entry's ``row``/``col``.
         """
+        return self.transform_at(entry["row"], entry["col"])
+
+    def transform_at(self, row: int, col: int) -> Transform:
+        """Affine transform of the patch whose top-left pixel is ``(row, col)`` of the source.
+
+        The one place patch georeferencing is computed: GeoTIFF patches, world
+        files and the footprint index all use it, so they agree with
+        :meth:`patch_transform`.
+        """
         transform = self.source.transform
         if transform is None:
             raise ValueError("the manifest records no transform (made by mapcv 0.1)")
         a, b, c, d, e, f = transform
-        row, col = entry["row"], entry["col"]
         return (a, b, c + a * col + b * row, d, e, f + d * col + e * row)
 
     def patch_bounds(self, entry: ManifestEntry) -> Tuple[float, float, float, float]:

@@ -9,9 +9,10 @@ import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <FileTree>
 - dataset/
-  - Images/ patch_0000000.png (RGB uint8) or .npy (bands-first float32)
-  - Masks/ patch_0000000.png (uint8: 0 = background, 1..255 = class)
+  - Images/ patch_0000000.png (RGB uint8), .npy (bands-first float32) or .tif (GeoTIFF)
+  - Masks/ patch_0000000.png (uint8: 0 = background, 1..255 = class), .npy or .tif
   - manifest.json task, bands, CRS, class names, per-patch files and stats
+  - patches.geojson where every patch is, with its split
   - splits/
     - train.txt
     - val.txt
@@ -21,7 +22,7 @@ import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Read a split
 
-Each split file lists image file names, one per line. Each manifest entry's `files` maps `image` and `mask` to paths relative to the dataset folder; use them instead of building paths yourself (masks are always `.png`, whatever the image format):
+Each split file lists image file names, one per line. Each manifest entry's `files` maps `image` and `mask` to paths relative to the dataset folder; use them instead of building paths yourself (the mask's extension follows `writer.mask_format`, which can differ from the image's):
 
 ```python
 import json
@@ -66,6 +67,36 @@ This page reads manifest version 3, written by mapcv 0.3. A dataset made by mapc
     Values are decoded surface reflectance (typically 0–1). Pixels without data are `NaN`.
   </TabItem>
 </Tabs>
+
+## Read `tif` and `npy` patches and masks
+
+The loaders above read the default formats. With `writer.image_format: tif` or `writer.mask_format: npy | tif` the paths in the manifest end in `.tif` or `.npy`. The mask holds the same values in every format, `ignore_index` included, so only the reading changes:
+
+<Tabs syncKey="format">
+  <TabItem label="GeoTIFF">
+    ```python
+    import rasterio
+
+    with rasterio.open(root / files["image"]) as src:
+        image = src.read()                 # (bands, H, W), the stored dtype (bands-first, like NPY)
+    with rasterio.open(root / files["mask"]) as src:
+        mask = src.read(1)                 # (H, W); 255 (the ignore index) is also the no-data value
+        valid = src.read_masks(1) > 0      # False where the pixel has no imagery
+    ```
+  </TabItem>
+  <TabItem label="NPY mask">
+    ```python
+    mask = np.load(root / files["mask"])   # (H, W), the mask's dtype
+    ```
+  </TabItem>
+  <TabItem label="16-bit PNG mask">
+    ```python
+    mask = np.asarray(Image.open(root / files["mask"]))   # (H, W) uint16; do not convert to "L"
+    ```
+  </TabItem>
+</Tabs>
+
+`rasterio` is `pip install rasterio`; a GeoTIFF also reads with GDAL, `tifffile` (pixels only) and TerraTorch, which reads GeoTIFF but not NPY. The mask's data type is `uint8` for segmentation today; `npy` and `tif` masks can be `uint16` or `float32` for tasks that need more than 255 classes or regression targets, so avoid hard-coding `uint8` when you load them.
 
 ## Class names
 
@@ -190,7 +221,25 @@ weights = {cid: total / (len(counts) * n) for cid, n in sorted(counts.items())}
 
 ## Map predictions back to the ground
 
-Each patch's `row` and `col`, together with the source's `transform` and `crs`, give its footprint in map coordinates; `mapcv.Manifest.patch_transform(entry)` and `patch_bounds(entry)` compute them. A snippet is in [Dataset format → georeferencing](/mapcv/reference/dataset-format/#georeferencing). Use it to write predictions as georeferenced rasters with your GIS tool of choice.
+Each patch's `row` and `col`, together with the source's `transform` and `crs`, give its footprint in map coordinates; `mapcv.Manifest.patch_transform(entry)` and `patch_bounds(entry)` compute them. A snippet is in [Dataset format → georeferencing](/mapcv/reference/dataset-format/#georeferencing).
+
+Three ways to get the patches onto a map, from least to most work:
+
+- **QGIS, one layer for everything.** Drag `dataset/patches.geojson` in. Each polygon is a patch with its `filename`, `split`, `row`, `col` and `class_pixels`, in WGS-84. Style by `split` to see what is train, validation and test, or filter on `class_pixels` to find the patches that contain a class.
+- **QGIS, the patches themselves.** With `writer.image_format: tif` (and `mask_format: tif`) drag `Images/*.tif` and `Masks/*.tif` in: they are georeferenced, the mask aligns with its image and its ignore pixels are transparent. For PNG or JPG patches set `writer.world_files: true`, and QGIS places them from the `.pgw`/`.jgw` files (it asks for the CRS: the manifest's `sources[0].crs`).
+- **Write predictions as GeoTIFFs.** Copy the patch's georeferencing onto the prediction so it opens exactly where the patch is:
+
+```python
+import rasterio
+
+with rasterio.open(root / files["image"]) as src:      # a tif patch
+    profile = src.profile
+profile.update(count=1, dtype="uint8", nodata=255, compress="deflate")
+with rasterio.open("prediction_0000000.tif", "w", **profile) as dst:
+    dst.write(predicted_mask.astype("uint8")[None])
+```
+
+For PNG or NPY patches take `rasterio.transform.Affine(*manifest.patch_transform(entry))` and the manifest's `crs` instead.
 
 <Aside type="tip">
 Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.

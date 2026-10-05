@@ -23,6 +23,7 @@ from rich.progress import (
 
 from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv.config import GeoTiffImageryConfig, MapcvConfig
+from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
 from mapcv.imagery import WindowedRasterSource, offset_transform, open_raster_source
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
@@ -31,7 +32,7 @@ from mapcv.sampler import (
     random_anchors_for,
     sample_annotated_patches,
 )
-from mapcv.splitter import SplitLists, SplitterConfig, split_dataset, split_manifest
+from mapcv.splitter import SplitLists, SplitterConfig, split_manifest
 from mapcv.targets import AnnotationBatch, Target, create_target
 from mapcv.writers import check_compatible, create_writer
 
@@ -261,4 +262,14 @@ def run_split(
     manifest = Manifest.load(manifest_path)
     cfg = split_config or SplitterConfig()
     splits_dir = staging_dir / _SPLITS_SUBDIR
-    return split_dataset(manifest, cfg, splits_dir)
+    counts, lists = split_manifest(manifest, cfg, splits_dir)
+    footprints = staging_dir / FOOTPRINTS_FILENAME
+    if footprints.exists():
+        # Keep the footprint index's ``split`` property in step with the new lists.
+        try:
+            write_footprints(manifest, lists, footprints)
+        except (RuntimeError, ValueError) as exc:
+            warnings.warn(
+                f"{FOOTPRINTS_FILENAME} was not updated: {exc}", UserWarning, stacklevel=2
+            )
+    return counts

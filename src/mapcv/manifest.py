@@ -49,10 +49,13 @@ class PatchSummary(TypedDict, total=False):
 
     ``empty_ratio`` is always present. Segmentation adds ``class_pixels``: the
     mask's pixel count per class ID (as strings, ascending), ignore value
-    included. Other tasks add their own keys.
+    included. Detection adds ``class_objects``: the number of objects (boxes)
+    per class ID (as strings, ascending; empty for a patch without objects).
+    Other tasks add their own keys.
     """
 
     class_pixels: Dict[str, int]
+    class_objects: Dict[str, int]
     empty_ratio: float
 
 

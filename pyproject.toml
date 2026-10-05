@@ -162,6 +162,11 @@ dev = [
     "pre-commit>=4.6.0",
     # The benchmark harness is exercised by a quick smoke test in tests/.
     { include-group = "bench" },
+    { include-group = "test" },
+]
+# Reference implementations the test suite checks mapcv's outputs against.
+test = [
+    "pycocotools>=2.0.8",
 ]
 # Only the benchmark suite in benchmarks/ needs these; mapcv itself does not.
 bench = [

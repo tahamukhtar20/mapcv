@@ -466,7 +466,7 @@ def test_info_refuses_a_manifest_from_a_newer_mapcv(tmp_path: Path) -> None:
     assert not isinstance(result.exception, ManifestMismatchError)
 
 
-@pytest.mark.parametrize("template", ["xyz", "sentinel2"])
+@pytest.mark.parametrize("template", ["xyz", "sentinel2", "detection"])
 def test_init_templates_write_parseable_configs(tmp_path: Path, template: str) -> None:
     out = tmp_path / f"{template}.yaml"
     result = runner.invoke(app, ["init", str(out), "--template", template])
@@ -492,7 +492,7 @@ def test_init_wizard_builds_a_config_from_a_label_file(tmp_path: Path) -> None:
         "[74.31,31.51],[74.3,31.5]]]}}]}"
     )
     out = tmp_path / "mapcv.yaml"
-    answers = "\n".join(["esri", str(labels), "17", "y", "kind", "256", "./ds", "y"]) + "\n"
+    answers = "\n".join(["esri", str(labels), "17", "y", "kind", "", "256", "./ds", "y"]) + "\n"
     result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers)
     assert result.exit_code == 0, result.output
     from mapcv.config import MapcvConfig

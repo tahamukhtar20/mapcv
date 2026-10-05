@@ -5,13 +5,14 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks and an optional `task`. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, an optional `detection` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
-task: segmentation  # what the dataset is for (optional, the default)
+task: segmentation  # what the dataset is for: segmentation (default) or detection
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
 labels:   { … }   # which polygons (optional: omit for an image-only dataset)
+detection: { … }  # box settings (optional, task: detection only)
 sampler:  { … }   # how to cut patches (required)
 writer:   { … }   # where and how to write (required)
 split:    { … }   # train/val/test lists (optional: omit to skip splitting)
@@ -88,11 +89,36 @@ What the dataset is for. It decides what each patch is annotated with and is rec
 | Value | Status | Annotation |
 | --- | --- | --- |
 | `segmentation` (default) | supported | A class mask per patch, from `labels` (none without `labels`: an image-only dataset) |
-| `detection`, `instance`, `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+| `detection` | supported | A box per object, written as COCO JSON and YOLO labels; needs `labels`. Settings in the [`detection`](#detection) block |
+| `instance`, `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
 
 ```yaml
 task: segmentation
 ```
+
+## `detection`
+
+Optional, and only allowed with `task: detection` (another task with a `detection` block is an error). Omit it for the defaults. One **object** is one label feature: a MultiPolygon is one object, and so is a feature that a patch edge cuts into pieces. Its box is the axis-aligned box of the part that is **visible** in the patch: inside the patch, inside the raster (not in padding) and over pixels with imagery. Holes do not change a box. Walkthrough: [Object detection datasets](/mapcv/tutorials/object-detection/); files: [Dataset format](/mapcv/reference/dataset-format/#detection-datasets).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `min_visible` | float, 0–1 | `0.3` | Keep an object in a patch only if at least this fraction of its area is visible there. `0` keeps every visible part; `1` keeps only whole objects. An object too large for any patch to show this fraction is never kept, and mapcv warns about it |
+| `min_box_pixels` | float ≥ 0 | `2` | Drop boxes narrower **or** shorter than this many pixels (slivers along patch edges) |
+| `formats` | list of `coco`, `yolo` | `[coco, yolo]` | Which annotation files to write. At least one; no duplicates |
+| `point_box_size` | float > 0 \| `null` | `null` | Turn GeoJSON `Point`/`MultiPoint` features into square boxes of this many pixels, centred on the point. `null`: points are skipped with a warning, as for segmentation |
+
+```yaml
+task: detection
+labels:
+  path: buildings.geojson
+  label_field: class
+detection:
+  min_visible: 0.3
+  min_box_pixels: 2
+  formats: [coco, yolo]
+```
+
+**Validation** (with `task: detection`): `labels` is required; `labels.ignore_index`, `labels.all_touched` and `writer.mask_format` are mask settings and are rejected when set, as is `writer.world_files` with images that are not PNG or JPG; `point_box_size` needs GeoJSON labels (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
 
 ## `region`
 
@@ -217,7 +243,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 | `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |
 | `pad_mode` | `zero` \| `reflect` | `zero` | How `pad` fills the missing part of an edge patch |
 | `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
-| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels |
+| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
 | `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |
 
@@ -247,7 +273,7 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | `world_files` | bool | `false` | Write a world file next to every PNG (`.pgw`) and JPG (`.jgw`) patch, images and masks, so QGIS and GDAL place them on the map. World files hold no CRS (it is `crs` in the manifest). Not needed for `tif`, which carries its georeferencing inside; an error when neither images nor masks are PNG or JPG |
 | `footprints` | bool | `true` | Write `patches.geojson` after the split: one WGS-84 footprint polygon per patch with its file name, split, row and column, and class pixel counts. Open it in QGIS to see where each patch is. Needs `pyproj` (`pip install "mapcv[zarr]"`) unless the imagery is XYZ or EPSG:4326; without it mapcv warns and skips the file |
 
-The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` when it is on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
+The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` when it is on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY.
 
 **GeoTIFF output.** `tif` patches (and masks) are written by mapcv itself, without GDAL: striped, Deflate-compressed with the horizontal predictor (the floating-point predictor for `float32`), one band per channel. They carry the source's EPSG code and each patch's own affine transform, so QGIS, rasterio and TerraTorch open them in place. Images declare `NaN` as no-data when they are floating point (and nothing for integer data, where 0 is a real value); masks declare `labels.ignore_index` as no-data, so GIS tools show the pixels without imagery as transparent. See [Dataset format](/mapcv/reference/dataset-format/#geotiff-patches).
 

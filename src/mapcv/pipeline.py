@@ -34,7 +34,7 @@ from mapcv.sampler import (
 )
 from mapcv.splitter import SplitLists, SplitterConfig, split_manifest
 from mapcv.targets import AnnotationBatch, Target, create_target
-from mapcv.writers import check_compatible, create_writer
+from mapcv.writers import check_compatible, create_writer, refresh_split_outputs
 
 _console = Console()
 
@@ -139,7 +139,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     manifest_path = staging / _MANIFEST_FILENAME
 
     target = create_target(config)
-    writer = create_writer(config.writer)
+    writer = create_writer(config.writer, target)
     check_compatible(target, writer)
     with _console.status("Opening imagery…"):
         if isinstance(config.imagery, GeoTiffImageryConfig):
@@ -253,7 +253,9 @@ def run_split(
 ) -> Dict[str, int]:
     """Split an existing dataset (manifest version 1, 2 or 3); return split counts.
 
-    The manifest is read, never rewritten.
+    The manifest is read, never rewritten. Outputs that depend on the split
+    (``patches.geojson``, and a detection dataset's COCO files, YOLO image lists
+    and ``dataset.yaml``) are rebuilt.
     """
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():
@@ -272,4 +274,5 @@ def run_split(
             warnings.warn(
                 f"{FOOTPRINTS_FILENAME} was not updated: {exc}", UserWarning, stacklevel=2
             )
+    refresh_split_outputs(manifest, staging_dir, lists)
     return counts

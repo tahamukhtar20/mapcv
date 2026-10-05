@@ -32,12 +32,16 @@ LABELS_MISS_MESSAGE = (
 
 
 def _parse_labels(
-    labels: LabelsConfig, data: bytes, destination_crs: str
+    labels: LabelsConfig, data: bytes, destination_crs: str, points: bool = False
 ) -> Tuple[List[GeomWithClass], ClassMap]:
+    """Label geometries in ``destination_crs`` with their class IDs, and the class map.
+
+    ``points=True`` also keeps GeoJSON point features.
+    """
     if labels.path.suffix.lower() == ".kml":
         raw, class_map = parse_kml(data, labels.label_field, labels.classes)
     else:
-        raw, class_map = parse_geojson(data, labels.label_field, labels.classes)
+        raw, class_map = parse_geojson(data, labels.label_field, labels.classes, points=points)
 
     if destination_crs.upper() == "EPSG:3857":
         projected = transform_all_to_mercator([geometry for geometry, _ in raw])
@@ -68,13 +72,15 @@ def _raster_bounds(source: RasterMetadata) -> Tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _warn_if_labels_miss_raster(geometries: List[GeomWithClass], source: RasterMetadata) -> None:
+def _warn_if_labels_miss_raster(
+    geometries: List[GeomWithClass], source: RasterMetadata, message: str = LABELS_MISS_MESSAGE
+) -> None:
     if not geometries:
         return
     extent = box(*_raster_bounds(source))
     if not any(geometry.intersects(extent) for geometry, _ in geometries):
-        # Attribute the warning to the caller of SegmentationTarget.prepare.
-        warnings.warn(LABELS_MISS_MESSAGE, UserWarning, stacklevel=3)
+        # Attribute the warning to the caller of the target's prepare().
+        warnings.warn(message, UserWarning, stacklevel=3)
 
 
 def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:

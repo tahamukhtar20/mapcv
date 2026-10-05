@@ -40,11 +40,13 @@ from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
+from mapcv.writers.detection import categories
 
 app = typer.Typer(
     name="mapcv",
     help=(
-        "Turn a region and polygon labels into a ready-to-train segmentation dataset.\n\n"
+        "Turn a region and polygon labels into a ready-to-train segmentation or detection "
+        "dataset.\n\n"
         "Start with [bold]mapcv init[/bold], check the cost with [bold]mapcv plan[/bold], "
         "then build with [bold]mapcv generate[/bold]."
     ),
@@ -111,7 +113,8 @@ def _main(
         False, "--quiet", "-q", help="Hide progress output; still show errors and summaries."
     ),
 ) -> None:
-    """Turn a region and polygon labels into a ready-to-train segmentation dataset."""
+    """Turn a region and polygon labels into a ready-to-train segmentation or detection
+    dataset."""
     pipeline._console.quiet = quiet
 
 
@@ -188,10 +191,25 @@ def _imagery_label(config: MapcvConfig) -> str:
     return f"XYZ {source} · zoom {imagery.zoom}"
 
 
+def _task_label(config: MapcvConfig) -> str:
+    if config.task != "detection":
+        return config.task
+    options = config.detection_options
+    detail = (
+        f"detection · {', '.join(options.formats)} · min_visible {options.min_visible:g} · "
+        f"boxes ≥ {options.min_box_pixels:g} px"
+    )
+    if options.point_box_size is not None:
+        detail += f" · points as {options.point_box_size:g} px boxes"
+    return detail
+
+
 def _settings_table(config: MapcvConfig) -> Table:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
+    if config.task != "segmentation":
+        table.add_row("Task", _task_label(config))
     region = config.region
     table.add_row(
         "Region", f"{region.west}, {region.south} → {region.east}, {region.north} (W, S → E, N)"
@@ -228,6 +246,8 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
     table.add_column()
     width_km, height_km = estimate.region_km
     region = config.region
+    if config.task != "segmentation":
+        table.add_row("Task", _task_label(config))
     table.add_row(
         "Region",
         f"{region.west}, {region.south} → {region.east}, {region.north}  "
@@ -255,6 +275,12 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         f"≈ {estimate.patches:,} × {estimate.patch_size} px "
         f"[dim]({config.sampler.mode}, stride {config.sampler.stride})[/dim]",
     )
+    if estimate.objects is not None:
+        table.add_row(
+            "Objects",
+            f"≈ {estimate.objects:,} [dim](label features in the region; one box each, in "
+            "every patch that shows enough of it)[/dim]",
+        )
     table.add_row(
         "Output",
         f"{config.writer.staging_dir} · {config.writer.image_format} "
@@ -301,7 +327,38 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
     return names
 
 
+def _object_table(manifest: Manifest) -> Optional[Table]:
+    """Objects and patches with objects per class, for detection datasets."""
+    objects: Counter[str] = Counter()
+    patches: Counter[str] = Counter()
+    for entry in manifest.patches:
+        counts = entry["summary"].get("class_objects") or {}
+        objects.update(counts)
+        patches.update(counts.keys())
+    total = sum(objects.values())
+    if not total:
+        return None
+    names = {str(cid): name for cid, name in categories(manifest.class_map).items()}
+    table = Table(box=None, padding=(0, 2), show_edge=False)
+    table.add_column("class")
+    table.add_column("id", justify="right")
+    table.add_column("objects", justify="right")
+    table.add_column("share", justify="right")
+    table.add_column("patches", justify="right")
+    for cid in sorted(objects, key=int):
+        table.add_row(
+            names.get(cid, f"class {cid}"),
+            cid,
+            f"{objects[cid]:,}",
+            f"{objects[cid] / total:.1%}",
+            f"{patches[cid]:,}",
+        )
+    return table
+
+
 def _class_table(manifest: Manifest) -> Optional[Table]:
+    if manifest.task == "detection":
+        return _object_table(manifest)
     totals: Counter[str] = Counter()
     for entry in manifest.patches:
         totals.update(entry["summary"].get("class_pixels") or {})
@@ -356,6 +413,11 @@ def _print_result(result: GenerateResult) -> None:
     written.append("manifest.json")
     if result.split_counts is not None:
         written.append("splits/")
+    written.extend(
+        name
+        for name in ("annotations/", "labels/", "dataset.yaml")
+        if manifest.task == "detection" and (result.staging_dir / name).exists()
+    )
     table.add_row("Files", f"{result.staging_dir}/ ({', '.join(written)})")
     _console.print(
         Panel(table, title="[bold]Dataset ready[/bold]", title_align="left", border_style="green")
@@ -363,11 +425,16 @@ def _print_result(result: GenerateResult) -> None:
     classes = _class_table(manifest)
     if classes is not None:
         _console.print(classes)
+    guide = (
+        "tutorials/object-detection/#train-a-detector"
+        if manifest.task == "detection"
+        else "guides/use-your-dataset/"
+    )
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
         f"  • Re-split it:     [cyan]mapcv split {result.staging_dir} --strategy spatial[/cyan]\n"
-        f"  • Train on it:     {_DOCS_URL}/guides/use-your-dataset/"
+        f"  • Train on it:     {_DOCS_URL}/{guide}"
     )
 
 
@@ -380,6 +447,7 @@ class Template(str, Enum):
     xyz = "xyz"
     sentinel2 = "sentinel2"
     geotiff = "geotiff"
+    detection = "detection"
 
 
 _HEADER = f"""\
@@ -519,10 +587,56 @@ split:
 """
 )
 
+_DETECTION_TEMPLATE = (
+    _HEADER
+    + """
+task: detection              # boxes (COCO + YOLO) instead of masks
+
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: xyz
+  zoom: 18
+  source: esri_satellite     # or url_template: "https://.../{z}/{x}/{y}.png"
+  max_connections: 4         # keep requests modest; respect the provider's limits
+
+labels:
+  path: buildings.geojson    # .geojson or .kml, in lon/lat; one object per feature
+  label_field: null          # property holding the class; null = every feature is class 1
+
+detection:
+  min_visible: 0.3           # keep an object in a patch if >= 30% of its area is visible there
+  min_box_pixels: 2          # drop boxes narrower or shorter than this (edge slivers)
+  formats: [coco, yolo]      # annotations/instances_<split>.json and labels/*.txt + dataset.yaml
+  # point_box_size: 16       # GeoJSON points become boxes of this many pixels
+
+sampler:
+  patch_size: 256
+  stride: 0                  # 0 = patch_size (no overlap)
+  mode: grid
+  edge_strategy: drop        # pad | drop | shift (pad: boxes stop at the raster edge)
+
+writer:
+  staging_dir: ./dataset
+  image_format: png          # png | jpg (Ultralytics cannot read npy)
+
+split:                       # dataset.yaml for Ultralytics needs train and val lists
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42
+"""
+)
+
 _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
     Template.geotiff: _GEOTIFF_TEMPLATE,
+    Template.detection: _DETECTION_TEMPLATE,
 }
 
 
@@ -839,10 +953,31 @@ def _wizard() -> str:
         if answer:
             labels_path = Path(answer).expanduser()
     label_lines: List[str] = []
+    task_lines: List[str] = []
+    detection_lines: List[str] = []
     if labels_path is not None:
         field = _ask_label_field(labels_path) if labels_path.exists() else None
         label_lines = ["labels:", f"  path: {_yaml_str(str(labels_path))}"]
         label_lines.append(f"  label_field: {field}" if field else "  label_field: null")
+        _console.print(
+            "  [bold]segmentation[/bold]  a class mask per patch\n"
+            "  [bold]detection[/bold]     a box per object (COCO and YOLO)"
+        )
+        task = Prompt.ask(
+            "Task", choices=["segmentation", "detection"], default="segmentation", console=_console
+        )
+        if task == "detection":
+            formats = Prompt.ask(
+                "Box formats", choices=["both", "coco", "yolo"], default="both", console=_console
+            )
+            chosen = "[coco, yolo]" if formats == "both" else f"[{formats}]"
+            task_lines = ["task: detection", ""]
+            detection_lines = [
+                "detection:",
+                "  min_visible: 0.3           # share of an object's area a patch must show",
+                "  min_box_pixels: 2          # drop thinner boxes (slivers at patch edges)",
+                f"  formats: {chosen}",
+            ]
 
     _console.print("\n[bold cyan]4/4 Patches and output[/bold cyan]")
     patch_size = IntPrompt.ask("Patch size in pixels", default=patch_default, console=_console)
@@ -854,6 +989,7 @@ def _wizard() -> str:
     lines = [
         _HEADER.rstrip(),
         "",
+        *task_lines,
         "region:",
         f"  west: {west:.6f}",
         f"  south: {south:.6f}",
@@ -865,6 +1001,8 @@ def _wizard() -> str:
         "",
         *label_lines,
         *([""] if label_lines else []),
+        *detection_lines,
+        *([""] if detection_lines else []),
         "sampler:",
         f"  patch_size: {patch_size}",
         "  stride: 0                  # 0 = no overlap",
@@ -892,7 +1030,8 @@ def _wizard() -> str:
         "Examples:\n\n"
         "  [cyan]mapcv init[/cyan]                         guided, writes mapcv.yaml\n\n"
         "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
-        "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example"
+        "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
+        "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO"
     ),
 )
 def init(

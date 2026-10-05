@@ -24,16 +24,27 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
-    task: Literal["segmentation"] = "segmentation"   # other tasks are planned
+    task: Literal["segmentation", "detection"] = "segmentation"   # more tasks are planned
     region: RegionConfig
     imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | None = None
     sampler: SamplerConfig
     writer: WriterConfig
     split: SplitterConfig | None = None
+    detection: DetectionOptions | None = None   # task: detection only
+
+    @property
+    def detection_options(self) -> DetectionOptions: ...   # the block, or its defaults
 
     @classmethod
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
+
+
+class DetectionOptions(BaseModel):
+    min_visible: float = 0.3
+    min_box_pixels: float = 2.0
+    formats: list[Literal["coco", "yolo"]] = ["coco", "yolo"]
+    point_box_size: float | None = None
 ```
 
 Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
@@ -99,7 +110,7 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
 
 ### `split_dataset`
 
@@ -204,12 +215,13 @@ patches, masks, meta = sample_patches(image, mask, SamplerConfig(patch_size=256,
 
 ```python
 def parse_geojson(data: bytes, label_field: str | None = None,
-                  classes: dict[str, int] | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+                  classes: dict[str, int] | None = None,
+                  points: bool = False) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
 def parse_kml(data: bytes, label_field: str | None = None,
               classes: dict[str, int] | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
 ```
 
-Parse file **bytes** into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. Class IDs follow the [labels rules](/mapcv/reference/configuration/#labels). Skipped features raise a `UserWarning` with counts. `parse_geojson` accepts a `FeatureCollection` or a single `Feature` and rejects projected `crs` members; `parse_kml` reads `<Data>` and `<SimpleData>` fields.
+Parse file **bytes** into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. Class IDs follow the [labels rules](/mapcv/reference/configuration/#labels). Skipped features raise a `UserWarning` with counts. `parse_geojson` accepts a `FeatureCollection` or a single `Feature` and rejects projected `crs` members, and with `points=True` also keeps `Point`/`MultiPoint` features (detection's `point_box_size` uses it); `parse_kml` reads `<Data>` and `<SimpleData>` fields.
 
 ### `transform_to_mercator`
 

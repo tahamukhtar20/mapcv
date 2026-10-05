@@ -19,7 +19,14 @@ from PIL import Image
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
-from mapcv._mapcv_rs import PyTileIndex, fetch_tiles, snap_bbox, tile_transform, tiles
+from mapcv._mapcv_rs import (
+    PyTileIndex,
+    decode_tile_window,
+    fetch_tiles,
+    snap_bbox,
+    tile_transform,
+    tiles,
+)
 from mapcv.config import (
     EOPFZarrImageryConfig,
     RegionConfig,
@@ -154,10 +161,11 @@ class XYZRasterSource:
     ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
         height = max(0, row_stop - row_start)
         width = max(0, col_stop - col_start)
-        window = np.zeros((height, width, 3), dtype=np.uint8)
-        valid = np.zeros((height, width), dtype=np.bool_)
         if height == 0 or width == 0:
-            return window, valid
+            return (
+                np.zeros((height, width, 3), dtype=np.uint8),
+                np.zeros((height, width), dtype=np.bool_),
+            )
 
         tile_col_start = self._min_x + col_start // 256
         tile_col_stop = self._min_x + (col_stop - 1) // 256
@@ -171,40 +179,67 @@ class XYZRasterSource:
                 for tile_x in range(tile_col_start, tile_col_stop + 1)
             ]
         )
-        for tile_y in range(tile_row_start, tile_row_stop + 1):
-            for tile_x in range(tile_col_start, tile_col_stop + 1):
-                payload = self._tiles.get((tile_x, tile_y))
-                if payload is None:
-                    continue
-                try:
-                    with Image.open(BytesIO(payload)) as image:
-                        tile_image = np.asarray(image.convert("RGB"), dtype=np.uint8)
-                except Exception as exc:
-                    raise RuntimeError(f"Unable to decode XYZ tile {tile_x}/{tile_y}") from exc
-                if tile_image.shape != (256, 256, 3):
-                    raise ValueError("XYZ tile sources must return 256x256 RGB-compatible images")
-
-                global_row = (tile_y - self._min_y) * 256
-                global_col = (tile_x - self._min_x) * 256
-                source_row_start = max(0, row_start - global_row)
-                source_col_start = max(0, col_start - global_col)
-                source_row_stop = min(256, row_stop - global_row)
-                source_col_stop = min(256, col_stop - global_col)
-                target_row_start = global_row + source_row_start - row_start
-                target_col_start = global_col + source_col_start - col_start
-                target_row_stop = target_row_start + source_row_stop - source_row_start
-                target_col_stop = target_col_start + source_col_stop - source_col_start
-                window[target_row_start:target_row_stop, target_col_start:target_col_stop] = (
-                    tile_image[
-                        source_row_start:source_row_stop,
-                        source_col_start:source_col_stop,
-                    ]
-                )
-                valid[target_row_start:target_row_stop, target_col_start:target_col_stop] = True
-        # Failed tiles are black-filled by the fetcher and some providers serve
-        # black NoData, so all-zero pixels count as empty, as in mapcv 0.1.
-        valid &= np.any(window != 0, axis=-1)
+        payloads = [
+            (tile_x, tile_y, payload)
+            for tile_y in range(tile_row_start, tile_row_stop + 1)
+            for tile_x in range(tile_col_start, tile_col_stop + 1)
+            if (payload := self._tiles.get((tile_x, tile_y))) is not None
+        ]
+        # Rust decodes the tiles it can match to Pillow exactly (PNG, WebP, GIF)
+        # on all cores without the GIL and builds the validity mask. Failed tiles
+        # are black-filled by the fetcher and some providers serve black NoData,
+        # so all-zero pixels count as empty, as in mapcv 0.1.
+        window, valid, undecoded = decode_tile_window(
+            payloads, self._min_x, self._min_y, row_start, row_stop, col_start, col_stop
+        )
+        if undecoded:
+            self._decode_with_pillow(
+                window, valid, undecoded, row_start, row_stop, col_start, col_stop
+            )
         return window, valid
+
+    def _decode_with_pillow(
+        self,
+        window: npt.NDArray[np.uint8],
+        valid: npt.NDArray[np.bool_],
+        undecoded: List[Tuple[int, int]],
+        row_start: int,
+        row_stop: int,
+        col_start: int,
+        col_stop: int,
+    ) -> None:
+        """Decode the tiles Rust left to Pillow (JPEG, 16-bit PNG, rare formats)."""
+        for tile_x, tile_y in undecoded:
+            tile_image = self._decode_tile(tile_x, tile_y)
+            global_row = (tile_y - self._min_y) * 256
+            global_col = (tile_x - self._min_x) * 256
+            source_row_start = max(0, row_start - global_row)
+            source_col_start = max(0, col_start - global_col)
+            source_row_stop = min(256, row_stop - global_row)
+            source_col_stop = min(256, col_stop - global_col)
+            target_row_start = global_row + source_row_start - row_start
+            target_col_start = global_col + source_col_start - col_start
+            target_row_stop = target_row_start + source_row_stop - source_row_start
+            target_col_stop = target_col_start + source_col_stop - source_col_start
+            target = (
+                slice(target_row_start, target_row_stop),
+                slice(target_col_start, target_col_stop),
+            )
+            window[target] = tile_image[
+                source_row_start:source_row_stop, source_col_start:source_col_stop
+            ]
+            valid[target] = np.any(window[target] != 0, axis=-1)
+
+    def _decode_tile(self, tile_x: int, tile_y: int) -> npt.NDArray[np.uint8]:
+        payload = self._tiles[(tile_x, tile_y)]
+        try:
+            with Image.open(BytesIO(payload)) as image:
+                tile_image = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        except Exception as exc:
+            raise RuntimeError(f"Unable to decode XYZ tile {tile_x}/{tile_y}") from exc
+        if tile_image.shape != (256, 256, 3):
+            raise ValueError("XYZ tile sources must return 256x256 RGB-compatible images")
+        return tile_image
 
     def _evict_rows_above(self, tile_row: int) -> None:
         for key in [key for key in self._tiles if key[1] < tile_row]:

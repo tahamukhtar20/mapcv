@@ -13,6 +13,7 @@ pub mod patch_writer;
 pub mod rasterizer;
 pub mod sampler;
 pub mod stitcher;
+pub mod tile_decoder;
 pub mod tile_math;
 
 use numpy::ndarray::{Dimension, Ix3, Ix4};
@@ -599,6 +600,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(tile_decoder::decode_tile_window, m)?)?;
     m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;
     m.add_function(wrap_pyfunction!(parse_kml_rs, m)?)?;
     m.add_class::<PyTileIndex>()?;

@@ -142,6 +142,10 @@ def _warn_deprecated(message: str) -> None:
     warnings.warn(f"{message} Removed in mapcv 0.3.0.", FutureWarning, stacklevel=2)
 
 
+# Web Mercator (EPSG:3857) is undefined at the poles; XYZ tiles stop at this latitude.
+WEB_MERCATOR_MAX_LATITUDE = 85.05112878
+
+
 class RegionConfig(BaseModel):
     """Geographic bounding box in WGS-84 degrees."""
 
@@ -156,6 +160,17 @@ class RegionConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> "RegionConfig":
+        for name in ("west", "east"):
+            value = getattr(self, name)
+            if not -180.0 <= value <= 180.0:
+                raise ValueError(f"region.{name} must be a longitude in -180..180, got {value}")
+        for name in ("south", "north"):
+            value = getattr(self, name)
+            if not -90.0 <= value <= 90.0:
+                raise ValueError(
+                    f"region.{name} must be a latitude in -90..90, got {value}; check that "
+                    "longitude and latitude are not swapped"
+                )
         if self.west >= self.east:
             raise ValueError("region.west must be less than region.east")
         if self.south >= self.north:
@@ -325,6 +340,13 @@ class MapcvConfig(BaseModel):
                 raise ValueError("EOPF Zarr imagery requires writer.image_format='npy'")
         elif self.writer.image_format == "npy":
             raise ValueError("XYZ imagery supports writer.image_format 'png' or 'jpg'")
+        if isinstance(self.imagery, XYZImageryConfig):
+            limit = WEB_MERCATOR_MAX_LATITUDE
+            if self.region.north > limit or self.region.south < -limit:
+                raise ValueError(
+                    f"XYZ tiles cover latitudes -{limit:.4f}..{limit:.4f} (Web Mercator); "
+                    "shrink the region or use imagery that covers the poles"
+                )
         return self
 
     @classmethod

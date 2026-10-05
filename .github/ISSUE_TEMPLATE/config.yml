@@ -1,2 +1,8 @@
 blank_issues_enabled: false
-contact_links: []
+contact_links:
+  - name: Question or idea
+    url: https://github.com/tahamukhtar20/mapcv/discussions
+    about: Ask how to do something, share a dataset you built or float an idea before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/tahamukhtar20/mapcv/security/advisories/new
+    about: Report it privately; see SECURITY.md.

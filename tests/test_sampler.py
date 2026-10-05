@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -10,6 +10,8 @@ import pytest
 
 from mapcv import SamplerConfig, sample_patches, sample_patches_at_anchors
 from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
+from mapcv._patching import MaskWindow, NullWindow
+from mapcv.sampler import sample_annotated_patches
 
 
 def test_grid_drop_only_full_patches() -> None:
@@ -456,3 +458,115 @@ def test_min_label_ratio_does_not_count_ignored_pixels() -> None:
         image, mask, [(0, 0)], config, valid_mask=valid, ignore_index=255
     )
     assert meta == []
+
+
+class _RecordingWindow:
+    """Annotates a patch with its anchor and records what the sampler passes in."""
+
+    def __init__(self, reject: Tuple[int, int] = (-1, -1)) -> None:
+        self.reject = reject
+        self.calls: List[Tuple[int, int, int, str, Optional[Tuple[int, ...]], float]] = []
+
+    def annotate(
+        self,
+        row: int,
+        col: int,
+        patch_size: int,
+        pad_mode: str,
+        valid_patch: Optional[npt.NDArray[np.bool_]],
+    ) -> Tuple[int, int]:
+        shape = None if valid_patch is None else tuple(valid_patch.shape)
+        self.calls.append((row, col, patch_size, pad_mode, shape, -1.0))
+        return (row, col)
+
+    def accepts(self, annotation: Tuple[int, int], min_label_ratio: float) -> bool:
+        assert min_label_ratio == 0.25
+        return annotation != self.reject
+
+    def collate(self, annotations: Sequence[Tuple[int, int]], patch_size: int) -> None:
+        raise AssertionError("the sampler does not collate")
+
+
+def test_annotated_sampling_hands_each_kept_patch_to_the_window() -> None:
+    image = np.ones((10, 10, 3), dtype=np.uint8)
+    valid = np.ones((10, 10), dtype=bool)
+    valid[:4, :4] = False  # the patch at (0, 0) has no imagery at all
+    config = SamplerConfig(
+        patch_size=4,
+        stride=4,
+        edge_strategy="pad",
+        pad_mode="reflect",
+        max_empty_ratio=0.8,
+        min_label_ratio=0.25,
+    )
+    window = _RecordingWindow(reject=(4, 4))
+
+    images, annotations, metadata = sample_annotated_patches(
+        image,
+        [(0, 0), (0, 4), (4, 4), (8, 8)],
+        config,
+        window,
+        row_offset=100,
+        col_offset=200,
+        valid_mask=valid,
+    )
+
+    # (0, 0) is too empty, (4, 4) is rejected by the window; (8, 8) is padded.
+    assert [(m["row"], m["col"], m["padded"]) for m in metadata] == [
+        (100, 204, False),
+        (108, 208, True),
+    ]
+    assert annotations == [(0, 4), (8, 8)]
+    assert images.shape == (2, 4, 4, 3)
+    # Too-empty patches are never annotated; annotate sees the window-local anchor,
+    # the pad mode and the patch's validity.
+    assert [call[:5] for call in window.calls] == [
+        (0, 4, 4, "reflect", (4, 4)),
+        (4, 4, 4, "reflect", (4, 4)),
+        (8, 8, 4, "reflect", (4, 4)),
+    ]
+
+
+def test_annotated_sampling_without_patches_returns_empty_arrays() -> None:
+    image = np.zeros((6, 6, 2), dtype=np.float32)
+    config = SamplerConfig(patch_size=3, max_empty_ratio=0.0)
+
+    images, annotations, metadata = sample_annotated_patches(
+        image, [(0, 0)], config, NullWindow(), valid_mask=np.zeros((6, 6), dtype=bool)
+    )
+
+    assert images.shape == (0, 3, 3, 2) and images.dtype == np.float32
+    assert annotations == [] and metadata == []
+
+
+@pytest.mark.parametrize("ignore_index", [None, 255])
+@pytest.mark.parametrize("min_label_ratio", [0.0, 0.3])
+def test_mask_sampling_is_the_annotated_sampler_with_a_mask_window(
+    ignore_index: Optional[int], min_label_ratio: float
+) -> None:
+    rng = np.random.default_rng(5)
+    image = rng.integers(0, 256, size=(13, 11, 3), dtype=np.uint8)
+    mask = rng.choice(np.array([0, 0, 0, 1, 2], dtype=np.uint8), size=(13, 11))
+    valid = rng.random((13, 11)) > 0.1
+    config = SamplerConfig(
+        patch_size=4,
+        stride=3,
+        edge_strategy="pad",
+        pad_mode="reflect",
+        min_label_ratio=min_label_ratio,
+        max_empty_ratio=0.4,
+    )
+    anchors = [(int(r), int(c)) for r, c in grid_sample_anchors(13, 11, 4, 3, "pad")]
+
+    images, masks, metadata = sample_patches_at_anchors(
+        image, mask, anchors, config, valid_mask=valid, ignore_index=ignore_index
+    )
+    window = MaskWindow(mask, ignore_index)
+    images2, annotations, metadata2 = sample_annotated_patches(
+        image, anchors, config, window, valid_mask=valid
+    )
+
+    assert masks is not None and len(masks) > 0
+    np.testing.assert_array_equal(images, images2)
+    np.testing.assert_array_equal(masks, window.collate(annotations, 4))
+    assert metadata == metadata2

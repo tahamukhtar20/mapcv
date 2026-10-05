@@ -140,4 +140,4 @@ Each baseline runs once per repeat in a fresh child process, measured exactly li
 
 `tests/test_benchmarks.py` runs `--quick` and the checks' negative cases (a changed pixel, a changed mask, a patch in two splits must all be caught) in about ten seconds. It skips itself if `psutil`, `rasterio` or `pyproj` are missing and on Windows, where the harness is not validated (resume scenarios need POSIX signals). `benchmarks/` is excluded from the source distribution.
 
-The harness patches a few private functions of `mapcv.pipeline` to time stages (`_instrumented.py`). If a refactor renames one, the smoke test fails with the missing name; update the wrapper along with the refactor.
+The harness patches a few private functions and methods of mapcv (the pipeline, the segmentation target, the files writer) to time stages (`_instrumented.py`). If a refactor renames one, the smoke test fails with the missing name; update the wrapper along with the refactor.

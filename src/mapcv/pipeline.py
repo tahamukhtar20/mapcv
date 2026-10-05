@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Optional, Tuple, cast
+from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 
-import numpy as np
 import numpy.typing as npt
-import shapely
 from rich.console import Console
-from shapely.geometry import box
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -27,22 +23,17 @@ from rich.progress import (
 
 from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv.config import MapcvConfig
-from mapcv.imagery import (
-    WindowedRasterSource,
-    offset_transform,
-    open_raster_source,
-    transform_geometry_to_crs,
-)
-from mapcv.labels import GeomWithClass, parse_geojson, parse_kml, transform_all_to_mercator
-from mapcv.rasterizer import rasterize
+from mapcv.imagery import WindowedRasterSource, offset_transform, open_raster_source
 from mapcv.sampler import (
     PatchMeta,
     SamplerConfig,
     random_anchors_for,
-    sample_patches_at_anchors,
+    sample_annotated_patches,
 )
-from mapcv.splitter import SplitterConfig, split_dataset
-from mapcv.writer import Manifest, load_or_create_manifest, write_patches
+from mapcv.splitter import SplitLists, SplitterConfig, split_dataset, split_manifest
+from mapcv.targets import AnnotationBatch, Target, create_target
+from mapcv.writer import Manifest, load_or_create_manifest
+from mapcv.writers import create_writer
 
 _console = Console()
 
@@ -99,119 +90,17 @@ def _group_anchors(anchors: List[Tuple[int, int]], chunk_rows: int) -> List[List
     return [grouped[index] for index in sorted(grouped)]
 
 
-def _parse_labels(
-    config: MapcvConfig, destination_crs: str
-) -> Tuple[List[GeomWithClass], Dict[str, int]]:
-    if config.labels is None:
-        return [], {}
-
-    data = config.labels.path.read_bytes()
-    labels = config.labels
-    if labels.path.suffix.lower() == ".kml":
-        raw, class_map = parse_kml(data, labels.label_field, labels.classes)
-    else:
-        raw, class_map = parse_geojson(data, labels.label_field, labels.classes)
-
-    if destination_crs.upper() == "EPSG:3857":
-        projected = transform_all_to_mercator([geometry for geometry, _ in raw])
-        transformed = [(geometry, class_id) for geometry, (_, class_id) in zip(projected, raw)]
-    else:
-        transformed = [
-            (transform_geometry_to_crs(geometry, destination_crs), class_id)
-            for geometry, class_id in raw
-        ]
-    return transformed, class_map
-
-
-LABELS_MISS_MESSAGE = (
-    "no label polygon intersects the imagery extent, so every mask will be background. "
-    "Check that labels are longitude/latitude (not swapped) and cover the configured region."
-)
 # Above this share of failed tiles a run is very likely misconfigured.
 _FAILED_TILES_WARNING = 0.5
-
-
-def _check_ignore_index(config: MapcvConfig, class_map: Dict[str, int]) -> None:
-    """Fail when a class would get the mask value reserved for ignored pixels."""
-    ignore = config.labels.ignore_index if config.labels else None
-    clashing = sorted(name for name, cid in class_map.items() if cid == ignore)
-    if clashing:
-        raise ValueError(
-            f"class {clashing[0]!r} gets mask value {ignore}, which labels.ignore_index "
-            "reserves for pixels without imagery; map it to another ID with labels.classes "
-            "or set labels.ignore_index to a free value (or null)"
-        )
-
-
-def _labels_fingerprint(config: MapcvConfig) -> Optional[Dict[str, Any]]:
-    """Label settings plus a hash of the label file, so resume notices edits."""
-    if config.labels is None:
-        return None
-    settings = config.labels.model_dump(mode="json", exclude={"path"})
-    settings["sha256"] = hashlib.sha256(config.labels.path.read_bytes()).hexdigest()
-    return settings
-
-
-def _raster_bounds(source: WindowedRasterSource) -> Tuple[float, float, float, float]:
-    a, _, c, _, e, f = source.metadata.transform
-    xs = (c, c + a * source.metadata.width)
-    ys = (f, f + e * source.metadata.height)
-    return min(xs), min(ys), max(xs), max(ys)
-
-
-def _warn_if_labels_miss_raster(
-    geometries: List[GeomWithClass], source: WindowedRasterSource
-) -> None:
-    if not geometries:
-        return
-    extent = box(*_raster_bounds(source))
-    if not any(geometry.intersects(extent) for geometry, _ in geometries):
-        warnings.warn(LABELS_MISS_MESSAGE, UserWarning, stacklevel=2)
-
-
-def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:
-    """(N, 4) minx, miny, maxx, maxy per label geometry, computed once per run."""
-    if not geometries:
-        return np.empty((0, 4), dtype=np.float64)
-    array = np.empty(len(geometries), dtype=object)
-    array[:] = [geometry for geometry, _ in geometries]
-    return cast(npt.NDArray[np.float64], shapely.bounds(array))
-
-
-def _geometries_in_window(
-    geometries: List[GeomWithClass],
-    bounds: npt.NDArray[np.float64],
-    transform: Tuple[float, float, float, float, float, float],
-    height: int,
-    width: int,
-) -> List[GeomWithClass]:
-    """Label geometries whose bounding box touches the window, in their original order.
-
-    Order matters: later polygons overwrite earlier ones when rasterized.
-    """
-    a, b, c, d, e, f = transform
-    if b or d:  # rotated grid: no cheap window bounds, keep everything
-        return geometries
-    xs = sorted((c, c + a * width))
-    ys = sorted((f, f + e * height))
-    pad = abs(a) + abs(e)  # one pixel of slack for all_touched edges
-    hit = (
-        (bounds[:, 0] <= xs[1] + pad)
-        & (bounds[:, 2] >= xs[0] - pad)
-        & (bounds[:, 1] <= ys[1] + pad)
-        & (bounds[:, 3] >= ys[0] - pad)
-    )
-    return [geometries[index] for index in np.flatnonzero(hit)]
 
 
 def _process_anchor_chunk(
     source: WindowedRasterSource,
     anchors: List[Tuple[int, int]],
-    config: MapcvConfig,
-    geometries: List[GeomWithClass],
-    label_bounds: Optional[npt.NDArray[np.float64]] = None,
-) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
-    patch_size = config.sampler.patch_size
+    sampler: SamplerConfig,
+    target: Target,
+) -> Tuple[npt.NDArray[Any], AnnotationBatch, List[PatchMeta]]:
+    patch_size = sampler.patch_size
     row_start = min(row for row, _ in anchors)
     row_stop = min(source.metadata.height, max(row + patch_size for row, _ in anchors))
     col_start = min(col for _, col in anchors)
@@ -219,36 +108,30 @@ def _process_anchor_chunk(
 
     image, valid_mask = source.read_window(row_start, row_stop, col_start, col_stop)
     local_anchors = [(row - row_start, col - col_start) for row, col in anchors]
-    mask: Optional[npt.NDArray[np.uint8]] = None
-    if geometries:
-        window_transform = offset_transform(source.metadata.transform, row_start, col_start)
-        if label_bounds is None:
-            label_bounds = _label_bounds(geometries)
-        nearby = _geometries_in_window(
-            geometries, label_bounds, window_transform, image.shape[0], image.shape[1]
-        )
-        mask = rasterize(
-            nearby,
-            (image.shape[0], image.shape[1]),
-            window_transform,
-            config.labels.all_touched if config.labels else False,
-        )
-
-    images, masks, metadata = sample_patches_at_anchors(
+    window = target.window(
+        offset_transform(source.metadata.transform, row_start, col_start),
+        image.shape[0],
+        image.shape[1],
+        valid_mask,
+    )
+    images, annotations, metadata = sample_annotated_patches(
         image,
-        mask,
         local_anchors,
-        config.sampler,
+        sampler,
+        window,
         row_offset=row_start,
         col_offset=col_start,
         valid_mask=valid_mask,
-        ignore_index=config.labels.ignore_index if config.labels else None,
     )
-    return images, masks, metadata
+    return images, window.collate(annotations, patch_size), metadata
 
 
 def run_generate(config: MapcvConfig) -> GenerateResult:
-    """Generate a patch dataset from the configured imagery source."""
+    """Generate a patch dataset from the configured imagery source.
+
+    The pipeline is task-agnostic: the target (``create_target``) says what each
+    patch is annotated with and the writer (``create_writer``) how it reaches disk.
+    """
     started = time.monotonic()
     staging = config.writer.staging_dir
     staging.mkdir(parents=True, exist_ok=True)
@@ -257,28 +140,22 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     with _console.status("Opening imagery…"):
         source = open_raster_source(config.region, config.imagery)
     try:
-        geometries, class_map = _parse_labels(config, source.metadata.crs)
-        _check_ignore_index(config, class_map)
-        _warn_if_labels_miss_raster(geometries, source)
-        label_bounds = _label_bounds(geometries)
-        patch_shape = (
-            [len(source.metadata.bands), config.sampler.patch_size, config.sampler.patch_size]
-            if config.writer.image_format == "npy"
-            else [config.sampler.patch_size, config.sampler.patch_size, 3]
-        )
+        target = create_target(config)
+        writer = create_writer(config.writer)
+        target.prepare(source.metadata)
         manifest: Manifest = load_or_create_manifest(
             manifest_path,
-            class_map,
+            target.class_map,
             source_type=source.metadata.source_type,
             product_id=source.metadata.product_id,
             bands=source.metadata.bands,
             dtype=source.metadata.dtype,
-            patch_shape=patch_shape,
+            patch_shape=writer.patch_shape(source.metadata, config.sampler.patch_size),
             crs=source.metadata.crs,
             transform=source.metadata.transform,
             sampler=config.sampler.model_dump(mode="json"),
-            labels=_labels_fingerprint(config),
-            writer=config.writer.model_dump(mode="json", exclude={"staging_dir"}),
+            labels=target.fingerprint(),
+            writer=writer.fingerprint(),
         )
 
         resumed_patches = len(manifest.patches)
@@ -304,17 +181,10 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         with _chunk_progress(disable=not chunks) as progress:
             task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
             for chunk_index, chunk_anchors in chunks:
-                images, masks, metadata = _process_anchor_chunk(
-                    source, chunk_anchors, config, geometries, label_bounds
+                images, annotations, metadata = _process_anchor_chunk(
+                    source, chunk_anchors, config.sampler, target
                 )
-                write_patches(
-                    images,
-                    masks,
-                    metadata,
-                    config.writer,
-                    manifest,
-                    strip_index=chunk_index,
-                )
+                writer.write(images, annotations, metadata, manifest, chunk_index)
                 # Persist after every chunk so an interrupted run resumes from here.
                 manifest.save(manifest_path)
                 progress.advance(task)
@@ -343,8 +213,10 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         source.close()
 
     split_counts: Optional[Dict[str, int]] = None
+    split_lists: Optional[SplitLists] = None
     if config.split is not None:
-        split_counts = split_dataset(manifest, config.split, staging / _SPLITS_SUBDIR)
+        split_counts, split_lists = split_manifest(manifest, config.split, staging / _SPLITS_SUBDIR)
+    writer.finalize(manifest, split_lists)
 
     return GenerateResult(
         staging_dir=staging,

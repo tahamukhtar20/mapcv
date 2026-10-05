@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -13,7 +13,11 @@ import pytest
 from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.imagery import RasterMetadata
 from mapcv.pipeline import run_generate
-from mapcv.writer import Manifest
+from mapcv.sampler import PatchMeta
+from mapcv.splitter import SplitLists, SplitterConfig
+from mapcv.targets import ImageOnlyTarget, SegmentationTarget, WindowTarget, create_target
+from mapcv.writer import Manifest, ManifestEntry
+from mapcv.writers import FilesWriter, create_writer
 
 
 class FakeRasterSource:
@@ -120,7 +124,9 @@ def test_generate_warns_when_labels_miss_the_imagery(
         '"geometry":{"type":"Polygon","coordinates":[[[100,10],[101,10],[101,11],[100,10]]]}}]}'
     )
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
-    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    monkeypatch.setattr(
+        "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
+    )
     config = _config(tmp_path)
     config.labels = LabelsConfig(path=labels)
 
@@ -179,7 +185,7 @@ def test_generate_warns_when_failed_tiles_stay_in_patches(
 def test_windowed_label_selection_matches_full_rasterization(all_touched: bool) -> None:
     from shapely.geometry import box as make_box
 
-    from mapcv.pipeline import _geometries_in_window, _label_bounds
+    from mapcv.targets.segmentation import _geometries_in_window, _label_bounds
     from mapcv.rasterizer import rasterize
 
     rng = np.random.default_rng(7)
@@ -224,7 +230,9 @@ def test_generated_masks_mark_padding_with_the_ignore_index(
     from PIL import Image
 
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
-    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    monkeypatch.setattr(
+        "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
+    )
     config = _labeled_config(tmp_path, _COVER_ALL)
     run_generate(config)
 
@@ -243,7 +251,9 @@ def test_a_class_on_the_ignore_value_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
-    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    monkeypatch.setattr(
+        "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
+    )
     config = _labeled_config(tmp_path, _COVER_ALL.replace('"7"', '"255"'), label_field="kind")
     with pytest.raises(ValueError, match="labels.ignore_index"):
         run_generate(config)
@@ -266,3 +276,246 @@ def test_global_random_anchors_are_distinct_and_warn_when_capped() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert len(_global_anchors(10, 10, enough)) == 20
+
+
+# ---------------------------------------------------------------------------
+# The pipeline is task-agnostic: any Target and Writer plug in.
+# ---------------------------------------------------------------------------
+
+Center = Tuple[int, int]
+Transform = Tuple[float, float, float, float, float, float]
+
+
+class CenterWindow:
+    """Annotates each patch with its centre pixel in window coordinates."""
+
+    def __init__(self, owner: "CenterTarget", transform: Transform, shape: Tuple[int, int]):
+        self.owner = owner
+        self.transform = transform
+        self.shape = shape
+
+    def annotate(
+        self,
+        row: int,
+        col: int,
+        patch_size: int,
+        pad_mode: str,
+        valid_patch: Optional[npt.NDArray[np.bool_]],
+    ) -> Center:
+        return (row + patch_size // 2, col + patch_size // 2)
+
+    def accepts(self, annotation: Center, min_label_ratio: float) -> bool:
+        return annotation != self.owner.reject
+
+    def collate(self, annotations: Sequence[Center], patch_size: int) -> List[Center]:
+        return list(annotations)
+
+
+class CenterTarget:
+    def __init__(self, reject: Optional[Center] = None) -> None:
+        self.reject = reject
+        self.prepared_with: List[RasterMetadata] = []
+        self.windows: List[CenterWindow] = []
+
+    @property
+    def class_map(self) -> Dict[str, int]:
+        return {"center": 1}
+
+    def prepare(self, source: RasterMetadata) -> None:
+        self.prepared_with.append(source)
+
+    def fingerprint(self) -> Optional[Dict[str, Any]]:
+        return {"task": "centers"}
+
+    def window(
+        self,
+        transform: Transform,
+        height: int,
+        width: int,
+        valid_mask: Optional[npt.NDArray[np.bool_]],
+    ) -> WindowTarget:
+        assert valid_mask is not None and valid_mask.shape == (height, width)
+        window = CenterWindow(self, transform, (height, width))
+        self.windows.append(window)
+        return window
+
+
+class RecordingWriter:
+    def __init__(self) -> None:
+        self.calls: List[Tuple[int, List[Center], List[Tuple[int, int]], Tuple[int, ...]]] = []
+        self.finalized: List[Tuple[int, Optional[SplitLists]]] = []
+
+    def fingerprint(self) -> Dict[str, Any]:
+        return {"layout": "recording"}
+
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+        return [len(source.bands), patch_size, patch_size]
+
+    def write(
+        self,
+        images: npt.NDArray[Any],
+        annotations: List[Center],
+        metadata: List[PatchMeta],
+        manifest: Manifest,
+        chunk_index: int,
+    ) -> None:
+        self.calls.append(
+            (
+                chunk_index,
+                annotations,
+                [(m["row"], m["col"]) for m in metadata],
+                tuple(images.shape),
+            )
+        )
+        for index, patch in enumerate(metadata):
+            manifest.patches.append(
+                ManifestEntry(
+                    filename=f"{len(manifest.patches)}.bin",
+                    mask_filename=None,
+                    row=patch["row"],
+                    col=patch["col"],
+                    padded=patch["padded"],
+                    strip_index=chunk_index,
+                    per_class_pixel_counts={"center": index},
+                    empty_ratio=patch.get("empty_ratio", 0.0),
+                )
+            )
+
+    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+        self.finalized.append((len(manifest.patches), split_lists))
+
+
+def _plug(
+    monkeypatch: pytest.MonkeyPatch, target: CenterTarget, writer: RecordingWriter
+) -> List[FakeRasterSource]:
+    sources: List[FakeRasterSource] = []
+
+    def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
+        sources.append(FakeRasterSource())
+        return sources[-1]
+
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", open_source)
+    monkeypatch.setattr("mapcv.pipeline.create_target", lambda config: target)
+    monkeypatch.setattr("mapcv.pipeline.create_writer", lambda config: writer)
+    return sources
+
+
+def test_pipeline_drives_any_target_and_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target, writer = CenterTarget(), RecordingWriter()
+    sources = _plug(monkeypatch, target, writer)
+    config = _config(tmp_path)
+
+    result = run_generate(config)
+
+    assert len(target.prepared_with) == 1 and target.prepared_with[0].product_id == "S2_TEST.zarr"
+    # One window per chunk, offset to the chunk origin: rows 0, 2 and 4 of the raster.
+    assert [w.transform[5] for w in target.windows] == [5000000.0, 4999980.0, 4999960.0]
+    assert [w.shape for w in target.windows] == [(3, 5), (3, 5), (3, 5)]
+    assert sources[0].windows == [(0, 3, 0, 5), (2, 5, 0, 5), (4, 7, 0, 5)]
+    # The writer receives each chunk's collated annotations, patch metadata and images.
+    assert [call[0] for call in writer.calls] == [0, 1, 2]
+    # Annotations are in window coordinates, so every chunk (3 rows high) looks the same.
+    assert [call[1] for call in writer.calls] == [[(1, 1), (1, 3)]] * 3
+    assert [call[2] for call in writer.calls] == [
+        [(0, 0), (0, 2)],
+        [(2, 0), (2, 2)],
+        [(4, 0), (4, 2)],
+    ]
+    assert all(call[3] == (2, 3, 3, 2) for call in writer.calls)
+    # The manifest takes its descriptive blocks from the target and the writer.
+    manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
+    assert manifest.class_map == {"center": 1}
+    assert manifest.labels == {"task": "centers"}
+    assert manifest.writer == {"layout": "recording"}
+    assert manifest.patch_shape == [2, 3, 3]
+    assert len(manifest.patches) == result.new_patches == 6
+    assert writer.finalized == [(6, None)]
+
+
+def test_a_target_can_reject_patches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target, writer = CenterTarget(reject=(1, 3)), RecordingWriter()
+    _plug(monkeypatch, target, writer)
+
+    result = run_generate(_config(tmp_path))
+
+    assert result.new_patches == 3
+    assert [call[2] for call in writer.calls] == [[(0, 0)], [(2, 0)], [(4, 0)]]
+
+
+@pytest.mark.filterwarnings("ignore:Patches overlap")
+def test_finalize_runs_last_with_the_split_lists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target, writer = CenterTarget(), RecordingWriter()
+    _plug(monkeypatch, target, writer)
+    config = _config(tmp_path)
+    config.split = SplitterConfig(strategy="random", test_ratio=0.34, val_ratio=0.0)
+
+    result = run_generate(config)
+
+    assert writer.finalized[0][0] == 6
+    lists = writer.finalized[0][1]
+    assert lists is not None
+    splits = config.writer.staging_dir / "splits"
+    for name in ("train", "val", "test"):
+        assert getattr(lists, name) == (splits / f"{name}.txt").read_text().splitlines()
+    assert result.split_counts is not None
+    assert result.split_counts["train"] == len(lists.train)
+    assert result.split_counts["test"] == len(lists.test)
+    assert sorted(lists.train + lists.val + lists.test) == sorted(
+        f"{index}.bin" for index in range(6)
+    )
+
+
+def test_resume_skips_writes_but_still_finalizes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target, writer = CenterTarget(), RecordingWriter()
+    sources = _plug(monkeypatch, target, writer)
+    config = _config(tmp_path)
+    run_generate(config)
+    writes = len(writer.calls)
+
+    run_generate(config)
+
+    assert len(writer.calls) == writes
+    assert sources[1].windows == []
+    assert [count for count, _ in writer.finalized] == [6, 6]
+
+
+def test_default_factories_pick_the_segmentation_pieces(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    assert isinstance(create_target(config), ImageOnlyTarget)
+    assert isinstance(create_writer(config.writer), FilesWriter)
+    config.labels = LabelsConfig(path=tmp_path / "labels.geojson")
+    assert isinstance(create_target(config), SegmentationTarget)
+
+
+def test_targets_need_prepare_before_use(tmp_path: Path) -> None:
+    target = SegmentationTarget(LabelsConfig(path=tmp_path / "labels.geojson"))
+    with pytest.raises(RuntimeError, match="prepare"):
+        _ = target.class_map
+    with pytest.raises(RuntimeError, match="prepare"):
+        target.fingerprint()
+    assert ImageOnlyTarget().class_map == {}
+    assert ImageOnlyTarget().fingerprint() is None
+
+
+def test_files_writer_describes_its_layout(tmp_path: Path) -> None:
+    source = FakeRasterSource().metadata
+    npy = FilesWriter(_config(tmp_path).writer)
+    assert npy.patch_shape(source, 3) == [2, 3, 3]
+    assert npy.fingerprint() == {"image_format": "npy", "jpg_quality": 95}
+
+    png = FilesWriter(_config(tmp_path).writer.model_copy(update={"image_format": "png"}))
+    assert png.patch_shape(source, 3) == [3, 3, 3]
+
+
+def test_files_writer_only_takes_masks(tmp_path: Path) -> None:
+    writer = FilesWriter(_config(tmp_path).writer)
+    images = np.zeros((1, 3, 3, 2), dtype=np.float32)
+    meta = [PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0)]
+    with pytest.raises(TypeError, match="masks"):
+        writer.write(images, [(1, 1)], meta, Manifest(class_map={}), 0)  # type: ignore[arg-type]

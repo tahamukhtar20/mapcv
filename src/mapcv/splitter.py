@@ -7,6 +7,7 @@ import math
 import random
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import DefaultDict, Dict, Hashable, List, Literal, Optional, Sequence, Set, Tuple
 
@@ -47,6 +48,15 @@ class SplitterConfig(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("labeled_ratios must not contain duplicates")
         return ratios
+
+
+@dataclass(frozen=True)
+class SplitLists:
+    """Patch filenames per split, in the order they were written to ``<split>.txt``."""
+
+    train: List[str]
+    val: List[str]
+    test: List[str]
 
 
 def _write_list(path: Path, names: Sequence[str]) -> None:
@@ -250,7 +260,24 @@ def split_dataset(
 ) -> Dict[str, int]:
     """Write train/val/test split lists derived from *manifest* to *output_dir*.
 
-    Produces:
+    Returns:
+        Patch counts per split, plus ``dropped`` for train/val patches removed
+        because they overlapped a held-out patch. See :func:`split_manifest` for
+        what is written.
+    """
+    counts, _ = _split(manifest, config, output_dir, stacklevel=3)
+    return counts
+
+
+def split_manifest(
+    manifest: Manifest,
+    config: SplitterConfig,
+    output_dir: Path,
+) -> Tuple[Dict[str, int], SplitLists]:
+    """Like :func:`split_dataset`, but also return the train/val/test filename lists.
+
+    Writes to *output_dir*:
+
       ``test.txt``, ``val.txt``, ``train.txt`` - one filename per line.
       ``<percent>/labeled.txt`` and ``<percent>/unlabeled.txt`` for each ratio
       in ``config.labeled_ratios`` (e.g. ``10``, ``20``, ``30``, ``12.5``).
@@ -258,9 +285,18 @@ def split_dataset(
     The split is computed from the manifest only - no images are opened.
 
     Returns:
-        Patch counts per split, plus ``dropped`` for train/val patches removed
-        because they overlapped a held-out patch.
+        ``(counts, lists)``: patch counts per split plus ``dropped`` (train/val
+        patches removed because they overlapped a held-out patch), and the lists.
     """
+    return _split(manifest, config, output_dir, stacklevel=3)
+
+
+def _split(
+    manifest: Manifest,
+    config: SplitterConfig,
+    output_dir: Path,
+    stacklevel: int,
+) -> Tuple[Dict[str, int], SplitLists]:
     rng = random.Random(config.seed)
     ignore = (manifest.labels or {}).get("ignore_index")
     ignore_key = str(ignore) if ignore is not None else None
@@ -274,7 +310,7 @@ def split_dataset(
             "spatial split is impossible without split.block_size; falling back to "
             "'stratified', which can leak overlapping patches between splits.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel,
         )
         strategy = "stratified"
     elif strategy != "spatial" and stride is not None and patch_size is not None:
@@ -283,7 +319,7 @@ def split_dataset(
                 f"Patches overlap or repeat, so a '{strategy}' split leaks pixels between "
                 "train and test; use strategy 'spatial'.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel,
             )
 
     dropped = 0
@@ -305,6 +341,8 @@ def split_dataset(
     _write_list(output_dir / "val.txt", val_files)
     _write_list(output_dir / "train.txt", train_files)
 
+    lists = SplitLists(train=list(train_files), val=val_files, test=test_files)
+
     rng.shuffle(train_files)
     for ratio in config.labeled_ratios:
         ratio_dir = output_dir / ratio_dirname(ratio)
@@ -322,4 +360,4 @@ def split_dataset(
     # Record how the lists were made, so a split can be reproduced or audited later.
     record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
     (output_dir / "split.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    return counts
+    return counts, lists

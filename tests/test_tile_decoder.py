@@ -387,6 +387,18 @@ def test_undecodable_tiles_raise_the_same_errors_as_before(
         source.read_window(0, 256, 0, 512)
 
 
+def test_first_bad_pillow_tile_raises_when_several_are_decoded_in_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grid = [PyTileIndex(x, 4, 12) for x in range(3, 7)]
+    jpeg = _encode(Image.fromarray(_content("photo")), "JPEG")
+    payloads = {(3, 4): jpeg, (4, 4): jpeg[:100], (5, 4): jpeg, (6, 4): jpeg[:50]}
+    source = _source(monkeypatch, grid, payloads)
+
+    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 4/4"):
+        source.read_window(0, 256, 0, 1024)
+
+
 def test_empty_window_and_missing_tiles(monkeypatch: pytest.MonkeyPatch) -> None:
     source = _source(monkeypatch, [PyTileIndex(3, 4, 12)], {})
 

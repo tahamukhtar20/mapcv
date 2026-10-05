@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -37,6 +39,20 @@ from mapcv.downloader import resolve_url_template
 
 
 Transform = Tuple[float, float, float, float, float, float]
+
+# Tiles Rust leaves to Pillow (JPEG, ...) are decoded in these threads; Pillow
+# releases the GIL in its decoders. Created on first use and reused across windows.
+_PILLOW_THREADS = min(8, os.cpu_count() or 1)
+_pillow_pool: Optional[ThreadPoolExecutor] = None
+
+
+def _pillow_executor() -> ThreadPoolExecutor:
+    global _pillow_pool
+    if _pillow_pool is None:
+        _pillow_pool = ThreadPoolExecutor(
+            max_workers=_PILLOW_THREADS, thread_name_prefix="mapcv-pillow"
+        )
+    return _pillow_pool
 
 
 @dataclass(frozen=True)
@@ -208,9 +224,16 @@ class XYZRasterSource:
         col_start: int,
         col_stop: int,
     ) -> None:
-        """Decode the tiles Rust left to Pillow (JPEG, 16-bit PNG, rare formats)."""
-        for tile_x, tile_y in undecoded:
-            tile_image = self._decode_tile(tile_x, tile_y)
+        """Decode the tiles Rust left to Pillow (JPEG, 16-bit PNG, rare formats).
+
+        The tiles are decoded in a thread pool and written into the window in
+        order, so the first undecodable tile raises exactly as it did serially.
+        """
+        if len(undecoded) > 1 and _PILLOW_THREADS > 1:
+            decoded = _pillow_executor().map(lambda key: self._decode_tile(*key), undecoded)
+        else:
+            decoded = (self._decode_tile(*key) for key in undecoded)
+        for (tile_x, tile_y), tile_image in zip(undecoded, decoded):
             global_row = (tile_y - self._min_y) * 256
             global_col = (tile_x - self._min_x) * 256
             source_row_start = max(0, row_start - global_row)

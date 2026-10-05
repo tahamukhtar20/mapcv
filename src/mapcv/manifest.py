@@ -244,7 +244,7 @@ class Manifest(BaseModel):
     def save(self, path: Path) -> None:
         """Atomically write the manifest (always as version 3)."""
         tmp_path = path.with_name(path.name + ".tmp")
-        tmp_path.write_text(self.to_json(), encoding="utf-8")
+        tmp_path.write_text(self.to_json(), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
 
 

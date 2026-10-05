@@ -64,7 +64,7 @@ class SplitLists:
 
 def _write_list(path: Path, names: Sequence[str]) -> None:
     """One filename per line, newline-terminated."""
-    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8")
+    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8", newline="\n")
 
 
 def ratio_dirname(ratio: float) -> str:
@@ -364,5 +364,7 @@ def _split(
     }
     # Record how the lists were made, so a split can be reproduced or audited later.
     record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
-    (output_dir / "split.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "split.json").write_text(
+        json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     return counts, lists

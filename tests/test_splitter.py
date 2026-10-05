@@ -440,3 +440,14 @@ def test_split_manifest_returns_the_written_lists(tmp_path: Path, strategy: str)
     assert (tmp_path / "a" / "20" / "labeled.txt").read_bytes() == (
         tmp_path / "b" / "20" / "labeled.txt"
     ).read_bytes()
+
+
+def test_split_files_and_manifest_use_lf_on_every_platform(tmp_path: Path) -> None:
+    # On Windows, text-mode writes default to CRLF; datasets must be byte-identical per OS.
+    manifest = _make_manifest(20)
+    split_dataset(manifest, SplitterConfig(labeled_ratios=[0.5]), tmp_path / "splits")
+    manifest.save(tmp_path / "manifest.json")
+    files = [*sorted((tmp_path / "splits").rglob("*.*")), tmp_path / "manifest.json"]
+    assert len(files) > 4
+    for path in files:
+        assert b"\r" not in path.read_bytes(), path

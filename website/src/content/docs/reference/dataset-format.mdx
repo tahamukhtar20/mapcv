@@ -116,7 +116,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `crs` | string | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2 |
 | `transform` | 6 floats | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
 | `patch_shape` | list of int | Shape of one stored image patch: `[H, W, 3]` for PNG/JPG, `[bands, H, W]` for NPY |
-| `fingerprint` | object | GeoTIFF only (absent for other sources): identifies the input file so a resumed run refuses a different one, plus the read settings. For a local file: `size`, `mtime` (whole seconds) and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB. For a URL: the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB. Both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file |
+| `fingerprint` | object | GeoTIFF only (absent for other sources): identifies the input file so a resumed run refuses a different one, plus the read settings. For a local file: `size` and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path and modification time are not recorded, so a copied or moved file still resumes). For a URL: the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB. Both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file |
 
 ### Target
 

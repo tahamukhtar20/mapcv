@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -635,6 +636,16 @@ def test_resume_accepts_the_same_file_and_refuses_another(tmp_path: Path) -> Non
     assert fingerprint is not None and fingerprint["kind"] == "file"
     assert fingerprint["size"] == raster.path.stat().st_size
     assert len(fingerprint["sha256_head_tail"]) == 64
+    assert "mtime" not in fingerprint
+
+    # A copy or touch (new path, new modification time) is still the same file.
+    copied = tmp_path / "elsewhere" / "scene.tif"
+    copied.parent.mkdir()
+    copied.write_bytes(raster.path.read_bytes())
+    os.utime(copied, (1_000_000_000, 1_000_000_000))
+    os.utime(raster.path, (1_100_000_000, 1_100_000_000))
+    moved = config_for(tmp_path, {"path": str(copied)}, region)
+    assert run_generate(moved).new_patches == 0
 
     # Same name and size, different pixels.
     other = make_raster(tmp_path, seed=99)

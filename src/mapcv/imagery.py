@@ -618,8 +618,10 @@ def _remote_http_url(url: str) -> str:
 def geotiff_fingerprint(location: str) -> Dict[str, Any]:
     """A cheap identity of a GeoTIFF, so a resumed run notices a different file.
 
-    Local files: size, modification time (whole seconds) and the SHA-256 of the first and
-    last 64 KiB (where the TIFF headers and, for non-COG files, the directory live).
+    Local files: size and the SHA-256 of the first and last 64 KiB (where the TIFF headers
+    and, for non-COG files, the directory live). The modification time is left out on
+    purpose: it changes when a file is copied, touched or rsynced, which would refuse a
+    resume of an unchanged file.
     URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
     ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
     Nothing reads the whole file, whatever its size.
@@ -636,7 +638,6 @@ def geotiff_fingerprint(location: str) -> Dict[str, Any]:
         return {
             "kind": "file",
             "size": stat.st_size,
-            "mtime": int(stat.st_mtime),
             "sha256_head_tail": digest.hexdigest(),
         }
     fingerprint: Dict[str, Any] = {"kind": "url", "url": location}

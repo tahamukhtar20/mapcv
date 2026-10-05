@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
 
-from mapcv.splitter import SplitterConfig, _classify_entry, split_dataset
+from mapcv.splitter import SplitterConfig, _classify_entry, split_dataset, split_manifest
 from mapcv.writer import Manifest, ManifestEntry
 
 
@@ -406,3 +407,32 @@ def test_default_block_shrinks_for_small_rasters(tmp_path: Path) -> None:
     m = _grid_manifest(size=768, patch=256, stride=256)  # 3 x 3 patches
     counts = split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
     assert counts["test"] > 0 and counts["train"] > 0
+
+
+# ---------------------------------------------------------------------------
+# split_manifest: the lists behind the files
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("strategy", ["spatial", "stratified", "random"])
+def test_split_manifest_returns_the_written_lists(tmp_path: Path, strategy: str) -> None:
+    m = _make_manifest(60)
+    config = SplitterConfig(strategy=strategy, labeled_ratios=[0.2], seed=3)  # type: ignore[arg-type]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        counts, lists = split_manifest(m, config, tmp_path / "a")
+        expected = split_dataset(m, config, tmp_path / "b")
+
+    assert counts == expected
+    for name in ("train", "val", "test"):
+        assert getattr(lists, name) == _read_lines(tmp_path / "a" / f"{name}.txt")
+    # The lists keep the order of the files, not the shuffle used for labeled/unlabeled.
+    labeled = _read_lines(tmp_path / "a" / "20" / "labeled.txt")
+    assert set(labeled) <= set(lists.train)
+    assert (tmp_path / "a" / "train.txt").read_bytes() == (
+        tmp_path / "b" / "train.txt"
+    ).read_bytes()
+    assert (tmp_path / "a" / "20" / "labeled.txt").read_bytes() == (
+        tmp_path / "b" / "20" / "labeled.txt"
+    ).read_bytes()

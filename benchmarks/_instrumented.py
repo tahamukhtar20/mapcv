@@ -54,16 +54,19 @@ def _timed(stage: str, func: F) -> F:
 def _install() -> None:
     from mapcv import cli, pipeline
     from mapcv.imagery import XYZRasterSource
+    from mapcv.targets import segmentation
     from mapcv.writer import Manifest
+    from mapcv.writers import FilesWriter
 
     cli.make_plan = _timed("plan", cli.make_plan)
     pipeline.open_raster_source = _timed("open", pipeline.open_raster_source)
-    pipeline._parse_labels = _timed("labels", pipeline._parse_labels)
-    pipeline._label_bounds = _timed("labels", pipeline._label_bounds)
-    pipeline.rasterize = _timed("rasterize", pipeline.rasterize)
-    pipeline.sample_patches_at_anchors = _timed("sample", pipeline.sample_patches_at_anchors)
-    pipeline.write_patches = _timed("write", pipeline.write_patches)
-    pipeline.split_dataset = _timed("split", pipeline.split_dataset)
+    segmentation.SegmentationTarget.prepare = _timed(  # type: ignore[method-assign]
+        "labels", segmentation.SegmentationTarget.prepare
+    )
+    segmentation.rasterize = _timed("rasterize", segmentation.rasterize)
+    pipeline.sample_annotated_patches = _timed("sample", pipeline.sample_annotated_patches)
+    FilesWriter.write = _timed("write", FilesWriter.write)  # type: ignore[method-assign]
+    pipeline.split_manifest = _timed("split", pipeline.split_manifest)
     Manifest.save = _timed("manifest", Manifest.save)  # type: ignore[method-assign]
     # read_window includes the fetch; the fetch is subtracted afterwards to get decode time.
     XYZRasterSource.read_window = _timed(  # type: ignore[method-assign]

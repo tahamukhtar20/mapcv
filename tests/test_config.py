@@ -12,6 +12,7 @@ from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
     EOPFZarrImageryConfig,
     MapcvConfig,
+    RegionConfig,
     XYZImageryConfig,
     eopf_local_path,
 )
@@ -229,6 +230,27 @@ def test_invalid_region_bounds_raise(tmp_path: Path) -> None:
     content = _MINIMAL.replace("  east: 74.40", "  east: 74.10")
     with pytest.raises(Exception, match="west"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("  west: 74.20", "  west: -200", "longitude in -180..180"),
+        ("  east: 74.40", "  east: 181", "longitude in -180..180"),
+        ("  south: 31.40", "  south: -95", "latitude in -90..90"),
+        # Swapped lon/lat: 74.3 is a valid longitude but not a latitude.
+        ("  north: 31.60", "  north: 91", "not swapped"),
+        ("  north: 31.60", "  north: 86", "Web Mercator"),
+    ],
+)
+def test_region_must_be_on_the_globe(tmp_path: Path, old: str, new: str, message: str) -> None:
+    with pytest.raises(Exception, match=message):
+        MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL.replace(old, new)))
+
+
+def test_web_mercator_limit_applies_only_to_xyz() -> None:
+    region = RegionConfig(west=0, south=80, east=1, north=89)
+    assert region.north == 89  # valid WGS-84; EOPF products are not limited to Web Mercator
 
 
 def test_missing_imagery_raises(tmp_path: Path) -> None:

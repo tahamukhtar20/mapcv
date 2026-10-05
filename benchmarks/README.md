@@ -41,7 +41,7 @@ The benchmark dependencies (`psutil`, `rasterio`, `pyproj`) live in the `bench` 
 | standard | `M-strict` | `M-failures` under `policy: strict` | clean failure |
 | standard | `M-resume` | `M`, Ctrl-C at about 40 %, run again | resume at scale, byte-for-byte |
 | large | `L` | 100x100 tiles (10,000 patches), 30,000 polygons | throughput and memory at dataset scale |
-| large | `XL` | 200x200 tiles (40,000 patches), 30,000 polygons | memory must stay bounded as the area grows |
+| large | `XL` | 200x200 tiles (40,000 patches), 30,000 polygons | memory and disk at the largest size (about 4.5 GB of output) |
 | large | `M-polys100k` | `M`'s raster with 100,000 polygons | label parsing, indexing and rasterization |
 
 Every scenario is deterministic: the labels are jittered, non-overlapping rectangles in three classes drawn with a fixed seed over a block of zoom-18 tiles near Amsterdam, and the tiles are synthetic (below). Sizes are in `scenarios.py`.
@@ -84,7 +84,8 @@ Per scenario, `summary` has the **median, min, max and standard deviation** over
 - Compare medians, and look at the spread: a standard deviation that is more than a few percent of the median means the machine was busy. Close other programs, plug a laptop in, and use `--repeat 5` or more.
 - Numbers are only comparable on the same machine, the same build (release!) and the same Python. The results file records CPU, RAM, OS, Python, library versions, the mapcv version and git commit (and whether the tree was dirty) so that a number can be traced back.
 - `S` is dominated by start-up; use `M` and larger for throughput. Throughput is `tiles / wall time`, which includes start-up and the final split.
-- `peak_rss_mb` for `L` and `XL` should be close to each other: mapcv holds a few tile rows at a time (`imagery.strip_rows`), not the area.
+- `peak_rss_mb` does not grow with the number of rows of tiles, because mapcv holds only `imagery.strip_rows` rows at a time, but it does grow with the width of the area, because a strip spans all of it (compare `M`, `L` and `XL`, which are 32, 100 and 200 tiles wide).
+- Output goes to the work directory, a temp dir unless you pass `--workdir`: about 0.1 MB per patch, so `L` needs about 1.1 GB and `XL` about 4.5 GB. A temp dir can be a small RAM-backed tmpfs; the harness checks the free space before each scenario and fails with a message rather than half-way through.
 - The tiles are small (a few KB; real aerial tiles are typically much larger) and the server is on loopback with no latency, so fetch and decode costs are optimistic compared with a real provider. Use `--online` for a reality check.
 - Resume scenarios report the uninterrupted and the resumed wall time and how many patches were written when Ctrl-C arrived. They run once regardless of `--repeat`, and are not performance numbers.
 

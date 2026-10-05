@@ -40,6 +40,7 @@ from benchmarks.scenarios import (
 )
 
 SCHEMA_VERSION = 1
+MB_PER_PATCH = 0.11  # PNG image + mask of the synthetic tiles, measured; JPEG output is smaller
 INTERRUPT_AT_FRACTION = 0.4  # resume scenarios send Ctrl-C once this share is written
 
 
@@ -197,11 +198,12 @@ def _run_generate_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
         if result.exit_code != 0:
             problems.append(_failure(result, f"run {repeat + 1}"))
             continue
-        if reference_hash is None:
+        if repeat == 0:
             report = check_dataset(scenario, run_dir / "dataset", geometries)
-            reference_hash = tree_hash(run_dir / "dataset")
+            if ctx.repeat > 1:
+                reference_hash = tree_hash(run_dir / "dataset")
             output_mb = _dataset_mb(run_dir / "dataset")
-        elif tree_hash(run_dir / "dataset") != reference_hash:
+        elif reference_hash is not None and tree_hash(run_dir / "dataset") != reference_hash:
             problems.append(f"run {repeat + 1} produced different output than run 1")
     problems.extend(report.problems)
 
@@ -330,10 +332,27 @@ def _run_resume_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
     }
 
 
+def _disk_problem(scenario: Scenario, ctx: Context) -> Optional[str]:
+    """A message if the work directory is too small for the scenario's output, else None."""
+    copies = 2 if scenario.kind == "resume" else 1
+    needed = scenario.expected_patches() * MB_PER_PATCH * copies * 1.3
+    free = shutil.disk_usage(ctx.workdir).free / 2**20
+    if free >= needed:
+        return None
+    return (
+        f"needs about {needed / 1024:.1f} GB of disk in {ctx.workdir} but only "
+        f"{free / 1024:.1f} GB is free (a temp dir can be a small RAM-backed tmpfs); "
+        "pass --workdir on a larger disk"
+    )
+
+
 def run_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
     """Run one scenario; the returned dict is its entry in the results file."""
     started = time.perf_counter()
-    if scenario.kind == "resume":
+    no_room = _disk_problem(scenario, ctx)
+    if no_room:
+        outcome: Dict[str, Any] = {"problems": [no_room]}
+    elif scenario.kind == "resume":
         outcome = _run_resume_scenario(scenario, ctx)
     else:
         outcome = _run_generate_scenario(scenario, ctx)

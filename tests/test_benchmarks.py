@@ -191,6 +191,21 @@ def test_main_exits_non_zero_when_a_check_fails(
     assert json.loads(out.read_text(encoding="utf-8"))["problems"] == ["Q: planted failure"]
 
 
+def test_a_work_directory_without_room_fails_early_with_a_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Full:
+        free = 1024
+
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: Full())
+
+    results = run_suite(["M"], repeat=1, workdir=tmp_path)
+
+    assert results["ok"] is False
+    assert "--workdir" in results["problems"][0]
+    assert results["scenarios"]["M"]["status"] == "failed"
+
+
 def test_baseline_hook_measures_a_registered_baseline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

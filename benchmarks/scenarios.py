@@ -177,7 +177,7 @@ _SCENARIOS = [
     ),
     Scenario(
         "XL",
-        "200x200 tiles (40,000 patches), 30,000 polygons: bounded-memory check",
+        "200x200 tiles (40,000 patches), 30,000 polygons: memory and disk at the largest size",
         "large",
         200,
         200,

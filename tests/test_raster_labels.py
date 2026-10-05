@@ -60,6 +60,9 @@ IMAGERY_EPSG = 32631
 IGNORE = 255
 SENTINEL = -999_999  # reference value of pixels outside the label raster
 TIE_TOLERANCE = 1e-9
+# rasterio 1.5 honours ``reproject(..., tolerance=0)``; older versions always approximate
+# the transformation between two CRSs (up to 0.125 pixel), which is no exact reference.
+EXACT_WARP = tuple(int(part) for part in rasterio.__version__.split(".")[:2]) >= (1, 5)
 
 # Raster value -> mask ID. 99 is unmapped, NODATA is the file's NoData.
 CLASSES = {0: 0, 10: 1, 20: 2, 30: 3, 40: 3}
@@ -259,6 +262,9 @@ def reference_values(
     """Raw label values at the patch's pixel centres, by GDAL's nearest-neighbour warp
     (exact transformation); ``SENTINEL`` outside the label raster."""
     with rasterio.open(label_path) as src:
+        exact: Dict[str, Any] = {"tolerance": 0} if EXACT_WARP else {}
+        if not EXACT_WARP and src.crs != CRS.from_user_input(dst_crs):
+            pytest.skip("rasterio < 1.5 cannot reproject without approximating (tolerance)")
         raw = src.read(1).astype(np.int32)
         destination = np.full((size, size), SENTINEL, dtype=np.int32)
         rasterio.warp.reproject(
@@ -271,7 +277,7 @@ def reference_values(
             dst_crs=CRS.from_user_input(dst_crs),
             dst_nodata=SENTINEL,
             resampling=Resampling.nearest,
-            tolerance=0,
+            **exact,
         )
     return destination.astype(np.int64)
 

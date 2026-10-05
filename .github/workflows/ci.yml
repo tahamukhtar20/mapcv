@@ -38,6 +38,8 @@ jobs:
         python-version: "3.13"
         enable-cache: true
         cache-dependency-glob: uv.lock
+        # PRs restore main's caches but do not save their own (10 GB cache budget).
+        save-cache: ${{ github.ref == 'refs/heads/main' }}
 
     # Installs the toolchain pinned in rust-toolchain.toml.
     - name: Install Rust toolchain
@@ -45,6 +47,8 @@ jobs:
 
     - name: Cache Rust build
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Check Rust formatting
       run: cargo fmt --check
@@ -96,6 +100,8 @@ jobs:
         python-version: ${{ matrix.python }}
         enable-cache: true
         cache-dependency-glob: uv.lock
+        # PRs restore main's caches but do not save their own (10 GB cache budget).
+        save-cache: ${{ github.ref == 'refs/heads/main' }}
 
     # Installs the toolchain pinned in rust-toolchain.toml.
     - name: Install Rust toolchain
@@ -103,6 +109,8 @@ jobs:
 
     - name: Cache Rust build
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' }}
 
     # --reinstall-package: always build the extension from this commit, never a cached wheel.
     - name: Install dependencies and build the Rust extension

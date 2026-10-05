@@ -615,10 +615,27 @@ mod tests {
     use super::*;
     use crate::geotiff::{GeoTiff, Samples, Window};
 
-    fn temp_dir(tag: &str) -> std::path::PathBuf {
+    /// A per-test temporary directory, removed when dropped.
+    struct TempDir(std::path::PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            // Best effort: on Windows a still-open file keeps the directory alive.
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    fn temp_dir(tag: &str) -> TempDir {
         let dir = std::env::temp_dir().join(format!("mapcv-gtw-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDir(dir)
     }
 
     const NORTH_UP: [f64; 6] = [10.0, 0.0, 500_000.0, 0.0, -10.0, 4_000_000.0];

@@ -35,6 +35,7 @@ DEFAULT_SENTINEL2_L2A_BANDS: List[str] = [
 
 
 _LABEL_SUFFIXES = frozenset({".kml", ".geojson", ".json"})
+_RASTER_LABEL_SUFFIXES = frozenset({".tif", ".tiff"})
 
 
 def eopf_local_path(path: str) -> Optional[Path]:
@@ -70,28 +71,34 @@ def _validate_eopf_path(path: str) -> str:
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
-def _validate_geotiff_path(path: str) -> str:
+def _check_geotiff_location(path: str, field: str) -> str:
     """A GeoTIFF/COG location: local path, ``file://``, ``https://``, anonymous ``s3://``.
 
     Plain ``http://`` is accepted only for a loopback host (a local test server): the
     rest of the internet gets the same rules as EOPF products.
     """
     if not path.strip():
-        raise ValueError("imagery.path must not be empty")
+        raise ValueError(f"{field} must not be empty")
     if eopf_local_path(path) is not None:
         return path
     parsed = urlsplit(path)
     loopback_http = parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS
     if parsed.scheme not in ("https", "s3") and not loopback_http:
-        raise ValueError(
-            "imagery.path must be a local path, file://, https://, or anonymous s3:// URL"
-        )
+        raise ValueError(f"{field} must be a local path, file://, https://, or anonymous s3:// URL")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError(
-            "imagery.path must not contain credentials, query strings, or fragments; "
+            f"{field} must not contain credentials, query strings, or fragments; "
             "private-store authentication is not supported"
         )
     return path
+
+
+def _validate_geotiff_path(path: str) -> str:
+    return _check_geotiff_location(path, "imagery.path")
+
+
+def _validate_label_raster_path(path: str) -> str:
+    return _check_geotiff_location(path, "labels.path")
 
 
 _REMOVED_SOURCES = {
@@ -151,7 +158,10 @@ def _join(base: Path, value: object) -> object:
 def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
     labels = data.get("labels")
     if isinstance(labels, dict) and "path" in labels:
-        labels["path"] = _join(base, labels["path"])
+        path = labels["path"]
+        # A label raster may be a URL, which is not a path to resolve.
+        if not isinstance(path, str) or urlsplit(path).scheme == "":
+            labels["path"] = _join(base, path)
     writer = data.get("writer")
     if isinstance(writer, dict) and "staging_dir" in writer:
         writer["staging_dir"] = _join(base, writer["staging_dir"])
@@ -317,7 +327,7 @@ ImageryConfig = Annotated[
 
 
 class LabelsConfig(BaseModel):
-    """Label file (KML or GeoJSON) settings.
+    """Vector label file (KML or GeoJSON) settings: polygons burned into the masks.
 
     ``classes`` maps label values to mask IDs (1..255). Without it, integer
     labels in 1..255 are used as-is and other labels get IDs in sorted order.
@@ -329,6 +339,7 @@ class LabelsConfig(BaseModel):
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")
 
+    type: Literal["vector"] = "vector"
     path: Path
     label_field: Optional[str] = None
     classes: Optional[Dict[str, int]] = None
@@ -338,6 +349,11 @@ class LabelsConfig(BaseModel):
     @field_validator("path")
     @classmethod
     def _check_suffix(cls, path: Path) -> Path:
+        if path.suffix.lower() in _RASTER_LABEL_SUFFIXES:
+            raise ValueError(
+                f"labels.path '{path.name}' is a raster: set labels.type: raster and map its "
+                "values with labels.classes"
+            )
         if path.suffix.lower() not in _LABEL_SUFFIXES:
             raise ValueError(
                 f"labels.path must be a .kml, .geojson, or .json file, got '{path.name}' "
@@ -370,6 +386,145 @@ class LabelsConfig(BaseModel):
                 "pick another class ID or set ignore_index to a free value (or null)"
             )
         return self
+
+
+class RasterClass(BaseModel):
+    """Where one label-raster value goes: mask ``id`` (0 = background) and class ``name``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=0, le=255)
+    name: Optional[str] = None
+
+
+class RasterLabelsConfig(BaseModel):
+    """A classified label raster (GeoTIFF / COG): land cover, a previous model's output, ...
+
+    ``classes`` maps raster values to mask IDs, either as ``value: id`` or as
+    ``value: {id: ..., name: ...}``; several values may share an ID. ID 0 is
+    background. After validation every entry is a :class:`RasterClass` with a
+    name (``value_<v>`` when none is given, joined with ``_`` for merged values).
+
+    Each imagery pixel takes the label value at its centre (nearest neighbour, never
+    averaged), whatever the label raster's CRS, resolution and origin. Pixels outside
+    the label raster, label NoData (``nodata``, default the file's) and
+    ``ignore_values`` get ``ignore_index``; values missing from ``classes`` get
+    background or ``ignore_index`` (``unmapped``).
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["raster"]
+    path: str
+    band: int = Field(default=1, ge=1)
+    classes: Dict[int, RasterClass]
+    nodata: Optional[int] = None
+    ignore_values: List[int] = Field(default_factory=list)
+    unmapped: Literal["background", "ignore"] = "background"
+    resampling: Literal["nearest"] = "nearest"
+    ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
+
+    _check_path = field_validator("path")(_validate_label_raster_path)
+
+    @field_validator("classes", mode="before")
+    @classmethod
+    def _expand_short_classes(cls, classes: Any) -> Any:
+        if not isinstance(classes, dict):
+            return classes
+        expanded: Dict[Any, Any] = {}
+        for value, target in classes.items():
+            if isinstance(value, bool) or isinstance(target, bool):
+                raise ValueError("labels.classes maps integer raster values to integer IDs")
+            expanded[value] = {"id": target} if isinstance(target, int) else target
+        return expanded
+
+    @field_validator("nodata", "ignore_values", mode="before")
+    @classmethod
+    def _no_booleans(cls, value: Any) -> Any:
+        values = value if isinstance(value, list) else [value]
+        if any(isinstance(item, bool) for item in values):
+            raise ValueError("raster values must be integers")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_classes(self) -> "RasterLabelsConfig":
+        if not self.classes:
+            raise ValueError(
+                "labels.classes must map at least one raster value to a mask ID, "
+                "e.g. {10: {id: 1, name: tree_cover}}"
+            )
+        names: Dict[int, str] = {}
+        for value, target in sorted(self.classes.items()):
+            if target.id == 0:
+                if target.name is not None:
+                    raise ValueError(
+                        f"labels.classes[{value}] maps to ID 0, which is background; "
+                        "it takes no name"
+                    )
+                continue
+            if target.id == self.ignore_index:
+                raise ValueError(
+                    f"labels.classes[{value}] uses {self.ignore_index}, which is "
+                    "labels.ignore_index; pick another class ID or set ignore_index to a free "
+                    "value (or null)"
+                )
+            if target.name is not None:
+                name = _normalize_label(target.name)
+                if name is None:
+                    raise ValueError(f"labels.classes[{value}].name must not be empty")
+                if names.setdefault(target.id, name) != name:
+                    raise ValueError(
+                        f"labels.classes gives ID {target.id} two names, "
+                        f"'{names[target.id]}' and '{name}'"
+                    )
+        by_id: Dict[int, List[int]] = {}
+        for value, target in sorted(self.classes.items()):
+            if target.id:
+                by_id.setdefault(target.id, []).append(value)
+        resolved: Dict[int, str] = {}
+        for class_id, values in by_id.items():
+            resolved[class_id] = names.get(class_id) or "value_" + "_".join(map(str, values))
+        seen: Dict[str, int] = {}
+        for class_id, name in sorted(resolved.items()):
+            if seen.setdefault(name, class_id) != class_id:
+                raise ValueError(
+                    f"labels.classes uses the name '{name}' for IDs {seen[name]} and {class_id}"
+                )
+        self.classes = {
+            value: RasterClass(id=target.id, name=resolved.get(target.id))
+            for value, target in sorted(self.classes.items())
+        }
+        overlap = sorted(set(self.ignore_values) & set(self.classes))
+        if overlap:
+            raise ValueError(
+                f"labels.ignore_values and labels.classes both list the value {overlap[0]}"
+            )
+        if self.nodata is not None and self.nodata in self.classes:
+            raise ValueError(
+                f"labels.nodata is {self.nodata}, which labels.classes maps to a class"
+            )
+        if self.unmapped == "ignore" and self.ignore_index is None:
+            raise ValueError(
+                "labels.unmapped: ignore needs labels.ignore_index; set one or use "
+                "unmapped: background"
+            )
+        return self
+
+    def class_map(self) -> Dict[str, int]:
+        """Class name to mask ID, in ID order (background is not a class)."""
+        pairs = {target.name: target.id for target in self.classes.values() if target.id}
+        return {
+            name: class_id
+            for name, class_id in sorted(pairs.items(), key=lambda item: (item[1], item[0]))
+            if name is not None
+        }
+
+
+AnyLabelsConfig = Annotated[
+    Union[LabelsConfig, RasterLabelsConfig],
+    Field(discriminator="type"),
+]
 
 
 SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection")
@@ -439,7 +594,7 @@ class MapcvConfig(BaseModel):
     task: Literal["segmentation", "detection"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig
-    labels: Optional[LabelsConfig] = None
+    labels: Optional[AnyLabelsConfig] = None
     sampler: SamplerConfig
     writer: WriterConfig
     split: Optional[SplitterConfig] = None
@@ -458,6 +613,10 @@ class MapcvConfig(BaseModel):
         imagery = raw.get("imagery")
         if isinstance(imagery, dict) and "type" not in imagery:
             raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
+        labels = raw.get("labels")
+        if isinstance(labels, dict) and "type" not in labels:
+            # Polygon labels predate labels.type; configs without it keep working.
+            raw = {**raw, "labels": {"type": "vector", **labels}}
         return raw
 
     @model_validator(mode="after")
@@ -503,6 +662,12 @@ class MapcvConfig(BaseModel):
         labels = self.labels
         if labels is None:
             raise ValueError("task: detection needs labels: the boxes come from the label features")
+        if isinstance(labels, RasterLabelsConfig):
+            raise ValueError(
+                "task: detection needs vector labels (one feature per object), not a label "
+                "raster; use task: segmentation for labels.type: raster, or polygonize the "
+                "raster's objects into a GeoJSON first"
+            )
         if "ignore_index" in labels.model_fields_set:
             raise ValueError(
                 "labels.ignore_index marks mask pixels without imagery and detection writes no "

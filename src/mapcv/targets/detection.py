@@ -439,8 +439,9 @@ class DetectionTarget:
         """Class map, the label settings with a hash of the label file, and the options."""
         if self._sha256 is None:
             raise RuntimeError("DetectionTarget.prepare() must run first")
+        # labels.type is left out, as for segmentation: polygon-label records predate it.
         settings = self._labels.model_dump(
-            mode="json", exclude={"path", "ignore_index", "all_touched"}
+            mode="json", exclude={"path", "ignore_index", "all_touched", "type"}
         )
         settings["sha256"] = self._sha256
         return TargetRecord(

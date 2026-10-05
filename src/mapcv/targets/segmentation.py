@@ -155,7 +155,8 @@ class SegmentationTarget:
         file, so a resumed run notices edits."""
         if self._sha256 is None:
             raise RuntimeError("SegmentationTarget.prepare() must run first")
-        settings = self._labels.model_dump(mode="json", exclude={"path", "ignore_index"})
+        # labels.type is left out: manifests from before raster labels record no type.
+        settings = self._labels.model_dump(mode="json", exclude={"path", "ignore_index", "type"})
         settings["sha256"] = self._sha256
         return TargetRecord(
             type="segmentation",

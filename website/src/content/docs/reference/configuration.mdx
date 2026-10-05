@@ -11,7 +11,7 @@ A mapcv config is one YAML file with six top-level blocks, an optional `task` an
 task: segmentation  # what the dataset is for: segmentation (default) or detection
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
-labels:   { … }   # which polygons (optional: omit for an image-only dataset)
+labels:   { … }   # which polygons or label raster (optional: omit for an image-only dataset)
 detection: { … }  # box settings (optional, task: detection only)
 sampler:  { … }   # how to cut patches (required)
 writer:   { … }   # where and how to write (required)
@@ -219,10 +219,13 @@ Needs no extra install. Reads one file as it is: patches keep the file's CRS, pi
 
 ## `labels`
 
-Optional. Without it you get an image-only dataset (no `Masks/`).
+Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` picks where the masks come from: `vector` (the default, so configs without `type` keep working) burns polygons from a GeoJSON or KML file; `raster` reads a classified GeoTIFF, see [Raster labels](#raster-labels-type-raster).
+
+### Polygon labels (`type: vector`)
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
+| `type` | `vector` | `vector` | Polygon labels |
 | `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. A relative path is resolved against the config file's folder |
 | `label_field` | string \| null | `null` | Feature property holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
@@ -231,7 +234,42 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
-**Validation:** suffix must be `.kml`, `.geojson` or `.json` (convert KMZ or Shapefiles first); `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+**Validation:** suffix must be `.kml`, `.geojson` or `.json` (convert KMZ or Shapefiles first; a `.tif` asks for `type: raster`); `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+
+### Raster labels (`type: raster`)
+
+A classified raster, such as a land-cover map (ESA WorldCover, Dynamic World), a national map or an earlier model's output, used as the masks. It may have any CRS, resolution and origin: mapcv reads it on the imagery's pixel grid.
+
+```yaml
+labels:
+  type: raster
+  path: ESA_WorldCover_10m_2021_v200_N48E000_Map.tif   # local, https:// or anonymous s3://
+  classes:                    # raster value -> mask ID, or -> {id, name}
+    10: {id: 1, name: tree_cover}
+    30: {id: 2, name: grassland}
+    40: {id: 3, name: cropland}
+    50: {id: 4, name: built_up}
+    80: {id: 5, name: water}
+    90: {id: 6, name: wetland}
+    95: {id: 6, name: wetland}  # several values may share an ID
+  unmapped: background        # other values: background | ignore
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `raster` | required | Raster labels |
+| `path` | string | required | A GeoTIFF or COG: a local path (relative to the config file's folder), an `https://` URL or an anonymous `s3://bucket/key`, read like [GeoTIFF imagery](#geotiff-and-cloud-optimized-geotiff-type-geotiff) (only the tiles under each window). Its CRS must be an EPSG code and its values integers (`uint8`, `uint16`, `int16`, …) |
+| `band` | int ≥ 1 | `1` | Band holding the classes (1-based) |
+| `classes` | map value → ID or `{id, name}` | required | Raster value → mask ID (0–255, `0` is background). The short form `10: 1` names the class `value_10` (`value_90_95` when several values share the ID); `{id: 1, name: tree_cover}` names it. One ID has one name. The names and IDs are the manifest's `class_map` |
+| `unmapped` | `background` \| `ignore` | `background` | What values missing from `classes` become: background (`0`), or `ignore_index` |
+| `nodata` | int \| null | the file's NoData | Label value meaning "no label": such pixels get `ignore_index` |
+| `ignore_values` | list of int | `[]` | More label values that get `ignore_index` (for example "unclassified") |
+| `resampling` | `nearest` | `nearest` | How a label pixel is picked; categorical values are never averaged, so `nearest` is the only choice |
+| `ignore_index` | int 1–255 or `null` | `255` | As for polygon labels; it also marks pixels outside the label raster, label NoData and `ignore_values`. `null` writes background (`0`) there |
+
+**Alignment.** Each imagery pixel takes the value of the label pixel that contains the imagery pixel's **centre**. The centre (`col + 0.5`, `row + 0.5` in the corner-based affine transform) is projected exactly into the label raster's CRS (pyproj, point by point), then the inverse of the label raster's transform gives a fractional label pixel, which is rounded down (`floor(x + 1e-10)`: a centre exactly on a boundary between two label pixels takes the right / lower one, as GDAL does). Files tagged `PixelIsPoint` are shifted by half a pixel to corner-based, as in GDAL. The result equals `rasterio.warp.reproject(..., resampling=Resampling.nearest, tolerance=0)` onto the patch's transform. (GDAL's default `tolerance=0.125` approximates the transformation and can pick a neighbouring label pixel near boundaries.) When the label raster shares the imagery's CRS and pixel grid, windows are copied directly, with the same result.
+
+**Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation` only: `task: detection` needs polygon labels (one feature per object) and refuses `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
 
 ## `sampler`
 

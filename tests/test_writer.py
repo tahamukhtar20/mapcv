@@ -1,24 +1,18 @@
-"""Tests for M6 patch writer and manifest."""
+"""Tests for the patch writer and the manifest entries it appends."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import pytest
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from mapcv import SamplerConfig, sample_patches
 from mapcv.sampler import PatchMeta
-from mapcv.writer import (
-    Manifest,
-    ManifestMismatchError,
-    WriterConfig,
-    load_or_create_manifest,
-    write_patches,
-)
+from mapcv.manifest import Manifest, TargetRecord
+from mapcv.writer import WriterConfig, write_patches
 
 
 # ---------------------------------------------------------------------------
@@ -67,94 +61,6 @@ def test_writer_config_jpg_quality_bounds(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Manifest load / save
-# ---------------------------------------------------------------------------
-
-
-def test_manifest_save_and_load(tmp_path: Path) -> None:
-    m = Manifest(class_map={"bg": 0, "building": 1})
-    path = tmp_path / "manifest.json"
-    m.save(path)
-    loaded = Manifest.load(path)
-    assert loaded.class_map == {"bg": 0, "building": 1}
-    assert loaded.version == 2
-    assert loaded.patches == []
-
-
-def test_manifest_save_is_valid_json(tmp_path: Path) -> None:
-    m = Manifest(class_map={"a": 1})
-    path = tmp_path / "manifest.json"
-    m.save(path)
-    data = json.loads(path.read_text())
-    assert "patches" in data
-    assert "class_map" in data
-    assert data["version"] == 2
-
-
-def test_load_or_create_returns_new_when_missing(tmp_path: Path) -> None:
-    m = load_or_create_manifest(tmp_path / "manifest.json", {"x": 1})
-    assert m.class_map == {"x": 1}
-    assert m.patches == []
-
-
-def test_load_or_create_loads_existing(tmp_path: Path) -> None:
-    path = tmp_path / "manifest.json"
-    Manifest(class_map={"y": 2}, bands=["b04"]).save(path)
-    m = load_or_create_manifest(path, {"y": 2}, bands=["b04"])
-    assert m.class_map == {"y": 2}
-
-
-@pytest.mark.parametrize(
-    "changed",
-    [
-        {"class_map": {"other": 1}},
-        {"bands": ["b08"]},
-        {"patch_shape": [1, 8, 8]},
-        {"product_id": "other.zarr"},
-        {"transform": (20.0, 0.0, 0.0, 0.0, -20.0, 0.0)},
-        {"sampler": {"patch_size": 8}},
-    ],
-)
-def test_load_or_create_rejects_mismatched_resume(tmp_path: Path, changed: Dict[str, Any]) -> None:
-    path = tmp_path / "manifest.json"
-    original: Dict[str, Any] = {
-        "class_map": {"y": 2},
-        "bands": ["b04"],
-        "patch_shape": [1, 4, 4],
-        "product_id": "S2.zarr",
-        "transform": (10.0, 0.0, 0.0, 0.0, -10.0, 0.0),
-        "sampler": {"patch_size": 4},
-    }
-    Manifest(**original).save(path)
-    with pytest.raises(ManifestMismatchError):
-        load_or_create_manifest(path, **{**original, **changed})
-
-
-def test_load_or_create_refuses_to_resume_version_one(tmp_path: Path) -> None:
-    path = tmp_path / "manifest.json"
-    path.write_text('{"version":1,"class_map":{},"patches":[]}')
-    with pytest.raises(ManifestMismatchError, match="version-1"):
-        load_or_create_manifest(path, {})
-
-
-def test_manifest_save_is_atomic(tmp_path: Path) -> None:
-    path = tmp_path / "manifest.json"
-    Manifest(class_map={}).save(path)
-    assert not (tmp_path / "manifest.json.tmp").exists()
-
-
-def test_version_one_manifest_remains_readable(tmp_path: Path) -> None:
-    path = tmp_path / "manifest.json"
-    path.write_text('{"version":1,"class_map":{},"patches":[]}')
-
-    manifest = Manifest.load(path)
-
-    assert manifest.version == 1
-    assert manifest.source_type == "xyz"
-    assert manifest.bands == []
-
-
-# ---------------------------------------------------------------------------
 # write_patches: file creation
 # ---------------------------------------------------------------------------
 
@@ -162,7 +68,7 @@ def test_version_one_manifest_remains_readable(tmp_path: Path) -> None:
 def test_images_dir_created(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     assert (tmp_path / "Images").is_dir()
 
@@ -170,7 +76,7 @@ def test_images_dir_created(tmp_path: Path) -> None:
 def test_masks_dir_created_when_mask_provided(tmp_path: Path) -> None:
     imgs, msks, meta = _patches_with_mask()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, msks, meta, cfg, m)
     assert (tmp_path / "Masks").is_dir()
 
@@ -178,7 +84,7 @@ def test_masks_dir_created_when_mask_provided(tmp_path: Path) -> None:
 def test_masks_dir_not_created_without_mask(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     assert not (tmp_path / "Masks").exists()
 
@@ -186,7 +92,7 @@ def test_masks_dir_not_created_without_mask(tmp_path: Path) -> None:
 def test_image_files_written(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     written = list((tmp_path / "Images").glob("*.png"))
     assert len(written) == len(meta)
@@ -195,7 +101,7 @@ def test_image_files_written(tmp_path: Path) -> None:
 def test_mask_files_written(tmp_path: Path) -> None:
     imgs, msks, meta = _patches_with_mask()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, msks, meta, cfg, m)
     written = list((tmp_path / "Masks").glob("*.png"))
     assert len(written) == len(meta)
@@ -204,7 +110,7 @@ def test_mask_files_written(tmp_path: Path) -> None:
 def test_jpg_format_written(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path, image_format="jpg")
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     written = list((tmp_path / "Images").glob("*.jpg"))
     assert len(written) == len(meta)
@@ -217,13 +123,7 @@ def test_npy_format_preserves_float32_bands_first(tmp_path: Path) -> None:
         PatchMeta(row=4, col=0, padded=False, empty_ratio=0.0),
     ]
     config = WriterConfig(staging_dir=tmp_path, image_format="npy")
-    manifest = Manifest(
-        class_map={},
-        source_type="eopf_zarr",
-        bands=["b01", "b02", "b03", "b04", "b05"],
-        dtype="float32",
-        patch_shape=[5, 4, 4],
-    )
+    manifest = Manifest()
 
     write_patches(images, None, meta, config, manifest)
 
@@ -237,12 +137,12 @@ def test_npy_overwrites_orphaned_tensor(tmp_path: Path) -> None:
     images = np.ones((1, 2, 2, 2), dtype=np.float32)
     meta = [PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0)]
     config = WriterConfig(staging_dir=tmp_path, image_format="npy")
-    first_manifest = Manifest(class_map={})
+    first_manifest = Manifest()
     write_patches(images, None, meta, config, first_manifest)
     tensor_path = tmp_path / "Images" / "patch_0000000.npy"
     np.save(tensor_path, np.zeros((2, 2, 2), dtype=np.float32), allow_pickle=False)
 
-    write_patches(images, None, meta, config, Manifest(class_map={}))
+    write_patches(images, None, meta, config, Manifest())
 
     assert np.all(np.load(tensor_path, allow_pickle=False) == 1)
 
@@ -250,7 +150,7 @@ def test_npy_overwrites_orphaned_tensor(tmp_path: Path) -> None:
 def test_empty_meta_writes_nothing(tmp_path: Path) -> None:
     imgs = np.zeros((0, 8, 8, 3), dtype=np.uint8)
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, [], cfg, m)
     assert not (tmp_path / "Images").exists()
     assert m.patches == []
@@ -264,7 +164,7 @@ def test_empty_meta_writes_nothing(tmp_path: Path) -> None:
 def test_manifest_extended_in_place(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     assert len(m.patches) == len(meta)
 
@@ -272,17 +172,17 @@ def test_manifest_extended_in_place(tmp_path: Path) -> None:
 def test_manifest_filenames_sequential(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
-    fnames = [e["filename"] for e in m.patches]
+    fnames = [e["files"]["image"] for e in m.patches]
     assert fnames == sorted(fnames)
-    assert fnames[0] == "patch_0000000.png"
+    assert fnames[0] == "Images/patch_0000000.png"
 
 
 def test_manifest_row_col_match_meta(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
     for entry, pm in zip(m.patches, meta):
         assert entry["row"] == pm["row"]
@@ -290,29 +190,35 @@ def test_manifest_row_col_match_meta(tmp_path: Path) -> None:
         assert entry["padded"] == pm["padded"]
 
 
-def test_manifest_strip_index_recorded(tmp_path: Path) -> None:
+def test_manifest_chunk_index_recorded(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
-    write_patches(imgs, None, meta, cfg, m, strip_index=3)
-    assert all(e["strip_index"] == 3 for e in m.patches)
+    m = Manifest()
+    write_patches(imgs, None, meta, cfg, m, chunk_index=3)
+    assert all(e["chunk"] == 3 for e in m.patches)
 
 
-def test_manifest_mask_filename_none_without_mask(tmp_path: Path) -> None:
+def test_manifest_lists_only_the_image_without_mask(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
-    assert all(e["mask_filename"] is None for e in m.patches)
+    assert all(set(e["files"]) == {"image"} for e in m.patches)
 
 
-def test_manifest_mask_filename_set_with_mask(tmp_path: Path) -> None:
+@pytest.mark.parametrize("image_format", ["png", "jpg", "npy"])
+def test_manifest_lists_image_and_mask_paths(tmp_path: Path, image_format: Any) -> None:
     imgs, msks, meta = _patches_with_mask()
-    cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    cfg = WriterConfig(staging_dir=tmp_path, image_format=image_format)
+    m = Manifest()
     write_patches(imgs, msks, meta, cfg, m)
-    for entry in m.patches:
-        assert entry["mask_filename"] == entry["filename"]
+    for index, entry in enumerate(m.patches):
+        assert entry["files"] == {
+            "image": f"Images/patch_{index:07d}.{image_format}",
+            "mask": f"Masks/patch_{index:07d}.png",
+        }
+        assert all((tmp_path / path).is_file() for path in entry["files"].values())
+        assert set(entry) == {"row", "col", "padded", "chunk", "files", "summary"}
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +229,9 @@ def test_manifest_mask_filename_set_with_mask(tmp_path: Path) -> None:
 def test_per_class_counts_no_mask_empty(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
-    assert all(e["per_class_pixel_counts"] == {} for e in m.patches)
+    assert all(e["summary"] == {"empty_ratio": 0.0} for e in m.patches)
 
 
 def test_per_class_counts_correct(tmp_path: Path) -> None:
@@ -337,9 +243,9 @@ def test_per_class_counts_correct(tmp_path: Path) -> None:
     cfg_s = SamplerConfig(patch_size=8, edge_strategy="drop")
     imgs, msks, meta = sample_patches(img, msk, cfg_s)
     cfg_w = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={"a": 1, "b": 2})
+    m = Manifest(target=TargetRecord(type="segmentation", class_map={"a": 1, "b": 2}))
     write_patches(imgs, msks, meta, cfg_w, m)
-    counts = m.patches[0]["per_class_pixel_counts"]
+    counts = m.patches[0]["summary"]["class_pixels"]
     assert counts["1"] == 32
     assert counts["2"] == 32
 
@@ -349,17 +255,17 @@ def test_empty_ratio_all_black(tmp_path: Path) -> None:
     cfg_s = SamplerConfig(patch_size=8, edge_strategy="drop", max_empty_ratio=1.0)
     imgs, _, meta = sample_patches(img, None, cfg_s)
     cfg_w = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg_w, m)
-    assert m.patches[0]["empty_ratio"] == 1.0
+    assert m.patches[0]["summary"]["empty_ratio"] == 1.0
 
 
 def test_empty_ratio_all_nonzero(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
-    assert all(e["empty_ratio"] == 0.0 for e in m.patches)
+    assert all(e["summary"]["empty_ratio"] == 0.0 for e in m.patches)
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +276,14 @@ def test_empty_ratio_all_nonzero(tmp_path: Path) -> None:
 def test_orphaned_file_is_overwritten(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, None, meta, cfg, m)
 
     # A file left by an interrupted run is not in the manifest and must be replaced.
-    first_path = tmp_path / "Images" / m.patches[0]["filename"]
+    first_path = tmp_path / m.patches[0]["files"]["image"]
     first_path.write_bytes(b"STALE")
 
-    m2 = Manifest(class_map={})
+    m2 = Manifest()
     write_patches(imgs, None, meta, cfg, m2)
     assert first_path.read_bytes() != b"STALE"
 
@@ -390,22 +296,22 @@ def test_orphaned_file_is_overwritten(tmp_path: Path) -> None:
 def test_two_strips_non_overlapping_filenames(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
-    write_patches(imgs, None, meta, cfg, m, strip_index=0)
-    write_patches(imgs, None, meta, cfg, m, strip_index=1)
-    fnames = [e["filename"] for e in m.patches]
-    assert len(fnames) == len(set(fnames)), "filenames must be unique across strips"
+    m = Manifest()
+    write_patches(imgs, None, meta, cfg, m, chunk_index=0)
+    write_patches(imgs, None, meta, cfg, m, chunk_index=1)
+    fnames = [e["files"]["image"] for e in m.patches]
+    assert len(fnames) == len(set(fnames)), "filenames must be unique across chunks"
     assert len(m.patches) == 2 * len(meta)
 
 
 def test_strip_indices_recorded_correctly(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={})
-    write_patches(imgs, None, meta, cfg, m, strip_index=0)
-    write_patches(imgs, None, meta, cfg, m, strip_index=1)
-    strip0 = [e for e in m.patches if e["strip_index"] == 0]
-    strip1 = [e for e in m.patches if e["strip_index"] == 1]
+    m = Manifest()
+    write_patches(imgs, None, meta, cfg, m, chunk_index=0)
+    write_patches(imgs, None, meta, cfg, m, chunk_index=1)
+    strip0 = [e for e in m.patches if e["chunk"] == 0]
+    strip1 = [e for e in m.patches if e["chunk"] == 1]
     assert len(strip0) == len(meta)
     assert len(strip1) == len(meta)
 
@@ -420,8 +326,8 @@ def test_parallel_same_as_serial(tmp_path: Path) -> None:
     cfg1 = WriterConfig(staging_dir=tmp_path / "run1")
     cfg2 = WriterConfig(staging_dir=tmp_path / "run2")
 
-    m1 = Manifest(class_map={})
-    m2 = Manifest(class_map={})
+    m1 = Manifest()
+    m2 = Manifest()
     write_patches(imgs, msks, meta, cfg1, m1)
     write_patches(imgs, msks, meta, cfg2, m2)
 
@@ -429,8 +335,7 @@ def test_parallel_same_as_serial(tmp_path: Path) -> None:
     for e1, e2 in zip(m1.patches, m2.patches):
         assert e1["row"] == e2["row"]
         assert e1["col"] == e2["col"]
-        assert e1["per_class_pixel_counts"] == e2["per_class_pixel_counts"]
-        assert e1["empty_ratio"] == e2["empty_ratio"]
+        assert e1["summary"] == e2["summary"]
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +359,7 @@ def test_manifest_json_byte_identical_across_runs(tmp_path: Path, image_format: 
     manifests: List[bytes] = []
     for run in ("run1", "run2"):
         cfg = WriterConfig(staging_dir=tmp_path / run, image_format=image_format)
-        m = Manifest(class_map={"a": 2, "b": 10})
+        m = Manifest(target=TargetRecord(type="segmentation", class_map={"a": 2, "b": 10}))
         write_patches(imgs, msks, meta, cfg, m)
         path = tmp_path / run / "manifest.json"
         m.save(path)
@@ -473,9 +378,9 @@ def test_per_class_counts_keys_numerically_ordered(tmp_path: Path, image_format:
     cfg_s = SamplerConfig(patch_size=8, edge_strategy="drop")
     imgs, msks, meta = sample_patches(img, msk, cfg_s)
     cfg_w = WriterConfig(staging_dir=tmp_path, image_format=image_format)
-    m = Manifest(class_map={})
+    m = Manifest()
     write_patches(imgs, msks, meta, cfg_w, m)
-    counts = m.patches[0]["per_class_pixel_counts"]
+    counts = m.patches[0]["summary"]["class_pixels"]
     assert list(counts) == ["0", "2", "10", "100", "255"]
     assert counts == {"0": 32, "2": 8, "10": 8, "100": 8, "255": 8}
 
@@ -488,7 +393,7 @@ def test_per_class_counts_keys_numerically_ordered(tmp_path: Path, image_format:
 def test_manifest_round_trip_with_entries(tmp_path: Path) -> None:
     imgs, _, meta = _patches()
     cfg = WriterConfig(staging_dir=tmp_path)
-    m = Manifest(class_map={"bg": 0, "obj": 1})
+    m = Manifest(target=TargetRecord(type="segmentation", class_map={"bg": 0, "obj": 1}))
     write_patches(imgs, None, meta, cfg, m)
 
     mpath = tmp_path / "manifest.json"
@@ -497,30 +402,4 @@ def test_manifest_round_trip_with_entries(tmp_path: Path) -> None:
 
     assert len(loaded.patches) == len(m.patches)
     for orig, reloaded in zip(m.patches, loaded.patches):
-        assert orig["filename"] == reloaded["filename"]
-        assert orig["row"] == reloaded["row"]
-        assert orig["empty_ratio"] == reloaded["empty_ratio"]
-
-
-def test_manifest_from_a_newer_mapcv_is_refused(tmp_path: Path) -> None:
-    path = tmp_path / "manifest.json"
-    path.write_text('{"version": 99, "class_map": {}, "patches": []}')
-    with pytest.raises(ManifestMismatchError, match="newer mapcv"):
-        Manifest.load(path)
-
-
-@pytest.mark.parametrize(
-    "changed",
-    [{"labels": {"sha256": "other"}}, {"writer": {"image_format": "jpg", "jpg_quality": 95}}],
-)
-def test_resume_detects_label_edits_and_writer_changes(
-    tmp_path: Path, changed: Dict[str, Any]
-) -> None:
-    path = tmp_path / "manifest.json"
-    original: Dict[str, Any] = {
-        "labels": {"sha256": "abc"},
-        "writer": {"image_format": "png", "jpg_quality": 95},
-    }
-    Manifest(class_map={}, **original).save(path)
-    with pytest.raises(ManifestMismatchError):
-        load_or_create_manifest(path, {}, **{**original, **changed})
+        assert orig == reloaded

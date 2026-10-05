@@ -150,11 +150,14 @@ def main() -> None:
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
     patches = manifest["patches"]
     check(len(patches) == NX * NY, f"{len(patches)} patches, expected {NX * NY}", out)
-    check(manifest["class_map"] == {"building": 1, "water": 2}, str(manifest["class_map"]), out)
-    images = sorted(p.name for p in (dataset / "Images").iterdir())
-    masks = sorted(p.name for p in (dataset / "Masks").iterdir())
-    check(images == masks == sorted(p["filename"] for p in patches), "files != manifest", out)
-    labeled = sum(1 for p in patches if set(p["per_class_pixel_counts"]) - {"0"})
+    check(manifest["version"] == 3 and manifest["task"] == "segmentation", "not a v3 manifest", out)
+    class_map = manifest["target"]["class_map"]
+    check(class_map == {"building": 1, "water": 2}, str(class_map), out)
+    images = sorted(f"Images/{p.name}" for p in (dataset / "Images").iterdir())
+    masks = sorted(f"Masks/{p.name}" for p in (dataset / "Masks").iterdir())
+    check(images == sorted(p["files"]["image"] for p in patches), "Images/ != manifest", out)
+    check(masks == sorted(p["files"]["mask"] for p in patches), "Masks/ != manifest", out)
+    labeled = sum(1 for p in patches if set(p["summary"]["class_pixels"]) - {"0", "255"})
     check(labeled > 0, "no patch contains a label", out)
     splits = {
         name: (dataset / "splits" / f"{name}.txt").read_text(encoding="utf-8").split()

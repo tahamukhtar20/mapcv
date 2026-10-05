@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import List, Optional, Tuple, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -21,6 +21,7 @@ from mapcv.labels import (
     parse_kml,
     transform_all_to_mercator,
 )
+from mapcv.manifest import TargetRecord
 from mapcv.rasterizer import rasterize
 from mapcv.targets.base import Transform, WindowTarget
 
@@ -126,6 +127,10 @@ class SegmentationTarget:
         self._sha256: Optional[str] = None
 
     @property
+    def type(self) -> Optional[str]:
+        return "segmentation"
+
+    @property
     def class_map(self) -> ClassMap:
         if self._class_map is None:
             raise RuntimeError("SegmentationTarget.prepare() must run first")
@@ -139,13 +144,21 @@ class SegmentationTarget:
         _warn_if_labels_miss_raster(self._geometries, source)
         self._bounds = _label_bounds(self._geometries)
 
-    def fingerprint(self) -> Optional[Dict[str, Any]]:
-        """Label settings plus a hash of the label file, so resume notices edits."""
+    def record(self) -> Optional[TargetRecord]:
+        """Class map and ignore value, plus the label settings and a hash of the label
+        file, so a resumed run notices edits."""
         if self._sha256 is None:
             raise RuntimeError("SegmentationTarget.prepare() must run first")
-        settings = self._labels.model_dump(mode="json", exclude={"path"})
+        settings = self._labels.model_dump(mode="json", exclude={"path", "ignore_index"})
         settings["sha256"] = self._sha256
-        return settings
+        return TargetRecord(
+            type="segmentation",
+            class_map=self.class_map,
+            ignore_index=self._labels.ignore_index,
+            dtype="uint8",
+            labels=settings,
+            options={},
+        )
 
     def window(
         self,

@@ -1,6 +1,6 @@
 ---
-title: Migrating to 0.2
-description: What changed between mapcv 0.1 and 0.2 and how to update configs, datasets and code.
+title: Migrating
+description: What changed in mapcv 0.3 and 0.2 and how to update configs, datasets and code.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
@@ -9,7 +9,72 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) from the repository. If the two ever differ, `MIGRATION.md` is authoritative.
 </Aside>
 
-## Checklist
+## Migrating to 0.3
+
+<Steps>
+
+1. Update code that reads `manifest.json` directly to [manifest version 3](#manifest-version-3): `files`, `summary`, `sources[0]` and `target`. Code that uses `mapcv.Manifest.load` keeps working for old and new datasets.
+2. To resume a dataset made by 0.2, add `labels.ignore_index: null` to its config ([why](#datasets-made-by-mapcv-02)).
+3. Nothing to do for `task`: it defaults to `segmentation`.
+
+</Steps>
+
+### Manifest version 3
+
+New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that the detection, instance, classification, change and regression tasks and other output layouts planned for 0.3 fit without another format change. Images, masks and split lists are byte-for-byte what 0.2 wrote for the same config; only `manifest.json` changes.
+
+| Version 2 (mapcv 0.2) | Version 3 (mapcv 0.3) |
+| --- | --- |
+| `patches[i].filename` | `patches[i].files.image`, a path relative to the dataset folder: `"Images/patch_0000000.png"` |
+| `patches[i].mask_filename` | `patches[i].files.mask` (`"Masks/patch_0000000.png"`); absent without labels instead of `null` |
+| `patches[i].per_class_pixel_counts` | `patches[i].summary.class_pixels` (absent without labels) |
+| `patches[i].empty_ratio` | `patches[i].summary.empty_ratio` |
+| `patches[i].strip_index` | `patches[i].chunk` |
+| `class_map` | `target.class_map` |
+| `labels` (settings and `sha256`) | `target.labels`; `labels.ignore_index` is now `target.ignore_index` |
+| `source_type`, `product_id`, `bands`, `dtype`, `crs`, `transform`, `patch_shape` | the same keys in `sources[0]` (named `"image"`) |
+| `writer` | `writer`, plus `layout: files` and `mask_format: png` |
+| (none) | `task`, `mapcv_version`, `target.type`, `target.dtype`, `target.options` |
+
+An image-only dataset has `"target": null`. Split lists are unchanged: one image file name per line. Each patch is one line of `manifest.json`, which makes large manifests about a third smaller. The full schema is in the [dataset format reference](/mapcv/reference/dataset-format/).
+
+Training code that reads `manifest.json` directly needs the new keys:
+
+```python
+import json
+from pathlib import Path
+
+root = Path("dataset")
+manifest = json.loads((root / "manifest.json").read_text())
+target = manifest["target"] or {}  # null for an image-only dataset
+class_map = target.get("class_map", {})  # was: manifest["class_map"]
+ignore_index = target.get("ignore_index")  # was: manifest["labels"]["ignore_index"]
+bands = manifest["sources"][0]["bands"]  # was: manifest["bands"]
+for patch in manifest["patches"]:
+    image = root / patch["files"]["image"]  # was: root / "Images" / patch["filename"]
+    mask = root / patch["files"]["mask"]  # was: root / "Masks" / patch["mask_filename"]
+    counts = patch["summary"]["class_pixels"]  # was: patch["per_class_pixel_counts"]
+```
+
+`mapcv.Manifest.load(path)` reads versions 1, 2 and 3 and returns version 3 without touching the file. To convert an existing manifest on disk (for example so the new loader above can read a 0.2 dataset), run `mapcv.Manifest.load(path).save(path)`. 0.2 code cannot read a version-3 manifest.
+
+Python API changes: `Manifest` has `task`, `sources`, `target` (`SourceRecord`, `TargetRecord`), `writer`, `sampler` and `patches`, with the read-only shortcuts `manifest.source`, `manifest.class_map` and `manifest.ignore_index`, and `patch_transform(entry)` / `patch_bounds(entry)` for georeferencing. `ManifestEntry` has `row`, `col`, `padded`, `chunk`, `files` and `summary`. `load_or_create_manifest(path, expected)` takes the expected `Manifest` instead of one keyword per field, `write_patches(..., chunk_index=0)` replaces `strip_index`, and the manifest classes live in `mapcv.manifest` (still importable from `mapcv` and `mapcv.writer`). For custom targets, `Target.fingerprint()` became `Target.record()`, which returns a `TargetRecord`, and targets and writers have a `type` and `layout` with `Writer.supports(target_type)`.
+
+### Datasets made by mapcv 0.2
+
+`mapcv info`, `mapcv split` and `Manifest.load` read 0.2 datasets as before and never rewrite their manifest.
+
+`mapcv generate` resumes a 0.2 dataset when the imagery, labels, sampler and writer settings match, with one addition: **set `labels.ignore_index: null`**. mapcv 0.2 wrote background (`0`) where there was no imagery; 0.3 writes `labels.ignore_index` (default `255`) there, and a resumed run must keep the dataset consistent. Without it, generation stops with a message that says so. A finished 0.2 dataset resumes as a no-op and is left as it is; one that gains patches is saved as version 3. New masks come from 0.3's rasterizer, which follows GDAL's rules exactly, so pixels on polygon edges can differ slightly from masks 0.2 wrote.
+
+Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1 datasets (as in 0.2), and 0.2 datasets made with `sampler.mode: random`, because 0.3 draws random positions without repeats and would mix two different samples. Both can still be split and inspected.
+
+### The `task` setting
+
+Configs take an optional top-level `task`. The default, and the only value accepted in this release, is `segmentation`, so existing configs need no change. `detection`, `instance`, `classification`, `change` and `regression` are planned; setting one of them fails validation with a message that lists the supported and planned tasks. The manifest records the task, and a resumed run must use the same one.
+
+## Migrating to 0.2
+
+### Checklist
 
 <Steps>
 
@@ -24,7 +89,7 @@ The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/m
 
 </Steps>
 
-## Imagery configuration
+### Imagery configuration
 
 The imagery source is now a discriminated `imagery` block. Move the XYZ zoom out of `region` and replace `tiles` with `imagery`:
 
@@ -43,7 +108,7 @@ imagery:
 
 mapcv 0.2 still accepted `region.zoom` plus `tiles` with a deprecation notice. **That compatibility path was removed in 0.3.0:** a config with `tiles:` or `region.zoom` now fails validation with an error that points here. Move `tiles` and `region.zoom` into the `imagery` block as shown above, and delete `region.zoom`. `imagery.type` is required.
 
-## Stricter configs
+### Stricter configs
 
 Unknown keys are now errors: a typo such as `stide:` or an option from a newer mapcv stops validation instead of being ignored. Remove keys that 0.2 does not know; `mapcv validate` names each one. An XYZ `imagery` block takes either `source` or `url_template`, not both.
 
@@ -51,15 +116,15 @@ Relative paths (`labels.path`, `writer.staging_dir`, a local EOPF `imagery.path`
 
 `mapcv init` writes `mapcv.yaml` unless you give it a path. Use `mapcv init --stdout` to print the config instead.
 
-## Google imagery preset
+### Google imagery preset
 
 The built-in `google_satellite` preset has been removed, and configs that still use it fail validation with a pointer to this guide. mapcv cannot determine whether a use of Google imagery is licensed for downloading, caching, or machine-learning dataset creation. Authorized custom XYZ templates remain supported through `imagery.url_template`; do not put credentials or signed query strings in committed YAML.
 
-## OpenStreetMap preset
+### OpenStreetMap preset
 
 The built-in `osm` preset has also been removed. OpenStreetMap data is open (ODbL), but the OpenStreetMap Foundation's tile servers run on donated capacity and their [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) forbids bulk downloading, which is what dataset generation does. To use OSM-styled tiles, point `imagery.url_template` at a commercial OSM tile service whose terms allow it (with your API key kept out of committed YAML) or at a tile server you host. To use OSM *features* as labels, export them (for example with Overpass or QuackOSM) to GeoJSON and pass them as `labels.path`, with ODbL attribution.
 
-## EOPF output and manifests
+### EOPF output and manifests
 
 EOPF Sentinel-2 L2A input requires `pip install "mapcv[zarr]"` and `writer.image_format: npy`. Each image patch has shape `(bands, height, width)` and decoded `float32` values. Band order is exactly the order configured in `imagery.bands`.
 
@@ -67,7 +132,7 @@ New datasets use manifest version 2. It records the source type, product identif
 
 Resuming any dataset now requires the same imagery, label file, label settings, sampler and writer settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
 
-## Sampling changes
+### Sampling changes
 
 Anchors are now computed once over the whole raster instead of per strip:
 
@@ -75,14 +140,14 @@ Anchors are now computed once over the whole raster instead of per strip:
 - Grid patches can cross the old strip seams, and `edge_strategy` applies only at the raster's outer edges. Patch positions and counts can therefore differ from a 0.1 run over the same region.
 - For XYZ, all-black pixels (including tiles that failed under `policy: lenient` or `ignore`) count as empty for `max_empty_ratio`, as in 0.1.
 
-## Splitting
+### Splitting
 
 The default `split.strategy` is now `spatial`: whole blocks of the raster (4 × `patch_size` by default, set with `split.block_size`) go to one split, and train/val patches that overlap a held-out patch are left out. Random patch-level splits overstate accuracy when patches overlap or neighbour each other. Set `strategy: stratified` or `random` to keep a patch-level split; mapcv warns when that leaks overlapping pixels. Manifests from 0.1 do not record the patch size, so `spatial` falls back to `stratified` unless `block_size` is set.
 
-## Class IDs
+### Class IDs
 
 With `labels.label_field`, class IDs used to follow the order labels first appeared in the file, so the same classes could get different IDs in different files. Now integer labels in 1..255 are used as their own IDs and other labels are numbered in sorted order. Set `labels.classes` (for example `{building: 1, road: 2}`) to pin IDs explicitly, for instance to match a dataset created with 0.1.
 
-## Removed Python APIs
+### Removed Python APIs
 
 `download_region_strips`, `iter_tile_strips`, `TilesConfig` and the `hello()` stub are removed; `mapcv generate` reads imagery in chunks without them. `download_region`, `stitch_region` and `sample_patches` remain for in-memory workflows.

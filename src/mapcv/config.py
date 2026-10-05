@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -304,18 +304,39 @@ class LabelsConfig(BaseModel):
         return self
 
 
+SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation",)
+# Tasks on the roadmap, named in the error so a config written for them fails clearly.
+PLANNED_TASKS: Tuple[str, ...] = ("detection", "instance", "classification", "change", "regression")
+
+
+def _validate_task(task: Any) -> Any:
+    if not isinstance(task, str) or task in SUPPORTED_TASKS:
+        return task
+    supported = ", ".join(SUPPORTED_TASKS)
+    planned = ", ".join(PLANNED_TASKS)
+    if task in PLANNED_TASKS:
+        raise ValueError(
+            f"task '{task}' is not supported yet; supported: {supported} (planned: {planned})"
+        )
+    raise ValueError(f"unknown task '{task}'; supported: {supported} (planned: {planned})")
+
+
 class MapcvConfig(BaseModel):
     """Full mapcv pipeline configuration."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")
 
+    # What the dataset is for; decides the target each patch is annotated with.
+    task: Literal["segmentation"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig
     labels: Optional[LabelsConfig] = None
     sampler: SamplerConfig
     writer: WriterConfig
     split: Optional[SplitterConfig] = None
+
+    _check_task = field_validator("task", mode="before")(_validate_task)
 
     @model_validator(mode="before")
     @classmethod

@@ -10,7 +10,14 @@ from typer.testing import CliRunner
 
 import mapcv
 from mapcv.cli import app
-from mapcv.writer import Manifest
+from mapcv.manifest import (
+    Manifest,
+    ManifestEntry,
+    ManifestMismatchError,
+    PatchSummary,
+    SourceRecord,
+    TargetRecord,
+)
 
 runner = CliRunner()
 
@@ -40,20 +47,19 @@ def _write_config(tmp_path: Path, staging: Optional[Path] = None) -> Path:
 
 def _write_manifest(staging_dir: Path, n: int = 20) -> None:
     staging_dir.mkdir(parents=True, exist_ok=True)
-    m = Manifest(class_map={"bg": 0, "obj": 1})
+    m = Manifest(
+        target=TargetRecord(type="segmentation", class_map={"obj": 1}, ignore_index=255),
+        sources=[SourceRecord(patch_shape=[1, 1, 3], dtype="uint8", crs="EPSG:3857")],
+    )
     for i in range(n):
-        from mapcv.writer import ManifestEntry
-
         m.patches.append(
             ManifestEntry(
-                filename=f"patch_{i:07d}.png",
-                mask_filename=None,
                 row=i,
                 col=0,
-                padded=False,
-                strip_index=0,
-                per_class_pixel_counts={},
-                empty_ratio=0.0,
+                padded=i == 0,
+                chunk=0,
+                files={"image": f"Images/patch_{i:07d}.png", "mask": f"Masks/patch_{i:07d}.png"},
+                summary=PatchSummary(class_pixels={"0": 3, "1": 1}, empty_ratio=0.0),
             )
         )
     m.save(staging_dir / "manifest.json")
@@ -436,7 +442,28 @@ def test_info_summarizes_a_dataset(tmp_path: Path) -> None:
     result = runner.invoke(app, ["info", str(staging)])
     assert result.exit_code == 0
     assert "20" in result.output
+    assert "segmentation" in result.output
+    assert "version 3" in result.output
+    assert "mask value 255" in result.output
+    assert "obj" in result.output and "25.0%" in result.output  # class table
     assert runner.invoke(app, ["info", str(tmp_path / "nope")]).exit_code == 1
+
+
+def test_info_reads_a_mapcv_0_2_dataset() -> None:
+    dataset = Path(__file__).parent / "fixtures" / "mapcv-0.2.0" / "dataset"
+    result = runner.invoke(app, ["info", str(dataset)])
+    assert result.exit_code == 0, result.output
+    assert "version 2 (mapcv 0.2; read as version 3)" in result.output
+    assert "building" in result.output and "water" in result.output
+    assert "train 7" in result.output
+
+
+def test_info_refuses_a_manifest_from_a_newer_mapcv(tmp_path: Path) -> None:
+    tmp_path.joinpath("manifest.json").write_text('{"version": 4, "patches": []}')
+    result = runner.invoke(app, ["info", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "newer mapcv" in result.output
+    assert not isinstance(result.exception, ManifestMismatchError)
 
 
 @pytest.mark.parametrize("template", ["xyz", "sentinel2"])

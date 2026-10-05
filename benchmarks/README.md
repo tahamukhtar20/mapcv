@@ -95,10 +95,10 @@ A failed check is added to `problems`, printed, stored in the results file, and 
 
 - **Images**: every patch (or, for `L`, `XL` and `M-polys100k`, a seeded sample of 300 to 400) equals the tiles the server sent: exactly for PNG output, within a small tolerance for JPEG output. Failed tiles must be black.
 - **Masks**: equal to `rasterio.features.rasterize` on the same labels reprojected with `pyproj`; pixels without imagery (failed tiles) carry `labels.ignore_index`. Needs rasterio and pyproj, otherwise skipped with a message.
-- **Manifest**: patch count matches the grid, patches lie on the stride grid with no duplicates, `transform` and `crs` are the tile grid's, the class map is right, Images/ and Masks/ hold exactly the listed files, per-class pixel counts equal the mask files, no temporary files are left.
+- **Manifest**: version 3 with task `segmentation`, patch count matches the grid, patches lie on the stride grid with no duplicates, the source's `transform` and `crs` are the tile grid's, the class map and ignore value are right, each entry lists an image and a mask, Images/ and Masks/ hold exactly the listed files, per-class pixel counts equal the mask files, no temporary files are left.
 - **Splits**: the lists are well formed (trailing newline), disjoint, name only known patches, and no train or validation patch shares a pixel with a test patch (or a train one with a validation patch).
 - **Failure handling**: `strict` exits non-zero, with a message and without a traceback.
-- **Resume**: the interrupted run exits non-zero without a traceback, and after resuming the dataset (images, masks, manifest content, splits) is identical to an uninterrupted run. The manifest is compared as parsed JSON, because the key order of `per_class_pixel_counts` differs between runs.
+- **Resume**: the interrupted run exits non-zero without a traceback, and after resuming the dataset (images, masks, manifest content, splits) is identical to an uninterrupted run. The manifest is compared as parsed JSON, so only its content counts.
 - **Determinism**: all repeats of a scenario produce identical output.
 
 ## Results file

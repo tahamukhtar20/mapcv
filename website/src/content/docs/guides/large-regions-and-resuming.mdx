@@ -103,15 +103,19 @@ mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already
 
 A resume is refused, **before** any imagery is read or written, if the existing manifest was produced with a different:
 
-| Recorded field | Changes when you edit… |
+| Recorded field (named in the error) | Changes when you edit… |
 | --- | --- |
+| `task` | `task` |
 | `class_map` | `labels.label_field`, `labels.classes`, or the set of label values |
-| `labels` | any `labels` setting, or the **contents** of the label file (a SHA-256 hash is recorded) |
+| `ignore_index` | `labels.ignore_index` |
+| `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
 | `sampler` | any `sampler` field |
 | `writer` | `image_format` (including `png` ↔ `jpg`) or `jpg_quality` |
+
+In the [manifest](/mapcv/reference/dataset-format/#manifestjson) these are `task`, the `target` block, the `sources` block, `sampler` and `writer`.
 
 Moving the label file is fine as long as its contents stay the same. A refused resume looks like this, here after a single byte was added to the label file:
 
@@ -133,9 +137,13 @@ dataset/manifest.json is a version-1 manifest from mapcv 0.1.x and cannot be res
 generate into a new writer.staging_dir ('mapcv split' still reads it)
 ```
 
-`mapcv split` and `mapcv info` still work on them. See [Migrating to 0.2](/mapcv/project/migration/).
+`mapcv split` and `mapcv info` still work on them. See [Migrating to 0.2](/mapcv/project/migration/#migrating-to-02).
 
-In the other direction, a manifest written by a newer mapcv (a higher manifest `version`) is refused with *"was written by a newer mapcv (manifest version N); upgrade mapcv to read it"*.
+### Datasets from mapcv 0.2
+
+mapcv 0.3 resumes a 0.2 dataset (manifest version 2) when its settings match, with `labels.ignore_index: null` in the config: 0.2 wrote background where there is no imagery, and the rest of the dataset must do the same. Without it the resume is refused with a message that says so. A finished 0.2 dataset is left as it is; one that gains patches is saved as manifest version 3. 0.2 datasets made with `sampler.mode: random` cannot be resumed, because 0.3 draws random positions differently. See [Migrating to 0.3](/mapcv/project/migration/#datasets-made-by-mapcv-02).
+
+In the other direction, a manifest written by a newer mapcv (a higher manifest `version`) is refused with *"manifest version N was written by a newer mapcv; upgrade mapcv to read it"*.
 
 ## Checklist for a big run
 

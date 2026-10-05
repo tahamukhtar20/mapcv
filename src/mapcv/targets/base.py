@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Protocol, Sequence, Tuple
+from typing import Any, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -10,6 +10,7 @@ import numpy.typing as npt
 from mapcv._patching import PadMode
 from mapcv.imagery import RasterMetadata
 from mapcv.labels import ClassMap
+from mapcv.manifest import TargetRecord
 
 Transform = Tuple[float, float, float, float, float, float]
 
@@ -51,6 +52,13 @@ class Target(Protocol):
     """What the dataset learns: parses its inputs once, then annotates patches per window."""
 
     @property
+    def type(self) -> Optional[str]:
+        """The manifest's ``target.type`` (``"segmentation"``), or ``None`` for no target.
+
+        Known before :meth:`prepare`, so writers can be checked up front.
+        """
+
+    @property
     def class_map(self) -> ClassMap:
         """Class name to ID; valid after :meth:`prepare`."""
 
@@ -60,8 +68,8 @@ class Target(Protocol):
         Raises on invalid inputs and warns when they cannot match the imagery.
         """
 
-    def fingerprint(self) -> Optional[Dict[str, Any]]:
-        """The manifest's ``labels`` block, or ``None``; a resumed run must reproduce it.
+    def record(self) -> Optional[TargetRecord]:
+        """The manifest's ``target`` block, or ``None``; a resumed run must reproduce it.
 
         Valid after :meth:`prepare`.
         """

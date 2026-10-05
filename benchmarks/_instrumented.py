@@ -55,7 +55,7 @@ def _install() -> None:
     from mapcv import cli, pipeline
     from mapcv.imagery import XYZRasterSource
     from mapcv.targets import segmentation
-    from mapcv.writer import Manifest
+    from mapcv.manifest import Manifest
     from mapcv.writers import FilesWriter
 
     cli.make_plan = _timed("plan", cli.make_plan)

@@ -24,6 +24,7 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
+    task: Literal["segmentation"] = "segmentation"   # other tasks are planned
     region: RegionConfig
     imagery: XYZImageryConfig | EOPFZarrImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | None = None
@@ -55,6 +56,7 @@ A dataclass:
 
 | Attribute | Type | Meaning |
 | --- | --- | --- |
+| `task` | `str` | The config's task (`"segmentation"`) |
 | `region_km` | `(float, float)` | Approximate width and height of the region |
 | `imagery` | `str` | Human-readable source description |
 | `resolution_m` | `float` | Ground resolution in metres per pixel |
@@ -126,30 +128,42 @@ See [Splits without leakage](/mapcv/guides/splits-without-leakage/).
 
 ### `Manifest`
 
+The parsed `manifest.json` (version 3; see [Dataset format](/mapcv/reference/dataset-format/#manifestjson) for every field). `GenerateResult.manifest` is one.
+
 ```python
+from mapcv import Manifest
+
 class Manifest(BaseModel):
-    version: int = 2
-    class_map: dict[str, int]
-    source_type: str = "xyz"
-    product_id: str | None = None
-    bands: list[str] = []
-    dtype: str | None = None
-    patch_shape: list[int] = []
-    crs: str | None = None
-    transform: tuple[float, float, float, float, float, float] | None = None
+    version: int = 3
+    mapcv_version: str | None = None
+    task: str = "segmentation"
+    sources: list[SourceRecord] = []          # name, source_type, product_id, bands, dtype,
+                                              # crs, transform, patch_shape
+    target: TargetRecord | None = None        # type, class_map, ignore_index, dtype, labels, options
+    writer: dict[str, Any] | None = None      # layout, image_format, jpg_quality, mask_format
     sampler: dict[str, Any] | None = None
-    labels: dict[str, Any] | None = None    # label settings + sha256 of the label file
-    writer: dict[str, Any] | None = None    # image_format, jpg_quality
     patches: list[ManifestEntry] = []
 
+    source: SourceRecord                      # the first source (read-only)
+    class_map: dict[str, int]                 # target.class_map, or {} (read-only)
+    ignore_index: int | None                  # target.ignore_index, or None (read-only)
+    upgraded_from: int | None                 # 1 or 2 when loaded from an older version
+
     @classmethod
-    def load(cls, path: Path) -> Manifest: ...   # version 1 or 2; newer raises ManifestMismatchError
-    def save(self, path: Path) -> None: ...       # atomic write
+    def load(cls, path: Path) -> Manifest: ...   # version 1, 2 or 3; older ones are upgraded in
+                                                 # memory; newer raises ManifestMismatchError
+    def save(self, path: Path) -> None: ...      # atomic write, always version 3
+    def patch_name(self, entry) -> str: ...      # the name split lists use: "patch_0000042.png"
+    def patch_transform(self, entry) -> tuple[float, ...]: ...   # affine of the patch's pixels
+    def patch_bounds(self, entry) -> tuple[float, float, float, float]: ...
+                                                 # (left, bottom, right, top) in the source CRS
 ```
+
+`Manifest.load(path).save(path)` converts a 0.1 or 0.2 manifest to version 3 on disk. Unknown keys are kept, so a manifest from a later 0.3 release round-trips unchanged.
 
 ### `ManifestEntry`
 
-A `TypedDict` (plain `dict` at runtime) with `filename`, `mask_filename`, `row`, `col`, `padded`, `strip_index`, `per_class_pixel_counts` and `empty_ratio`. Meanings: [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
+A `TypedDict` (plain `dict` at runtime) with `row`, `col`, `padded`, `chunk`, `files` (role → path relative to the dataset folder, for example `{"image": "Images/patch_0000000.png", "mask": "Masks/patch_0000000.png"}`) and `summary` (a `PatchSummary`: `empty_ratio` and, with labels, `class_pixels`). Meanings: [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
 
 ### `ManifestMismatchError`
 
@@ -159,7 +173,7 @@ from mapcv import ManifestMismatchError
 class ManifestMismatchError(ValueError): ...
 ```
 
-Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, or one created with a different class map, source, product, bands, dtype, patch shape, CRS, transform, sampler, label settings or label-file contents, or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
+Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, a version-2 manifest of random sampling, or one created with a different task, source, product, bands, dtype, patch shape, CRS, transform, class map, ignore index, label settings or label-file contents, sampler or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
 
 ## Building blocks
 
@@ -257,4 +271,4 @@ The built-in XYZ sources and their URL templates. `resolve_url_template(url_temp
 
 ### Writer internals
 
-`load_or_create_manifest(path, class_map, *, source_type, product_id, bands, dtype, patch_shape, crs, transform, sampler, labels, writer)` and `write_patches(image_patches, mask_patches, meta, config, manifest, strip_index=0)` are the functions `run_generate` uses to resume-check and write patches. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.
+`load_or_create_manifest(path, expected)` and `write_patches(image_patches, mask_patches, meta, config, manifest, chunk_index=0)` are the functions `run_generate` uses to resume-check and write patches. `expected` is a `Manifest` without patches describing the run (task, sources, target, writer, sampler); the existing manifest at `path` is returned when it matches, `expected` when there is none, and `ManifestMismatchError` is raised otherwise. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.

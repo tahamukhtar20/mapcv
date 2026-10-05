@@ -29,11 +29,11 @@ from mapcv import pipeline
 from mapcv._mapcv_rs import parse_kml_rs
 from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
 from mapcv.labels import MAX_CLASS_ID, parse_geojson, parse_kml
+from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
-from mapcv.writer import Manifest, ManifestMismatchError
 
 app = typer.Typer(
     name="mapcv",
@@ -280,7 +280,7 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
 def _class_names(manifest: Manifest) -> Dict[str, str]:
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
-    ignore = (manifest.labels or {}).get("ignore_index")
+    ignore = manifest.ignore_index
     if ignore is not None:
         names.setdefault(str(ignore), "ignored (no imagery)")
     if not manifest.class_map:
@@ -291,7 +291,7 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
 def _class_table(manifest: Manifest) -> Optional[Table]:
     totals: Counter[str] = Counter()
     for entry in manifest.patches:
-        totals.update(entry["per_class_pixel_counts"])
+        totals.update(entry["summary"].get("class_pixels") or {})
     pixels = sum(totals.values())
     if not pixels:
         return None
@@ -327,8 +327,9 @@ def _print_result(result: GenerateResult) -> None:
     if result.new_patches != total:
         patches += f" [dim]({result.new_patches:,} new this run)[/dim]"
     table.add_row("Patches", patches)
-    shape = "×".join(str(dim) for dim in manifest.patch_shape) if manifest.patch_shape else "?"
-    table.add_row("Shape", f"{shape} {manifest.dtype or ''}".strip())
+    source = manifest.source
+    shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
+    table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
     if result.tiles_requested:
         table.add_row(
             "Tiles", f"{result.tiles_requested:,} fetched · {result.tiles_failed:,} failed"
@@ -337,9 +338,7 @@ def _print_result(result: GenerateResult) -> None:
         table.add_row("Splits", _split_line(result.split_counts))
     minutes, seconds = divmod(int(result.seconds), 60)
     table.add_row("Time", f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s")
-    written = ["Images/"]
-    if any(entry["mask_filename"] for entry in manifest.patches):
-        written.append("Masks/")
+    written = [f"{folder}/" for folder in patch_folders(manifest)] or ["Images/"]
     written.append("manifest.json")
     if result.split_counts is not None:
         written.append("splits/")
@@ -840,17 +839,27 @@ def info(
     if not manifest_path.exists():
         _console.print(f"[red]No manifest found at[/red] {manifest_path}")
         raise typer.Exit(code=1)
-    manifest = Manifest.load(manifest_path)
+    try:
+        manifest = Manifest.load(manifest_path)
+    except ManifestMismatchError as exc:
+        _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
-    table.add_row("Source", f"{manifest.source_type} · {manifest.product_id or 'unknown product'}")
-    if manifest.bands:
-        table.add_row("Bands", ", ".join(manifest.bands))
-    shape = "×".join(str(dim) for dim in manifest.patch_shape) or "?"
-    table.add_row("Patches", f"{len(manifest.patches):,} · {shape} {manifest.dtype or ''}".strip())
-    if manifest.crs:
-        table.add_row("CRS", manifest.crs)
+    target = manifest.target
+    task = manifest.task if target is not None else f"{manifest.task} · image only (no labels)"
+    table.add_row("Task", task)
+    source = manifest.source
+    table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
+    if source.bands:
+        table.add_row("Bands", ", ".join(source.bands))
+    shape = "×".join(str(dim) for dim in source.patch_shape) or "?"
+    table.add_row("Patches", f"{len(manifest.patches):,} · {shape} {source.dtype or ''}".strip())
+    if source.crs:
+        table.add_row("CRS", source.crs)
+    if target is not None and target.ignore_index is not None:
+        table.add_row("Ignore", f"mask value {target.ignore_index} marks pixels without imagery")
     padded = sum(1 for entry in manifest.patches if entry["padded"])
     if padded:
         table.add_row("Padded", f"{padded:,} patch(es) touch the raster edge")
@@ -862,7 +871,10 @@ def info(
             text = path.read_text().strip() if path.exists() else ""
             counts[name] = len(text.splitlines()) if text else 0
         table.add_row("Splits", _split_line(counts))
-    table.add_row("Manifest", f"version {manifest.version}")
+    version = f"version {manifest.loaded_version}"
+    if manifest.upgraded_from is not None:
+        version += f" (mapcv 0.{manifest.upgraded_from}; read as version {manifest.version})"
+    table.add_row("Manifest", version)
     _console.print(
         Panel(table, title=f"[bold]{staging_dir}[/bold]", title_align="left", border_style="cyan")
     )

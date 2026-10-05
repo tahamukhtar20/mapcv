@@ -24,6 +24,7 @@ from rich.progress import (
 from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv.config import MapcvConfig
 from mapcv.imagery import WindowedRasterSource, offset_transform, open_raster_source
+from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
     PatchMeta,
     SamplerConfig,
@@ -32,8 +33,7 @@ from mapcv.sampler import (
 )
 from mapcv.splitter import SplitLists, SplitterConfig, split_dataset, split_manifest
 from mapcv.targets import AnnotationBatch, Target, create_target
-from mapcv.writer import Manifest, load_or_create_manifest
-from mapcv.writers import create_writer
+from mapcv.writers import check_compatible, create_writer
 
 _console = Console()
 
@@ -137,26 +137,34 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     staging.mkdir(parents=True, exist_ok=True)
     manifest_path = staging / _MANIFEST_FILENAME
 
+    target = create_target(config)
+    writer = create_writer(config.writer)
+    check_compatible(target, writer)
     with _console.status("Opening imagery…"):
         source = open_raster_source(config.region, config.imagery)
     try:
-        target = create_target(config)
-        writer = create_writer(config.writer)
         target.prepare(source.metadata)
-        manifest: Manifest = load_or_create_manifest(
-            manifest_path,
-            target.class_map,
-            source_type=source.metadata.source_type,
-            product_id=source.metadata.product_id,
-            bands=source.metadata.bands,
-            dtype=source.metadata.dtype,
-            patch_shape=writer.patch_shape(source.metadata, config.sampler.patch_size),
-            crs=source.metadata.crs,
-            transform=source.metadata.transform,
-            sampler=config.sampler.model_dump(mode="json"),
-            labels=target.fingerprint(),
+        meta = source.metadata
+        expected = Manifest(
+            mapcv_version=mapcv_version(),
+            task=config.task,
+            sources=[
+                SourceRecord(
+                    name="image",
+                    source_type=meta.source_type,
+                    product_id=meta.product_id,
+                    bands=list(meta.bands),
+                    dtype=meta.dtype,
+                    crs=meta.crs,
+                    transform=meta.transform,
+                    patch_shape=writer.patch_shape(meta, config.sampler.patch_size),
+                )
+            ],
+            target=target.record(),
             writer=writer.fingerprint(),
+            sampler=config.sampler.model_dump(mode="json"),
         )
+        manifest = load_or_create_manifest(manifest_path, expected)
 
         resumed_patches = len(manifest.patches)
         anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
@@ -189,7 +197,9 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
                 manifest.save(manifest_path)
                 progress.advance(task)
 
-        manifest.save(manifest_path)
+        # A finished dataset is left untouched (a 0.2 manifest stays version 2).
+        if chunks or not manifest_path.exists():
+            manifest.save(manifest_path)
         requested = int(getattr(source, "tiles_requested", 0))
         failed = int(getattr(source, "tiles_failed", 0))
         reasons = str(getattr(source, "failure_reasons", "") or "")
@@ -233,7 +243,10 @@ def run_split(
     staging_dir: Path,
     split_config: Optional[SplitterConfig] = None,
 ) -> Dict[str, int]:
-    """Split an existing version-1 or version-2 dataset manifest; return split counts."""
+    """Split an existing dataset (manifest version 1, 2 or 3); return split counts.
+
+    The manifest is read, never rewritten.
+    """
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")

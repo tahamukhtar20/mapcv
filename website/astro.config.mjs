@@ -95,7 +95,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Providers & licensing', slug: 'project/providers' },
-            { label: 'Migrating to 0.2', slug: 'project/migration' },
+            { label: 'Migrating', slug: 'project/migration' },
             { label: 'Changelog', slug: 'project/changelog' },
             { label: 'Contributing', slug: 'project/contributing' },
             { label: 'Citing mapcv', slug: 'project/citing' },

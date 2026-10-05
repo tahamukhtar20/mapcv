@@ -28,19 +28,22 @@ from mapcv.labels import (
     parse_kml,
     transform_to_mercator,
 )
+from mapcv.manifest import (
+    MANIFEST_VERSION,
+    Manifest,
+    ManifestEntry,
+    ManifestMismatchError,
+    PatchSummary,
+    SourceRecord,
+    TargetRecord,
+    load_or_create_manifest,
+)
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, plan
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import SamplerConfig, sample_patches, sample_patches_at_anchors
 from mapcv.splitter import SplitterConfig, split_dataset
-from mapcv.writer import (
-    Manifest,
-    ManifestMismatchError,
-    ManifestEntry,
-    WriterConfig,
-    load_or_create_manifest,
-    write_patches,
-)
+from mapcv.writer import WriterConfig, write_patches
 
 try:
     __version__ = _package_version("mapcv")
@@ -64,9 +67,13 @@ __all__ = [
     "RegionConfig",
     "ClassMap",
     "GeomWithClass",
+    "MANIFEST_VERSION",
     "Manifest",
     "ManifestMismatchError",
     "ManifestEntry",
+    "PatchSummary",
+    "SourceRecord",
+    "TargetRecord",
     "WriterConfig",
     "download_region",
     "bounds",

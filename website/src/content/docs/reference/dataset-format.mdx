@@ -78,7 +78,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
     },
     "options": {}
   },
-  "writer": { "layout": "files", "image_format": "png", "jpg_quality": 95, "mask_format": "png" },
+  "writer": { "layout": "files", "image_format": "png", "jpg_quality": 95, "jpg_subsampling": "4:2:0", "mask_format": "png" },
   "sampler": {
     "patch_size": 256, "stride": 256, "mode": "grid", "edge_strategy": "drop",
     "pad_mode": "zero", "max_empty_ratio": 1.0, "min_label_ratio": 0.0,
@@ -100,7 +100,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"` |
 | `sources` | list | The imagery, one object per source (today always one, named `"image"`). See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
-| `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format`, `jpg_quality` and `mask_format` (`"png"`). A resume notices a format change |
+| `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format`, `jpg_quality`, `jpg_subsampling` and `mask_format` (`"png"`). A resume notices a format change |
 | `sampler` | object | The resolved `sampler` config (with `stride` filled in). Used for resume checks, spatial splits and patch bounds |
 | `patches` | list | One entry per patch, in file order. See [Patch entries](#patch-entries) |
 

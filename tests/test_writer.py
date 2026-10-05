@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import pytest
+from PIL import Image, JpegImagePlugin
+from pydantic import ValidationError
 from typing import Any, List, Optional, Tuple
 
 from mapcv import SamplerConfig, sample_patches
@@ -51,6 +54,14 @@ def test_writer_config_defaults(tmp_path: Path) -> None:
     cfg = WriterConfig(staging_dir=tmp_path)
     assert cfg.image_format == "png"
     assert cfg.jpg_quality == 95
+    assert cfg.jpg_subsampling == "4:2:0"
+
+
+def test_writer_config_jpg_subsampling_is_validated(tmp_path: Path) -> None:
+    assert WriterConfig(staging_dir=tmp_path, jpg_subsampling="4:4:4").jpg_subsampling == "4:4:4"
+    for bad in ("4:2:2", "420", "", "4:4:4 "):
+        with pytest.raises(ValidationError, match="jpg_subsampling"):
+            WriterConfig(staging_dir=tmp_path, jpg_subsampling=bad)  # type: ignore[arg-type]
 
 
 def test_writer_config_jpg_quality_bounds(tmp_path: Path) -> None:
@@ -114,6 +125,87 @@ def test_jpg_format_written(tmp_path: Path) -> None:
     write_patches(imgs, None, meta, cfg, m)
     written = list((tmp_path / "Images").glob("*.jpg"))
     assert len(written) == len(meta)
+
+
+def _corpus(n: int = 24, size: int = 128) -> npt.NDArray[np.uint8]:
+    """Fixed, imagery-like patches: smooth colour gradients, hard edges and mild noise."""
+    rng = np.random.default_rng(1234)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float64) / size
+    out = np.empty((n, size, size, 3), dtype=np.uint8)
+    for i in range(n):
+        phase = rng.uniform(0, 6.28, size=3)
+        base = np.stack(
+            [
+                90 + 80 * np.sin(3 * xx + phase[c]) * np.cos(2 * yy + phase[(c + 1) % 3])
+                for c in range(3)
+            ],
+            axis=-1,
+        )
+        base[(xx + yy * 0.5 > rng.uniform(0.6, 1.2))] += rng.uniform(-40, 40, size=3)
+        base += rng.normal(0, 4, size=base.shape)
+        out[i] = np.clip(base, 0, 255).astype(np.uint8)
+    return out
+
+
+def _write_jpgs(images: npt.NDArray[np.uint8], tmp_path: Path, **config: Any) -> List[Path]:
+    meta = [PatchMeta(row=i, col=0, padded=False, empty_ratio=0.0) for i in range(len(images))]
+    cfg = WriterConfig(staging_dir=tmp_path, image_format="jpg", **config)
+    write_patches(images, None, meta, cfg, Manifest())
+    return sorted((tmp_path / "Images").glob("*.jpg"))
+
+
+@pytest.mark.parametrize(("setting", "sampling"), [(None, 2), ("4:2:0", 2), ("4:4:4", 0)])
+def test_jpg_sampling_factors_match_the_setting(
+    tmp_path: Path, setting: Optional[str], sampling: int
+) -> None:
+    extra = {} if setting is None else {"jpg_subsampling": setting}
+    files = _write_jpgs(_corpus(2), tmp_path, **extra)
+    for path in files:
+        with Image.open(path) as img:
+            # Pillow reports 0 = 4:4:4, 1 = 4:2:2, 2 = 4:2:0.
+            assert JpegImagePlugin.get_sampling(img) == sampling
+
+
+def test_jpg_size_is_close_to_pillows_at_quality_95(tmp_path: Path) -> None:
+    images = _corpus()
+    ours = sum(p.stat().st_size for p in _write_jpgs(images, tmp_path, jpg_quality=95))
+    theirs = 0
+    for patch in images:
+        buffer = io.BytesIO()
+        Image.fromarray(patch).save(buffer, "JPEG", quality=95, subsampling=2)
+        theirs += buffer.tell()
+    assert 0.85 * theirs <= ours <= 1.15 * theirs, (ours, theirs)
+
+
+def test_jpg_444_is_larger_and_not_worse_than_420(tmp_path: Path) -> None:
+    images = _corpus(8)
+
+    def run(sub: str) -> Tuple[int, float]:
+        files = _write_jpgs(images, tmp_path / sub.replace(":", ""), jpg_subsampling=sub)
+        size = sum(p.stat().st_size for p in files)
+        err = 0.0
+        for patch, path in zip(images, files):
+            with Image.open(path) as img:
+                err += float(np.mean((np.asarray(img.convert("RGB"), np.float64) - patch) ** 2))
+        return size, err
+
+    size420, err420 = run("4:2:0")
+    size444, err444 = run("4:4:4")
+    assert size444 > 1.2 * size420
+    assert err444 <= err420
+
+
+def test_jpg_png_output_ignores_subsampling(tmp_path: Path) -> None:
+    images = _corpus(2, 32)
+    meta = [PatchMeta(row=i, col=0, padded=False, empty_ratio=0.0) for i in range(2)]
+    for sub in ("4:2:0", "4:4:4"):
+        out = tmp_path / sub.replace(":", "")
+        cfg = WriterConfig(staging_dir=out, image_format="png", jpg_subsampling=sub)
+        write_patches(images, None, meta, cfg, Manifest())
+    for name in ("patch_0000000.png", "patch_0000001.png"):
+        assert (tmp_path / "420" / "Images" / name).read_bytes() == (
+            tmp_path / "444" / "Images" / name
+        ).read_bytes()
 
 
 def test_npy_format_preserves_float32_bands_first(tmp_path: Path) -> None:

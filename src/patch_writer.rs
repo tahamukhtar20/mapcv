@@ -1,8 +1,8 @@
 //! Parallel patch writer: encodes and writes image/mask patches using rayon.
 
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ImageBuffer, Luma, Rgb};
+use jpeg_encoder::{ChromaSubsamplingMethod, ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::BufWriter;
@@ -29,14 +29,51 @@ pub struct PatchResult {
     pub empty_ratio: f64,
 }
 
-/// Check that `image_format` is one the writer encodes and `jpg_quality` is in `1..=100`.
+/// Chroma subsampling of JPEG patches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subsampling {
+    /// Chroma at half resolution in both directions (Pillow's default).
+    Yuv420,
+    /// Chroma at full resolution.
+    Yuv444,
+}
+
+impl Subsampling {
+    /// Parse `"4:2:0"` or `"4:4:4"`.
+    ///
+    /// # Errors
+    /// Returns a message naming the unsupported value.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "4:2:0" => Ok(Self::Yuv420),
+            "4:4:4" => Ok(Self::Yuv444),
+            other => Err(format!(
+                "jpg_subsampling must be '4:2:0' or '4:4:4', got '{other}'"
+            )),
+        }
+    }
+
+    fn factor(self) -> SamplingFactor {
+        match self {
+            Self::Yuv420 => SamplingFactor::F_2_2,
+            Self::Yuv444 => SamplingFactor::F_1_1,
+        }
+    }
+}
+
+/// Check that `image_format` is one the writer encodes, `jpg_quality` is in `1..=100`
+/// and `jpg_subsampling` is `"4:2:0"` or `"4:4:4"`.
 ///
 /// Only `"png"` and `"jpg"` are accepted; anything else (for example `"jpeg"`)
 /// would otherwise be written as PNG under a misleading name.
 ///
 /// # Errors
 /// Returns a message naming the unsupported value.
-pub fn check_format(image_format: &str, jpg_quality: u8) -> Result<(), String> {
+pub fn check_format(
+    image_format: &str,
+    jpg_quality: u8,
+    jpg_subsampling: &str,
+) -> Result<(), String> {
     if image_format != "png" && image_format != "jpg" {
         return Err(format!(
             "image_format must be 'png' or 'jpg', got '{image_format}'"
@@ -45,6 +82,7 @@ pub fn check_format(image_format: &str, jpg_quality: u8) -> Result<(), String> {
     if !(1..=100).contains(&jpg_quality) {
         return Err(format!("jpg_quality must be in 1..=100, got {jpg_quality}"));
     }
+    Subsampling::parse(jpg_subsampling)?;
     Ok(())
 }
 
@@ -101,6 +139,7 @@ fn check_buffers(
 ///
 /// Files are named `patch_{global_idx:07}.{ext}` where `global_idx = start_idx + local_i`.
 /// Masks are always written as PNG regardless of `image_format`.
+/// `jpg_subsampling` (`"4:2:0"` or `"4:4:4"`) only affects JPEG output.
 /// Existing files are overwritten: the caller indexes from the manifest length, so any file
 /// at these indices is an orphan from an interrupted run, never a recorded patch.
 #[allow(clippy::too_many_arguments)]
@@ -117,8 +156,10 @@ pub fn write_patches(
     masks_dir: &Path,
     image_format: &str,
     jpg_quality: u8,
+    jpg_subsampling: &str,
 ) -> Result<Vec<PatchResult>, String> {
-    check_format(image_format, jpg_quality)?;
+    check_format(image_format, jpg_quality, jpg_subsampling)?;
+    let subsampling = Subsampling::parse(jpg_subsampling)?;
     check_buffers(
         image_data.len(),
         has_mask.then_some(mask_data.len()),
@@ -142,7 +183,14 @@ pub fn write_patches(
 
             let img_slice = &image_data[local_i * img_patch_bytes..(local_i + 1) * img_patch_bytes];
 
-            encode_image(img_slice, patch_size, &img_path, image_format, jpg_quality)?;
+            encode_image(
+                img_slice,
+                patch_size,
+                &img_path,
+                image_format,
+                jpg_quality,
+                subsampling,
+            )?;
 
             let mask_filename = if has_mask {
                 let msk_fname = format!("patch_{global_idx:07}.png");
@@ -185,14 +233,25 @@ fn encode_image(
     path: &Path,
     format: &str,
     quality: u8,
+    subsampling: Subsampling,
 ) -> Result<(), String> {
     let ps = u32::try_from(patch_size)
         .map_err(|_| format!("patch size {patch_size} is too large to encode"))?;
     if format == "jpg" {
-        let file = File::create(path).map_err(|e| e.to_string())?;
-        let mut enc = JpegEncoder::new_with_quality(BufWriter::new(file), quality);
-        enc.encode(data, ps, ps, image::ExtendedColorType::Rgb8)
+        let side = u16::try_from(patch_size)
+            .map_err(|_| format!("patch size {patch_size} is too large for JPEG (max 65535)"))?;
+        // Encode in memory and write once, so a failed write is reported rather than lost
+        // when a `BufWriter` is dropped.
+        let mut out = Vec::with_capacity(patch_size * patch_size / 2);
+        let mut enc = Encoder::new(&mut out, quality);
+        enc.set_sampling_factor(subsampling.factor());
+        // Box-average the chroma like libjpeg (the default takes the top-left pixel).
+        enc.set_chroma_subsampling_method(ChromaSubsamplingMethod::Average);
+        // Optimised Huffman tables would save ~20% more, but the encoder then writes one scan
+        // per component, which some decoders (zune-jpeg, the one behind `image`) misdecode.
+        enc.encode(data, side, side, ColorType::Rgb)
             .map_err(|e| e.to_string())?;
+        std::fs::write(path, &out).map_err(|e| e.to_string())?;
     } else {
         let file = File::create(path).map_err(|e| e.to_string())?;
         let enc = PngEncoder::new_with_quality(
@@ -286,6 +345,7 @@ mod tests {
             &dir,
             "png",
             95,
+            "4:2:0",
         )
         .err()
         .unwrap_or_default()
@@ -302,11 +362,67 @@ mod tests {
 
     #[test]
     fn unknown_format_and_quality_are_rejected() {
-        assert!(check_format("jpeg", 95).is_err());
-        assert!(check_format("PNG", 95).is_err());
-        assert!(check_format("jpg", 0).is_err());
-        assert!(check_format("jpg", 101).is_err());
-        assert!(check_format("png", 95).is_ok());
-        assert!(check_format("jpg", 1).is_ok());
+        assert!(check_format("jpeg", 95, "4:2:0").is_err());
+        assert!(check_format("PNG", 95, "4:2:0").is_err());
+        assert!(check_format("jpg", 0, "4:2:0").is_err());
+        assert!(check_format("jpg", 101, "4:2:0").is_err());
+        assert!(check_format("png", 95, "4:2:0").is_ok());
+        assert!(check_format("jpg", 1, "4:4:4").is_ok());
+        assert!(check_format("jpg", 95, "4:2:2").is_err());
+        assert!(check_format("jpg", 95, "420").is_err());
+    }
+
+    /// A smooth gradient with a hard diagonal edge, `ps x ps` RGB.
+    fn gradient(ps: usize) -> Vec<u8> {
+        let mut data = Vec::with_capacity(ps * ps * 3);
+        for y in 0..ps {
+            for x in 0..ps {
+                let edge = if x + y > ps { 60 } else { 0 };
+                data.push(u8::try_from((x * 255 / ps + edge).min(255)).unwrap());
+                data.push(u8::try_from((y * 255 / ps).min(255)).unwrap());
+                data.push(u8::try_from(((x + y) * 127 / ps + edge).min(255)).unwrap());
+            }
+        }
+        data
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn jpeg_patches_decode_with_the_image_crate_for_both_subsamplings() {
+        let ps = 64;
+        let source = gradient(ps);
+        let dir = std::env::temp_dir().join(format!("mapcv-jpeg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for sub in ["4:2:0", "4:4:4"] {
+            write_patches(
+                &source,
+                &[],
+                false,
+                1,
+                ps,
+                &[(0, 0, false)],
+                0,
+                0,
+                &dir,
+                &dir,
+                "jpg",
+                95,
+                sub,
+            )
+            .unwrap();
+            // `image` decodes with zune-jpeg, which misreads streams that use one scan per
+            // component (what optimised Huffman tables produce), so this guards against that.
+            let decoded = image::open(dir.join("patch_0000000.jpg"))
+                .unwrap()
+                .to_rgb8();
+            let mse = source
+                .iter()
+                .zip(decoded.as_raw())
+                .map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2))
+                .sum::<f64>()
+                / source.len() as f64;
+            assert!(mse < 25.0, "{sub}: mse {mse}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

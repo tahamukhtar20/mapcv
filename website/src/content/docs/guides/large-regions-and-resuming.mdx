@@ -113,7 +113,7 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
 | `sampler` | any `sampler` field |
-| `writer` | `image_format` (including `png` ↔ `jpg`) or `jpg_quality` |
+| `writer` | `image_format` (including `png` ↔ `jpg`), `jpg_quality` or `jpg_subsampling` |
 
 In the [manifest](/mapcv/reference/dataset-format/#manifestjson) these are `task`, the `target` block, the `sources` block, `sampler` and `writer`.
 

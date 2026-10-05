@@ -199,8 +199,9 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | `staging_dir` | path | required | Output folder, created if needed; a relative path is resolved against the config file's folder. Re-running into a folder with a compatible `manifest.json` resumes |
 | `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`) |
 | `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
+| `jpg_subsampling` | `4:2:0` \| `4:4:4` | `4:2:0` | JPEG chroma subsampling when `image_format: jpg`. `4:2:0` stores colour at half resolution in each direction, like Pillow's default, and gives smaller files (about 10% on typical aerial imagery at quality 95, up to half on noisy colour imagery). Use `4:4:4` to keep full colour resolution. JPEG datasets made by mapcv 0.2 are `4:4:4`, so resume them with `jpg_subsampling: 4:4:4` |
 
-Masks are always single-channel PNG. The manifest records the writer as `{layout: files, image_format, jpg_quality, mask_format: png}`. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
+Masks are always single-channel PNG. The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format: png}`. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
 
 **Validation:** XYZ needs `png` or `jpg`; EOPF needs `npy`.
 

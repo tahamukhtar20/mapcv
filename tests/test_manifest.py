@@ -218,6 +218,7 @@ def test_generated_manifest_has_the_v3_schema(
         "layout": "files",
         "image_format": "npy",
         "jpg_quality": 95,
+        "jpg_subsampling": "4:2:0",
         "mask_format": "png",
     }
     assert data["sampler"]["patch_size"] == 3
@@ -443,7 +444,12 @@ def test_mapcv_0_2_manifest_is_upgraded_on_load() -> None:
         dtype="uint8",
         labels=raw["labels"],
     )
-    assert manifest.writer == {"layout": "files", **raw["writer"], "mask_format": "png"}
+    assert manifest.writer == {
+        "layout": "files",
+        **raw["writer"],
+        "jpg_subsampling": "4:2:0",
+        "mask_format": "png",
+    }
     assert manifest.sampler == raw["sampler"]
     for old, new in zip(raw["patches"], manifest.patches):
         assert new["files"] == {
@@ -455,6 +461,22 @@ def test_mapcv_0_2_manifest_is_upgraded_on_load() -> None:
         assert manifest.patch_name(new) == old["filename"]
         for file in new["files"].values():
             assert (V2_DATASET / "dataset" / file).is_file()
+
+
+def test_mapcv_0_2_jpeg_dataset_is_upgraded_as_full_chroma(tmp_path: Path) -> None:
+    raw = json.loads((V2_DATASET / "dataset" / "manifest.json").read_text())
+    raw["writer"] = {"image_format": "jpg", "jpg_quality": 90}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw))
+
+    # mapcv 0.2 had no subsampling setting and always wrote 4:4:4.
+    assert Manifest.load(path).writer == {
+        "layout": "files",
+        "image_format": "jpg",
+        "jpg_quality": 90,
+        "jpg_subsampling": "4:4:4",
+        "mask_format": "png",
+    }
 
 
 def test_development_v2_manifest_keeps_its_ignore_index() -> None:
@@ -585,7 +607,13 @@ def _expected() -> Manifest:
             dtype="uint8",
             labels={"sha256": "abc"},
         ),
-        writer={"layout": "files", "image_format": "png", "jpg_quality": 95, "mask_format": "png"},
+        writer={
+            "layout": "files",
+            "image_format": "png",
+            "jpg_quality": 95,
+            "jpg_subsampling": "4:2:0",
+            "mask_format": "png",
+        },
         sampler={"patch_size": 4},
     )
 

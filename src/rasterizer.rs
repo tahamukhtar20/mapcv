@@ -621,7 +621,7 @@ fn walk_edge(p0: (f64, f64), p1: (f64, f64), canvas: &mut Canvas) {
 ///
 /// # Errors
 /// Returns an error if `transform` is singular or not finite, or if
-/// `width * height` overflows `usize`.
+/// `width * height` overflows `usize` or the raster cannot be allocated.
 ///
 /// # Panics
 /// Does not panic on well-formed input.
@@ -636,7 +636,11 @@ pub fn rasterize(
     let buf_len = width
         .checked_mul(height)
         .ok_or_else(|| "raster dimensions overflow usize".to_string())?;
-    let mut out = vec![0u8; buf_len];
+    // `vec![0; n]` aborts the process when the allocation fails.
+    let mut out = Vec::new();
+    out.try_reserve_exact(buf_len)
+        .map_err(|_| format!("a {width} x {height} raster is too large to allocate"))?;
+    out.resize(buf_len, 0u8);
     if buf_len == 0 {
         return Ok(out);
     }
@@ -907,5 +911,23 @@ mod tests {
         let tri = vec![vec![(1.0, 0.5), (1.02, 1e9), (0.0, 1e9)]];
         let mask = rasterize(&[(tri, 1)], 4, 4, identity(), true).unwrap();
         assert_eq!(mask[4], 1);
+    }
+
+    #[test]
+    fn huge_and_non_finite_edges_terminate() {
+        // Edges that start far outside the raster must neither hang nor
+        // overflow, whatever the magnitude.
+        let square = |far: f64| vec![vec![(0.5, 0.5), (far, 0.5), (far, 2.5), (0.5, 2.5)]];
+        for far in [1e6, 1e9, 1e15, 1e19, 1e300, f64::INFINITY, f64::NAN] {
+            for all_touched in [false, true] {
+                rasterize(&[(square(far), 1)], 4, 4, identity(), all_touched).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn unallocatable_raster_errors() {
+        assert!(rasterize(&[], usize::MAX / 2, 2, identity(), false).is_err());
+        assert!(rasterize(&[], 1 << 62, 1, identity(), false).is_err());
     }
 }

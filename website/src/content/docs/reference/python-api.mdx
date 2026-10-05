@@ -35,7 +35,7 @@ class MapcvConfig(BaseModel):
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
 ```
 
-Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; legacy 0.1 layouts emit a `FutureWarning`. Field reference: [Configuration](/mapcv/reference/configuration/).
+Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
 
 Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig`, `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
 

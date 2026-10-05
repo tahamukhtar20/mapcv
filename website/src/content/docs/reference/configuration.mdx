@@ -71,9 +71,8 @@ The area of interest as a WGS-84 longitude/latitude bounding box.
 | `south` | float | required | Southern latitude in degrees |
 | `east` | float | required | Eastern longitude in degrees |
 | `north` | float | required | Northern latitude in degrees |
-| `zoom` | int, 1–22 | — | **Deprecated** (0.1 layout). Use `imagery.zoom`; see [Legacy configs](#legacy-01-configs) |
 
-**Validation:** longitudes in −180…180, latitudes in −90…90, `west < east` and `south < north`. With XYZ imagery the box must also stay within ±85.0511° latitude, the limit of Web Mercator tiles. A box that crosses the antimeridian is not supported.
+**Validation:** longitudes in −180…180, latitudes in −90…90, `west < east` and `south < north`. With XYZ imagery the box must also stay within ±85.0511° latitude, the limit of Web Mercator tiles. A box that crosses the antimeridian is not supported. `region.zoom` from the 0.1 layout was removed in 0.3.0; set `imagery.zoom` instead (see [Removed 0.1 keys](#removed-01-keys)).
 
 For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. For Sentinel-2 it is reprojected into the product's CRS and expanded outward to the product's pixel edges. See [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/).
 
@@ -207,15 +206,19 @@ Optional. When present, `mapcv generate` writes split lists at the end; `mapcv s
 
 **Validation:** ratios within bounds; `labeled_ratios` may not contain duplicates (after conversion to folder names such as `0.125` → `12.5`). With `spatial`, the achieved ratios are approximate because whole blocks move together. See [Splits without leakage](/mapcv/guides/splits-without-leakage/).
 
-## Legacy 0.1 configs
+## Removed 0.1 keys
 
-The 0.1 layout (`region.zoom` plus a `tiles:` block) still loads in 0.2 with a deprecation notice and is converted to `imagery: {type: xyz, zoom: …, …}`. It will be removed in 0.3.0.
+mapcv 0.2 still loaded the 0.1 layout (`region.zoom` plus a top-level `tiles:` block) with a deprecation notice. Both were removed in 0.3.0 and now fail validation, with the replacement named in the error:
 
 ```console
-$ mapcv validate legacy.yaml
-Deprecated: 'tiles' and 'region.zoom' are deprecated; move them into an 'imagery' block with type: xyz
-and zoom (see MIGRATION.md). Removed in mapcv 0.3.0.
-✓ legacy.yaml is a valid config.
+$ mapcv validate old.yaml
+Config error in old.yaml:
+  • config: `tiles:` was replaced by `imagery:` in mapcv 0.2 and removed in 0.3; move it under `imagery: {type: xyz, zoom: ..., source: ...}` and delete `region.zoom` (see MIGRATION.md)
 ```
 
-`tiles` and `imagery` together are an error. `region.zoom` next to an `imagery` block fills a missing `imagery.zoom`, and is otherwise ignored with a notice. Full guide: [Migrating to 0.2](/mapcv/project/migration/).
+| Removed | Use instead |
+| --- | --- |
+| `region.zoom` | `imagery.zoom` |
+| `tiles:` | `imagery: {type: xyz, zoom: …, source: …}` |
+
+Full guide: [Migrating to 0.2](/mapcv/project/migration/).

@@ -17,7 +17,7 @@ imagery:
   source: esri_satellite
 ```
 
-Configurations using `region.zoom` plus `tiles` still work in 0.2 and print a deprecation notice (a `FutureWarning`). `region.zoom` next to an `imagery` block is also deprecated: it fills a missing `imagery.zoom`, and is otherwise ignored with a notice. This compatibility path will be removed in 0.3.0. `imagery.type` is required.
+mapcv 0.2 still accepted `region.zoom` plus `tiles` with a deprecation notice. **That compatibility path was removed in 0.3.0:** a config with `tiles:` or `region.zoom` now fails validation with an error that points here. Move `tiles` and `region.zoom` into the `imagery` block as shown above, and delete `region.zoom`. `imagery.type` is required.
 
 ## Stricter configs
 

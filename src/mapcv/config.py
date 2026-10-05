@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import warnings
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import unquote, urlsplit
@@ -136,10 +135,17 @@ def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
             imagery["path"] = _join(base, path)
 
 
-def _warn_deprecated(message: str) -> None:
-    # FutureWarning, not DeprecationWarning: this targets end users editing YAML,
-    # and Python hides DeprecationWarning raised outside __main__ by default.
-    warnings.warn(f"{message} Removed in mapcv 0.3.0.", FutureWarning, stacklevel=2)
+_REGION_ZOOM_REMOVED = (
+    "`region.zoom` was moved to `imagery.zoom` in mapcv 0.2 and removed in 0.3; "
+    "delete it and set `imagery: {type: xyz, zoom: ..., source: ...}` instead "
+    "(see MIGRATION.md)"
+)
+
+_TILES_REMOVED = (
+    "`tiles:` was replaced by `imagery:` in mapcv 0.2 and removed in 0.3; "
+    "move it under `imagery: {type: xyz, zoom: ..., source: ...}` and delete `region.zoom` "
+    "(see MIGRATION.md)"
+)
 
 
 # Web Mercator (EPSG:3857) is undefined at the poles; XYZ tiles stop at this latitude.
@@ -156,7 +162,13 @@ class RegionConfig(BaseModel):
     south: float
     east: float
     north: float
-    zoom: Optional[int] = Field(default=None, ge=1, le=22)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_zoom(cls, raw: Any) -> Any:
+        if isinstance(raw, dict) and "zoom" in raw:
+            raise ValueError(_REGION_ZOOM_REMOVED)
+        return raw
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> "RegionConfig":
@@ -307,40 +319,15 @@ class MapcvConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_legacy_tiles(cls, raw: Any) -> Any:
+    def _reject_removed_keys(cls, raw: Any) -> Any:
         if not isinstance(raw, dict):
             return raw
-
-        data = dict(raw)
-        legacy_tiles = data.get("tiles")
-        imagery = data.get("imagery")
-        region = data.get("region")
-        region_zoom = region.get("zoom") if isinstance(region, dict) else None
-        if legacy_tiles is not None and imagery is not None:
-            raise ValueError("provide 'imagery' or legacy 'tiles', not both")
+        if "tiles" in raw:
+            raise ValueError(_TILES_REMOVED)
+        imagery = raw.get("imagery")
         if isinstance(imagery, dict) and "type" not in imagery:
             raise ValueError("imagery.type is required: 'xyz' or 'eopf_zarr'")
-
-        if imagery is None and legacy_tiles is not None:
-            if region_zoom is None:
-                raise ValueError("legacy tiles configuration requires region.zoom")
-            data["imagery"] = {"type": "xyz", "zoom": region_zoom, **dict(legacy_tiles)}
-            data.pop("tiles")
-            _warn_deprecated(
-                "'tiles' and 'region.zoom' are deprecated; move them into an 'imagery' block "
-                "with type: xyz and zoom (see MIGRATION.md)."
-            )
-        elif region_zoom is not None:
-            if isinstance(imagery, dict) and imagery.get("type") == "xyz" and "zoom" not in imagery:
-                data["imagery"] = {**imagery, "zoom": region_zoom}
-                _warn_deprecated("'region.zoom' is deprecated; set imagery.zoom instead.")
-            else:
-                _warn_deprecated("'region.zoom' is ignored with this imagery block; remove it.")
-
-        if region_zoom is not None and isinstance(region, dict):
-            data["region"] = {key: value for key, value in region.items() if key != "zoom"}
-
-        return data
+        return raw
 
     @model_validator(mode="after")
     def _validate_source_writer_pair(self) -> "MapcvConfig":

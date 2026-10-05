@@ -170,7 +170,7 @@ def _image_nodata(dtype: "np.dtype[Any]", manifest: Manifest) -> Optional[float]
         value = float("nan") if declared == "nan" else float(declared)
         if dtype.kind == "f":
             return value
-        if dtype.kind in "iu" and value == int(value):
+        if dtype.kind in "iu" and np.isfinite(value) and value == int(value):
             info = np.iinfo(dtype)
             return value if info.min <= value <= info.max else None
         return None

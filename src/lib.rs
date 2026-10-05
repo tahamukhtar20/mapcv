@@ -20,7 +20,6 @@ use numpy::{
     ToPyArray,
 };
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use tile_math::{BBox, TileIndex};
 
 /// A fetched tile and its encoded image bytes, as returned to Python.
@@ -326,7 +325,8 @@ fn rasterize(
 /// `meta`          is a list of `(row, col, padded)` tuples.
 ///
 /// Returns a list of `(filename, mask_filename, row, col, padded, strip_index,
-/// class_counts, empty_ratio)` in patch order.
+/// class_counts, empty_ratio)` in patch order. `class_counts` is a list of
+/// `(class_id, pixel_count)` pairs in ascending class-id order.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
@@ -353,7 +353,7 @@ fn write_patches_rs(
         usize,
         bool,
         usize,
-        HashMap<String, u64>,
+        Vec<(u8, u64)>,
         f64,
     )>,
 > {

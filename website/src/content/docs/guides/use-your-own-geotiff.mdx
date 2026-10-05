@@ -1,0 +1,143 @@
+---
+title: Use your own GeoTIFF
+description: Build a dataset from a GeoTIFF or Cloud Optimized GeoTIFF you already have, local or over HTTPS, with labels in lon/lat reprojected automatically and multiband output as NPY.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Drone and aerial orthophotos, commercial imagery and national mapping rasters usually come as GeoTIFF files. mapcv reads them directly, local or remote, without GDAL: patches are cut from the file's own pixels, in the file's CRS, at the file's resolution. Nothing is resampled. This page walks through a local file and a public Cloud Optimized GeoTIFF (COG) URL.
+
+No extra install is needed: `pip install mapcv` is enough.
+
+## What mapcv does with the file
+
+- **Grid.** Your WGS-84 `region` is reprojected into the file's CRS and expanded outward to whole pixels of the file, then clipped to the raster. Every patch is a block of the file's pixels, so it equals what `rasterio` reads from the same window.
+- **Labels.** Keep your labels in WGS-84 longitude/latitude, as for any mapcv dataset. mapcv reprojects them into the file's CRS and burns them onto the same pixels. Never reproject labels yourself.
+- **Bands and data type.** The file's bands and data type are kept. 8-bit RGB (or one gray band) can be written as PNG or JPG; everything else (16-bit, float, 4 or more bands) is written as `npy`, bands-first, in the file's own data type.
+- **NoData.** Pixels equal to the file's NoData value in every selected band, and the area outside the file, count as empty and become `labels.ignore_index` (255) in masks.
+
+## A local file
+
+<Steps>
+
+1. **Look at the file.** The guided `mapcv init` asks for the path, opens it and prints what it found; answer `geotiff` to the first question:
+
+   ```console
+   $ mapcv init
+   …
+   GeoTIFF / COG path or URL: ortho/paris-2024.tif
+   CRS        EPSG:32631
+   Size       12,000 × 9,000 px · 3 band(s) · uint8
+   Pixel      0.1 × 0.1 CRS units
+   NoData     0
+   Overviews  4
+   ```
+
+   It then offers the whole file as the area (press Enter), asks for labels and writes a working config. To write a commented starting file instead, run `mapcv init --template geotiff`.
+
+2. **Write the config.** Relative paths are resolved against the config file's folder:
+
+   ```yaml title="mapcv.yaml"
+   region: { west: 2.3330, south: 48.8560, east: 2.3400, north: 48.8600 }
+   imagery:
+     type: geotiff
+     path: ortho/paris-2024.tif
+   labels:
+     path: buildings.geojson     # lon/lat
+     label_field: class
+   sampler:
+     patch_size: 256
+     edge_strategy: drop
+     max_empty_ratio: 0.2        # skip patches that are mostly NoData
+   writer:
+     staging_dir: ./dataset
+     image_format: png           # 8-bit RGB
+   split:
+     strategy: spatial
+   ```
+
+3. **Plan, then generate.** `mapcv plan` opens the file's header (no pixels), reports the CRS, the window on the file's grid, the pixel size in metres and the expected patches, and warns if the region leaves the file:
+
+   ```console
+   $ mapcv plan mapcv.yaml
+   ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────────────────╮
+   │ Region   2.333, 48.856 → 2.34, 48.86  (≈ 0.5 × 0.4 km)                                           │
+   │ Imagery  GeoTIFF paris-2024.tif · EPSG:32631 · 3 band(s) uint8 (≈ 0.10 m/px)                     │
+   │ Raster   5,174 × 4,492 px                                                                        │
+   │ Labels   none (image-only dataset)                                                               │
+   │ Patches  ≈ 340 × 256 px (grid, stride 256)                                                       │
+   │ Output   dataset · png (≈ 36.8 MB)                                                               │
+   │ Split    spatial · test 0.2 · val 0.1                                                            │
+   │ Memory   ≈ 53.0 MB per chunk                                                                     │
+   ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+   $ mapcv generate mapcv.yaml
+   ```
+
+4. **Inspect it.** `mapcv info dataset/` shows `geotiff · paris-2024.tif`, the band names (`b1, b2, b3`) and the CRS. The manifest's `sources[0]` records the file, its grid and a fingerprint, so resuming into the same folder with a different file is refused.
+
+</Steps>
+
+### Multiband and 16-bit rasters: NPY
+
+A 4-band `uint16` file (blue, green, red, near-infrared, for example) cannot be a PNG. Ask for `npy`, which keeps the band count and data type, and optionally pick or reorder bands with 1-based numbers:
+
+```yaml
+imagery:
+  type: geotiff
+  path: ortho/multispectral.tif
+  bands: [3, 2, 1, 4]     # red, green, blue, NIR, in this order
+writer:
+  image_format: npy       # patches are (4, H, W) uint16 arrays
+```
+
+With the default `png`, a file that does not fit stops `mapcv plan` and `mapcv generate` with a message that says so. To get an 8-bit RGB PNG from a 4-band 8-bit file, select three bands (`bands: [1, 2, 3]`); 16-bit data has to stay `npy` (rescale it in your training code).
+
+### NoData
+
+mapcv uses the NoData value stored in the file. If the file does not declare one, or declares the wrong one, set it in the config:
+
+```yaml
+imagery:
+  type: geotiff
+  path: ortho/scene.tif
+  nodata: 0
+```
+
+Floating-point files also treat `NaN` and infinite values as empty.
+
+### Coarser resolution: overviews
+
+If the file has overviews (check the `Overviews` line above), `overview: 1` reads the first one, usually half the resolution, `overview: 2` the next, and so on. The patches then use that coarser grid. mapcv does not build overviews or resample otherwise; to change the resolution by another factor, resample the file first (for example with `gdalwarp`).
+
+## A public COG URL
+
+A Cloud Optimized GeoTIFF stores its pixels in tiles with an index at the start, so mapcv can read only the tiles under your region with HTTP range requests; the rest of the file is never downloaded. Use the URL as the path:
+
+```yaml
+region: { west: 2.3330, south: 48.8560, east: 2.3400, north: 48.8600 }
+imagery:
+  type: geotiff
+  path: https://example.com/cogs/paris-2024.tif
+```
+
+A public object in S3 works as `s3://bucket/key.tif` (anonymous access, for buckets that allow it). One example is the Sentinel-2 L2A COGs of the Earth Search `sentinel-cogs` bucket; their 8-bit true-colour file is `TCI.tif` inside each scene folder, and the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) or the Earth Search catalogue lists the scene folders.
+
+Rules for remote files:
+
+- The server must support HTTP range requests; otherwise the error says so.
+- Only `https://` and anonymous `s3://` URLs are accepted. A URL with a username, password, query string or fragment is rejected, so signed (pre-signed, SAS) URLs and private buckets are not supported. `http://` is accepted only for a local test server on `localhost` or `127.0.0.1`.
+- Reads are cached in memory and retried on transient errors. A plain, non-tiled GeoTIFF over HTTP works too, but mapcv then has to fetch whole strips, so a COG is much cheaper.
+- Resuming checks the URL, the server's `ETag` and the file size, so a file replaced on the server is noticed.
+
+<Aside type="caution">
+Check the licence and attribution requirements of imagery you did not make yourself before you share a dataset built from it.
+</Aside>
+
+## Limits
+
+- One file per run. Mosaics of several files are not supported; merge them first, for example into a virtual or real COG.
+- The file's CRS must be an EPSG code (UTM, Web Mercator, WGS-84 and national grids all are); files with a custom CRS or no CRS are reported with the reason, and need re-tagging first.
+- Supported compression: none, Deflate, LZW, PackBits, ZSTD, JPEG and WebP. A file that uses another one (LERC, JPEG 2000, ...) fails when opened, naming it; convert it with `gdal_translate -co COMPRESS=DEFLATE`.
+- External `.ovr` overviews, internal mask bands and GCP-only georeferencing are not read.
+
+See the [configuration reference](/mapcv/reference/configuration/#geotiff-and-cloud-optimized-geotiff-type-geotiff) for every field and rule, and [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/#geotiff-and-cog-files) for how the window is chosen.

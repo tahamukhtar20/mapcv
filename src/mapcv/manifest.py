@@ -18,7 +18,7 @@ from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, with_config
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_serializer, with_config
 from pydantic_core import to_json
 from typing_extensions import TypedDict
 
@@ -88,6 +88,16 @@ class SourceRecord(BaseModel):
     crs: Optional[str] = None
     transform: Optional[Transform] = None
     patch_shape: List[int] = Field(default_factory=list)
+    # Identity of the input file (a GeoTIFF's size, time and header hash, or a URL's ETag),
+    # so a resumed run refuses a different file. Absent for sources that have none.
+    fingerprint: Optional[Dict[str, Any]] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_missing_fingerprint(self, handler: Any) -> Dict[str, Any]:
+        data: Dict[str, Any] = handler(self)
+        if data.get("fingerprint") is None:
+            data.pop("fingerprint", None)
+        return data
 
 
 class TargetRecord(BaseModel):
@@ -329,7 +339,17 @@ def _transforms_differ(a: Optional[Transform], b: Optional[Transform]) -> bool:
     return not all(math.isclose(x, y, rel_tol=1e-9, abs_tol=1e-9) for x, y in zip(a, b))
 
 
-_SOURCE_FIELDS = ("source_type", "product_id", "bands", "dtype", "crs", "patch_shape")
+_SOURCE_FIELDS = (
+    "source_type",
+    "product_id",
+    "bands",
+    "dtype",
+    "crs",
+    "patch_shape",
+    "fingerprint",
+)
+# Fields whose difference is easier to act on under another name.
+_SOURCE_FIELD_LABELS = {"fingerprint": "imagery file or read settings"}
 _TARGET_FIELDS = {
     "type": "target type",
     "class_map": "class_map",
@@ -350,7 +370,7 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> List[str]:
         for have, want in zip(manifest.sources, expected.sources):
             prefix = f"{have.name}: " if len(expected.sources) > 1 else ""
             mismatches.extend(
-                prefix + name
+                prefix + _SOURCE_FIELD_LABELS.get(name, name)
                 for name in _SOURCE_FIELDS
                 if getattr(have, name) != getattr(want, name)
             )

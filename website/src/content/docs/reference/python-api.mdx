@@ -26,7 +26,7 @@ print(result.new_patches, result.split_counts)
 class MapcvConfig(BaseModel):
     task: Literal["segmentation"] = "segmentation"   # other tasks are planned
     region: RegionConfig
-    imagery: XYZImageryConfig | EOPFZarrImageryConfig   # chosen by imagery.type
+    imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | None = None
     sampler: SamplerConfig
     writer: WriterConfig
@@ -38,7 +38,7 @@ class MapcvConfig(BaseModel):
 
 Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
 
-Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig`, `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
+Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `GeoTiffImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig`, `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
 
 ## Planning and generation
 

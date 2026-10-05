@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
 from urllib.parse import urlsplit
 
+import numpy as np
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -27,7 +28,12 @@ from rich.table import Table
 import mapcv
 from mapcv import pipeline
 from mapcv._mapcv_rs import parse_kml_rs
-from mapcv.config import EOPFZarrImageryConfig, MapcvConfig
+from mapcv.config import (
+    EOPFZarrImageryConfig,
+    GeoTiffImageryConfig,
+    MapcvConfig,
+    eopf_local_path,
+)
 from mapcv.labels import MAX_CLASS_ID, parse_geojson, parse_kml
 from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
@@ -115,7 +121,7 @@ def _format_validation_error(exc: ValidationError) -> List[str]:
         location = ".".join(
             str(part)
             for part in error["loc"]
-            if not str(part).startswith("function-") and part not in ("xyz", "eopf_zarr")
+            if not str(part).startswith("function-") and part not in ("xyz", "eopf_zarr", "geotiff")
         )
         message = str(error["msg"]).removeprefix("Value error, ")
         lines.append(f"  • [bold]{location or 'config'}[/bold]: {message}")
@@ -173,6 +179,11 @@ def _imagery_label(config: MapcvConfig) -> str:
             f"Sentinel-2 EOPF {_redact_url(imagery.path)} · {imagery.resolution} m · "
             f"{len(imagery.bands)} bands"
         )
+    if isinstance(imagery, GeoTiffImageryConfig):
+        where = _redact_url(imagery.path) if "://" in imagery.path else imagery.path
+        selected = f"bands {imagery.bands}" if imagery.bands else "all bands"
+        overview = f" · overview {imagery.overview}" if imagery.overview else ""
+        return f"GeoTIFF {where} · {selected}{overview}"
     source = imagery.source or _redact_url(imagery.url_template or "")
     return f"XYZ {source} · zoom {imagery.zoom}"
 
@@ -270,7 +281,9 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
     )
     for message in estimate.warnings:
         _console.print(f"[yellow]⚠[/yellow]  {message}")
-    if not isinstance(config.imagery, EOPFZarrImageryConfig):
+    if isinstance(config.imagery, GeoTiffImageryConfig):
+        _console.print("[dim]Your own imagery: mapcv reads it as it is, without resampling.[/dim]")
+    elif not isinstance(config.imagery, EOPFZarrImageryConfig):
         _console.print(
             "[dim]Imagery terms are your responsibility: check the provider's license, "
             f"attribution and rate limits ({_PROVIDERS_URL}).[/dim]"
@@ -328,6 +341,7 @@ def _print_result(result: GenerateResult) -> None:
         patches += f" [dim]({result.new_patches:,} new this run)[/dim]"
     table.add_row("Patches", patches)
     source = manifest.source
+    table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
     shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
     table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
     if result.tiles_requested:
@@ -365,6 +379,7 @@ class Template(str, Enum):
 
     xyz = "xyz"
     sentinel2 = "sentinel2"
+    geotiff = "geotiff"
 
 
 _HEADER = f"""\
@@ -457,7 +472,55 @@ split:
 """
 )
 
-_TEMPLATES = {Template.xyz: _XYZ_TEMPLATE, Template.sentinel2: _SENTINEL2_TEMPLATE}
+_GEOTIFF_TEMPLATE = (
+    """\
+# mapcv config - docs: {docs}/reference/configuration/
+# Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
+# Your own GeoTIFF or Cloud Optimized GeoTIFF: you are responsible for its license.
+""".format(docs=_DOCS_URL)
+    + """
+region:                      # WGS-84 lon/lat bounding box inside the file
+  west: 2.30
+  south: 48.85
+  east: 2.32
+  north: 48.87
+
+imagery:
+  type: geotiff
+  # A local path (relative to this file), https:// URL or anonymous s3:// URL.
+  # The file is read as it is: patches use its CRS and pixel grid, nothing is resampled.
+  path: /path/to/ortho.tif
+  # bands: [1, 2, 3]         # 1-based; default: every band, in file order
+  # overview: 0              # 0 = full resolution; 1, 2, ... = reduced-resolution overviews
+  # nodata: 0                # overrides the file's NoData value (patches over it are "empty")
+
+# labels:                    # omit for an image-only dataset
+#   path: buildings.geojson  # .geojson or .kml, in lon/lat: mapcv reprojects it into the file's CRS
+#   label_field: null        # property holding the class; null = every polygon is class 1
+
+sampler:
+  patch_size: 256
+  stride: 0
+  mode: grid
+  edge_strategy: drop
+  max_empty_ratio: 0.2       # NoData and the area outside the file count as empty
+
+writer:
+  staging_dir: ./dataset
+  image_format: png          # png | jpg for 8-bit 1- or 3-band files; npy keeps any bands and dtype
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+"""
+)
+
+_TEMPLATES = {
+    Template.xyz: _XYZ_TEMPLATE,
+    Template.sentinel2: _SENTINEL2_TEMPLATE,
+    Template.geotiff: _GEOTIFF_TEMPLATE,
+}
 
 
 def _yaml_str(value: str) -> str:
@@ -465,12 +528,21 @@ def _yaml_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _ask_bbox_or_file() -> Tuple[Tuple[float, float, float, float], Optional[Path]]:
+def _ask_bbox_or_file(
+    default_bbox: Optional[Tuple[float, float, float, float]] = None,
+) -> Tuple[Tuple[float, float, float, float], Optional[Path]]:
+    default = ",".join(f"{value:.6f}" for value in default_bbox) if default_bbox else None
     while True:
-        answer = Prompt.ask(
-            "Area: a bounding box [dim]west,south,east,north[/dim] or a .geojson/.kml file",
-            console=_console,
-        ).strip()
+        prompt = "Area: a bounding box [dim]west,south,east,north[/dim] or a .geojson/.kml file"
+        if default is not None:
+            answer = Prompt.ask(
+                prompt + " [dim](Enter = the whole file)[/dim]",
+                default=default,
+                show_default=False,
+                console=_console,
+            ).strip()
+        else:
+            answer = Prompt.ask(prompt, console=_console).strip()
         path = Path(answer).expanduser()
         if path.suffix.lower() in (".geojson", ".json", ".kml"):
             if not path.exists():
@@ -551,6 +623,126 @@ def _ask_label_field(path: Path) -> Optional[str]:
     return answer or None
 
 
+class _GeoTiffAnswer:
+    """What the wizard learned about the file the user pointed it at."""
+
+    def __init__(
+        self,
+        imagery_lines: List[str],
+        image_format: str,
+        extent: Optional[Tuple[float, float, float, float]],
+    ) -> None:
+        self.imagery_lines = imagery_lines
+        self.image_format = image_format
+        self.extent = extent
+
+
+def _geotiff_wgs84_extent(tif: Any) -> Optional[Tuple[float, float, float, float]]:
+    """A lon/lat box (``west, south, east, north``) that lies inside the file, or ``None``.
+
+    The file's own bounding box, projected to lon/lat, reaches a little outside the file
+    when projected back (a lon/lat box is not a rectangle in UTM), so the box is shrunk
+    in small steps until the whole of it maps into the file.
+    """
+    import math
+
+    from pyproj import Transformer
+
+    from mapcv.config import RegionConfig
+    from mapcv.imagery import region_bounds_in_crs, region_pixel_window
+
+    info = tif.info
+    if info.epsg is None or info.transform is None:
+        return None
+    a, b, c, d, e, f = info.transform
+    xs = [c + a * col + b * row for col in (0, info.width) for row in (0, info.height)]
+    ys = [f + d * col + e * row for col in (0, info.width) for row in (0, info.height)]
+    to_wgs84 = Transformer.from_crs(f"EPSG:{info.epsg}", "EPSG:4326", always_xy=True)
+    west, south, east, north = to_wgs84.transform_bounds(
+        min(xs), min(ys), max(xs), max(ys), densify_pts=21
+    )
+    width, height = east - west, north - south
+    for step in range(100):
+        shrink = step * 0.002
+        edges = (
+            math.ceil((west + width * shrink) * 1e6) / 1e6,
+            math.ceil((south + height * shrink) * 1e6) / 1e6,
+            math.floor((east - width * shrink) * 1e6) / 1e6,
+            math.floor((north - height * shrink) * 1e6) / 1e6,
+        )
+        if edges[0] >= edges[2] or edges[1] >= edges[3]:
+            break
+        region = RegionConfig(west=edges[0], south=edges[1], east=edges[2], north=edges[3])
+        bounds = region_bounds_in_crs(region, f"EPSG:{info.epsg}")
+        if not region_pixel_window(bounds, info.transform, info.height, info.width)[4]:
+            return edges
+    return None
+
+
+def _ask_geotiff() -> _GeoTiffAnswer:
+    """Ask for a GeoTIFF/COG path or URL, show what is in it, and pick output defaults."""
+    from mapcv.geotiff import GeoTiff
+    from mapcv.imagery import geotiff_location
+
+    _console.print("\n[dim]A local file, an https:// URL or a public s3:// object.[/dim]")
+    while True:
+        answer = Prompt.ask("GeoTIFF / COG path or URL", console=_console).strip().strip("'\"")
+        try:
+            tif = GeoTiff(
+                geotiff_location(str(Path(answer).expanduser()) if "://" not in answer else answer)
+            )
+        except Exception as exc:  # noqa: BLE001 - any failure to open is shown and asked again
+            _console.print(f"[red]Cannot read that file:[/red] {exc}")
+            continue
+        break
+    info = tif.info
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column()
+    crs = f"EPSG:{info.epsg}" if info.epsg is not None else f"none usable ({info.crs_error})"
+    table.add_row("CRS", crs)
+    table.add_row(
+        "Size", f"{info.width:,} × {info.height:,} px · {info.count} band(s) · {info.dtype}"
+    )
+    if info.transform is not None:
+        table.add_row("Pixel", f"{abs(info.transform[0]):g} × {abs(info.transform[4]):g} CRS units")
+    table.add_row("NoData", "none" if info.nodata is None else f"{info.nodata:g}")
+    table.add_row("Overviews", str(len(info.overviews)))
+    _console.print(table)
+    if info.epsg is None:
+        _console.print(
+            "[yellow]mapcv needs a CRS given by an EPSG code; the config will be written, but "
+            "generating from this file will fail until it is re-projected or re-tagged.[/yellow]"
+        )
+    path_text = answer if "://" in answer else str(Path(answer).expanduser())
+    lines = ["  type: geotiff", f"  path: {_yaml_str(path_text)}"]
+    image_format = "png" if info.dtype == np.uint8 and info.count in (1, 3) else "npy"
+    if info.dtype == np.uint8 and info.count > 3:
+        while True:
+            picked = Prompt.ask(
+                f"Bands to use [dim](1-based; e.g. 1,2,3 for RGB PNG; blank = all {info.count} "
+                "as NPY)[/dim]",
+                default="",
+                show_default=False,
+                console=_console,
+            ).strip()
+            try:
+                numbers = [int(part) for part in picked.split(",")] if picked else []
+            except ValueError:
+                numbers = [0]
+            if all(1 <= number <= info.count for number in numbers) and len(set(numbers)) == len(
+                numbers
+            ):
+                break
+            _console.print(f"[red]Enter distinct band numbers from 1 to {info.count}.[/red]")
+        if numbers:
+            lines.append(f"  bands: {numbers}")
+            image_format = "png" if len(numbers) in (1, 3) else "npy"
+    if image_format == "npy":
+        _console.print("[dim]Patches will be written as NPY (bands, height, width).[/dim]")
+    return _GeoTiffAnswer(lines, image_format, _geotiff_wgs84_extent(tif))
+
+
 def _wizard() -> str:
     _console.print(
         Panel(
@@ -568,16 +760,27 @@ def _wizard() -> str:
     )
     _console.print("  [bold]sentinel2[/bold]  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)")
     _console.print("  [bold]custom[/bold]     your own XYZ tile URL")
+    _console.print("  [bold]geotiff[/bold]    your own GeoTIFF / COG file or URL")
     kind = Prompt.ask(
-        "Imagery", choices=["esri", "sentinel2", "custom"], default="esri", console=_console
+        "Imagery",
+        choices=["esri", "sentinel2", "custom", "geotiff"],
+        default="esri",
+        console=_console,
     )
 
+    geotiff: Optional[_GeoTiffAnswer] = _ask_geotiff() if kind == "geotiff" else None
+
     _console.print("\n[bold cyan]2/4 Area[/bold cyan]")
-    (west, south, east, north), area_file = _ask_bbox_or_file()
+    (west, south, east, north), area_file = _ask_bbox_or_file(
+        geotiff.extent if geotiff is not None else None
+    )
     latitude = (south + north) / 2
 
     imagery_lines: List[str]
-    if kind == "sentinel2":
+    if geotiff is not None:
+        imagery_lines = geotiff.imagery_lines
+        patch_default, image_format, edge = 256, geotiff.image_format, "drop"
+    elif kind == "sentinel2":
         product = Prompt.ask(
             "Product path or URL [dim](local .zarr, https:// or s3://)[/dim]", console=_console
         )
@@ -957,3 +1160,7 @@ def validate(
     _console.print(_settings_table(config))
     if config.labels is not None and not config.labels.path.exists():
         _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {config.labels.path}")
+    if isinstance(config.imagery, GeoTiffImageryConfig):
+        local = eopf_local_path(config.imagery.path)
+        if local is not None and not local.exists():
+            _console.print(f"[yellow]Warning:[/yellow] imagery.path not found: {local}")

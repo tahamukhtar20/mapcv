@@ -7,8 +7,16 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
-from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, XYZImageryConfig
+from mapcv.config import (
+    EOPFZarrImageryConfig,
+    GeoTiffImageryConfig,
+    MapcvConfig,
+    XYZImageryConfig,
+)
+from mapcv.imagery import GeoTiffRasterSource
 from shapely.geometry import box
 
 from mapcv.labels import parse_geojson, parse_kml
@@ -115,6 +123,43 @@ def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[i
     return max(1, rows), max(1, cols)
 
 
+def _pixel_size_m(crs: str, transform: Tuple[float, float, float, float, float, float]) -> float:
+    """Ground size of one pixel of a raster in ``crs``, in metres (at the raster's origin)."""
+    from pyproj import CRS
+
+    a, b, _, d, e, f = transform  # f is the top latitude for a geographic CRS
+    size = math.sqrt(abs(a * e - b * d))
+    parsed = CRS.from_user_input(crs)
+    if parsed.is_geographic:
+        return size * 111_320.0 * math.cos(math.radians(f))
+    return size * float(parsed.axis_info[0].unit_conversion_factor)
+
+
+def _geotiff_raster(
+    config: MapcvConfig, imagery: GeoTiffImageryConfig, warned: List[str]
+) -> Tuple[int, int, float, int, int, str]:
+    """Open the file's header and size the region's window: ``(height, width, metres per
+    pixel, channels, bytes per value, description)``."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", UserWarning)
+        source = GeoTiffRasterSource(
+            config.region, imagery, image_format=config.writer.image_format
+        )
+    warned.extend(str(warning.message) for warning in caught)
+    meta = source.metadata
+    source.close()
+    resolution = _pixel_size_m(meta.crs, meta.transform)
+    description = f"GeoTIFF {meta.product_id} · {meta.crs} · {len(meta.bands)} band(s) {meta.dtype}"
+    return (
+        meta.height,
+        meta.width,
+        resolution,
+        len(meta.bands),
+        int(np.dtype(meta.dtype).itemsize),
+        description,
+    )
+
+
 def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
     sampler = config.sampler
     if sampler.mode == "random":
@@ -169,6 +214,11 @@ def plan(config: MapcvConfig) -> Plan:
         description = f"{name} · zoom {imagery.zoom}"
         channels, bytes_per_value = 3, 1
         chunk_rows = imagery.strip_rows * _TILE_PX
+    elif isinstance(imagery, GeoTiffImageryConfig):
+        height, width, resolution, channels, bytes_per_value, description = _geotiff_raster(
+            config, imagery, plan_warnings
+        )
+        chunk_rows = imagery.chunk_rows
     else:
         height, width = _eopf_raster(config, imagery)
         resolution = float(imagery.resolution)

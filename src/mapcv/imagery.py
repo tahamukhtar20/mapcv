@@ -1,11 +1,14 @@
-"""Windowed imagery sources for XYZ tiles and EOPF Sentinel-2 Zarr products."""
+"""Windowed imagery sources: XYZ tiles, EOPF Sentinel-2 Zarr products and GeoTIFF/COG files."""
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import sys
 import time
+import urllib.request
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
@@ -13,7 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from collections import Counter
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import numpy as np
 import numpy.typing as npt
@@ -31,11 +34,13 @@ from mapcv._mapcv_rs import (
 )
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    GeoTiffImageryConfig,
     RegionConfig,
     XYZImageryConfig,
     eopf_local_path,
 )
 from mapcv.downloader import resolve_url_template
+from mapcv.geotiff import GeoTiff
 
 
 Transform = Tuple[float, float, float, float, float, float]
@@ -68,6 +73,9 @@ class RasterMetadata:
     crs: str
     transform: Transform
     chunk_rows: int
+    #: Identifies the exact input file(s), for sources whose input can change under the same
+    #: name (a GeoTIFF); recorded in the manifest so a resumed run refuses a different file.
+    fingerprint: Optional[Dict[str, Any]] = None
 
 
 class WindowedRasterSource(Protocol):
@@ -92,19 +100,44 @@ def offset_transform(transform: Transform, row: int, col: int) -> Transform:
 
 @lru_cache(maxsize=8)
 def _wgs84_transformer(destination_crs: str) -> Any:
-    try:
-        from pyproj import Transformer
-    except ImportError as exc:  # pragma: no cover - exercised by optional-extra smoke tests
-        raise RuntimeError(
-            "Non-Web-Mercator imagery requires the Zarr dependencies. "
-            "Install them with 'pip install mapcv[zarr]'."
-        ) from exc
+    from pyproj import Transformer
+
     return Transformer.from_crs("EPSG:4326", destination_crs, always_xy=True)
 
 
 def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> BaseGeometry:
     """Transform a WGS-84 geometry into ``destination_crs``."""
     return shapely_transform(_wgs84_transformer(destination_crs).transform, geometry)
+
+
+def region_bounds_in_crs(region: RegionConfig, crs: str) -> Tuple[float, float, float, float]:
+    """``(left, bottom, right, top)`` of the WGS-84 ``region`` in ``crs``.
+
+    The region's edges are densified before projecting, so the box also covers the
+    bulge of a curved edge (a lon/lat box is not a rectangle in UTM).
+    """
+    left, bottom, right, top = _wgs84_transformer(crs).transform_bounds(
+        region.west, region.south, region.east, region.north, densify_pts=21
+    )
+    return float(left), float(bottom), float(right), float(top)
+
+
+# Tolerance for float noise when snapping to a grid, in grid steps.
+_GRID_EPS = 1e-9
+
+
+def snap_interval_to_grid(
+    low: float, high: float, origin: float, step: float, eps: float = _GRID_EPS
+) -> Tuple[float, float]:
+    """Expand ``[low, high]`` outward to the nearest grid lines ``origin + k * step``.
+
+    ``eps`` (in steps) keeps an edge that sits on a grid line, up to float noise, from
+    growing by a whole pixel.
+    """
+    return (
+        origin + math.floor((low - origin) / step + eps) * step,
+        origin + math.ceil((high - origin) / step - eps) * step,
+    )
 
 
 def _safe_product_id(path_or_url: str) -> str:
@@ -363,14 +396,10 @@ def _snap_bounds_to_grid(
     y_res = abs(float(y_values[1] - y_values[0])) if y_values.size > 1 else float(resolution)
     x_edge = float(np.min(x_values)) - x_res / 2.0
     y_edge = float(np.min(y_values)) - y_res / 2.0
-    eps = 1e-9
     left, bottom, right, top = bounds
-    return (
-        x_edge + math.floor((left - x_edge) / x_res + eps) * x_res,
-        y_edge + math.floor((bottom - y_edge) / y_res + eps) * y_res,
-        x_edge + math.ceil((right - x_edge) / x_res - eps) * x_res,
-        y_edge + math.ceil((top - y_edge) / y_res - eps) * y_res,
-    )
+    snapped_left, snapped_right = snap_interval_to_grid(left, right, x_edge, x_res)
+    snapped_bottom, snapped_top = snap_interval_to_grid(bottom, top, y_edge, y_res)
+    return snapped_left, snapped_bottom, snapped_right, snapped_top
 
 
 class BandGapError(RuntimeError):
@@ -417,7 +446,6 @@ class EOPFZarrRasterSource:
 
         try:
             import xarray as xr
-            from pyproj import Transformer
         except ImportError as exc:
             if sys.version_info >= (3, 14):
                 raise RuntimeError(
@@ -468,14 +496,7 @@ class EOPFZarrRasterSource:
         except Exception:
             discovery.close()
             raise
-        transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
-        left, bottom, right, top = transformer.transform_bounds(
-            region.west,
-            region.south,
-            region.east,
-            region.north,
-            densify_pts=21,
-        )
+        left, bottom, right, top = region_bounds_in_crs(region, crs)
         x_values = np.asarray(discovery.coords["x"].values)
         y_values = np.asarray(discovery.coords["y"].values)
         if x_values.size == 0 or y_values.size == 0:
@@ -565,11 +586,289 @@ class EOPFZarrRasterSource:
         self._dataset.close()
 
 
+# ── GeoTIFF / COG ────────────────────────────────────────────────────────────
+
+# The head (and, for local files, tail) of a file that is hashed for its fingerprint.
+_FINGERPRINT_BYTES = 64 * 1024
+_FINGERPRINT_TIMEOUT_S = 15.0
+# Tolerance, in pixels, for a region edge that sits on the file's border.
+_EDGE_EPS_PX = 1e-6
+
+
+def geotiff_location(path: str) -> str:
+    """What the reader opens for ``imagery.path``: a path, or the URL itself."""
+    local = eopf_local_path(path)
+    return str(local) if local is not None else path
+
+
+def _remote_http_url(url: str) -> str:
+    """The ``http(s)`` URL behind ``url`` (``s3://bucket/key`` maps as in the Rust reader)."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "s3":
+        return url
+    bucket, key = parsed.netloc, parsed.path.lstrip("/")
+    host = (
+        f"https://s3.amazonaws.com/{bucket}/"
+        if "." in bucket
+        else f"https://{bucket}.s3.amazonaws.com/"
+    )
+    return host + quote(key, safe="/%")
+
+
+def geotiff_fingerprint(location: str) -> Dict[str, Any]:
+    """A cheap identity of a GeoTIFF, so a resumed run notices a different file.
+
+    Local files: size and the SHA-256 of the first and last 64 KiB (where the TIFF headers
+    and, for non-COG files, the directory live). The modification time is left out on
+    purpose: it changes when a file is copied, touched or rsynced, which would refuse a
+    resume of an unchanged file.
+    URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
+    ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
+    Nothing reads the whole file, whatever its size.
+    """
+    if "://" not in location:
+        path = Path(location)
+        stat = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            digest.update(handle.read(_FINGERPRINT_BYTES))
+            if stat.st_size > _FINGERPRINT_BYTES:
+                handle.seek(max(_FINGERPRINT_BYTES, stat.st_size - _FINGERPRINT_BYTES))
+                digest.update(handle.read(_FINGERPRINT_BYTES))
+        return {
+            "kind": "file",
+            "size": stat.st_size,
+            "sha256_head_tail": digest.hexdigest(),
+        }
+    fingerprint: Dict[str, Any] = {"kind": "url", "url": location}
+    request = urllib.request.Request(
+        _remote_http_url(location),
+        headers={"Range": f"bytes=0-{_FINGERPRINT_BYTES - 1}", "User-Agent": "mapcv"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:  # noqa: S310
+            head = response.read(_FINGERPRINT_BYTES)
+            etag = response.headers.get("ETag")
+            content_range = response.headers.get("Content-Range", "")
+            total = content_range.rpartition("/")[2]
+            fingerprint["size"] = int(total) if total.isdigit() else None
+            fingerprint["etag"] = etag.strip() if etag else None
+            fingerprint["sha256_head"] = hashlib.sha256(head).hexdigest()
+    except OSError:
+        # The reader reports unreachable files itself; a missing fingerprint only
+        # weakens the resume check to the URL.
+        pass
+    return fingerprint
+
+
+def _nodata_mask(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray[np.bool_]:
+    """Pixels where every band is NoData (or non-finite, for float rasters)."""
+    empty = _all_equal(data, nodata)
+    if np.issubdtype(data.dtype, np.floating):
+        empty |= np.all(~np.isfinite(data), axis=-1)
+    return empty
+
+
+def _all_equal(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray[np.bool_]:
+    if nodata is None or np.isnan(nodata):
+        return np.zeros(data.shape[:2], dtype=np.bool_)
+    if np.issubdtype(data.dtype, np.integer):
+        info = np.iinfo(data.dtype)
+        if nodata != int(nodata) or not info.min <= nodata <= info.max:
+            return np.zeros(data.shape[:2], dtype=np.bool_)
+    return np.asarray(np.all(data == data.dtype.type(nodata), axis=-1), dtype=np.bool_)
+
+
+def _json_nodata(nodata: Optional[float]) -> Optional[Any]:
+    """``nodata`` as a JSON-safe, self-equal value (``NaN != NaN`` would break resuming)."""
+    if nodata is None:
+        return None
+    return "nan" if np.isnan(nodata) else nodata
+
+
+def region_pixel_window(
+    bounds: Tuple[float, float, float, float], transform: Transform, height: int, width: int
+) -> Tuple[int, int, int, int, bool]:
+    """Pixel window ``(row0, row1, col0, col1)`` covering ``bounds``, clipped to the raster.
+
+    The CRS box is mapped through the inverse of the (possibly rotated) pixel transform
+    and its pixel extent is snapped outward to whole pixels. The last value says whether
+    the box reaches beyond the raster.
+    """
+    left, bottom, right, top = bounds
+    a, b, c, d, e, f = transform
+    det = a * e - b * d
+    if det == 0:
+        raise ValueError("the GeoTIFF's pixel transform is degenerate")
+    cols: List[float] = []
+    rows: List[float] = []
+    for x, y in ((left, bottom), (left, top), (right, bottom), (right, top)):
+        cols.append((e * (x - c) - b * (y - f)) / det)
+        rows.append((a * (y - f) - d * (x - c)) / det)
+    low_col, high_col = min(cols), max(cols)
+    low_row, high_row = min(rows), max(rows)
+    extends = (
+        low_col < -_EDGE_EPS_PX
+        or low_row < -_EDGE_EPS_PX
+        or high_col > width + _EDGE_EPS_PX
+        or high_row > height + _EDGE_EPS_PX
+    )
+    snapped_col0, snapped_col1 = snap_interval_to_grid(low_col, high_col, 0.0, 1.0)
+    snapped_row0, snapped_row1 = snap_interval_to_grid(low_row, high_row, 0.0, 1.0)
+    return (
+        max(0, int(snapped_row0)),
+        min(height, int(snapped_row1)),
+        max(0, int(snapped_col0)),
+        min(width, int(snapped_col1)),
+        extends,
+    )
+
+
+def _extent_text(transform: Transform, height: int, width: int) -> str:
+    a, b, c, d, e, f = transform
+    xs = [c + a * col + b * row for col in (0, width) for row in (0, height)]
+    ys = [f + d * col + e * row for col in (0, width) for row in (0, height)]
+    return f"{min(xs):.2f}, {min(ys):.2f} to {max(xs):.2f}, {max(ys):.2f}"
+
+
+class GeoTiffRasterSource:
+    """Windowed reader over one GeoTIFF or COG, on the file's own pixel grid.
+
+    The region (WGS-84) is projected into the file's CRS and snapped outward to whole
+    pixels, so pixels are read exactly as stored: no warping, no resampling. The window
+    is clipped to the raster. Patches, masks and transforms are expressed in the file's
+    CRS and grid, so labels are rasterized onto the same pixels.
+    """
+
+    def __init__(
+        self,
+        region: RegionConfig,
+        config: GeoTiffImageryConfig,
+        *,
+        image_format: Optional[str] = None,
+    ) -> None:
+        # URL safety rules are enforced by GeoTiffImageryConfig validation.
+        location = geotiff_location(config.path)
+        self._tif = GeoTiff(location)
+        info = self._tif.info
+        name = _safe_product_id(config.path)
+
+        if info.epsg is None:
+            raise ValueError(
+                f"GeoTIFF '{name}' has no usable CRS: {info.crs_error or 'no CRS in the file'}. "
+                "mapcv reads files whose CRS is an EPSG code; re-project or re-tag the file."
+            )
+        if info.transform is None:
+            raise ValueError(f"GeoTIFF '{name}' has no georeferencing (no pixel size/origin tags)")
+        if config.overview > len(info.overviews):
+            raise ValueError(
+                f"imagery.overview is {config.overview}, but '{name}' has "
+                f"{len(info.overviews)} overview level(s) (0 is the full resolution)"
+            )
+        file_transform = info.overview_transform(config.overview)
+        assert file_transform is not None
+        level_height, level_width = (
+            (info.height, info.width)
+            if config.overview == 0
+            else info.overviews[config.overview - 1]
+        )
+
+        selected = (
+            list(config.bands) if config.bands is not None else list(range(1, info.count + 1))
+        )
+        if max(selected) > info.count:
+            raise ValueError(
+                f"imagery.bands asks for band {max(selected)}, but '{name}' has {info.count} band(s)"
+            )
+        self._bands = [band - 1 for band in selected]
+        self._expand_gray = False
+        if image_format is not None and image_format != "npy":
+            if info.dtype != np.uint8 or len(selected) not in (1, 3):
+                raise ValueError(
+                    f"'{name}' has {len(selected)} selected band(s) of {info.dtype}; "
+                    f"writer.image_format '{image_format}' writes 1 or 3 bands of uint8. "
+                    "Use writer.image_format: npy (keeps band count and dtype), or select "
+                    "1 or 3 bands of a uint8 file with imagery.bands"
+                )
+            self._expand_gray = len(selected) == 1
+        names = [f"b{band}" for band in selected]
+        if self._expand_gray:
+            names = names * 3
+
+        crs = f"EPSG:{info.epsg}"
+        left, bottom, right, top = region_bounds_in_crs(region, crs)
+        row0, row1, col0, col1, extends = region_pixel_window(
+            (left, bottom, right, top), file_transform, level_height, level_width
+        )
+        if row0 >= row1 or col0 >= col1:
+            raise ValueError(
+                f"requested region does not intersect the GeoTIFF '{name}' "
+                f"(file extent in {crs}: {_extent_text(file_transform, level_height, level_width)})"
+            )
+        if extends:
+            warnings.warn(
+                f"the region extends beyond the GeoTIFF '{name}'; only the part inside the file "
+                "is used (patches at its edge are padded or dropped by sampler.edge_strategy)",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        self._overview = config.overview
+        self._row0, self._col0 = row0, col0
+        self._nodata = config.nodata if config.nodata is not None else info.nodata
+        effective_nodata = _json_nodata(self._nodata)
+        self._dtype = info.dtype
+        self.metadata = RasterMetadata(
+            source_type="geotiff",
+            product_id=name,
+            width=col1 - col0,
+            height=row1 - row0,
+            bands=names,
+            dtype=str(info.dtype),
+            crs=crs,
+            transform=offset_transform(file_transform, row0, col0),
+            chunk_rows=config.chunk_rows,
+            fingerprint={
+                **geotiff_fingerprint(location),
+                "overview": config.overview,
+                "bands": selected,
+                "nodata": effective_nodata,
+            },
+        )
+
+    def read_window(
+        self, row_start: int, row_stop: int, col_start: int, col_stop: int
+    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+        data, inside = self._tif.read_window(
+            self._row0 + row_start,
+            self._row0 + row_stop,
+            self._col0 + col_start,
+            self._col0 + col_stop,
+            bands=self._bands,
+            overview=self._overview,
+        )
+        valid = inside & ~_nodata_mask(data, self._nodata)
+        if self._expand_gray:
+            data = np.repeat(data, 3, axis=-1)
+        return data, valid
+
+    def close(self) -> None:
+        """Nothing to release: the reader holds no open handles between reads."""
+
+
 def open_raster_source(
     region: RegionConfig,
-    imagery: XYZImageryConfig | EOPFZarrImageryConfig,
+    imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig,
+    *,
+    image_format: Optional[str] = None,
 ) -> WindowedRasterSource:
-    """Construct the configured raster source."""
+    """Construct the configured raster source.
+
+    ``image_format`` (``writer.image_format``) lets a GeoTIFF source check that its
+    bands and dtype fit the output; other sources ignore it.
+    """
     if isinstance(imagery, XYZImageryConfig):
         return XYZRasterSource(region, imagery)
+    if isinstance(imagery, GeoTiffImageryConfig):
+        return GeoTiffRasterSource(region, imagery, image_format=image_format)
     return EOPFZarrRasterSource(region, imagery)

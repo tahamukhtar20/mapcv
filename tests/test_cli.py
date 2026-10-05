@@ -315,6 +315,11 @@ def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
     assert "SECRET" not in result.output
 
 
+def _unwrapped(output: str) -> str:
+    """Output with all whitespace removed, so assertions survive console line wrapping."""
+    return "".join(output.split())
+
+
 def test_validate_rejects_legacy_tiles_config_with_migration_hint(tmp_path: Path) -> None:
     p = _write_config(tmp_path)
     p.write_text(
@@ -324,9 +329,11 @@ def test_validate_rejects_legacy_tiles_config_with_migration_hint(tmp_path: Path
     )
     result = runner.invoke(app, ["validate", str(p)])
     assert result.exit_code == 1
-    assert "Config error" in result.output
-    assert "removed in 0.3" in result.output
-    assert "MIGRATION.md" in result.output
+    output = _unwrapped(result.output)
+    assert "Configerror" in output
+    assert "`tiles:`wasreplacedby`imagery:`" in output
+    assert "removedin0.3" in output
+    assert "MIGRATION.md" in output
 
 
 def test_validate_rejects_region_zoom_with_migration_hint(tmp_path: Path) -> None:
@@ -334,9 +341,10 @@ def test_validate_rejects_region_zoom_with_migration_hint(tmp_path: Path) -> Non
     p.write_text(p.read_text().replace("  north: 31.60\n", "  north: 31.60\n  zoom: 16\n"))
     result = runner.invoke(app, ["validate", str(p)])
     assert result.exit_code == 1
-    assert "region.zoom" in result.output
-    assert "imagery.zoom" in result.output
-    assert "MIGRATION.md" in result.output
+    output = _unwrapped(result.output)
+    assert "`region.zoom`wasmovedto`imagery.zoom`" in output
+    assert "removedin0.3" in output
+    assert "MIGRATION.md" in output
 
 
 def test_init_links_provider_guidance(tmp_path: Path) -> None:

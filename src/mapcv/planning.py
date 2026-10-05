@@ -14,7 +14,9 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
+    RasterLabelsConfig,
     XYZImageryConfig,
+    eopf_local_path,
 )
 from mapcv.imagery import GeoTiffRasterSource
 from shapely.geometry import box
@@ -50,6 +52,8 @@ class LabelSummary:
     warnings: List[str] = field(default_factory=list)
     # Features whose geometry intersects the region (each is one detection object).
     in_region: int = 0
+    #: What the label raster is (CRS, size, pixel size), for raster labels.
+    raster: Optional[str] = None
 
 
 @dataclass
@@ -178,11 +182,51 @@ def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
     )
 
 
+def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> LabelSummary:
+    """Open the label raster's header (no pixels are read) and check it covers the region."""
+    from pyproj import Transformer
+
+    from mapcv.targets.raster_labels import LabelRasterSampler
+
+    local = eopf_local_path(labels.path)
+    if local is not None and not local.exists():
+        return LabelSummary(
+            labels.path, 0, labels.class_map(), [f"label raster not found: {local}"]
+        )
+    # The same checks generate makes (CRS, band, integer values); the CRS argument only
+    # matters for sampling, which planning does not do.
+    sampler = LabelRasterSampler(labels, "EPSG:4326")
+    info = sampler.info
+    a, b, c, d, e, f = sampler.transform
+    xs = [c + a * col + b * row for col in (0, info.width) for row in (0, info.height)]
+    ys = [f + d * col + e * row for col in (0, info.width) for row in (0, info.height)]
+    to_wgs84 = Transformer.from_crs(sampler.crs, "EPSG:4326", always_xy=True)
+    west, south, east, north = to_wgs84.transform_bounds(
+        min(xs), min(ys), max(xs), max(ys), densify_pts=21
+    )
+    region = config.region
+    messages: List[str] = []
+    if not box(west, south, east, north).intersects(
+        box(region.west, region.south, region.east, region.north)
+    ):
+        messages.append(
+            "the label raster does not overlap the region, so every mask pixel would be "
+            "ignored. Check labels.path and the region."
+        )
+    description = (
+        f"raster {sampler.name} · {sampler.crs} · {info.width:,} × {info.height:,} px · "
+        f"{info.dtype} · ≈ {_pixel_size_m(sampler.crs, sampler.transform):.2f} m/px"
+    )
+    return LabelSummary(labels.path, 0, labels.class_map(), messages, raster=description)
+
+
 def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
     """Parse the configured label file and summarize it, or ``None`` without labels."""
     labels = config.labels
     if labels is None:
         return None
+    if isinstance(labels, RasterLabelsConfig):
+        return _summarize_label_raster(config, labels)
     if not labels.path.exists():
         return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
     data = labels.path.read_bytes()

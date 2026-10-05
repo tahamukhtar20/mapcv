@@ -32,6 +32,7 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
+    RasterLabelsConfig,
     eopf_local_path,
 )
 from mapcv.labels import MAX_CLASS_ID, parse_geojson, parse_kml
@@ -217,6 +218,13 @@ def _settings_table(config: MapcvConfig) -> Table:
     table.add_row("Imagery", _imagery_label(config))
     if config.labels is None:
         table.add_row("Labels", "none (image-only dataset)")
+    elif isinstance(config.labels, RasterLabelsConfig):
+        raster = config.labels
+        where = _redact_url(raster.path) if "://" in raster.path else raster.path
+        table.add_row(
+            "Labels",
+            f"{where} · raster band {raster.band} · {len(raster.class_map())} class(es)",
+        )
     else:
         field = config.labels.label_field or "none — every polygon is class 1"
         table.add_row("Labels", f"{config.labels.path} · field: {field}")
@@ -267,9 +275,14 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         table.add_row("Labels", "none (image-only dataset)")
     else:
         classes = ", ".join(f"{name} → {cid}" for name, cid in sorted(labels.classes.items()))
-        detail = f"{labels.polygons:,} polygon(s)"
-        detail += f" · classes: {classes}" if classes else " · every polygon is class 1"
-        table.add_row("Labels", f"{labels.path} · {detail}")
+        if labels.raster is not None:
+            where = _redact_url(labels.path) if "://" in labels.path else labels.path
+            detail = f"{labels.raster} · classes: {classes or 'none (all background)'}"
+            table.add_row("Labels", f"{where} · {detail}")
+        else:
+            detail = f"{labels.polygons:,} polygon(s)"
+            detail += f" · classes: {classes}" if classes else " · every polygon is class 1"
+            table.add_row("Labels", f"{labels.path} · {detail}")
     table.add_row(
         "Patches",
         f"≈ {estimate.patches:,} × {estimate.patch_size} px "
@@ -316,12 +329,21 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
         )
 
 
+def _raster_labels(manifest: Manifest) -> bool:
+    """Whether the dataset's masks were read from a label raster."""
+    target = manifest.target
+    return target is not None and (target.labels or {}).get("type") == "raster"
+
+
 def _class_names(manifest: Manifest) -> Dict[str, str]:
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
     ignore = manifest.ignore_index
     if ignore is not None:
-        names.setdefault(str(ignore), "ignored (no imagery)")
+        names.setdefault(
+            str(ignore),
+            "ignored (no imagery or label)" if _raster_labels(manifest) else "ignored (no imagery)",
+        )
     if not manifest.class_map:
         names.setdefault("1", "labeled")
     return names
@@ -568,6 +590,15 @@ imagery:
 # labels:                    # omit for an image-only dataset
 #   path: buildings.geojson  # .geojson or .kml, in lon/lat: mapcv reprojects it into the file's CRS
 #   label_field: null        # property holding the class; null = every polygon is class 1
+#
+# labels:                    # or a classified label raster (land cover, a model's output, ...)
+#   type: raster             # any CRS and resolution: each pixel takes the label at its centre
+#   path: landcover.tif      # local path, https:// or anonymous s3:// URL
+#   classes:                 # raster value -> mask ID (0 = background), optionally with a name
+#     10: {id: 1, name: tree_cover}
+#     50: {id: 2, name: built_up}
+#     80: {id: 3, name: water}
+#   unmapped: background     # values not listed above: background | ignore
 
 sampler:
   patch_size: 256
@@ -860,6 +891,126 @@ def _ask_geotiff() -> _GeoTiffAnswer:
     return _GeoTiffAnswer(lines, image_format, _geotiff_wgs84_extent(tif))
 
 
+_RASTER_SUFFIXES = (".tif", ".tiff")
+# The wizard lists a label raster's values from at most this many pixels.
+_WIZARD_SAMPLE_PIXELS = 4_000_000
+
+
+def _sample_label_values(
+    tif: Any, bbox: Tuple[float, float, float, float]
+) -> Tuple[Dict[int, int], bool]:
+    """Pixel count per value of the label raster under ``bbox`` (lon/lat), and whether
+    the values come from a reduced sample (an overview or a crop)."""
+    from mapcv.config import RegionConfig
+    from mapcv.imagery import region_bounds_in_crs, region_pixel_window
+
+    info = tif.info
+    region = RegionConfig(west=bbox[0], south=bbox[1], east=bbox[2], north=bbox[3])
+    bounds = region_bounds_in_crs(region, f"EPSG:{info.epsg}")
+    level, sampled = 0, False
+    sizes = [(info.height, info.width), *info.overviews]
+    while True:
+        height, width = sizes[level]
+        transform = info.overview_transform(level)
+        row0, row1, col0, col1, _ = region_pixel_window(bounds, transform, height, width)
+        pixels = (row1 - row0) * (col1 - col0)
+        if pixels <= _WIZARD_SAMPLE_PIXELS or level == len(sizes) - 1:
+            break
+        level, sampled = level + 1, True
+    if row0 >= row1 or col0 >= col1:
+        return {}, sampled
+    side = int(_WIZARD_SAMPLE_PIXELS**0.5)
+    if pixels > _WIZARD_SAMPLE_PIXELS:  # no small enough overview: the centre of the area
+        mid_row, mid_col = (row0 + row1) // 2, (col0 + col1) // 2
+        row0, row1 = max(row0, mid_row - side // 2), min(row1, mid_row + side // 2)
+        col0, col1 = max(col0, mid_col - side // 2), min(col1, mid_col + side // 2)
+        sampled = True
+    data, _ = tif.read_window(row0, row1, col0, col1, bands=[0], overview=level)
+    values, counts = np.unique(data[..., 0], return_counts=True)
+    return {int(value): int(count) for value, count in zip(values, counts)}, sampled
+
+
+def _ask_label_raster(path_text: str, bbox: Tuple[float, float, float, float]) -> List[str]:
+    """Describe a label raster, list its values and write ``labels`` lines that map them."""
+    from mapcv.geotiff import GeoTiff
+    from mapcv.imagery import geotiff_location
+    from mapcv.targets.raster_labels import integer_nodata
+
+    lines = ["labels:", "  type: raster", f"  path: {_yaml_str(path_text)}"]
+    placeholder = lines + [
+        "  classes:                   # raster value: {id: mask ID, name: class name}",
+        "    1: {id: 1, name: class_1}",
+    ]
+    _console.print("[dim]A label raster: each pixel's value is its class.[/dim]")
+    try:
+        tif = GeoTiff(geotiff_location(path_text))
+    except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
+        _console.print(f"[yellow]Cannot read that file:[/yellow] {exc}. Edit labels.classes.")
+        return placeholder
+    info = tif.info
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column()
+    crs = f"EPSG:{info.epsg}" if info.epsg is not None else f"none usable ({info.crs_error})"
+    table.add_row("CRS", crs)
+    table.add_row(
+        "Size", f"{info.width:,} × {info.height:,} px · {info.count} band(s) · {info.dtype}"
+    )
+    if info.transform is not None:
+        table.add_row("Pixel", f"{abs(info.transform[0]):g} × {abs(info.transform[4]):g} CRS units")
+    table.add_row("NoData", "none" if info.nodata is None else f"{info.nodata:g}")
+    _console.print(table)
+    if info.epsg is None or info.transform is None or info.dtype.kind not in "iu":
+        _console.print(
+            "[yellow]mapcv reads integer label rasters with an EPSG CRS; the config will be "
+            "written, but generating will fail until the file is fixed.[/yellow]"
+        )
+        return placeholder
+    try:
+        counts, sampled = _sample_label_values(tif, bbox)
+    except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
+        _console.print(f"[yellow]Cannot read its values:[/yellow] {exc}. Edit labels.classes.")
+        return placeholder
+    nodata = integer_nodata(info.nodata, info.dtype)
+    if nodata is not None:
+        counts.pop(nodata, None)
+    if not counts:
+        _console.print("[yellow]No label values under the area.[/yellow] Edit labels.classes.")
+        return placeholder
+    total = sum(counts.values())
+    values = sorted(counts)
+    shown = Table(box=None, padding=(0, 2), show_edge=False)
+    shown.add_column("value", justify="right")
+    shown.add_column("share", justify="right")
+    for value in values[:20]:
+        shown.add_row(str(value), f"{counts[value] / total:.1%}")
+    _console.print(shown)
+    if len(values) > 20:
+        _console.print(f"[dim]… and {len(values) - 20} more value(s).[/dim]")
+    if sampled:
+        _console.print("[dim]Values from a sample of the area (an overview or its centre).[/dim]")
+    classes = [value for value in values if value != 0]
+    if len(classes) > MAX_CLASS_ID - 1:
+        _console.print(
+            f"[yellow]{len(classes)} distinct values: too many for class IDs.[/yellow] "
+            "Edit labels.classes."
+        )
+        return placeholder
+    identity = all(1 <= value < MAX_CLASS_ID for value in classes)
+    lines.append("  classes:                   # raster value: {id: mask ID, name: class name}")
+    if 0 in counts:
+        lines.append("    0: 0                     # background")
+    for number, value in enumerate(classes, start=1):
+        class_id = value if identity else number
+        lines.append(f"    {value}: {{id: {class_id}, name: value_{value}}}")
+    lines.append("  unmapped: background       # values not listed: background | ignore")
+    _console.print(
+        "[dim]Each value becomes a class; rename them (and merge values by giving them "
+        "the same ID) in the config.[/dim]"
+    )
+    return lines
+
+
 def _wizard() -> str:
     _console.print(
         Panel(
@@ -939,20 +1090,26 @@ def _wizard() -> str:
 
     _console.print("\n[bold cyan]3/4 Labels[/bold cyan]")
     labels_path: Optional[Path] = None
+    raster_lines: List[str] = []
     if area_file is not None and Confirm.ask(
         f"Use {area_file.name} as the labels too?", default=True, console=_console
     ):
         labels_path = area_file
     elif area_file is None:
         answer = Prompt.ask(
-            "Label file [dim](.geojson/.kml; blank for an image-only dataset)[/dim]",
+            "Label file [dim](.geojson/.kml, or a .tif label raster; blank for an image-only "
+            "dataset)[/dim]",
             default="",
             show_default=False,
             console=_console,
         ).strip()
-        if answer:
+        if answer.lower().endswith(_RASTER_SUFFIXES):
+            path_text = answer if "://" in answer else str(Path(answer).expanduser())
+            raster_lines = _ask_label_raster(path_text, (west, south, east, north))
+        elif answer:
             labels_path = Path(answer).expanduser()
-    label_lines: List[str] = []
+    # A label raster makes masks, so the task question is only asked for vector labels.
+    label_lines: List[str] = raster_lines
     task_lines: List[str] = []
     detection_lines: List[str] = []
     if labels_path is not None:
@@ -1204,7 +1361,8 @@ def info(
     if source.crs:
         table.add_row("CRS", source.crs)
     if target is not None and target.ignore_index is not None:
-        table.add_row("Ignore", f"mask value {target.ignore_index} marks pixels without imagery")
+        without = "imagery or label" if _raster_labels(manifest) else "imagery"
+        table.add_row("Ignore", f"mask value {target.ignore_index} marks pixels without {without}")
     padded = sum(1 for entry in manifest.patches if entry["padded"])
     if padded:
         table.add_row("Padded", f"{padded:,} patch(es) touch the raster edge")
@@ -1300,8 +1458,13 @@ def validate(
     config = _load_config(config_path)
     _console.print(f"[green]✓[/green] {config_path} is a valid config.")
     _console.print(_settings_table(config))
-    if config.labels is not None and not config.labels.path.exists():
-        _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {config.labels.path}")
+    labels = config.labels
+    if isinstance(labels, RasterLabelsConfig):
+        label_file = eopf_local_path(labels.path)
+        if label_file is not None and not label_file.exists():
+            _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")
+    elif labels is not None and not labels.path.exists():
+        _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {labels.path}")
     if isinstance(config.imagery, GeoTiffImageryConfig):
         local = eopf_local_path(config.imagery.path)
         if local is not None and not local.exists():

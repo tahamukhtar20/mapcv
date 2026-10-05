@@ -1,11 +1,11 @@
 ---
 title: Prepare labels
-description: Get polygon labels into a GeoJSON or KML file mapcv can read — from QGIS, ogr2ogr, Python or OpenStreetMap — and choose class IDs.
+description: Get polygon labels into a GeoJSON or KML file mapcv can read — from QGIS, ogr2ogr, Python or OpenStreetMap — choose class IDs, or use a classified raster such as ESA WorldCover as labels.
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-mapcv burns **polygons** from one label file into the masks. This page covers what that file must look like, how to export it from common tools, and how class IDs are chosen.
+mapcv burns **polygons** from one label file into the masks, or reads the classes from a **classified raster** (a land-cover map, an earlier model's output). This page covers what a polygon file must look like, how to export it from common tools and how class IDs are chosen, then [raster labels](#use-a-classified-raster-as-labels).
 
 ## What mapcv accepts
 
@@ -124,6 +124,52 @@ The example label files in the repository were made this way; see [`examples/`](
 
 <Aside>
 OSM tags are messy: `building=yes` is the most common building "type", and land-use polygons overlap. Map raw tags to the classes you care about (in your export script, or with `labels.classes`) rather than using every tag value as a class.
+</Aside>
+
+## Use a classified raster as labels
+
+Many datasets start from an existing classified raster: [ESA WorldCover](https://esa-worldcover.org/) (10 m, global), [Dynamic World](https://dynamicworld.app/) (10 m, near real time), a national land-cover map, or the predictions of an earlier model. Set `labels.type: raster` and map its values to mask IDs:
+
+```yaml
+labels:
+  type: raster
+  path: ESA_WorldCover_10m_2021_v200_N48E000_Map.tif   # local, https:// or anonymous s3://
+  classes:                      # raster value -> {id: mask ID, name: class name}
+    10: {id: 1, name: tree_cover}
+    20: {id: 2, name: shrubland}
+    30: {id: 3, name: grassland}
+    40: {id: 4, name: cropland}
+    50: {id: 5, name: built_up}
+    60: {id: 6, name: bare}
+    80: {id: 7, name: water}
+    90: {id: 8, name: wetland}
+    95: {id: 8, name: wetland}  # mangroves merged into wetland
+  unmapped: background          # snow (70), moss (100): background | ignore
+```
+
+- **Class IDs.** `classes` maps each raster value to a mask ID from 0 to 255; `0` is background. Several values can share an ID (to merge classes); the short form `10: 1` names the class `value_10`. The names become the manifest's `class_map`.
+- **Values not listed** become background (`unmapped: background`, the default, as features missing from `classes` do with polygon labels) or `ignore_index` (`unmapped: ignore`), so a loss skips them.
+- **No label.** The file's NoData value, `ignore_values` (for example a "not classified" code) and every pixel outside the raster get `ignore_index` (255), like pixels without imagery. Set `nodata:` to override the file's NoData value.
+- **Integer values only.** `uint8`, `uint16`, `int16`, … in one band (`band:` picks another). A float raster (probabilities) must be turned into classes first.
+
+`mapcv plan` opens the raster's header (no pixels) and prints its CRS, size and pixel size with the class map, and warns when it does not overlap the region. `mapcv init` recognises a `.tif` label file, lists the values under your area and writes a `classes` block to rename.
+
+### How the raster is aligned to the imagery
+
+The label raster does not need the imagery's CRS, resolution or origin; it is read on the imagery's pixel grid:
+
+1. For each imagery pixel, mapcv takes the pixel's **centre** and projects it exactly into the label raster's CRS (Web Mercator tiles and a WorldCover tile in EPSG:4326, for example).
+2. The label pixel that contains that point gives the value (**nearest neighbour**). Labels are categories, so values are never averaged or interpolated, whatever the resolutions: a 10 m label pixel covers about 100 pixels of 1 m imagery, and a 0.5 m label raster is sampled once per 1 m pixel.
+3. A centre exactly on the boundary between two label pixels takes the right / lower one, as GDAL does. `PixelIsPoint` files are handled as in GDAL.
+
+This is what `rasterio.warp.reproject(..., resampling=Resampling.nearest)` gives onto each patch's transform, without GDAL's default approximation of the transformation; mapcv's tests check every mask against it, including rotated imagery grids and labels in another CRS. When the label raster was made on the imagery's grid (same CRS, pixel size and whole-pixel origin), windows are copied straight from it.
+
+<Aside title="Check the label raster's resolution">
+Labels coarser than the imagery give blocky masks: WorldCover's 10 m pixels on 0.3 m aerial imagery are 33-pixel squares that do not follow the edges in the image. That is the label data, not a misalignment. Prefer imagery at or near the label resolution (Sentinel-2 for WorldCover or Dynamic World).
+</Aside>
+
+<Aside type="caution" title="Licences">
+Land-cover products have their own terms: ESA WorldCover is CC BY 4.0 (credit "© ESA WorldCover project"), Dynamic World is CC BY 4.0 via Google Earth Engine. Credit them when you share a dataset.
 </Aside>
 
 ## Common problems

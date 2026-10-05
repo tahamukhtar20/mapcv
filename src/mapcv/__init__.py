@@ -14,6 +14,8 @@ from mapcv.config import (
     ImageryConfig,
     LabelsConfig,
     MapcvConfig,
+    RasterClass,
+    RasterLabelsConfig,
     RegionConfig,
     XYZImageryConfig,
 )
@@ -62,6 +64,8 @@ __all__ = [
     "URL_TEMPLATES",
     "LabelsConfig",
     "DetectionOptions",
+    "RasterClass",
+    "RasterLabelsConfig",
     "ImageryConfig",
     "XYZImageryConfig",
     "EOPFZarrImageryConfig",

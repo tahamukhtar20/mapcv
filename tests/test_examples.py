@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from mapcv import Manifest
 from mapcv.cli import app
-from mapcv.config import MapcvConfig
+from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.planning import plan
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -41,7 +41,7 @@ def test_example_config_is_valid(config_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.chdir(config_path.parent)
     config = MapcvConfig.from_yaml(Path("mapcv.yaml"))
 
-    assert config.labels is not None
+    assert isinstance(config.labels, LabelsConfig)
     assert config.labels.path.exists()
     assert config.labels.path.stat().st_size < _MAX_LABEL_BYTES
     label_file = json.loads(config.labels.path.read_text())

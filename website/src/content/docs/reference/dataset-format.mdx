@@ -43,7 +43,7 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
 | NoData | black `(0, 0, 0)` pixels (failed tiles, padding, provider NoData) | `NaN` where the product has no data; `0` in padded areas | like the source's format; floating-point GeoTIFFs declare `NaN` as no-data |
 | Mask | single-channel PNG, `uint8` (16-bit PNG for `uint16` masks), `(H, W)` | NumPy array, `(H, W)`, the mask's own dtype | single-band GeoTIFF, the mask's own dtype |
 
-**Masks.** `0` is background (imagery, no polygon), other values are class IDs from the manifest's `target.class_map`, and `255` (`labels.ignore_index`, recorded as the manifest's `target.ignore_index`) marks pixels with no imagery under them: padding, failed tiles and NoData. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. The values are the same in `png`, `npy` and `tif`; today segmentation masks are `uint8`, and `npy` and `tif` can also hold `uint16` and wider integers or `float32`/`float64` where a task needs them (PNG holds `uint8` and `uint16`). A `tif` mask also declares `ignore_index` as its no-data value, so GIS tools and `rasterio` (`read(masked=True)`) treat those pixels as missing. Pass the ignore value to your loss; see [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
+**Masks.** `0` is background (imagery, no polygon), other values are class IDs from the manifest's `target.class_map`, and `255` (`labels.ignore_index`, recorded as the manifest's `target.ignore_index`) marks pixels with no imagery under them: padding, failed tiles and NoData. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. With [raster labels](/mapcv/reference/configuration/#raster-labels-type-raster), `255` also marks pixels without a label: outside the label raster, its NoData and `labels.ignore_values`. The values are the same in `png`, `npy` and `tif`; today segmentation masks are `uint8`, and `npy` and `tif` can also hold `uint16` and wider integers or `float32`/`float64` where a task needs them (PNG holds `uint8` and `uint16`). A `tif` mask also declares `ignore_index` as its no-data value, so GIS tools and `rasterio` (`read(masked=True)`) treat those pixels as missing. Pass the ignore value to your loss; see [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
 
 ## Georeferenced outputs
 
@@ -177,9 +177,9 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch) or `"detection"` (boxes) |
 | `class_map` | object | Label value → class ID (mask value, COCO `category_id`). Empty when every polygon is class 1 |
-| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`); `null` when they are background, and for detection |
+| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection |
 | `dtype` | string \| null | Data type of the mask values: `"uint8"`; `null` for detection (no masks) |
-| `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file, so a resume notices edited labels |
+| `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file, so a resume notices edited labels. For raster labels (`"type": "raster"`) the settings are `band`, `classes` (each value as `{"id", "name"}`), `nodata`, `ignore_values`, `unmapped` and `resampling`, plus a `fingerprint` that identifies the label raster as a GeoTIFF source's does (`size` and `sha256_head_tail` for a local file; `url`, `etag`, `size` and `sha256_head` for a URL) instead of a `sha256`, since nothing reads the whole file |
 | `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection |
 
 ### Patch entries

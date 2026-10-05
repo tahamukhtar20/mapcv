@@ -495,10 +495,10 @@ def test_init_wizard_builds_a_config_from_a_label_file(tmp_path: Path) -> None:
     answers = "\n".join(["esri", str(labels), "17", "y", "kind", "", "256", "./ds", "y"]) + "\n"
     result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers)
     assert result.exit_code == 0, result.output
-    from mapcv.config import MapcvConfig
+    from mapcv.config import LabelsConfig, MapcvConfig
 
     config = MapcvConfig.from_yaml(out)
-    assert config.labels is not None and config.labels.label_field == "kind"
+    assert isinstance(config.labels, LabelsConfig) and config.labels.label_field == "kind"
     assert config.split is not None and config.split.strategy == "spatial"
     assert config.region.west == pytest.approx(74.3)
 

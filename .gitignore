@@ -24,3 +24,6 @@ site/
 website/.astro/
 website/dist/
 website/node_modules/
+
+# Benchmark results and scratch output
+benchmark-results.json

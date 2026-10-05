@@ -112,6 +112,19 @@ writer:
 
 Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, and Google Earth Engine integration are outside the 0.2.0 scope. See the [migration guide](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) and [provider guidance](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
 
+## GeoTIFF and COG imagery
+
+Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL or a public `s3://` object) can be the imagery. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects WGS-84 labels onto it. 8-bit RGB can be written as PNG/JPG; any other layout needs `image_format: npy`.
+
+```yaml
+imagery:
+  type: geotiff
+  path: ortho/scene.tif      # or https://.../scene.tif
+  # bands: [1, 2, 3]         # 1-based, default: all
+  # overview: 0              # reduced-resolution level
+  # nodata: 0                # override the file's NoData
+```
+
 ## Documentation
 
 Full documentation including configuration reference, CLI reference, and API reference is available at **[tahamukhtar20.github.io/mapcv](https://tahamukhtar20.github.io/mapcv)**.

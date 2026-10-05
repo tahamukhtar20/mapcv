@@ -68,6 +68,7 @@ export default defineConfig({
             { label: 'Use your dataset', slug: 'guides/use-your-dataset' },
             { label: 'Prepare labels', slug: 'guides/prepare-labels' },
             { label: 'Choose imagery and zoom', slug: 'guides/choose-imagery-and-zoom' },
+            { label: 'Use your own GeoTIFF', slug: 'guides/use-your-own-geotiff' },
             { label: 'Large regions and resuming', slug: 'guides/large-regions-and-resuming' },
             { label: 'Splits without leakage', slug: 'guides/splits-without-leakage' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },

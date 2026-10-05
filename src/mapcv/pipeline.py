@@ -22,7 +22,7 @@ from rich.progress import (
 )
 
 from mapcv._mapcv_rs import grid_sample_anchors
-from mapcv.config import MapcvConfig
+from mapcv.config import GeoTiffImageryConfig, MapcvConfig
 from mapcv.imagery import WindowedRasterSource, offset_transform, open_raster_source
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
@@ -141,7 +141,13 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
     writer = create_writer(config.writer)
     check_compatible(target, writer)
     with _console.status("Opening imagery…"):
-        source = open_raster_source(config.region, config.imagery)
+        if isinstance(config.imagery, GeoTiffImageryConfig):
+            # A GeoTIFF's bands and dtype must fit the output format; checked at open.
+            source = open_raster_source(
+                config.region, config.imagery, image_format=config.writer.image_format
+            )
+        else:
+            source = open_raster_source(config.region, config.imagery)
     try:
         target.prepare(source.metadata)
         meta = source.metadata
@@ -158,6 +164,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
                     crs=meta.crs,
                     transform=meta.transform,
                     patch_shape=writer.patch_shape(meta, config.sampler.patch_size),
+                    fingerprint=meta.fingerprint,
                 )
             ],
             target=target.record(),

@@ -56,6 +56,7 @@ mapcv never holds the whole region in memory. Patch positions are computed once 
 | --- | --- | --- |
 | XYZ | `strip_rows` × 256 px (default 4 → 1,024 px) | `imagery.strip_rows` |
 | Sentinel-2 | `chunk_rows` px (default 1,024) | `imagery.chunk_rows` |
+| GeoTIFF | `chunk_rows` px (default 1,024) | `imagery.chunk_rows` |
 
 Each chunk reads a window one patch taller than the chunk (so patches that cross a chunk boundary are cut once, whole), rasterizes the labels for that window, writes the patches and saves the manifest. XYZ tiles are fetched per chunk and dropped once the window has moved past them.
 

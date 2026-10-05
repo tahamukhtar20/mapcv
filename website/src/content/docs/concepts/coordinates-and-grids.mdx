@@ -31,9 +31,13 @@ Each Sentinel-2 L2A product is delivered on a 10/20/60 m grid in a UTM zone (for
 
 Pixels are square metres on the ground (10 m is 10 m), which makes Sentinel-2 patches comparable across latitudes within a zone.
 
+## GeoTIFF and COG files
+
+A GeoTIFF already has a grid, and mapcv keeps it. The region is reprojected into the file's CRS (densified), the resulting box is mapped through the inverse of the file's pixel transform and expanded **outward to whole pixels**, then clipped to the raster. The window starts on a pixel boundary of the file, so every patch is a block of the file's own pixels: nothing is warped or resampled, and a patch equals `rasterio.open(...).read(window=...)` at the same position. Rotated grids work the same way. With `imagery.overview`, the grid is that of the overview, whose transform is scaled from the full-resolution one as GDAL does.
+
 ## Labels on the grid
 
-Polygons are reprojected from lon/lat into the raster CRS (a closed-form Web Mercator transform for XYZ, pyproj for UTM) and then rasterized with the raster's affine transform:
+Polygons are reprojected from lon/lat into the raster CRS (a closed-form Web Mercator transform for XYZ, pyproj for UTM and any other CRS) and then rasterized with the raster's affine transform:
 
 - The transform maps a pixel's **top-left corner**: `x = a·col + b·row + c`, `y = d·col + e·row + f` (rasterio's convention). For north-up rasters `b = d = 0` and `e` is negative.
 - A pixel is labeled when its **centre** `(col + 0.5, row + 0.5)` falls inside a polygon, the same rule as rasterio's default. With `labels.all_touched: true`, every pixel the outline touches is labeled too, which thickens thin features such as roads.

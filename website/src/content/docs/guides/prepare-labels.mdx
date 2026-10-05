@@ -17,7 +17,7 @@ mapcv burns **polygons** from one label file into the masks. This page covers wh
 | GeoJSON shape | A `FeatureCollection` or a single `Feature`. A `crs` member is allowed only if it names WGS-84 (`CRS84`, `EPSG:4326`); projected CRSs are rejected |
 | KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write) |
 
-mapcv reprojects the polygons into the imagery's CRS itself (Web Mercator for XYZ, the product's UTM zone for Sentinel-2), so never reproject labels to match the imagery.
+mapcv reprojects the polygons into the imagery's CRS itself (Web Mercator for XYZ, the product's UTM zone for Sentinel-2, the file's own CRS for a GeoTIFF), so never reproject labels to match the imagery.
 
 ## Configure labels
 

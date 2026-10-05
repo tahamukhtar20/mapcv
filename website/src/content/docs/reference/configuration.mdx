@@ -60,6 +60,25 @@ split:    { … }   # train/val/test lists (optional: omit to skip splitting)
       strategy: spatial
     ```
   </TabItem>
+  <TabItem label="GeoTIFF example">
+    ```yaml
+    region: { west: 3.0010, south: 48.8490, east: 3.0070, north: 48.8520 }
+    imagery:
+      type: geotiff
+      path: ortho/paris-2024.tif      # a COG URL (https:// or s3://) works too
+    labels:
+      path: buildings.geojson         # lon/lat; reprojected into the file's CRS
+      label_field: class
+    sampler:
+      patch_size: 256
+      edge_strategy: drop
+    writer:
+      staging_dir: ./dataset
+      image_format: png               # npy for anything but 8-bit 1- or 3-band files
+    split:
+      strategy: spatial
+    ```
+  </TabItem>
 </Tabs>
 
 ## `task`
@@ -88,11 +107,11 @@ The area of interest as a WGS-84 longitude/latitude bounding box.
 
 **Validation:** longitudes in −180…180, latitudes in −90…90, `west < east` and `south < north`. With XYZ imagery the box must also stay within ±85.0511° latitude, the limit of Web Mercator tiles. A box that crosses the antimeridian is not supported. `region.zoom` from the 0.1 layout was removed in 0.3.0; set `imagery.zoom` instead (see [Removed 0.1 keys](#removed-01-keys)).
 
-For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. For Sentinel-2 it is reprojected into the product's CRS and expanded outward to the product's pixel edges. See [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/).
+For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. For Sentinel-2 it is reprojected into the product's CRS and expanded outward to the product's pixel edges. For a GeoTIFF it is reprojected into the file's CRS, expanded outward to the file's pixels and clipped to the raster. See [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/).
 
 ## `imagery`
 
-Selects exactly one imagery source with the required `type` key: `xyz` or `eopf_zarr`.
+Selects exactly one imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`.
 
 ### XYZ tiles (`type: xyz`)
 
@@ -148,6 +167,30 @@ Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
 - `writer.image_format` must be `npy`.
 - The region must intersect the product.
 
+### GeoTIFF and Cloud Optimized GeoTIFF (`type: geotiff`)
+
+Needs no extra install. Reads one file as it is: patches keep the file's CRS, pixel grid, band count and data type, and nothing is resampled. A guide with examples: [Use your own GeoTIFF](/mapcv/guides/use-your-own-geotiff/).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `"geotiff"` | required | Selects one GeoTIFF or COG |
+| `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder |
+| `bands` | list of ints ≥ 1 | all bands | **1-based** band numbers to read, **in output order**: `[3, 2, 1]` reverses the bands of a BGR file. Band names in the manifest keep the file's numbering (`b3`, `b2`, `b1`) |
+| `overview` | int ≥ 0 | `0` | Overview level: `0` is the full resolution, `1` the first (largest) overview, and so on. Fails when the file has fewer levels |
+| `nodata` | number \| `.nan` | file's value | NoData value that overrides (or supplies) the file's. Pixels where every selected band equals it have no imagery |
+| `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+
+**Validation:**
+
+- `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`), for a local test server. Windows paths work.
+- `bands` must be non-empty and without duplicates.
+- The file must have a CRS that is an EPSG code and a pixel transform, and its compression must be one the reader supports (none, Deflate, LZW, PackBits, ZSTD, JPEG, WebP); the error names the problem. The region must intersect the file.
+- `writer.image_format`: `png` or `jpg` need `uint8` data in **1 or 3** selected bands (a single band is written as gray, repeated into three channels); any other data type or band count needs `npy`. A selection that cannot fit PNG/JPG is rejected when the config is loaded; the data type is checked when the file is opened (`mapcv plan` does that, without reading pixels).
+
+**Empty pixels.** A pixel has no imagery when every selected band equals the NoData value, or, for floating-point files, is `NaN` or infinite. They count as empty for `sampler.max_empty_ratio` and are `labels.ignore_index` in masks, like the area outside the raster. A region that extends beyond the file is clipped to it with a warning; one that misses it is an error.
+
+**Resuming.** The manifest records a fingerprint of the file in `sources[0].fingerprint` and a resumed run refuses a different file (see [Dataset format](/mapcv/reference/dataset-format/#sources)).
+
 ## `labels`
 
 Optional. Without it you get an image-only dataset (no `Masks/`).
@@ -186,7 +229,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 | `drop` | Only patches that fit entirely inside | Positions where the patch fits entirely inside; none if the raster is smaller than the patch |
 | `shift` | Like `drop`, plus one last patch shifted inward to cover the remaining edge (may overlap its neighbour) | Same as `pad` |
 
-**Empty pixels:** for XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty unless every band has data, i.e. when any band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
+**Empty pixels:** for GeoTIFF, a pixel is empty when it is outside the file, equal to NoData in every selected band, or non-finite (floating-point files). For XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty unless every band has data, i.e. when any band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
 
 <Aside>
 Random mode draws distinct positions, uniformly over every position where the patch fits (the raster edges are sampled as often as the centre), and the same seed always gives the same positions. If `random_count` is more than the number of positions, all of them are used and mapcv warns. Random patches can still overlap each other. Use the `spatial` split with it (the default); mapcv warns if you choose `stratified` or `random`.
@@ -197,13 +240,13 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `staging_dir` | path | required | Output folder, created if needed; a relative path is resolved against the config file's folder. Re-running into a folder with a compatible `manifest.json` resumes |
-| `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`) |
+| `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`); for GeoTIFF `png`/`jpg` when the data is `uint8` in 1 or 3 bands, otherwise `npy` (bands-first, the file's data type) |
 | `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
 | `jpg_subsampling` | `4:2:0` \| `4:4:4` | `4:2:0` | JPEG chroma subsampling when `image_format: jpg`. `4:2:0` stores colour at half resolution in each direction, like Pillow's default, and gives smaller files (about 10% on typical aerial imagery at quality 95, up to half on noisy colour imagery). Use `4:4:4` to keep full colour resolution. JPEG datasets made by mapcv 0.2 are `4:4:4`, so resume them with `jpg_subsampling: 4:4:4` |
 
 Masks are always single-channel PNG. The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format: png}`. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
 
-**Validation:** XYZ needs `png` or `jpg`; EOPF needs `npy`.
+**Validation:** XYZ needs `png` or `jpg`; EOPF needs `npy`; GeoTIFF needs `npy` unless it is `uint8` in 1 or 3 bands (see [GeoTIFF](#geotiff-and-cloud-optimized-geotiff-type-geotiff)).
 
 ## `split`
 

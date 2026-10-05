@@ -67,6 +67,33 @@ def _validate_eopf_path(path: str) -> str:
     return path
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _validate_geotiff_path(path: str) -> str:
+    """A GeoTIFF/COG location: local path, ``file://``, ``https://``, anonymous ``s3://``.
+
+    Plain ``http://`` is accepted only for a loopback host (a local test server): the
+    rest of the internet gets the same rules as EOPF products.
+    """
+    if not path.strip():
+        raise ValueError("imagery.path must not be empty")
+    if eopf_local_path(path) is not None:
+        return path
+    parsed = urlsplit(path)
+    loopback_http = parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS
+    if parsed.scheme not in ("https", "s3") and not loopback_http:
+        raise ValueError(
+            "imagery.path must be a local path, file://, https://, or anonymous s3:// URL"
+        )
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(
+            "imagery.path must not contain credentials, query strings, or fragments; "
+            "private-store authentication is not supported"
+        )
+    return path
+
+
 _REMOVED_SOURCES = {
     "google_satellite": "Google does not permit downloading its imagery for datasets",
     "osm": (
@@ -242,8 +269,49 @@ class EOPFZarrImageryConfig(BaseModel):
         return self
 
 
+class GeoTiffImageryConfig(BaseModel):
+    """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling).
+
+    ``bands`` are 1-based band numbers in the order they should be written
+    (default: every band). ``overview`` is the overview level to read (0 = full
+    resolution). ``nodata`` overrides the file's NoData value; pixels where every
+    selected band equals it are treated as having no imagery.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["geotiff"] = "geotiff"
+    path: str
+    bands: Optional[List[int]] = None
+    overview: int = Field(default=0, ge=0)
+    nodata: Optional[float] = None
+    chunk_rows: int = Field(default=1024, ge=1)
+
+    _check_path = field_validator("path")(_validate_geotiff_path)
+
+    @field_validator("nodata")
+    @classmethod
+    def _finite_or_nan_nodata(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and value in (float("inf"), float("-inf")):
+            raise ValueError("imagery.nodata must be a number or .nan")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_bands(self) -> "GeoTiffImageryConfig":
+        if self.bands is None:
+            return self
+        if not self.bands:
+            raise ValueError("imagery.bands must contain at least one band (or be omitted)")
+        if any(isinstance(band, bool) or band < 1 for band in self.bands):
+            raise ValueError("imagery.bands are 1-based band numbers (1 is the first band)")
+        if len(self.bands) != len(set(self.bands)):
+            raise ValueError("imagery.bands must not contain duplicates")
+        return self
+
+
 ImageryConfig = Annotated[
-    Union[XYZImageryConfig, EOPFZarrImageryConfig],
+    Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig],
     Field(discriminator="type"),
 ]
 
@@ -347,7 +415,7 @@ class MapcvConfig(BaseModel):
             raise ValueError(_TILES_REMOVED)
         imagery = raw.get("imagery")
         if isinstance(imagery, dict) and "type" not in imagery:
-            raise ValueError("imagery.type is required: 'xyz' or 'eopf_zarr'")
+            raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
         return raw
 
     @model_validator(mode="after")
@@ -355,6 +423,14 @@ class MapcvConfig(BaseModel):
         if isinstance(self.imagery, EOPFZarrImageryConfig):
             if self.writer.image_format != "npy":
                 raise ValueError("EOPF Zarr imagery requires writer.image_format='npy'")
+        elif isinstance(self.imagery, GeoTiffImageryConfig):
+            bands = self.imagery.bands
+            if self.writer.image_format != "npy" and bands is not None and len(bands) not in (1, 3):
+                raise ValueError(
+                    f"imagery.bands selects {len(bands)} bands, but writer.image_format "
+                    f"'{self.writer.image_format}' writes 1 or 3 bands of uint8; select 1 or 3 "
+                    "bands or set writer.image_format: npy"
+                )
         elif self.writer.image_format == "npy":
             raise ValueError("XYZ imagery supports writer.image_format 'png' or 'jpg'")
         if isinstance(self.imagery, XYZImageryConfig):

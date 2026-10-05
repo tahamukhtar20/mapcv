@@ -9,6 +9,7 @@ from mapcv._mapcv_rs import bounds, snap_bbox
 from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
     EOPFZarrImageryConfig,
+    GeoTiffImageryConfig,
     ImageryConfig,
     LabelsConfig,
     MapcvConfig,
@@ -62,6 +63,7 @@ __all__ = [
     "ImageryConfig",
     "XYZImageryConfig",
     "EOPFZarrImageryConfig",
+    "GeoTiffImageryConfig",
     "DEFAULT_SENTINEL2_L2A_BANDS",
     "MapcvConfig",
     "RegionConfig",

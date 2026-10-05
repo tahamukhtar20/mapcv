@@ -513,6 +513,17 @@ class MapcvConfig(BaseModel):
                 "labels.all_touched is a rasterization setting and detection does not "
                 "rasterize; remove it"
             )
+        if "mask_format" in self.writer.model_fields_set:
+            raise ValueError(
+                "writer.mask_format sets the format of segmentation masks and detection writes "
+                "no masks; remove it (boxes go to COCO and YOLO files, see detection.formats)"
+            )
+        if self.writer.world_files and self.writer.image_format not in ("png", "jpg"):
+            raise ValueError(
+                "writer.world_files adds .pgw/.jgw files to PNG and JPG patches and detection "
+                f"writes no masks, so with image_format '{self.writer.image_format}' it would "
+                "write none; remove it (GeoTIFF patches carry their georeferencing)"
+            )
         options = self.detection_options
         if options.point_box_size is not None and labels.path.suffix.lower() == ".kml":
             raise ValueError(

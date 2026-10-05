@@ -37,6 +37,7 @@ import numpy.typing as npt
 import yaml
 
 from mapcv.config import DetectionOptions
+from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
 from mapcv.imagery import RasterMetadata
 from mapcv.labels import ClassMap
 from mapcv.manifest import Manifest, PatchSummary
@@ -216,10 +217,16 @@ class DetectionWriter:
         return target_type in self.TARGET_TYPES
 
     def fingerprint(self) -> Dict[str, Any]:
-        return {
+        # As the files layout records it, minus mask_format: detection writes no masks.
+        block = {
             "layout": self.layout,
-            **self._config.model_dump(mode="json", exclude={"staging_dir"}),
+            **self._config.model_dump(
+                mode="json", exclude={"staging_dir", "mask_format", "world_files", "footprints"}
+            ),
         }
+        if self._config.world_files:
+            block["world_files"] = True
+        return block
 
     def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
         return FilesWriter(self._config).patch_shape(source, patch_size)
@@ -275,6 +282,18 @@ class DetectionWriter:
         )
 
     def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+        """Write ``patches.geojson`` (``writer.footprints``) and the annotation files."""
+        if self._config.footprints:
+            path = self._config.staging_dir / FOOTPRINTS_FILENAME
+            try:
+                write_footprints(manifest, split_lists, path)
+            except (RuntimeError, ValueError) as exc:
+                warnings.warn(
+                    f"{FOOTPRINTS_FILENAME} was not written: {exc}", UserWarning, stacklevel=2
+                )
+        self.write_annotations(manifest, split_lists)
+
+    def write_annotations(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
         """Write the COCO files, YOLO image lists and ``dataset.yaml`` for the split."""
         staging = self._config.staging_dir
         objects = load_objects(manifest, staging)

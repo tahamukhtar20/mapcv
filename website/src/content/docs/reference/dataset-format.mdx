@@ -243,9 +243,12 @@ With `task: detection` the images go to `images/` and each patch's objects becom
   - val.txt
   - test.txt
   - dataset.yaml Ultralytics dataset file (written with a split)
+  - patches.geojson footprints, as for segmentation (`writer.footprints`)
   - manifest.json
   - splits/
 </FileTree>
+
+Detection uses the same `writer` settings as segmentation, except `mask_format`, which is an error to set (there are no masks). `image_format: tif` writes GeoTIFF images (Ultralytics reads them; COCO's `file_name` ends in `.tif`), `world_files` adds a world file next to PNG/JPG images (`files.image_world`), and `patches.geojson` is written and kept in step with `mapcv split` as for any dataset.
 
 **What an object is.** One label feature is one object: a MultiPolygon is one object, and a feature cut into pieces by a patch edge is one object whose box covers every visible piece. Its box is the axis-aligned bounding box of the part that is visible in the patch: inside the patch, inside the raster (not in padding) and over pixels with imagery (failed tiles and NoData are cut out). Holes do not change a box. An object is kept when at least `min_visible` of its area is visible and the box is at least `min_box_pixels` wide and high; GeoJSON points become `point_box_size` squares when that is set.
 

@@ -876,6 +876,14 @@ def test_detection_defaults(tmp_path: Path) -> None:
         ({"labels": {"path": "x.geojson", "all_touched": True}}, "all_touched"),
         ({"labels": {"path": "x.kml"}, "detection": {"point_box_size": 8}}, "KML points"),
         ({"sampler": {"patch_size": 256, "pad_mode": "reflect"}}, "mirrors objects"),
+        (
+            {"writer": {"staging_dir": "out", "mask_format": "png"}},
+            "detection writes no masks",
+        ),
+        (
+            {"writer": {"staging_dir": "out", "image_format": "tif", "world_files": True}},
+            "world_files",
+        ),
     ],
 )
 def test_invalid_detection_configs_fail_clearly(
@@ -1143,7 +1151,7 @@ def test_npy_patches_get_boxes_too(tmp_path: Path) -> None:
     from mapcv.targets.detection import DetectedObject, PatchObjects
     from mapcv.writer import WriterConfig
 
-    config = WriterConfig(staging_dir=tmp_path, image_format="npy")
+    config = WriterConfig(staging_dir=tmp_path, image_format="npy", footprints=False)
     writer = DetectionWriter(config, DetectionOptions())
     manifest = Manifest(
         task="detection",
@@ -1192,7 +1200,7 @@ def test_kml_labels_work_for_detection(tmp_path: Path) -> None:
     )
     config = MapcvConfig.model_validate(
         {
-            **detection_config(tmp_path).model_dump(mode="json", exclude_none=True),
+            **detection_config(tmp_path).model_dump(mode="json", exclude_unset=True),
             "labels": {"path": str(tmp_path / "labels.kml"), "label_field": "class"},
         }
     )
@@ -1338,3 +1346,53 @@ def test_geotiff_boxes_match_an_independent_clip_in_the_file_crs(
             assert bbox == pytest.approx(want, abs=2e-3)
             checked += 1
     assert checked >= 10
+
+
+def test_footprints_tif_images_and_world_files(tmp_path: Path) -> None:
+    write_labels(tmp_path / "labels.geojson", random_features(seed=12, count=40))
+    config = detection_config(tmp_path, split={"strategy": "random"})
+    generate(config)
+    staging = config.writer.staging_dir
+    footprints = json.loads((staging / "patches.geojson").read_text())
+    train = set((staging / "splits" / "train.txt").read_text().split())
+    assert {
+        f["properties"]["filename"]
+        for f in footprints["features"]
+        if f["properties"]["split"] == "train"
+    } == train
+    manifest = Manifest.load(staging / "manifest.json")
+    assert manifest.writer is not None
+    assert "mask_format" not in manifest.writer and "footprints" not in manifest.writer
+    # mapcv split keeps the footprints' split in step with the new lists.
+    run_split(staging, SplitterConfig(strategy="random", seed=9))
+    footprints = json.loads((staging / "patches.geojson").read_text())
+    train = set((staging / "splits" / "train.txt").read_text().split())
+    assert {
+        f["properties"]["filename"]
+        for f in footprints["features"]
+        if f["properties"]["split"] == "train"
+    } == train
+
+    data = detection_config(tmp_path, split={"strategy": "random"}, staging="tif").model_dump(
+        mode="json", exclude_unset=True
+    )
+    data["writer"].update(image_format="tif", footprints=False)
+    tif = generate(MapcvConfig.model_validate(data))
+    tif_dir = tmp_path / "tif"
+    assert not (tif_dir / "patches.geojson").exists()
+    assert tif.patches[0]["files"]["image"] == "images/patch_0000000.tif"
+    coco = load_coco(tif_dir / "annotations" / "instances_train.json")
+    assert all(image["file_name"].endswith(".tif") for image in coco["images"])
+    assert (tif_dir / "train.txt").read_text().startswith("./images/patch_")
+
+    data = detection_config(tmp_path, staging="world").model_dump(mode="json", exclude_unset=True)
+    data["writer"]["world_files"] = True
+    with pytest.warns(UserWarning, match="no split"):
+        world = generate(MapcvConfig.model_validate(data))
+    assert world.writer is not None and world.writer["world_files"] is True
+    entry = world.patches[0]
+    assert entry["files"] == {
+        "image": "images/patch_0000000.png",
+        "image_world": "images/patch_0000000.pgw",
+    }
+    assert (tmp_path / "world" / entry["files"]["image_world"]).exists()

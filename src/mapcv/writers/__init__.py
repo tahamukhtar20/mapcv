@@ -55,7 +55,9 @@ def refresh_split_outputs(
     """Rebuild the outputs that depend on the split after ``mapcv split``.
 
     Detection datasets get new per-split COCO files, YOLO image lists and
-    ``dataset.yaml``; other tasks have none.
+    ``dataset.yaml``; other tasks have none. (``run_split`` updates
+    ``patches.geojson`` itself, for every task.)
     """
     if manifest.task == "detection":
-        DetectionWriter.from_manifest(manifest, staging_dir).finalize(manifest, split_lists)
+        writer = DetectionWriter.from_manifest(manifest, staging_dir)
+        writer.write_annotations(manifest, split_lists)

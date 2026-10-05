@@ -118,7 +118,7 @@ detection:
   formats: [coco, yolo]
 ```
 
-**Validation** (with `task: detection`): `labels` is required; `labels.ignore_index` and `labels.all_touched` are mask settings and are rejected when set; `point_box_size` needs GeoJSON labels (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
+**Validation** (with `task: detection`): `labels` is required; `labels.ignore_index`, `labels.all_touched` and `writer.mask_format` are mask settings and are rejected when set, as is `writer.world_files` with images that are not PNG or JPG; `point_box_size` needs GeoJSON labels (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
 
 ## `region`
 

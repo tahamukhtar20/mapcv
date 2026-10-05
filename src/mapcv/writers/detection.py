@@ -7,7 +7,8 @@ Layout (relative to ``writer.staging_dir``)::
     annotations/instances_train.json  COCO, one file per split (``instances_all.json`` without a split)
     annotations/objects/chunk_000000.json  the exact boxes of each chunk (internal)
     train.txt, val.txt, test.txt    YOLO image lists (``./images/...``), one per split
-    dataset.yaml                    Ultralytics dataset file (written with a split)
+    dataset.yaml                    Ultralytics dataset file (written with a split; no ``path``,
+                                    so paths are relative to its folder)
 
 ``write`` stores each chunk's boxes in ``annotations/objects/`` with full
 precision next to the images and YOLO labels. ``finalize`` (after the split, and
@@ -318,14 +319,17 @@ class DetectionWriter:
         for name in SPLIT_NAMES:
             lines = "".join(f"./{IMAGES_DIR}/{image}\n" for image in splits[name])
             _write_text(staging / f"{name}.txt", lines)
-        _write_text(staging / DATASET_YAML, dataset_yaml(manifest, staging, splits))
+        _write_text(staging / DATASET_YAML, dataset_yaml(manifest, splits))
 
 
-def dataset_yaml(manifest: Manifest, staging: Path, splits: Dict[str, List[str]]) -> str:
-    """Ultralytics' dataset file: root ``path``, image lists per split and class ``names``."""
-    data: Dict[str, Any] = {"path": str(staging.resolve())}
-    data["train"] = "train.txt"
-    data["val"] = "val.txt"
+def dataset_yaml(manifest: Manifest, splits: Dict[str, List[str]]) -> str:
+    """Ultralytics' dataset file: image lists per split and class ``names``.
+
+    There is no ``path`` key: Ultralytics then takes the dataset root from the
+    folder of the YAML file itself, so the dataset keeps working when it is moved
+    or copied to another machine. The image lists sit next to it.
+    """
+    data: Dict[str, Any] = {"train": "train.txt", "val": "val.txt"}
     if splits.get("test"):
         data["test"] = "test.txt"
     data["names"] = {
@@ -335,7 +339,7 @@ def dataset_yaml(manifest: Manifest, staging: Path, splits: Dict[str, List[str]]
     header = (
         "# Ultralytics YOLO dataset written by mapcv. Train with:\n"
         "#   yolo detect train data=<this file>\n"
-        "# `path` is the dataset folder; update it if you move the dataset.\n"
+        "# Paths are relative to this file's folder (no `path:` key), so the dataset can move.\n"
     )
     body: str = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
     return header + body

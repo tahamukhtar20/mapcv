@@ -292,10 +292,9 @@ Images without objects are listed with no annotations, so evaluation counts thei
 0 0.1072654297 0.0349613281 0.1176394531 0.0699226563
 ```
 
-`dataset.yaml` follows Ultralytics' format: `path` is the dataset folder (absolute, so it works from any working directory; edit it if you move the dataset, or delete the line and Ultralytics uses the file's own folder), `train`, `val` and `test` are the image lists next to it, and `names` maps class indices to names. Ultralytics finds each image's labels by replacing `/images/` with `/labels/` in its path, which is why detection images live in `images/`.
+`dataset.yaml` follows Ultralytics' format: `train`, `val` and `test` are the image lists next to it, and `names` maps class indices to names. It has no `path` key, so Ultralytics takes the dataset root from the folder that holds `dataset.yaml`: the dataset can be moved or copied to another machine as a whole folder and still trains. (A relative `path` would be resolved against the working directory or Ultralytics' own datasets folder, and an absolute one breaks on another machine.) Ultralytics finds each image's labels by replacing `/images/` with `/labels/` in its path, which is why detection images live in `images/`.
 
 ```yaml title="dataset/dataset.yaml"
-path: /home/me/dataset
 train: train.txt
 val: val.txt
 test: test.txt

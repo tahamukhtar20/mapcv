@@ -177,7 +177,7 @@ This tutorial builds an **object detection** dataset from the [quickstart](/mapc
    metrics = model.val(split="test")
    ```
 
-   `dataset.yaml` records the dataset folder as an absolute `path`; edit it if you move the folder.
+   `dataset.yaml` has no `path:` key, so Ultralytics resolves the image lists against the folder the file is in: copy the whole `dataset/` folder to a GPU machine and train there without editing anything.
 
    **torchvision** reads the COCO files. This dataset class turns them into what torchvision's detection models expect (boxes as `[x1, y1, x2, y2]`, class IDs as labels, and an empty box list for background patches):
 

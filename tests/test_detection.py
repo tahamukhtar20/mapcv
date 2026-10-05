@@ -627,35 +627,65 @@ def test_yolo_labels_equal_the_coco_boxes(split_dataset: Tuple[MapcvConfig, List
                 assert denormalized == pytest.approx(ann["bbox"], abs=1e-6)
 
 
+def ultralytics_split_lists(yaml_arg: str, cwd: Path) -> Dict[str, Path]:
+    """Where Ultralytics' ``check_det_dataset`` looks for each split's image list.
+
+    Mirrors ``# Resolve paths`` and ``# Set paths`` in ultralytics/data/utils.py at
+    https://github.com/ultralytics/ultralytics/blob/94313082d0a08e615d02c11500479a757c04f7e1/ultralytics/data/utils.py#L767-L781
+    (line 727 sets ``yaml_file``). The dataset root is
+    ``Path(extract_dir or data.get("path") or Path(data["yaml_file"]).parent)``,
+    resolved against ``DATASETS_DIR`` only if it neither exists nor is absolute;
+    ``yaml_file`` is the path as given to ``data=`` (``YAML.load(..., append_filename=True)``).
+    Each split is then ``(root / data[k]).resolve()``.
+    """
+    yaml_file = Path(yaml_arg)
+    data = yaml.safe_load((cwd / yaml_file).read_text(encoding="utf-8"))
+    root = Path(data.get("path") or yaml_file.parent)
+    exists = (cwd / root).exists()
+    assert exists or root.is_absolute(), "Ultralytics would look under DATASETS_DIR"
+    return {
+        split: (cwd / root / data[split]).resolve()
+        for split in ("train", "val", "test")
+        if data.get(split)
+    }
+
+
+@pytest.mark.parametrize("given", ["absolute", "relative"])
 def test_dataset_yaml_follows_ultralytics_conventions(
-    split_dataset: Tuple[MapcvConfig, List[Feature]],
+    split_dataset: Tuple[MapcvConfig, List[Feature]], tmp_path: Path, given: str
 ) -> None:
+    import shutil
+
     config, _ = split_dataset
-    staging = config.writer.staging_dir
+    # Train on another machine: the dataset is copied somewhere else first.
+    staging = tmp_path / "elsewhere" / "copied dataset"
+    shutil.copytree(config.writer.staging_dir, staging)
     data = yaml.safe_load((staging / "dataset.yaml").read_text(encoding="utf-8"))
-    assert list(data) == ["path", "train", "val", "test", "names"]
-    root = Path(data["path"])
-    assert root.is_absolute() and root == staging.resolve()
+    assert list(data) == ["train", "val", "test", "names"]  # no `path`: the yaml's folder
     assert data["names"] == {0: "building", 1: "car", 2: "tree"}
+    if given == "absolute":
+        lists = ultralytics_split_lists(str(staging / "dataset.yaml"), Path.cwd())
+    else:  # yolo ... data=copied dataset/dataset.yaml, run from the parent folder
+        lists = ultralytics_split_lists("copied dataset/dataset.yaml", staging.parent)
+    manifest = Manifest.load(staging / "manifest.json")
     for split in ("train", "val", "test"):
-        list_file = root / data[split]  # check_det_dataset: (path / data[k]).resolve()
-        assert list_file.is_file()
+        list_file = lists[split]
+        assert list_file == (staging / f"{split}.txt").resolve()
         lines = list_file.read_text(encoding="utf-8").strip().splitlines()
         expected = (staging / "splits" / f"{split}.txt").read_text().split()
         assert [Path(line).name for line in lines] == expected
         for line in lines:
             assert line.startswith("./images/")
-            # get_img_files: "./" is relative to the list file's folder.
+            # get_img_files: a leading "./" is relative to the list file's folder.
             image = line.replace("./", str(list_file.parent) + os.sep, 1).replace("/", os.sep)
             assert Path(image).is_file()
             label = Path(img2label_path(image))
             assert label.parent == staging.resolve() / "labels"
-            entry_objects = label.exists()
-            stem = Path(image).name
-            manifest = Manifest.load(staging / "manifest.json")
-            entry = next(e for e in manifest.patches if e["files"]["image"].endswith(stem))
-            assert entry_objects == bool(entry["summary"]["class_objects"])
-            if entry_objects:
+            entry = next(
+                e for e in manifest.patches if e["files"]["image"].endswith(Path(image).name)
+            )
+            assert label.exists() == bool(entry["summary"]["class_objects"])
+            if label.exists():
                 for row in label.read_text().splitlines():
                     assert 0 <= int(row.split()[0]) < len(data["names"])
 

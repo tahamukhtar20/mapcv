@@ -10,14 +10,16 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
+import mapcv
+
 from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.imagery import RasterMetadata
 from mapcv.pipeline import run_generate
 from mapcv.sampler import PatchMeta
 from mapcv.splitter import SplitLists, SplitterConfig
 from mapcv.targets import ImageOnlyTarget, SegmentationTarget, WindowTarget, create_target
-from mapcv.writer import Manifest, ManifestEntry
-from mapcv.writers import FilesWriter, create_writer
+from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord
+from mapcv.writers import FilesWriter, check_compatible, create_writer
 
 
 class FakeRasterSource:
@@ -95,13 +97,17 @@ def test_generate_keeps_global_anchors_across_chunk_seams_and_resumes(
     assert coordinates == [(0, 0), (0, 2), (2, 0), (2, 2), (4, 0), (4, 2)]
     assert sources[0].windows == [(0, 3, 0, 5), (2, 5, 0, 5), (4, 7, 0, 5)]
     assert sources[0].closed
-    assert manifest.version == 2
-    assert manifest.source_type == "eopf_zarr"
-    assert manifest.bands == ["b08", "b04"]
-    assert manifest.dtype == "float32"
-    assert manifest.patch_shape == [2, 3, 3]
-    assert manifest.crs == "EPSG:32632"
-    assert manifest.transform == (10.0, 0.0, 500000.0, 0.0, -10.0, 5000000.0)
+    assert manifest.version == 3
+    assert manifest.task == "segmentation"
+    assert manifest.target is None
+    source = manifest.source
+    assert source.name == "image"
+    assert source.source_type == "eopf_zarr"
+    assert source.bands == ["b08", "b04"]
+    assert source.dtype == "float32"
+    assert source.patch_shape == [2, 3, 3]
+    assert source.crs == "EPSG:32632"
+    assert source.transform == (10.0, 0.0, 500000.0, 0.0, -10.0, 5000000.0)
 
     stored = np.load(config.writer.staging_dir / "Images" / "patch_0000000.npy")
     assert stored.shape == (2, 3, 3)
@@ -148,7 +154,7 @@ def test_resumed_run_records_the_same_chunk_indices(
     run_generate(config)
     manifest_path = config.writer.staging_dir / "manifest.json"
     complete = Manifest.load(manifest_path)
-    assert [entry["strip_index"] for entry in complete.patches] == [0, 0, 1, 1, 2, 2]
+    assert [entry["chunk"] for entry in complete.patches] == [0, 0, 1, 1, 2, 2]
 
     # Simulate an interruption after the first chunk.
     partial = Manifest.load(manifest_path)
@@ -237,14 +243,14 @@ def test_generated_masks_mark_padding_with_the_ignore_index(
     run_generate(config)
 
     manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
-    assert manifest.labels is not None and manifest.labels["ignore_index"] == 255
+    assert manifest.target is not None and manifest.target.ignore_index == 255
+    assert manifest.ignore_index == 255
     padded = [entry for entry in manifest.patches if entry["padded"]]
     assert padded
     for entry in padded:
-        assert entry["mask_filename"] is not None
-        mask = np.asarray(Image.open(config.writer.staging_dir / "Masks" / entry["mask_filename"]))
+        mask = np.asarray(Image.open(config.writer.staging_dir / entry["files"]["mask"]))
         assert set(np.unique(mask)) == {1, 255}  # the class inside, ignore in the padding
-        assert set(entry["per_class_pixel_counts"]) == {"1", "255"}
+        assert set(entry["summary"]["class_pixels"]) == {"1", "255"}
 
 
 def test_a_class_on_the_ignore_value_is_an_error(
@@ -318,14 +324,18 @@ class CenterTarget:
         self.windows: List[CenterWindow] = []
 
     @property
+    def type(self) -> Optional[str]:
+        return "centers"
+
+    @property
     def class_map(self) -> Dict[str, int]:
         return {"center": 1}
 
     def prepare(self, source: RasterMetadata) -> None:
         self.prepared_with.append(source)
 
-    def fingerprint(self) -> Optional[Dict[str, Any]]:
-        return {"task": "centers"}
+    def record(self) -> Optional[TargetRecord]:
+        return TargetRecord(type="centers", class_map=self.class_map, options={"radius": 0})
 
     def window(
         self,
@@ -344,6 +354,14 @@ class RecordingWriter:
     def __init__(self) -> None:
         self.calls: List[Tuple[int, List[Center], List[Tuple[int, int]], Tuple[int, ...]]] = []
         self.finalized: List[Tuple[int, Optional[SplitLists]]] = []
+        self.supported: Tuple[Optional[str], ...] = ("centers",)
+
+    @property
+    def layout(self) -> str:
+        return "recording"
+
+    def supports(self, target_type: Optional[str]) -> bool:
+        return target_type in self.supported
 
     def fingerprint(self) -> Dict[str, Any]:
         return {"layout": "recording"}
@@ -370,14 +388,12 @@ class RecordingWriter:
         for index, patch in enumerate(metadata):
             manifest.patches.append(
                 ManifestEntry(
-                    filename=f"{len(manifest.patches)}.bin",
-                    mask_filename=None,
                     row=patch["row"],
                     col=patch["col"],
                     padded=patch["padded"],
-                    strip_index=chunk_index,
-                    per_class_pixel_counts={"center": index},
-                    empty_ratio=patch.get("empty_ratio", 0.0),
+                    chunk=chunk_index,
+                    files={"image": f"Records/{len(manifest.patches)}.bin"},
+                    summary=PatchSummary(empty_ratio=patch.get("empty_ratio", 0.0)),
                 )
             )
 
@@ -427,9 +443,11 @@ def test_pipeline_drives_any_target_and_writer(
     # The manifest takes its descriptive blocks from the target and the writer.
     manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
     assert manifest.class_map == {"center": 1}
-    assert manifest.labels == {"task": "centers"}
+    assert manifest.target == TargetRecord(
+        type="centers", class_map={"center": 1}, options={"radius": 0}
+    )
     assert manifest.writer == {"layout": "recording"}
-    assert manifest.patch_shape == [2, 3, 3]
+    assert manifest.source.patch_shape == [2, 3, 3]
     assert len(manifest.patches) == result.new_patches == 6
     assert writer.finalized == [(6, None)]
 
@@ -498,16 +516,26 @@ def test_targets_need_prepare_before_use(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="prepare"):
         _ = target.class_map
     with pytest.raises(RuntimeError, match="prepare"):
-        target.fingerprint()
+        target.record()
+    assert target.type == "segmentation"
     assert ImageOnlyTarget().class_map == {}
-    assert ImageOnlyTarget().fingerprint() is None
+    assert ImageOnlyTarget().record() is None
+    assert ImageOnlyTarget().type is None
 
 
 def test_files_writer_describes_its_layout(tmp_path: Path) -> None:
     source = FakeRasterSource().metadata
     npy = FilesWriter(_config(tmp_path).writer)
     assert npy.patch_shape(source, 3) == [2, 3, 3]
-    assert npy.fingerprint() == {"image_format": "npy", "jpg_quality": 95}
+    assert npy.fingerprint() == {
+        "layout": "files",
+        "image_format": "npy",
+        "jpg_quality": 95,
+        "mask_format": "png",
+    }
+    assert npy.layout == "files"
+    assert npy.supports("segmentation") and npy.supports(None)
+    assert not npy.supports("detection")
 
     png = FilesWriter(_config(tmp_path).writer.model_copy(update={"image_format": "png"}))
     assert png.patch_shape(source, 3) == [3, 3, 3]
@@ -518,4 +546,47 @@ def test_files_writer_only_takes_masks(tmp_path: Path) -> None:
     images = np.zeros((1, 3, 3, 2), dtype=np.float32)
     meta = [PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0)]
     with pytest.raises(TypeError, match="masks"):
-        writer.write(images, [(1, 1)], meta, Manifest(class_map={}), 0)  # type: ignore[arg-type]
+        writer.write(images, [(1, 1)], meta, Manifest(), 0)  # type: ignore[arg-type]
+
+
+def test_an_incompatible_writer_fails_before_reading_imagery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target, writer = CenterTarget(), RecordingWriter()
+    writer.supported = ("segmentation",)
+    sources = _plug(monkeypatch, target, writer)
+
+    with pytest.raises(ValueError, match="'recording' writer layout cannot write centers"):
+        run_generate(_config(tmp_path))
+
+    assert sources == [] and target.prepared_with == []
+    assert not (tmp_path / "dataset" / "manifest.json").exists()
+
+
+def test_check_compatible_accepts_the_default_pieces(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    writer = create_writer(config.writer)
+    check_compatible(create_target(config), writer)
+    config.labels = LabelsConfig(path=tmp_path / "labels.geojson")
+    check_compatible(create_target(config), writer)
+
+
+def test_generate_records_the_task_and_the_patch_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
+    monkeypatch.setattr(
+        "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
+    )
+    config = _labeled_config(tmp_path, _COVER_ALL)
+    manifest = run_generate(config).manifest
+
+    assert manifest.task == "segmentation"
+    assert manifest.mapcv_version == mapcv.__version__
+    staging = config.writer.staging_dir
+    for index, entry in enumerate(manifest.patches):
+        assert entry["files"] == {
+            "image": f"Images/patch_{index:07d}.npy",
+            "mask": f"Masks/patch_{index:07d}.png",
+        }
+        assert all((staging / path).is_file() for path in entry["files"].values())

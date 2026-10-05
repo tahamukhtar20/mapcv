@@ -1,0 +1,204 @@
+{
+  "version": 2,
+  "class_map": {
+    "building": 1,
+    "water": 2
+  },
+  "source_type": "xyz",
+  "product_id": "custom-xyz:127.0.0.1",
+  "bands": [
+    "red",
+    "green",
+    "blue"
+  ],
+  "dtype": "uint8",
+  "patch_shape": [
+    192,
+    192,
+    3
+  ],
+  "crs": "EPSG:3857",
+  "transform": [
+    0.5971642834779232,
+    0.0,
+    554627.0772372372,
+    0.0,
+    -0.5971642834774684,
+    6875052.072081894
+  ],
+  "sampler": {
+    "patch_size": 192,
+    "stride": 192,
+    "mode": "grid",
+    "edge_strategy": "pad",
+    "pad_mode": "zero",
+    "max_empty_ratio": 1.0,
+    "min_label_ratio": 0.0,
+    "random_seed": 42,
+    "random_count": 100
+  },
+  "labels": {
+    "label_field": "class",
+    "classes": null,
+    "all_touched": false,
+    "sha256": "fa5eeae1f48f252a36e1e838552f7867fd2007b94d645ac611fe8e858875e352"
+  },
+  "writer": {
+    "image_format": "png",
+    "jpg_quality": 95
+  },
+  "patches": [
+    {
+      "filename": "patch_0000000.png",
+      "mask_filename": "patch_0000000.png",
+      "row": 0,
+      "col": 0,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 36864
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000001.png",
+      "mask_filename": "patch_0000001.png",
+      "row": 0,
+      "col": 192,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 36864
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000002.png",
+      "mask_filename": "patch_0000002.png",
+      "row": 0,
+      "col": 384,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 21924,
+        "2": 14940
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000003.png",
+      "mask_filename": "patch_0000003.png",
+      "row": 0,
+      "col": 576,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 28764,
+        "2": 8100
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000004.png",
+      "mask_filename": "patch_0000004.png",
+      "row": 192,
+      "col": 0,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "1": 8192,
+        "0": 28672
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000005.png",
+      "mask_filename": "patch_0000005.png",
+      "row": 192,
+      "col": 192,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "1": 24576,
+        "0": 12288
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000006.png",
+      "mask_filename": "patch_0000006.png",
+      "row": 192,
+      "col": 384,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "2": 13446,
+        "0": 23418
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000007.png",
+      "mask_filename": "patch_0000007.png",
+      "row": 192,
+      "col": 576,
+      "padded": false,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 29574,
+        "2": 7290
+      },
+      "empty_ratio": 0.0
+    },
+    {
+      "filename": "patch_0000008.png",
+      "mask_filename": "patch_0000008.png",
+      "row": 384,
+      "col": 0,
+      "padded": true,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "1": 2752,
+        "0": 34112
+      },
+      "empty_ratio": 0.3333333333333333
+    },
+    {
+      "filename": "patch_0000009.png",
+      "mask_filename": "patch_0000009.png",
+      "row": 384,
+      "col": 192,
+      "padded": true,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 28608,
+        "1": 8256
+      },
+      "empty_ratio": 0.3333333333333333
+    },
+    {
+      "filename": "patch_0000010.png",
+      "mask_filename": "patch_0000010.png",
+      "row": 384,
+      "col": 384,
+      "padded": true,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 36864
+      },
+      "empty_ratio": 0.3333333333333333
+    },
+    {
+      "filename": "patch_0000011.png",
+      "mask_filename": "patch_0000011.png",
+      "row": 384,
+      "col": 576,
+      "padded": true,
+      "strip_index": 0,
+      "per_class_pixel_counts": {
+        "0": 36864
+      },
+      "empty_ratio": 0.3333333333333333
+    }
+  ]
+}

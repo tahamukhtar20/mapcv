@@ -5,9 +5,10 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks. `region`, `imagery`, `sampler` and `writer` are required; `labels` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks and an optional `task`. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
+task: segmentation  # what the dataset is for (optional, the default)
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
 labels:   { … }   # which polygons (optional: omit for an image-only dataset)
@@ -60,6 +61,19 @@ split:    { … }   # train/val/test lists (optional: omit to skip splitting)
     ```
   </TabItem>
 </Tabs>
+
+## `task`
+
+What the dataset is for. It decides what each patch is annotated with and is recorded in the manifest, so a resumed run must use the same task.
+
+| Value | Status | Annotation |
+| --- | --- | --- |
+| `segmentation` (default) | supported | A class mask per patch, from `labels` (none without `labels`: an image-only dataset) |
+| `detection`, `instance`, `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+
+```yaml
+task: segmentation
+```
 
 ## `region`
 
@@ -186,7 +200,7 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | `image_format` | `png` \| `jpg` \| `npy` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`) |
 | `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
 
-Masks are always single-channel PNG. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
+Masks are always single-channel PNG. The manifest records the writer as `{layout: files, image_format, jpg_quality, mask_format: png}`. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/).
 
 **Validation:** XYZ needs `png` or `jpg`; EOPF needs `npy`.
 

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 from typer.testing import CliRunner
 
+from mapcv import Manifest
 from mapcv.cli import app
 from mapcv.config import MapcvConfig
 from mapcv.planning import plan
@@ -55,3 +60,33 @@ def test_quickstart_plan_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0, result.output
     assert "77 tiles" in result.output
     assert "building → 1" in result.output
+
+
+def test_torch_dataset_example_reads_an_upgraded_0_2_dataset(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset"
+    fixture = Path(__file__).parent / "fixtures" / "mapcv-0.2.0" / "dataset"
+    shutil.copytree(fixture, dataset)
+    spec = importlib.util.spec_from_file_location(
+        "torch_dataset", _EXAMPLES / "scripts" / "torch_dataset.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="version 2"):
+        module.MapcvDataset(dataset, "train")
+    # The upgrade recipe from the migration guide.
+    path = dataset / "manifest.json"
+    Manifest.load(path).save(path)
+
+    train = module.MapcvDataset(dataset, "train")
+    names = (dataset / "splits" / "train.txt").read_text().split()
+    assert len(train) == len(names)
+    sample = train[0]
+    assert sample["filename"] == names[0]
+    assert sample["image"].shape == (3, 192, 192)
+    mask = np.asarray(Image.open(fixture / "Masks" / names[0]), dtype=np.int64)
+    np.testing.assert_array_equal(sample["mask"], mask)
+    assert train.class_names == {0: "background", 1: "building", 2: "water"}
+    assert train.ignore_index is None
+    assert sum(train.class_pixel_counts().values()) == len(train) * 192 * 192

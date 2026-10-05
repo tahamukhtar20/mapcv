@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import pytest
 
 from mapcv.splitter import SplitterConfig, _classify_entry, split_dataset, split_manifest
-from mapcv.writer import Manifest, ManifestEntry
+from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord
 
 
 # ---------------------------------------------------------------------------
@@ -25,20 +25,25 @@ def _entry(
     mask: bool = False,
 ) -> ManifestEntry:
     fname = f"patch_{idx:07d}.png"
-    return ManifestEntry(
-        filename=fname,
-        mask_filename=fname if mask else None,
-        row=idx,
-        col=0,
-        padded=False,
-        strip_index=0,
-        per_class_pixel_counts=counts if counts is not None else {},
-        empty_ratio=empty_ratio,
-    )
+    files = {"image": f"Images/{fname}"}
+    summary = PatchSummary(empty_ratio=empty_ratio)
+    if mask:
+        files["mask"] = f"Masks/{fname}"
+        summary = PatchSummary(class_pixels=counts or {}, empty_ratio=empty_ratio)
+    elif counts:
+        summary = PatchSummary(class_pixels=counts, empty_ratio=empty_ratio)
+    return ManifestEntry(row=idx, col=0, padded=False, chunk=0, files=files, summary=summary)
+
+
+def _name(entry: ManifestEntry) -> str:
+    return entry["files"]["image"].rsplit("/", 1)[-1]
 
 
 def _manifest(entries: List[ManifestEntry]) -> Manifest:
-    m = Manifest(class_map={"bg": 0, "obj": 1}, sampler={"patch_size": 1, "stride": 1})
+    m = Manifest(
+        target=TargetRecord(type="segmentation", class_map={"bg": 0, "obj": 1}),
+        sampler={"patch_size": 1, "stride": 1},
+    )
     m.patches = list(entries)
     return m
 
@@ -179,7 +184,7 @@ def test_labeled_unlabeled_partition_train(tmp_path: Path) -> None:
 
 def test_all_filenames_come_from_manifest(tmp_path: Path) -> None:
     m = _make_manifest(40)
-    all_fnames = {e["filename"] for e in m.patches}
+    all_fnames = {_name(e) for e in m.patches}
     split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
     used: set[str] = set()
     for fname in ["test.txt", "val.txt", "train.txt"]:
@@ -303,9 +308,9 @@ def test_stratified_uses_all_classes(tmp_path: Path) -> None:
     used: set[str] = set()
     for fname in ["test.txt", "val.txt", "train.txt"]:
         used |= set(_read_lines(tmp_path / fname))
-    class0_fnames = {e["filename"] for e in entries[:30]}
-    class1_fnames = {e["filename"] for e in entries[30:60]}
-    class2_fnames = {e["filename"] for e in entries[60:]}
+    class0_fnames = {_name(e) for e in entries[:30]}
+    class1_fnames = {_name(e) for e in entries[30:60]}
+    class2_fnames = {_name(e) for e in entries[60:]}
     assert used & class0_fnames
     assert used & class1_fnames
     assert used & class2_fnames
@@ -347,7 +352,7 @@ def _overlaps(a: ManifestEntry, b: ManifestEntry, patch: int) -> bool:
 def test_spatial_split_has_no_overlap_between_splits(tmp_path: Path) -> None:
     m = _grid_manifest(size=4096, patch=256, stride=128)
     counts = split_dataset(m, SplitterConfig(labeled_ratios=[]), tmp_path)
-    by_name = {e["filename"]: e for e in m.patches}
+    by_name = {_name(e): e for e in m.patches}
     test = [by_name[f] for f in _read_lines(tmp_path / "test.txt")]
     val = [by_name[f] for f in _read_lines(tmp_path / "val.txt")]
     train = [by_name[f] for f in _read_lines(tmp_path / "train.txt")]
@@ -383,8 +388,7 @@ def test_stratified_split_preserves_stratum_shares(tmp_path: Path) -> None:
     )
     test = set(_read_lines(tmp_path / "test.txt"))
     shares = [
-        len(test & {e["filename"] for e in entries[lo:hi]})
-        for lo, hi in ((0, 50), (50, 80), (80, 100))
+        len(test & {_name(e) for e in entries[lo:hi]}) for lo, hi in ((0, 50), (50, 80), (80, 100))
     ]
     assert shares == [10, 6, 4]
 

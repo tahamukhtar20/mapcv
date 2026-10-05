@@ -141,13 +141,15 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    ```console
    $ mapcv info dataset
    ╭─ dataset ────────────────────────────────────────────────────────────────────────────╮
+   │ Task      segmentation                                                               │
    │ Source    eopf_zarr ·                                                                │
    │           S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716.zarr          │
    │ Bands     b04, b03, b02, b08                                                         │
    │ Patches   25 · 4×128×128 float32                                                     │
    │ CRS       EPSG:32631                                                                 │
+   │ Ignore    mask value 255 marks pixels without imagery                                │
    │ Splits    train 18 (72%) · val 2 (8%) · test 5 (20%)                                 │
-   │ Manifest  version 2                                                                  │
+   │ Manifest  version 3                                                                  │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
    ```
 
@@ -161,12 +163,13 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    from PIL import Image
 
    manifest = json.load(open("dataset/manifest.json"))
-   bands = manifest["bands"]                          # ['b04', 'b03', 'b02', 'b08']
-   names = {cid: name for name, cid in manifest["class_map"].items()} | {0: "background"}
+   bands = manifest["sources"][0]["bands"]            # ['b04', 'b03', 'b02', 'b08']
+   class_map = manifest["target"]["class_map"]
+   names = {cid: name for name, cid in class_map.items()} | {0: "background", 255: "no data"}
 
-   name = open("dataset/splits/train.txt").read().split()[0]
-   image = np.load(f"dataset/Images/{name}")          # (4, 128, 128) float32 reflectance
-   mask = np.asarray(Image.open(f"dataset/Masks/{name.replace('.npy', '.png')}"))
+   files = manifest["patches"][0]["files"]            # paths relative to dataset/
+   image = np.load(f"dataset/{files['image']}")       # (4, 128, 128) float32 reflectance
+   mask = np.asarray(Image.open(f"dataset/{files['mask']}"))
 
    red, nir = image[bands.index("b04")], image[bands.index("b08")]
    ndvi = (nir - red) / (nir + red + 1e-6)

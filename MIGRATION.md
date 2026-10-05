@@ -1,3 +1,58 @@
+# Migrating to mapcv 0.3
+
+## Manifest version 3
+
+New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that the detection, instance, classification, change and regression tasks and other output layouts planned for 0.3 fit without another format change. Images, masks and split lists are byte-for-byte what 0.2 wrote for the same config; only `manifest.json` changes.
+
+| Version 2 (mapcv 0.2) | Version 3 (mapcv 0.3) |
+| --- | --- |
+| `patches[i].filename` | `patches[i].files.image`, a path relative to the dataset folder: `"Images/patch_0000000.png"` |
+| `patches[i].mask_filename` | `patches[i].files.mask` (`"Masks/patch_0000000.png"`); absent without labels instead of `null` |
+| `patches[i].per_class_pixel_counts` | `patches[i].summary.class_pixels` (absent without labels) |
+| `patches[i].empty_ratio` | `patches[i].summary.empty_ratio` |
+| `patches[i].strip_index` | `patches[i].chunk` |
+| `class_map` | `target.class_map` |
+| `labels` (settings and `sha256`) | `target.labels`; `labels.ignore_index` is now `target.ignore_index` |
+| `source_type`, `product_id`, `bands`, `dtype`, `crs`, `transform`, `patch_shape` | the same keys in `sources[0]` (named `"image"`) |
+| `writer` | `writer`, plus `layout: files` and `mask_format: png` |
+| (none) | `task`, `mapcv_version`, `target.type`, `target.dtype`, `target.options` |
+
+An image-only dataset has `"target": null`. Split lists are unchanged: one image file name per line. Each patch is one line of `manifest.json`, which makes large manifests about a third smaller. The full schema is in the [dataset format reference](https://tahamukhtar20.github.io/mapcv/reference/dataset-format/).
+
+Training code that reads `manifest.json` directly needs the new keys:
+
+```python
+import json
+from pathlib import Path
+
+root = Path("dataset")
+manifest = json.loads((root / "manifest.json").read_text())
+target = manifest["target"] or {}  # null for an image-only dataset
+class_map = target.get("class_map", {})  # was: manifest["class_map"]
+ignore_index = target.get("ignore_index")  # was: manifest["labels"]["ignore_index"]
+bands = manifest["sources"][0]["bands"]  # was: manifest["bands"]
+for patch in manifest["patches"]:
+    image = root / patch["files"]["image"]  # was: root / "Images" / patch["filename"]
+    mask = root / patch["files"]["mask"]  # was: root / "Masks" / patch["mask_filename"]
+    counts = patch["summary"]["class_pixels"]  # was: patch["per_class_pixel_counts"]
+```
+
+`mapcv.Manifest.load(path)` reads versions 1, 2 and 3 and returns version 3 without touching the file. To convert an existing manifest on disk (for example so the new loader above can read a 0.2 dataset), run `mapcv.Manifest.load(path).save(path)`. 0.2 code cannot read a version-3 manifest.
+
+Python API changes: `Manifest` has `task`, `sources`, `target` (`SourceRecord`, `TargetRecord`), `writer`, `sampler` and `patches`, with the read-only shortcuts `manifest.source`, `manifest.class_map` and `manifest.ignore_index`, and `patch_transform(entry)` / `patch_bounds(entry)` for georeferencing. `ManifestEntry` has `row`, `col`, `padded`, `chunk`, `files` and `summary`. `load_or_create_manifest(path, expected)` takes the expected `Manifest` instead of one keyword per field, `write_patches(..., chunk_index=0)` replaces `strip_index`, and the manifest classes live in `mapcv.manifest` (still importable from `mapcv` and `mapcv.writer`). For custom targets, `Target.fingerprint()` became `Target.record()`, which returns a `TargetRecord`, and targets and writers have a `type` and `layout` with `Writer.supports(target_type)`.
+
+## Datasets made by mapcv 0.2
+
+`mapcv info`, `mapcv split` and `Manifest.load` read 0.2 datasets as before and never rewrite their manifest.
+
+`mapcv generate` resumes a 0.2 dataset when the imagery, labels, sampler and writer settings match, with one addition: **set `labels.ignore_index: null`**. mapcv 0.2 wrote background (`0`) where there was no imagery; 0.3 writes `labels.ignore_index` (default `255`) there, and a resumed run must keep the dataset consistent. Without it, generation stops with a message that says so. A finished 0.2 dataset resumes as a no-op and is left as it is; one that gains patches is saved as version 3. New masks come from 0.3's rasterizer, which follows GDAL's rules exactly, so pixels on polygon edges can differ slightly from masks 0.2 wrote.
+
+Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1 datasets (as in 0.2), and 0.2 datasets made with `sampler.mode: random`, because 0.3 draws random positions without repeats and would mix two different samples. Both can still be split and inspected.
+
+## The `task` setting
+
+Configs take an optional top-level `task`. The default, and the only value accepted in this release, is `segmentation`, so existing configs need no change. `detection`, `instance`, `classification`, `change` and `regression` are planned; setting one of them fails validation with a message that lists the supported and planned tasks. The manifest records the task, and a resumed run must use the same one.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

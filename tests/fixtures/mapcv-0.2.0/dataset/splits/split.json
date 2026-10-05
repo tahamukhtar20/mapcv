@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "test_ratio": 0.25,
+    "val_ratio": 0.2,
+    "labeled_ratios": [
+      0.5
+    ],
+    "seed": 42,
+    "strategy": "spatial",
+    "block_size": null,
+    "sample_limit": null
+  },
+  "strategy_used": "spatial",
+  "train": 7,
+  "val": 2,
+  "test": 3,
+  "dropped": 0
+}

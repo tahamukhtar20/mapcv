@@ -20,7 +20,7 @@ mapcv is a Python package with a Rust extension built by [maturin](https://www.m
    uv run maturin develop
    ```
 
-   Re-run `uv run maturin develop` after every change to Rust code (`src/*.rs`). Add `--extra zarr` to work on Sentinel-2 support (Python 3.10–3.13).
+   Re-run `uv run maturin develop` after every change to Rust code (`src/*.rs`). Add `--extra zarr` to work on Sentinel-2 support (Python 3.10–3.13). `rust-toolchain.toml` pins the Rust version CI uses; rustup installs it on first use.
 
 2. Install the pre-commit hooks (`cargo fmt`, `clippy`, `ruff`, `mypy` and `pytest` run before each commit):
 
@@ -37,7 +37,7 @@ mapcv is a Python package with a Rust extension built by [maturin](https://www.m
 uv run pytest                 # tests
 uv run ruff format . && uv run ruff check .
 uv run mypy --strict .
-cargo fmt && cargo clippy
+cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 The live Sentinel-2 test is opt-in: set `MAPCV_EOPF_URL` to a public product and run `uv run pytest -m eopf_live`.

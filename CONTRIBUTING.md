@@ -9,7 +9,7 @@ This document outlines the process for contributing to the project and setting u
 ### 1. Development Environment Setup
 `mapcv` is a hybrid Python and Rust project. We use `uv` for Python dependency management and `maturin` to build the Rust extensions.
 
-Make sure you have Rust and Python 3.10+ installed. First, fork and clone the repository, then navigate to the project directory and install all development dependencies:
+Make sure you have Rust (via rustup, which installs the version pinned in `rust-toolchain.toml` on first use) and Python 3.10+ installed. First, fork and clone the repository, then navigate to the project directory and install all development dependencies:
 
 ```bash
 uv sync --extra dev
@@ -45,7 +45,12 @@ uv run mypy --strict .
 **Rust Formatting & Linting:**
 ```bash
 cargo fmt
-cargo clippy
+cargo clippy --all-targets -- -D warnings
+```
+
+**Rust Unit Tests:**
+```bash
+cargo test
 ```
 
 **Running Tests:**

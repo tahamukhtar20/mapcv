@@ -226,8 +226,12 @@ fn grid_sample_anchors(
 
 /// Generate random patch anchor positions using a seeded PRNG.
 ///
-/// Returns `count` `(row, col)` top-left corners. `edge_strategy` is `"pad"`
-/// (default), `"drop"`, or `"shift"`.
+/// Returns up to `count` distinct `(row, col)` top-left corners, drawn
+/// uniformly without replacement from the positions whose patch fits inside
+/// the raster. When `count` exceeds the number of such positions (see
+/// `random_anchor_capacity`) all of them are returned. `edge_strategy` is
+/// `"pad"` (default), `"drop"`, or `"shift"`; it only matters for a raster
+/// smaller than the patch, where `"drop"` returns nothing.
 #[pyfunction]
 #[pyo3(signature = (height, width, patch_size, count, seed = 42, edge_strategy = "pad"))]
 fn random_sample_anchors(
@@ -239,6 +243,19 @@ fn random_sample_anchors(
     edge_strategy: &str,
 ) -> PyResult<Vec<(usize, usize)>> {
     sampler::random_anchors(height, width, patch_size, count, seed, edge_strategy)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Number of distinct anchors `random_sample_anchors` can return.
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, edge_strategy = "pad"))]
+fn random_anchor_capacity(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    edge_strategy: &str,
+) -> PyResult<usize> {
+    sampler::random_anchor_capacity(height, width, patch_size, edge_strategy)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -443,6 +460,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rasterize, m)?)?;
     m.add_function(wrap_pyfunction!(grid_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;

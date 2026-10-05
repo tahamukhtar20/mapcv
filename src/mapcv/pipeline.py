@@ -25,7 +25,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
+from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv.config import MapcvConfig
 from mapcv.imagery import (
     WindowedRasterSource,
@@ -35,7 +35,12 @@ from mapcv.imagery import (
 )
 from mapcv.labels import GeomWithClass, parse_geojson, parse_kml, transform_all_to_mercator
 from mapcv.rasterizer import rasterize
-from mapcv.sampler import PatchMeta, SamplerConfig, sample_patches_at_anchors
+from mapcv.sampler import (
+    PatchMeta,
+    SamplerConfig,
+    random_anchors_for,
+    sample_patches_at_anchors,
+)
 from mapcv.splitter import SplitterConfig, split_dataset
 from mapcv.writer import Manifest, load_or_create_manifest, write_patches
 
@@ -75,16 +80,7 @@ def _chunk_progress(disable: bool = False) -> Progress:
 
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
     if config.mode == "random":
-        return list(
-            random_sample_anchors(
-                height,
-                width,
-                config.patch_size,
-                config.random_count,
-                config.random_seed,
-                config.edge_strategy,
-            )
-        )
+        return random_anchors_for(height, width, config)
     return list(
         grid_sample_anchors(
             height,

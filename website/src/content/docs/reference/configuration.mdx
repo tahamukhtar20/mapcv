@@ -163,20 +163,20 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 | `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
 | `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
-| `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk) |
+| `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |
 
 **Edge strategies:**
 
 | `edge_strategy` | Grid behaviour | Random behaviour |
 | --- | --- | --- |
-| `pad` | Patches start at every stride step inside the raster; the part outside is filled by `pad_mode` and the patch is marked `padded` | Positions anywhere in the raster; may be padded |
-| `drop` | Only patches that fit entirely inside | Positions clamped so patches fit |
-| `shift` | Like `drop`, plus one last patch shifted inward to cover the remaining edge (may overlap its neighbour) | Same as `drop` |
+| `pad` | Patches start at every stride step inside the raster; the part outside is filled by `pad_mode` and the patch is marked `padded` | Same positions as `drop`; a raster smaller than the patch gives one padded patch at the top-left |
+| `drop` | Only patches that fit entirely inside | Positions where the patch fits entirely inside; none if the raster is smaller than the patch |
+| `shift` | Like `drop`, plus one last patch shifted inward to cover the remaining edge (may overlap its neighbour) | Same as `pad` |
 
 **Empty pixels:** for XYZ, a pixel is empty when all three channels are 0 (black tiles, failed tiles, padding). For Sentinel-2, a pixel is empty unless every band has data, i.e. when any band is NaN (NoData); a reflectance of 0 is valid data. Padding in Sentinel-2 patches is 0, not NaN.
 
 <Aside>
-Random mode can draw the same position more than once, and random patches overlap. Use the `spatial` split with it (the default); mapcv warns if you choose `stratified` or `random`.
+Random mode draws distinct positions, uniformly over every position where the patch fits (the raster edges are sampled as often as the centre), and the same seed always gives the same positions. If `random_count` is more than the number of positions, all of them are used and mapcv warns. Random patches can still overlap each other. Use the `spatial` split with it (the default); mapcv warns if you choose `stratified` or `random`.
 </Aside>
 
 ## `writer`

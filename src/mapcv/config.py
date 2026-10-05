@@ -226,6 +226,9 @@ class LabelsConfig(BaseModel):
 
     ``classes`` maps label values to mask IDs (1..255). Without it, integer
     labels in 1..255 are used as-is and other labels get IDs in sorted order.
+    ``ignore_index`` (default 255) is written where a mask has no imagery under
+    it: padding beyond the raster edge, NoData and failed tiles. ``null`` writes
+    background (0) there instead, as mapcv 0.2 did.
     """
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -235,6 +238,7 @@ class LabelsConfig(BaseModel):
     label_field: Optional[str] = None
     classes: Optional[Dict[str, int]] = None
     all_touched: bool = False
+    ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
 
     @field_validator("path")
     @classmethod
@@ -265,6 +269,11 @@ class LabelsConfig(BaseModel):
     def _classes_need_field(self) -> "LabelsConfig":
         if self.classes is not None and self.label_field is None:
             raise ValueError("labels.classes requires labels.label_field")
+        if self.classes is not None and self.ignore_index in self.classes.values():
+            raise ValueError(
+                f"labels.classes uses {self.ignore_index}, which is labels.ignore_index; "
+                "pick another class ID or set ignore_index to a free value (or null)"
+            )
         return self
 
 

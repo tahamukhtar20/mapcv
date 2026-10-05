@@ -59,13 +59,18 @@ def ratio_dirname(ratio: float) -> str:
     return format(round(ratio * 100, 4), "g")
 
 
-def _classify_entry(entry: ManifestEntry) -> int:
+def _class_counts(entry: ManifestEntry, ignore_key: Optional[str]) -> Dict[str, int]:
+    """Per-class pixel counts without the ignore value (pixels with no imagery)."""
+    return {k: v for k, v in entry["per_class_pixel_counts"].items() if k != ignore_key}
+
+
+def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> int:
     """Classify a manifest entry as 0 (empty), 1 (fully labeled), or 2 (mixed).
 
     When a mask is present the classification uses per_class_pixel_counts; when
     absent it falls back to empty_ratio from the image.
     """
-    counts = entry["per_class_pixel_counts"]
+    counts = _class_counts(entry, ignore_key)
     if counts:
         has_bg = "0" in counts
         has_labeled = any(k != "0" for k in counts)
@@ -81,11 +86,11 @@ def _classify_entry(entry: ManifestEntry) -> int:
     return 2
 
 
-def _stratum(entry: ManifestEntry) -> Tuple[int, str]:
+def _stratum(entry: ManifestEntry, ignore_key: Optional[str] = None) -> Tuple[int, str]:
     """Stratify on labeled fraction and, when masked, the dominant foreground class."""
-    counts = {k: v for k, v in entry["per_class_pixel_counts"].items() if k != "0"}
+    counts = {k: v for k, v in _class_counts(entry, ignore_key).items() if k != "0"}
     dominant = max(sorted(counts), key=lambda k: counts[k]) if counts else ""
-    return _classify_entry(entry), dominant
+    return _classify_entry(entry, ignore_key), dominant
 
 
 def _manifest_patch_geometry(manifest: Manifest) -> Tuple[Optional[int], Optional[int]]:
@@ -198,10 +203,11 @@ def _stratified_split(
     entries: List[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
+    ignore_key: Optional[str] = None,
 ) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry]]:
     strata: Dict[Hashable, List[ManifestEntry]] = defaultdict(list)
     for entry in entries:
-        strata[_stratum(entry)].append(entry)
+        strata[_stratum(entry, ignore_key)].append(entry)
     test: List[ManifestEntry] = []
     val: List[ManifestEntry] = []
     train: List[ManifestEntry] = []
@@ -216,7 +222,10 @@ def _stratified_split(
 
 
 def _apply_sample_limit(
-    entries: List[ManifestEntry], config: SplitterConfig, rng: random.Random
+    entries: List[ManifestEntry],
+    config: SplitterConfig,
+    rng: random.Random,
+    ignore_key: Optional[str] = None,
 ) -> List[ManifestEntry]:
     if config.sample_limit is None or config.sample_limit >= len(entries):
         return list(entries)
@@ -225,7 +234,7 @@ def _apply_sample_limit(
     # Keep the stratum mix when subsampling.
     strata: Dict[Hashable, List[ManifestEntry]] = defaultdict(list)
     for entry in entries:
-        strata[_stratum(entry)].append(entry)
+        strata[_stratum(entry, ignore_key)].append(entry)
     pool: List[ManifestEntry] = []
     for key in sorted(strata, key=str):
         members = strata[key]
@@ -253,7 +262,9 @@ def split_dataset(
         because they overlapped a held-out patch.
     """
     rng = random.Random(config.seed)
-    entries = _apply_sample_limit(manifest.patches, config, rng)
+    ignore = (manifest.labels or {}).get("ignore_index")
+    ignore_key = str(ignore) if ignore is not None else None
+    entries = _apply_sample_limit(manifest.patches, config, rng, ignore_key)
     patch_size, stride = _manifest_patch_geometry(manifest)
 
     strategy = config.strategy
@@ -279,7 +290,7 @@ def split_dataset(
     if strategy == "spatial":
         test, val, train, dropped = _spatial_split(entries, config, rng, patch_size)
     elif strategy == "stratified":
-        test, val, train = _stratified_split(entries, config, rng)
+        test, val, train = _stratified_split(entries, config, rng, ignore_key)
     else:
         shuffled = list(entries)
         rng.shuffle(shuffled)

@@ -288,6 +288,9 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
 def _class_names(manifest: Manifest) -> Dict[str, str]:
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
+    ignore = (manifest.labels or {}).get("ignore_index")
+    if ignore is not None:
+        names.setdefault(str(ignore), "ignored (no imagery)")
     if not manifest.class_map:
         names.setdefault("1", "labeled")
     return names

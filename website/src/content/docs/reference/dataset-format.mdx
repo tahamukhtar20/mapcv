@@ -41,7 +41,7 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
 | NoData | black `(0, 0, 0)` pixels (failed tiles, padding, provider NoData) | `NaN` where the product has no data; `0` in padded areas |
 | Mask | single-channel PNG, `uint8`, `(H, W)` | same |
 
-**Masks.** `0` is background (no polygon) and `1..255` are class IDs from the manifest's `class_map`. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. mapcv does not write a separate "ignore" value: padded and NoData pixels are `0` in the mask. To ignore them in training, derive a validity mask from the image (all-black RGB, or `NaN` in any band) and set those mask pixels to your loss's ignore index. See [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
+**Masks.** `0` is background (imagery, no polygon), other values are class IDs from the manifest's `class_map`, and `255` (`labels.ignore_index`, recorded in the manifest's `labels`) marks pixels with no imagery under them: padding, failed tiles and NoData. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. Pass the ignore value to your loss; see [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
 
 ## `manifest.json`
 

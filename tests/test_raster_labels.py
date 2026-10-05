@@ -649,6 +649,25 @@ def test_min_label_ratio_and_stratified_split_use_the_raster_classes(tmp_path: P
     assert result.manifest.class_map == {"value_10": 1, "value_20": 2, "value_30_40": 3}
 
 
+def test_geotiff_masks_hold_the_same_labels_on_the_patch_grid(tmp_path: Path) -> None:
+    imagery, labels = _small_case(tmp_path)
+    png = config_for(
+        tmp_path, _geotiff(imagery), imagery.region(), {"path": str(labels)}, staging="png"
+    )
+    data = png.model_dump(mode="json")
+    data["writer"].update(staging_dir=str(tmp_path / "tif"), image_format="tif", mask_format="tif")
+    tif = MapcvConfig.model_validate(data)
+    png_manifest = run_generate(png).manifest
+    tif_manifest = run_generate(tif).manifest
+    assert len(png_manifest.patches) == len(tif_manifest.patches) > 0
+    for a, b in zip(png_manifest.patches, tif_manifest.patches):
+        expected = np.asarray(Image.open(tmp_path / "png" / a["files"]["mask"]))
+        with rasterio.open(tmp_path / "tif" / b["files"]["mask"]) as src:
+            np.testing.assert_array_equal(src.read(1), expected)
+            assert tuple(src.transform)[:6] == pytest.approx(tif_manifest.patch_transform(b))
+            assert src.nodata == IGNORE
+
+
 # ── Manifest, resume, planning ───────────────────────────────────────────────
 
 

@@ -31,37 +31,25 @@ def _load() -> Tuple[Any, List[Dict[str, Any]]]:
 
 _NPZ_DATA, _META = _load()
 
-# case 5 is the thin diagonal - allow up to 1% edge-pixel disagreement
-_THIN_DIAGONAL_CASE = 5
-_THIN_DIAGONAL_TOL = 0.01
-
 
 def _run_case(entry: Dict[str, Any]) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
     geom = wkt_loads(entry["wkt"])
     class_id: int = entry["class_id"]
     transform = cast(Tuple[float, float, float, float, float, float], tuple(entry["transform"]))
     h, w = entry["out_shape"]
-    our = rasterize([(geom, class_id)], (h, w), transform)
+    all_touched = bool(entry.get("all_touched", False))
+    our = rasterize([(geom, class_id)], (h, w), transform, all_touched=all_touched)
     golden = _NPZ_DATA[f"case_{entry['case']}"]
     return our, golden
 
 
 @pytest.mark.parametrize("entry", _META)
 def test_rasterize_matches_rasterio(entry: Dict[str, Any]) -> None:
-    """Our rasterize() must match rasterio pixel-for-pixel (case 5: <=1% tolerance)."""
+    """Our rasterize() must match rasterio pixel-for-pixel, in both all_touched modes."""
     our, golden = _run_case(entry)
     mismatch = int(np.sum(our != golden))
-    total = golden.size
-    case = entry["case"]
-
-    if case == _THIN_DIAGONAL_CASE:
-        rate = mismatch / total
-        assert rate <= _THIN_DIAGONAL_TOL, (
-            f"case {case} (thin diagonal): mismatch rate {rate:.3%} > {_THIN_DIAGONAL_TOL:.1%} "
-            f"({mismatch}/{total} pixels)"
-        )
-    else:
-        assert mismatch == 0, (
-            f"case {case}: {mismatch}/{total} pixel mismatches "
-            f"(our nonzero={int(np.count_nonzero(our))}, ref nonzero={entry['nonzero']})"
-        )
+    assert mismatch == 0, (
+        f"case {entry['case']} (all_touched={entry.get('all_touched', False)}): "
+        f"{mismatch}/{golden.size} pixel mismatches "
+        f"(our nonzero={int(np.count_nonzero(our))}, ref nonzero={entry['nonzero']})"
+    )

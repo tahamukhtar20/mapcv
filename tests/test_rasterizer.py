@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Tuple
+import math
+import random
+from typing import List, Tuple
 
 import numpy as np
 import pytest
@@ -196,3 +198,173 @@ def test_cross_validate_against_rasterio() -> None:
         dtype=np.uint8,
     )
     np.testing.assert_array_equal(ours, theirs)
+
+
+# ---- GDAL pixel rules (#70, #71, #124) ---------------------------------------
+# Expected masks below were checked against rasterio 1.5 / GDAL 3.12.
+
+
+def test_all_touched_burns_every_pixel_an_edge_crosses() -> None:
+    """#70: the edge (0.1, 0.5) -> (3.1, 3.5) crosses pixel (row 1, col 1)."""
+    tri = Polygon([(0.1, 0.5), (3.1, 3.5), (0.0, 4.0)])
+    mask = rasterize([(tri, 1)], (4, 4), IDENTITY, all_touched=True)
+    assert mask.tolist() == [
+        [1, 0, 0, 0],
+        [1, 1, 0, 0],
+        [1, 1, 1, 0],
+        [1, 1, 1, 1],
+    ]
+
+
+@pytest.mark.parametrize("eps", [0.0, 1e-13, 2e-11, 1e-6])
+@pytest.mark.parametrize("notch, expected", [(0.6, [1, 1, 1, 1]), (0.4, [1, 0, 1, 1])])
+def test_near_horizontal_edges_keep_scanline_parity(
+    eps: float, notch: float, expected: list[int]
+) -> None:
+    """#71: an edge with |dy| < 1e-12 across the row-0 centre line still counts."""
+    ring = [(0, 0), (4, 0), (4, 1), (2, notch + eps), (1, notch - eps), (0, 1)]
+    mask = rasterize([(Polygon(ring), 1)], (1, 4), IDENTITY)
+    assert mask[0].tolist() == expected
+
+
+def test_duplicate_vertices_and_vertices_on_centre_rows_change_nothing() -> None:
+    plain = _square(0, 0, 4)
+    noisy = Polygon([(0, 0), (0, 0), (4, 0), (4, 1.5), (4, 1.5), (4, 4), (0, 4), (0, 2.5), (0, 0)])
+    for all_touched in (False, True):
+        a = rasterize([(plain, 1)], (6, 6), IDENTITY, all_touched=all_touched)
+        b = rasterize([(noisy, 1)], (6, 6), IDENTITY, all_touched=all_touched)
+        np.testing.assert_array_equal(a, b)
+
+
+def test_pixel_aligned_square_all_touched_burns_interior_only() -> None:
+    """#124: GDAL burns 2x2 for the (1,1)-(3,3) square, not 3x3."""
+    mask = rasterize([(_square(1, 1, 2), 1)], (5, 5), IDENTITY, all_touched=True)
+    expected = np.zeros((5, 5), dtype=np.uint8)
+    expected[1:3, 1:3] = 1
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_pixel_centres_on_edges_follow_gdal() -> None:
+    """#124: centres on a left edge are out, on a right edge in.
+
+    Centres on a horizontal edge are in when the edge runs right to left once
+    the ring is clockwise in world coordinates, so the outcome depends on
+    which way the transform flips y.
+    """
+    sq = _square(0.5, 0.5, 2)
+    assert rasterize([(sq, 1)], (4, 4), IDENTITY).tolist() == [
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+    north_up: Transform = (1.0, 0.0, 0.0, 0.0, -1.0, 4.0)
+    sq_north_up = _square(0.5, 1.5, 2)  # the same pixels under north_up
+    assert rasterize([(sq_north_up, 1)], (4, 4), north_up).tolist() == [
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 1, 1, 0],
+        [0, 0, 0, 0],
+    ]
+
+
+@pytest.mark.parametrize("all_touched", [False, True])
+def test_hole_with_edges_through_pixel_centres(all_touched: bool) -> None:
+    hole = [(2.5, 2.5), (5.5, 2.5), (5.5, 5.5), (2.5, 5.5)]
+    poly = Polygon([(0, 0), (8, 0), (8, 8), (0, 8)], [hole])
+    mask = rasterize([(poly, 1)], (8, 8), IDENTITY, all_touched=all_touched)
+    # Hole centres on its left/top edges stay burned; all_touched also burns
+    # column 5, which the hole's right edge passes through.
+    last_col = 5 if all_touched else 6
+    expected = np.ones((8, 8), dtype=np.uint8)
+    expected[3:5, 3:last_col] = 0
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_tiny_geographic_pixels_are_not_singular() -> None:
+    """#71: 5e-7 degree pixels have |det| = 2.5e-13 but are a valid transform."""
+    transform: Transform = (5e-7, 0.0, 13.4, 0.0, -5e-7, 52.5)
+    x0, y0 = 13.4 + 1e-6, 52.5 - 1e-6
+    poly = Polygon([(x0, y0), (x0 + 2e-6, y0), (x0 + 2e-6, y0 - 2e-6), (x0, y0 - 2e-6)])
+    mask = rasterize([(poly, 1)], (8, 8), transform)
+    expected = np.zeros((8, 8), dtype=np.uint8)
+    expected[2:6, 2:6] = 1
+    np.testing.assert_array_equal(mask, expected)
+
+
+# ---- Property-style comparison against rasterio ------------------------------
+
+_RIO_TRANSFORMS: List[Transform] = [
+    (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+    (0.5, 0.0, 1024.0, 0.0, -0.25, 4096.0),
+    (0.5971642834779395, 0.0, 1113194.9079327357, 0.0, -0.5971642834779395, 6800125.4543973),
+    (5e-7, 0.0, 13.404954, 0.0, -5e-7, 52.520008),
+    (0.8660254037844387, -0.5, 100.0, 0.5, 0.8660254037844387, -50.0),
+]
+
+
+def _random_pixel_rings(rng: random.Random, w: int, h: int) -> List[List[Tuple[float, float]]]:
+    """A random polygon in pixel space, biased towards GDAL's tie cases."""
+    kind = rng.choice(["star", "sliver", "near_h", "snapped", "hole", "dup"])
+    cx, cy = rng.uniform(-3, w + 3), rng.uniform(-3, h + 3)
+    r = rng.uniform(0.3, 25)
+    angles = sorted(rng.uniform(0, 2 * math.pi) for _ in range(rng.randint(3, 12)))
+    pts = [
+        (cx + rng.uniform(0.2, 1) * r * math.cos(a), cy + rng.uniform(0.2, 1) * r * math.sin(a))
+        for a in angles
+    ]
+    if kind == "sliver":
+        ang = rng.uniform(0, 2 * math.pi)
+        length, width = rng.uniform(1, 50), 10 ** rng.uniform(-3, -0.3)
+        dx, dy = math.cos(ang), math.sin(ang)
+        x1, y1 = cx + dx * length, cy + dy * length
+        return [[(cx, cy), (x1, y1), (x1 - dy * width, y1 + dx * width)]]
+    if kind == "near_h":
+        base = math.floor(cy) + rng.choice([0.5, 0.0])
+        eps = [0.0, 1e-13, -1e-13, 2e-11, -1e-6, 1e-3]
+        pts = [(x, base + rng.choice(eps)) if rng.random() < 0.5 else (x, y) for x, y in pts]
+    elif kind == "snapped":
+        half = rng.random() < 0.5
+        pts = [(math.floor(x) + 0.5 * half, math.floor(y) + 0.5 * half) for x, y in pts]
+    elif kind == "dup":
+        pts = [p for p in pts for _ in range(rng.randint(1, 2))]
+    elif kind == "hole":
+        poly = Polygon(pts).convex_hull
+        inner = poly.buffer(-r / 4, join_style=2)
+        if isinstance(inner, Polygon) and not inner.is_empty and isinstance(poly, Polygon):
+            hole = [(math.floor(x) + 0.5, math.floor(y) + 0.5) for x, y in inner.exterior.coords]
+            return [list(poly.exterior.coords), hole]
+    return [pts]
+
+
+@pytest.mark.parametrize("all_touched", [False, True])
+def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
+    """Pixel-exact agreement with GDAL on random polygons full of tie cases."""
+    rasterio_features = pytest.importorskip("rasterio.features")
+    from rasterio.transform import Affine as RIOAffine
+
+    rng = random.Random(70_71_124)
+    for case in range(300):
+        transform = rng.choice(_RIO_TRANSFORMS)
+        a, b, c, d, e, f = transform
+        h, w = rng.randint(1, 40), rng.randint(1, 40)
+        shapes = []
+        for _ in range(rng.randint(1, 3)):
+            rings = [
+                [(a * x + b * y + c, d * x + e * y + f) for x, y in ring]
+                for ring in _random_pixel_rings(rng, w, h)
+            ]
+            if len(rings[0]) >= 3:
+                shapes.append((Polygon(rings[0], rings[1:]), rng.randint(1, 255)))
+        if not shapes:
+            continue
+        ours = rasterize(shapes, (h, w), transform, all_touched=all_touched)
+        theirs = rasterio_features.rasterize(
+            shapes,
+            out_shape=(h, w),
+            transform=RIOAffine(*transform),
+            fill=0,
+            all_touched=all_touched,
+            dtype=np.uint8,
+        )
+        np.testing.assert_array_equal(ours, theirs, err_msg=f"case {case}")

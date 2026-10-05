@@ -340,8 +340,19 @@ def _random_pixel_rings(rng: random.Random, w: int, h: int) -> List[List[Tuple[f
 @pytest.mark.parametrize("all_touched", [False, True])
 def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
     """Pixel-exact agreement with GDAL on random polygons full of tie cases."""
+    rasterio = pytest.importorskip("rasterio")
     rasterio_features = pytest.importorskip("rasterio.features")
     from rasterio.transform import Affine as RIOAffine
+
+    gdal_version = tuple(int(part) for part in rasterio.__gdal_version__.split(".")[:2])
+    if all_touched and gdal_version < (3, 11):
+        # Before GDAL 3.11 (OSGeo/gdal commit 58d0299, "fix/simplify
+        # vertical/horizontal detection"), the all_touched edge walker drew any
+        # edge whose ends share a column (or row) as a vertical (horizontal) run.
+        # A diagonal edge from (6.0, 12.0) to (6.99999, 14.0) then counts as
+        # pixel-aligned and burns nothing, although it crosses pixel (12, 6).
+        # mapcv follows the fixed rule.
+        pytest.skip(f"all_touched follows GDAL >= 3.11, rasterio has {rasterio.__gdal_version__}")
 
     rng = random.Random(70_71_124)
     for case in range(300):

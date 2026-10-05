@@ -65,7 +65,9 @@
 //!   through. Edges lying on pixel boundaries (within 1e-4 px) burn nothing,
 //!   so a pixel-aligned square burns exactly the pixels inside it. Like GDAL,
 //!   edges within 0.01 px of vertical or horizontal are drawn as straight runs
-//!   along one column or row.
+//!   along one column or row. This is the rule of GDAL 3.11 and later; older
+//!   GDAL also drew any edge whose ends share a column or row that way, which
+//!   could miss pixels a diagonal edge crosses.
 //!
 //! Coordinate conventions match rasterio:
 //! - The affine transform maps `(col, row)` -> `(x, y)` in world coords.

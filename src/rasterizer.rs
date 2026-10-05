@@ -1,3 +1,48 @@
+// This file is part of mapcv (MIT License, see LICENSE). Parts of it are
+// derived from GDAL 3.12.1 (https://github.com/OSGeo/gdal/tree/v3.12.1) and
+// remain under GDAL's MIT license; see also THIRD_PARTY_NOTICES.md:
+//
+// - `Scratch::fill`: `GDALdllImageFilledPolygon()`, alg/llrasterize.cpp
+// - `walk_edge`: `GDALdllImageLineAllTouched()`, alg/llrasterize.cpp
+// - `is_clockwise` and the ring reorientation in `Scratch::load`:
+//   `OGRLineString::isClockwise()`, ogr/ogrlinestring.cpp, as used by
+//   `GDALCollectRingsFromGeometry()`, alg/gdalrasterize.cpp
+// - `Affine::inverse`, `Affine::apply`: `GDALInvGeoTransform()` and
+//   `GDALGenImgProjTransform()`, alg/gdaltransformer.cpp
+//
+// alg/llrasterize.cpp:
+//   Copyright (c) 2000, Frank Warmerdam <warmerdam@pobox.com>
+//   Copyright (c) 2011, Even Rouault <even dot rouault at spatialys.com>
+// alg/gdalrasterize.cpp:
+//   Copyright (c) 2005, Frank Warmerdam <warmerdam@pobox.com>
+//   Copyright (c) 2008-2013, Even Rouault <even dot rouault at spatialys.com>
+// ogr/ogrlinestring.cpp:
+//   Copyright (c) 1999, Frank Warmerdam
+//   Copyright (c) 2008-2014, Even Rouault <even dot rouault at spatialys.com>
+// alg/gdaltransformer.cpp:
+//   Copyright (c) 2002, i3 - information integration and imaging
+//                            Fort Collin, CO
+//   Copyright (c) 2008-2013, Even Rouault <even dot rouault at spatialys.com>
+//   Copyright (c) 2021, CLS
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+// THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
 //! Scanline polygon rasterizer.
 //!
 //! Burns `(polygon, class_id)` pairs into a u8 raster with the same pixel

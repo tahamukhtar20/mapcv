@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
+import platform
 import random
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box
 
 from mapcv import rasterize
 
@@ -294,6 +295,8 @@ def test_tiny_geographic_pixels_are_not_singular() -> None:
 
 # ---- Property-style comparison against rasterio ------------------------------
 
+_EXACT_PARITY_MACHINES = {"x86_64", "AMD64"}
+
 _RIO_TRANSFORMS: List[Transform] = [
     (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
     (0.5, 0.0, 1024.0, 0.0, -0.25, 4096.0),
@@ -337,9 +340,91 @@ def _random_pixel_rings(rng: random.Random, w: int, h: int) -> List[List[Tuple[f
     return [pts]
 
 
+# Pixel-space tolerances for the non-x86 path below. The affine transform of the
+# largest-magnitude test transform rounds to about 1e-8 px, so 1e-6 px is
+# generously above floating-point noise yet far below any real geometric gap.
+_TIE_EPS = 1e-6
+# A cascade (see _is_tie) follows an edge for its whole length; the longest
+# edge here covers 40 px at a slope of 1e-3, so look 1e-2 px away from it.
+_CASCADE_REACH = 1e-2
+# Share of burned pixels allowed to differ from rasterio where GDAL is built
+# with fused multiply-add. The random corpus is deliberately saturated with
+# tie cases; the share observed on macOS arm64 was 0.25% (all_touched=False)
+# and 0.12% (all_touched=True).
+_MAX_TIE_FRACTION = 5e-3
+
+
+class _PixelShape(NamedTuple):
+    value: int
+    boundary: MultiLineString
+    # Edges with an end within _TIE_EPS of a pixel grid line (integer x or y).
+    ambiguous_edges: MultiLineString
+
+
+def _pixel_shape(rings: List[List[Tuple[float, float]]], value: int) -> _PixelShape:
+    boundary, ambiguous = [], []
+    for ring in rings:
+        closed = ring + ring[:1]
+        for start, end in zip(closed, closed[1:]):
+            if start == end:
+                continue
+            line = LineString([start, end])
+            boundary.append(line)
+            if any(abs(v - round(v)) <= _TIE_EPS for point in (start, end) for v in point):
+                ambiguous.append(line)
+    return _PixelShape(value, MultiLineString(boundary), MultiLineString(ambiguous))
+
+
+def _is_tie(
+    shapes: List[_PixelShape], row: int, col: int, values: Tuple[int, int], touched: bool
+) -> bool:
+    """True if floating-point noise can explain why GDAL and mapcv differ at a pixel.
+
+    Only shapes whose value appears at the pixel in either result are considered.
+    The pixel is a tie if, for one of them:
+
+    - a polygon edge passes within ``_TIE_EPS`` of the pixel centre, where the
+      scanline fill rule is decided; or, with ``all_touched``,
+    - an edge merely grazes the pixel square (a corner, or a side) without
+      entering it by more than ``_TIE_EPS``; or
+    - the pixel lies next to an edge that starts or ends within ``_TIE_EPS`` of
+      a pixel grid line: GDAL's test for axis-aligned edges then flips for the
+      whole edge, not only at the vertex.
+    """
+    centre = Point(col + 0.5, row + 0.5)
+    square = box(col, row, col + 1, row + 1)
+    inset = box(col + _TIE_EPS, row + _TIE_EPS, col + 1 - _TIE_EPS, row + 1 - _TIE_EPS)
+    for shape in shapes:
+        if shape.value not in values:
+            continue
+        if shape.boundary.distance(centre) <= _TIE_EPS:
+            return True
+        if not touched:
+            continue
+        if not shape.boundary.intersects(inset) and shape.boundary.distance(square) <= _TIE_EPS:
+            return True
+        if shape.ambiguous_edges.distance(square) <= _CASCADE_REACH:
+            return True
+    return False
+
+
 @pytest.mark.parametrize("all_touched", [False, True])
 def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
-    """Pixel-exact agreement with GDAL on random polygons full of tie cases."""
+    """Agreement with GDAL on random polygons full of tie cases.
+
+    On x86-64 the result must be pixel-exact: mapcv's port of ``llrasterize``
+    does the same IEEE-754 arithmetic as the GDAL inside the x86-64 rasterio
+    wheels, which are built without fused multiply-add (FMA).
+
+    On other CPUs (the macOS arm64 runners) clang contracts ``a * b + c`` into a
+    single FMA by default, so GDAL's affine transform and edge intersections
+    round once instead of twice and can land on the other side of a pixel
+    centre (or grid line) that sits within ~1e-8 px of an edge. mapcv itself
+    never differs between platforms (Rust does not contract floating-point
+    operations), so there the test accepts only such tie pixels (see
+    ``_is_tie``) and caps their total at ``_MAX_TIE_FRACTION`` of the burned
+    pixels. Any other mismatch is a real algorithmic difference and fails.
+    """
     rasterio = pytest.importorskip("rasterio")
     rasterio_features = pytest.importorskip("rasterio.features")
     from rasterio.transform import Affine as RIOAffine
@@ -354,19 +439,26 @@ def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
         # mapcv follows the fixed rule.
         pytest.skip(f"all_touched follows GDAL >= 3.11, rasterio has {rasterio.__gdal_version__}")
 
+    exact = platform.machine() in _EXACT_PARITY_MACHINES
     rng = random.Random(70_71_124)
+    burned = 0
+    ties: List[str] = []
+    not_ties: List[str] = []
     for case in range(300):
         transform = rng.choice(_RIO_TRANSFORMS)
         a, b, c, d, e, f = transform
         h, w = rng.randint(1, 40), rng.randint(1, 40)
         shapes = []
+        pixel_shapes: List[_PixelShape] = []
         for _ in range(rng.randint(1, 3)):
+            pixel_space = _random_pixel_rings(rng, w, h)
             rings = [
-                [(a * x + b * y + c, d * x + e * y + f) for x, y in ring]
-                for ring in _random_pixel_rings(rng, w, h)
+                [(a * x + b * y + c, d * x + e * y + f) for x, y in ring] for ring in pixel_space
             ]
             if len(rings[0]) >= 3:
-                shapes.append((Polygon(rings[0], rings[1:]), rng.randint(1, 255)))
+                value = rng.randint(1, 255)
+                shapes.append((Polygon(rings[0], rings[1:]), value))
+                pixel_shapes.append(_pixel_shape(pixel_space, value))
         if not shapes:
             continue
         ours = rasterize(shapes, (h, w), transform, all_touched=all_touched)
@@ -378,4 +470,22 @@ def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
             all_touched=all_touched,
             dtype=np.uint8,
         )
-        np.testing.assert_array_equal(ours, theirs, err_msg=f"case {case}")
+        if exact:
+            np.testing.assert_array_equal(ours, theirs, err_msg=f"case {case}")
+            continue
+        burned += int(np.count_nonzero(theirs))
+        for row, col in zip(*np.nonzero(ours != theirs)):
+            row, col = int(row), int(col)
+            values = (int(ours[row, col]), int(theirs[row, col]))
+            description = (
+                f"case {case} (row {row}, col {col}): mapcv {values[0]}, rasterio {values[1]}"
+            )
+            if _is_tie(pixel_shapes, row, col, values, all_touched):
+                ties.append(description)
+            else:
+                not_ties.append(description)
+    assert not not_ties, f"mismatches that are not floating-point ties: {not_ties}"
+    assert len(ties) <= _MAX_TIE_FRACTION * burned, (
+        f"{len(ties)} tie pixels differ from rasterio out of {burned} burned "
+        f"(limit {_MAX_TIE_FRACTION:.2%}): {ties[:10]}"
+    )

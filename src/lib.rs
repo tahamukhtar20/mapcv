@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 pub mod fetcher;
+pub mod geotiff;
 pub mod kml_parser;
 pub mod patch_writer;
 pub mod rasterizer;
@@ -585,6 +586,167 @@ fn parse_kml_rs(
     Ok((result.polygons, result.skipped_non_polygon))
 }
 
+/// Map a GeoTIFF reader error to `ValueError` (bad input, corrupt or
+/// unsupported file) or `RuntimeError` (file system or network failure).
+fn geotiff_error(error: geotiff::GeoTiffError) -> PyErr {
+    match error {
+        geotiff::GeoTiffError::Invalid(m) => PyValueError::new_err(m),
+        geotiff::GeoTiffError::Io(m) => PyRuntimeError::new_err(m),
+    }
+}
+
+/// Name of a TIFF photometric interpretation code.
+fn photometric_name(code: u16) -> String {
+    match code {
+        0 => "miniswhite".to_owned(),
+        1 => "minisblack".to_owned(),
+        2 => "rgb".to_owned(),
+        3 => "palette".to_owned(),
+        4 => "mask".to_owned(),
+        5 => "cmyk".to_owned(),
+        6 => "ycbcr".to_owned(),
+        8 => "cielab".to_owned(),
+        other => format!("unknown ({other})"),
+    }
+}
+
+/// A GeoTIFF or Cloud Optimized GeoTIFF opened without GDAL.
+///
+/// `GeoTiff(path, cache_bytes=64 MiB)` opens a local path, an `http(s)://` URL
+/// or a public `s3://bucket/key` (read with HTTP range requests; anonymous
+/// access only). `cache_bytes` bounds the block cache of a remote file.
+#[pyclass(name = "GeoTiff", module = "mapcv._mapcv_rs", frozen)]
+struct PyGeoTiff {
+    inner: geotiff::GeoTiff,
+}
+
+#[pymethods]
+impl PyGeoTiff {
+    #[new]
+    #[pyo3(signature = (path, cache_bytes = geotiff::DEFAULT_CACHE_BYTES))]
+    fn new(py: Python<'_>, path: String, cache_bytes: usize) -> PyResult<Self> {
+        py.detach(move || geotiff::GeoTiff::open(&path, cache_bytes))
+            .map(|inner| PyGeoTiff { inner })
+            .map_err(geotiff_error)
+    }
+
+    /// Structure and georeferencing as a dict.
+    ///
+    /// Keys: `width`, `height`, `count`, `dtype` (numpy name), `epsg` (int or
+    /// None), `crs_error` (why `epsg` is None), `crs_citation`, `transform`
+    /// (`(a, b, c, d, e, f)` or None), `raster_type` (`"area"`/`"point"`),
+    /// `nodata`, `tiled`, `block_size` (`(rows, cols)`), `overviews` (list of
+    /// `(height, width)`, largest first), `compression`, `predictor`,
+    /// `planar`, `photometric`, `byte_order`, `bigtiff`.
+    fn metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let g = &self.inner;
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("width", g.width())?;
+        d.set_item("height", g.height())?;
+        d.set_item("count", g.band_count())?;
+        d.set_item("dtype", g.dtype().name())?;
+        match g.epsg() {
+            Ok(code) => {
+                d.set_item("epsg", code)?;
+                d.set_item("crs_error", py.None())?;
+            }
+            Err(reason) => {
+                d.set_item("epsg", py.None())?;
+                d.set_item("crs_error", reason)?;
+            }
+        }
+        d.set_item("crs_citation", g.crs_citation())?;
+        d.set_item(
+            "transform",
+            g.transform().map(|[a, b, c, dd, e, f]| (a, b, c, dd, e, f)),
+        )?;
+        d.set_item(
+            "raster_type",
+            match g.raster_type() {
+                geotiff::georef::RasterType::Area => "area",
+                geotiff::georef::RasterType::Point => "point",
+            },
+        )?;
+        d.set_item("nodata", g.nodata())?;
+        d.set_item("tiled", g.tiled())?;
+        let levels = g.levels();
+        d.set_item(
+            "block_size",
+            (levels[0].block_height, levels[0].block_width),
+        )?;
+        let overviews: Vec<(usize, usize)> =
+            levels[1..].iter().map(|l| (l.height, l.width)).collect();
+        d.set_item("overviews", overviews)?;
+        d.set_item("compression", g.compression())?;
+        d.set_item("predictor", g.predictor())?;
+        d.set_item("planar", g.planar())?;
+        d.set_item("photometric", photometric_name(g.photometric()))?;
+        d.set_item(
+            "byte_order",
+            if g.little_endian() { "little" } else { "big" },
+        )?;
+        d.set_item("bigtiff", g.bigtiff())?;
+        Ok(d)
+    }
+
+    /// Read rows `row0..row1` and columns `col0..col1` (half-open, in the
+    /// pixel grid of `overview`; 0 = full resolution, 1 = largest overview).
+    ///
+    /// `bands` are 0-based band indices (all bands when None). Returns
+    /// `(data, valid)`: `data` is `(rows, cols, bands)` in the file's dtype and
+    /// `valid` a `(rows, cols)` bool array, False where the window extends past
+    /// the raster (those pixels hold nodata, or 0 without one). Only the tiles
+    /// or strips under the window are read; the GIL is released meanwhile.
+    #[pyo3(signature = (row0, row1, col0, col1, bands = None, overview = 0))]
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    fn read_window<'py>(
+        &self,
+        py: Python<'py>,
+        row0: i64,
+        row1: i64,
+        col0: i64,
+        col1: i64,
+        bands: Option<Vec<usize>>,
+        overview: usize,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyArray2<bool>>)> {
+        let window = geotiff::Window {
+            row0,
+            row1,
+            col0,
+            col1,
+        };
+        let data = py
+            .detach(|| self.inner.read_window(window, bands.as_deref(), overview))
+            .map_err(geotiff_error)?;
+        let shape = (data.height, data.width, data.bands);
+        let shape_error = |e: numpy::ndarray::ShapeError| PyRuntimeError::new_err(e.to_string());
+        macro_rules! to_numpy {
+            ($v:expr) => {
+                numpy::ndarray::Array3::from_shape_vec(shape, $v)
+                    .map_err(shape_error)?
+                    .into_pyarray(py)
+                    .into_any()
+            };
+        }
+        let array = match data.samples {
+            geotiff::Samples::U8(v) => to_numpy!(v),
+            geotiff::Samples::I8(v) => to_numpy!(v),
+            geotiff::Samples::U16(v) => to_numpy!(v),
+            geotiff::Samples::I16(v) => to_numpy!(v),
+            geotiff::Samples::U32(v) => to_numpy!(v),
+            geotiff::Samples::I32(v) => to_numpy!(v),
+            geotiff::Samples::U64(v) => to_numpy!(v),
+            geotiff::Samples::I64(v) => to_numpy!(v),
+            geotiff::Samples::F32(v) => to_numpy!(v),
+            geotiff::Samples::F64(v) => to_numpy!(v),
+        };
+        let valid = numpy::ndarray::Array2::from_shape_vec((data.height, data.width), data.valid)
+            .map_err(shape_error)?
+            .into_pyarray(py);
+        Ok((array, valid))
+    }
+}
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(xy, m)?)?;
@@ -605,5 +767,6 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_kml_rs, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
+    m.add_class::<PyGeoTiff>()?;
     Ok(())
 }

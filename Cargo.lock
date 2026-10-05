@@ -782,6 +782,7 @@ name = "mapcv_rs"
 version = "0.2.0"
 dependencies = [
  "bytemuck",
+ "fdeflate",
  "flate2",
  "futures",
  "image",

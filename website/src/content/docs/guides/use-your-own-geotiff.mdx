@@ -87,7 +87,7 @@ imagery:
   path: ortho/multispectral.tif
   bands: [3, 2, 1, 4]     # red, green, blue, NIR, in this order
 writer:
-  image_format: npy       # patches are (4, H, W) uint16 arrays
+  image_format: npy       # patches are (4, H, W) uint16 arrays; tif writes them as GeoTIFFs
 ```
 
 With the default `png`, a file that does not fit stops `mapcv plan` and `mapcv generate` with a message that says so. To get an 8-bit RGB PNG from a 4-band 8-bit file, select three bands (`bands: [1, 2, 3]`); 16-bit data has to stay `npy` (rescale it in your training code).

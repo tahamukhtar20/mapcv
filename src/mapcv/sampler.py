@@ -141,7 +141,8 @@ def sample_annotated_patches(
             valid_patch, _ = extract_array_patch(valid_mask, row, col, patch_size, "zero")
 
         if valid_patch is not None:
-            empty_ratio = float(1.0 - np.count_nonzero(valid_patch) / valid_patch.size)
+            # empty / size, not 1 - valid / size: the same division the Rust PNG writer made.
+            empty_ratio = float(np.count_nonzero(~valid_patch) / valid_patch.size)
         elif image_patch.ndim == 3:
             empty = np.all(image_patch == 0, axis=-1)
             empty_ratio = float(np.count_nonzero(empty) / empty.size)

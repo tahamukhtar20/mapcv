@@ -31,6 +31,8 @@ _XYZ_TILE_BYTES = 25_000
 _PNG_COMPRESSION = 0.55
 _JPG_COMPRESSION = 0.15
 _MASK_COMPRESSION = 0.05
+# GeoTIFF (Deflate with a predictor): like PNG for 8-bit data, and about a fifth off float32 bytes.
+_TIF_FLOAT_COMPRESSION = 0.8
 
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
@@ -231,13 +233,18 @@ def plan(config: MapcvConfig) -> Plan:
     image_format = config.writer.image_format
     if image_format == "npy":
         image_bytes = channels * pixels_per_patch * bytes_per_value
+    elif image_format == "tif":
+        ratio = _PNG_COMPRESSION if bytes_per_value == 1 else _TIF_FLOAT_COMPRESSION
+        image_bytes = int(channels * pixels_per_patch * bytes_per_value * ratio)
     elif image_format == "jpg":
         image_bytes = int(3 * pixels_per_patch * _JPG_COMPRESSION)
     else:
         image_bytes = int(3 * pixels_per_patch * _PNG_COMPRESSION)
-    # Segmentation writes one PNG mask per patch when there are labels.
+    # Segmentation writes one uint8 mask per patch when there are labels: compressed as
+    # PNG or GeoTIFF, raw as NPY.
     has_masks = config.task == "segmentation" and config.labels is not None
-    mask_bytes = int(pixels_per_patch * _MASK_COMPRESSION) if has_masks else 0
+    mask_ratio = 1.0 if config.writer.mask_format == "npy" else _MASK_COMPRESSION
+    mask_bytes = int(pixels_per_patch * mask_ratio) if has_masks else 0
     output = patches * (image_bytes + mask_bytes)
     window_rows = min(height, chunk_rows + patch_size)
     # Window, validity mask, label mask and extracted patches each hold a copy.

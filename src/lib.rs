@@ -9,6 +9,7 @@
 
 pub mod fetcher;
 pub mod geotiff;
+pub mod geotiff_writer;
 pub mod kml_parser;
 pub mod patch_writer;
 pub mod rasterizer;
@@ -517,6 +518,73 @@ fn write_patches_rs<'py>(
         .collect())
 }
 
+/// Write equally shaped rasters as GeoTIFF files, in parallel, with the GIL released.
+///
+/// `data` is the rasters' samples back to back as raw bytes (a C-contiguous
+/// numpy array viewed as `uint8`), `n` rasters of `(height, width, bands)`
+/// samples of `dtype` in native byte order; `transforms[i]` and `names[i]` are
+/// the georeferencing and file name (inside `directory`) of raster `i`.
+/// Existing files are overwritten.
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[pyfunction]
+#[pyo3(signature = (data, dtype, shape, transforms, names, directory, epsg, geographic, nodata=None, band_names=None, level=None))]
+fn write_geotiffs_rs<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    dtype: &str,
+    shape: (usize, usize, usize, usize),
+    transforms: Vec<[f64; 6]>,
+    names: Vec<String>,
+    directory: String,
+    epsg: u32,
+    geographic: bool,
+    nodata: Option<f64>,
+    band_names: Option<Vec<String>>,
+    level: Option<u32>,
+) -> PyResult<()> {
+    let bytes = u8_array::<numpy::ndarray::Ix1>(data, "data", "(n_bytes,)")?;
+    let (n, height, width, bands) = shape;
+    let fmt = geotiff_writer::RasterFormat {
+        width,
+        height,
+        bands,
+        dtype: geotiff_writer::dtype_from_name(dtype).map_err(PyValueError::new_err)?,
+    };
+    if transforms.len() != n || names.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "{n} rasters need {n} transforms and file names, got {} and {}",
+            transforms.len(),
+            names.len()
+        )));
+    }
+    let band_names = band_names.unwrap_or_default();
+    let options = geotiff_writer::Options {
+        nodata,
+        band_names: &band_names,
+        level,
+    };
+    let slice = bytes
+        .as_slice()
+        .map_err(|e| PyValueError::new_err(format!("data cannot be read: {e}")))?;
+    let dir = std::path::PathBuf::from(directory);
+    let files: Vec<(String, geotiff_writer::Georef)> = names
+        .into_iter()
+        .zip(transforms)
+        .map(|(name, transform)| {
+            (
+                name,
+                geotiff_writer::Georef {
+                    epsg,
+                    geographic,
+                    transform,
+                },
+            )
+        })
+        .collect();
+    py.detach(|| geotiff_writer::write_all(slice, &fmt, &options, &dir, &files))
+        .map_err(PyRuntimeError::new_err)
+}
+
 /// Decode and stitch satellite tile bytes into a single `(H, W, 3)` RGB array.
 ///
 /// Tiles from both sides of the antimeridian raise `ValueError`; stitch each
@@ -769,6 +837,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(tile_decoder::decode_tile_window, m)?)?;
     m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(write_geotiffs_rs, m)?)?;
     m.add_function(wrap_pyfunction!(parse_kml_rs, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;

@@ -782,12 +782,12 @@ class GeoTiffRasterSource:
             )
         self._bands = [band - 1 for band in selected]
         self._expand_gray = False
-        if image_format is not None and image_format != "npy":
+        if image_format is not None and image_format not in ("npy", "tif"):
             if info.dtype != np.uint8 or len(selected) not in (1, 3):
                 raise ValueError(
                     f"'{name}' has {len(selected)} selected band(s) of {info.dtype}; "
                     f"writer.image_format '{image_format}' writes 1 or 3 bands of uint8. "
-                    "Use writer.image_format: npy (keeps band count and dtype), or select "
+                    "Use writer.image_format: npy or tif (keep band count and dtype), or select "
                     "1 or 3 bands of a uint8 file with imagery.bands"
                 )
             self._expand_gray = len(selected) == 1

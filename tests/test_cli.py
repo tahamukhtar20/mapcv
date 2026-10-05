@@ -315,7 +315,7 @@ def test_validate_redacts_url_template_secrets(tmp_path: Path) -> None:
     assert "SECRET" not in result.output
 
 
-def test_validate_reports_deprecated_legacy_config(tmp_path: Path) -> None:
+def test_validate_rejects_legacy_tiles_config_with_migration_hint(tmp_path: Path) -> None:
     p = _write_config(tmp_path)
     p.write_text(
         p.read_text()
@@ -323,8 +323,20 @@ def test_validate_reports_deprecated_legacy_config(tmp_path: Path) -> None:
         .replace("imagery:\n  type: xyz\n  zoom: 16\n", "tiles:\n")
     )
     result = runner.invoke(app, ["validate", str(p)])
-    assert result.exit_code == 0
-    assert "Deprecated" in result.output
+    assert result.exit_code == 1
+    assert "Config error" in result.output
+    assert "removed in 0.3" in result.output
+    assert "MIGRATION.md" in result.output
+
+
+def test_validate_rejects_region_zoom_with_migration_hint(tmp_path: Path) -> None:
+    p = _write_config(tmp_path)
+    p.write_text(p.read_text().replace("  north: 31.60\n", "  north: 31.60\n  zoom: 16\n"))
+    result = runner.invoke(app, ["validate", str(p)])
+    assert result.exit_code == 1
+    assert "region.zoom" in result.output
+    assert "imagery.zoom" in result.output
+    assert "MIGRATION.md" in result.output
 
 
 def test_init_links_provider_guidance(tmp_path: Path) -> None:

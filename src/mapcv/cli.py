@@ -128,7 +128,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
         _console.print("[dim]Create one with [bold]mapcv init[/bold].[/dim]")
         raise typer.Exit(code=1)
     with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", FutureWarning)
+        warnings.simplefilter("always")
         try:
             config = MapcvConfig.from_yaml(config_path)
         except ValidationError as exc:
@@ -144,12 +144,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
             _console.print(f"[red]Config error:[/red] {exc}")
             raise typer.Exit(code=1)
     for warning in caught:
-        if issubclass(warning.category, FutureWarning):
-            _console.print(f"[yellow]Deprecated:[/yellow] {warning.message}")
-        else:
-            warnings.showwarning(
-                warning.message, warning.category, warning.filename, warning.lineno
-            )
+        warnings.showwarning(warning.message, warning.category, warning.filename, warning.lineno)
     return config
 
 
@@ -160,10 +155,7 @@ def _show_warnings(caught: List[warnings.WarningMessage], shown: Set[str]) -> No
         if message in shown:
             continue
         shown.add(message)
-        if issubclass(warning.category, FutureWarning):
-            _console.print(f"[yellow]Deprecated:[/yellow] {message}")
-        else:
-            _console.print(f"[yellow]⚠[/yellow]  {message}")
+        _console.print(f"[yellow]⚠[/yellow]  {message}")
 
 
 def _redact_url(url: str) -> str:

@@ -870,6 +870,10 @@ def test_classes_accept_ids_and_names_and_merge_values() -> None:
         ({"classes": {10: {"id": 0, "name": "bg"}}}, "background"),
         ({"classes": {True: 1}}, "integer"),
         ({"classes": {"ten": 1}}, "valid integer"),
+        ({"classes": [10, 20]}, "valid dictionary"),
+        ({"classes": {10: {"id": 1, "name": " "}}}, "must not be empty"),
+        ({"classes": {10: 1}, "nodata": True}, "must be integers"),
+        ({"classes": {10: 1}, "ignore_values": [3, False]}, "must be integers"),
         ({"classes": {10: 1}, "ignore_values": [10]}, "both list"),
         ({"classes": {10: 1}, "nodata": 10}, "nodata"),
         ({"classes": {10: 1}, "unmapped": "ignore", "ignore_index": None}, "unmapped"),
@@ -1010,3 +1014,216 @@ def test_init_wizard_writes_an_editable_config_for_an_unreadable_raster(tmp_path
     assert flat("Cannot read that file") in flat(result.output)
     config = MapcvConfig.from_yaml(out)
     assert isinstance(config.labels, RasterLabelsConfig)
+
+
+# ── Sampler edge cases ───────────────────────────────────────────────────────
+
+
+def _sampler(
+    path: Path, imagery_crs: str = f"EPSG:{IMAGERY_EPSG}", **labels: Any
+) -> LabelRasterSampler:
+    config = RasterLabelsConfig.model_validate(
+        {"type": "raster", "path": str(path), "classes": CLASSES, **labels}
+    )
+    return LabelRasterSampler(config, imagery_crs)
+
+
+def test_32_bit_labels_are_classified_without_a_lookup_table(tmp_path: Path) -> None:
+    transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
+    cases: Sequence[Tuple[str, Tuple[int, ...], Dict[int, int]]] = [
+        ("uint32", (5, 70_000, 9, 123_456), {70_000: 1, 5: 2}),
+        ("int32", (-70_000, 3, 9, 8), {-70_000: 1, 3: 2}),
+    ]
+    for dtype, values, classes in cases:
+        path = make_labels(
+            tmp_path, transform, 40, 30, dtype=dtype, values=values, nodata=9, name=f"{dtype}.tif"
+        )
+        sampler = _sampler(path, classes=classes)
+        mask = sampler.sample(six(transform), 30, 40)
+        with rasterio.open(path) as src:
+            raw = src.read(1).astype(np.int64)
+        np.testing.assert_array_equal(mask, expected_mask(raw, classes, nodata=9))
+
+
+def test_windows_off_the_label_raster_are_ignored(tmp_path: Path) -> None:
+    transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
+    labels = make_labels(tmp_path, transform, 40, 30)
+    far = six(transform * Affine.translation(1_000, 1_000))
+    same_grid = _sampler(labels)
+    assert same_grid.grid_offset(far) == (1_000, 1_000)
+    assert (same_grid.sample(far, 8, 8) == IGNORE).all()
+    # Same CRS on another grid: the separable path.
+    shifted = six(transform * Affine.translation(1_000.5, 1_000))
+    assert same_grid.grid_offset(shifted) is None
+    assert (same_grid.sample(shifted, 8, 8) == IGNORE).all()
+    # Another CRS: the general path; background instead of ignore without an ignore_index.
+    lon, lat = Transformer.from_crs("EPSG:32631", "EPSG:4326", always_xy=True).transform(
+        499_000.0, 5_399_000.0
+    )
+    other = _sampler(labels, "EPSG:4326", ignore_index=None)
+    window = (1e-5, 0.0, lon, 0.0, -1e-5, lat)
+    assert (other.sample(window, 8, 8) == 0).all()
+
+
+def test_the_general_path_reads_more_when_the_perimeter_misses_pixels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imagery = make_imagery(tmp_path)
+    transform, width, height = labels_around(imagery, 4326, 1.3e-5)
+    labels = make_labels(tmp_path, transform, width, height, epsg=4326)
+    sampler = _sampler(labels)
+    window = six(imagery.transform)
+    expected = sampler.sample(window, 200, 200)
+    # A perimeter estimate that is far too small, or none at all.
+    estimates: Sequence[Optional[Tuple[int, int, int, int]]] = [(0, 1, 0, 1), None]
+    for estimate in estimates:
+        monkeypatch.setattr(sampler, "_perimeter_window", lambda *args, e=estimate: e)
+        np.testing.assert_array_equal(sampler.sample(window, 200, 200), expected)
+
+
+def test_perimeter_window_is_none_without_finite_coordinates(tmp_path: Path) -> None:
+    transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
+    sampler = _sampler(make_labels(tmp_path, transform, 4, 4))
+    nan = float("nan")
+    assert sampler._perimeter_window((nan, 0.0, 0.0, 0.0, nan, 0.0), 3, 3) is None
+
+
+def test_a_tiny_label_raster_still_counts_as_overlapping(tmp_path: Path) -> None:
+    from mapcv.imagery import RasterMetadata
+
+    source = RasterMetadata(
+        source_type="geotiff",
+        product_id="big",
+        width=200_000,
+        height=200_000,
+        bands=["b1"],
+        dtype="uint8",
+        crs=f"EPSG:{IMAGERY_EPSG}",
+        transform=(1.0, 0.0, 400_000.0, 0.0, -1.0, 5_500_000.0),
+        chunk_rows=1024,
+    )
+    x, y = 500_000.3, 5_400_000.6  # between two of the 64 x 64 sample points
+    small = make_labels(tmp_path, Affine(1.0, 0.0, x, 0.0, -1.0, y), 2, 2, name="utm.tif")
+    assert _sampler(small).overlaps(source)
+    lon, lat = Transformer.from_crs("EPSG:32631", "EPSG:4326", always_xy=True).transform(x, y)
+    geographic = make_labels(
+        tmp_path, Affine(1e-5, 0.0, lon, 0.0, -1e-5, lat), 2, 2, epsg=4326, name="geo.tif"
+    )
+    assert _sampler(geographic).overlaps(source)
+    far = make_labels(tmp_path, Affine(1.0, 0.0, 10.0, 0.0, -1.0, 10.0), 2, 2, name="far.tif")
+    assert not _sampler(far).overlaps(source)
+
+
+def test_label_rasters_without_a_crs_are_refused(tmp_path: Path) -> None:
+    path = tmp_path / "nocrs.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=4,
+        width=4,
+        count=1,
+        dtype="uint8",
+        transform=Affine(2.0, 0.0, 100.0, 0.0, -2.0, 200.0),
+    ) as dst:
+        dst.write(np.zeros((1, 4, 4), dtype=np.uint8))
+    with pytest.raises(ValueError, match="no usable CRS"):
+        _sampler(path)
+
+
+def test_the_target_needs_prepare_first() -> None:
+    target = RasterSegmentationTarget(
+        RasterLabelsConfig.model_validate({"type": "raster", "path": "x.tif", "classes": {1: 1}})
+    )
+    with pytest.raises(RuntimeError, match="prepare"):
+        target.sampler
+    with pytest.raises(RuntimeError, match="prepare"):
+        target.record()
+
+
+# ── init wizard: label raster values ─────────────────────────────────────────
+
+
+def _bbox(imagery: Imagery) -> Tuple[float, float, float, float]:
+    region = imagery.region()
+    return region["west"], region["south"], region["east"], region["north"]
+
+
+def test_wizard_maps_non_identity_values_to_sequential_ids(tmp_path: Path) -> None:
+    from mapcv.cli import _ask_label_raster
+
+    imagery = make_imagery(tmp_path)
+    labels = make_labels(
+        tmp_path, imagery.transform, 320, 288, dtype="uint16", values=VALUES_U16, nodata=NODATA_U16
+    )
+    lines = _ask_label_raster(str(labels), _bbox(imagery))
+    assert "    1000: {id: 1, name: value_1000}" in lines
+    assert "    4000: {id: 4, name: value_4000}" in lines
+    assert not any("65535" in line for line in lines)
+
+
+def test_wizard_writes_a_placeholder_when_values_cannot_be_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import cli
+
+    imagery = make_imagery(tmp_path)
+    bbox = _bbox(imagery)
+    placeholder = "    1: {id: 1, name: class_1}"
+    # Too many distinct values for class IDs (and more than the 20 listed).
+    many = make_labels(
+        tmp_path,
+        imagery.transform,
+        320,
+        288,
+        dtype="uint16",
+        values=range(1, 400),
+        nodata=None,
+        name="many.tif",
+    )
+    assert placeholder in cli._ask_label_raster(str(many), bbox)
+    # Nothing under the area.
+    far = make_labels(tmp_path, Affine(1.0, 0.0, 10.0, 0.0, -1.0, 10.0), 8, 8, name="far.tif")
+    assert placeholder in cli._ask_label_raster(str(far), bbox)
+    # Float values.
+    floats = tmp_path / "float.tif"
+    with rasterio.open(
+        floats,
+        "w",
+        driver="GTiff",
+        height=8,
+        width=8,
+        count=1,
+        dtype="float32",
+        crs=CRS.from_epsg(IMAGERY_EPSG),
+        transform=imagery.transform,
+    ) as dst:
+        dst.write(np.zeros((1, 8, 8), dtype=np.float32))
+    assert placeholder in cli._ask_label_raster(str(floats), bbox)
+    # Reading fails.
+    good = make_labels(tmp_path, imagery.transform, 320, 288, name="good.tif")
+
+    def fail(*args: Any) -> Any:
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(cli, "_sample_label_values", fail)
+    assert placeholder in cli._ask_label_raster(str(good), bbox)
+
+
+def test_wizard_samples_an_overview_or_the_centre_of_a_large_area(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import cli
+    from mapcv.geotiff import GeoTiff
+
+    imagery = make_imagery(tmp_path)
+    bbox = _bbox(imagery)
+    monkeypatch.setattr(cli, "_WIZARD_SAMPLE_PIXELS", 2_500)
+    plain = make_labels(tmp_path, imagery.transform, 320, 288, name="plain.tif")
+    counts, sampled = cli._sample_label_values(GeoTiff(plain), bbox)
+    assert sampled and 0 < sum(counts.values()) <= 2_500
+    with_overviews = make_labels(tmp_path, imagery.transform, 320, 288, name="ovr.tif")
+    with rasterio.open(with_overviews, "r+") as dst:
+        dst.build_overviews([8], Resampling.nearest)
+    counts, sampled = cli._sample_label_values(GeoTiff(with_overviews), bbox)
+    assert sampled and 0 < sum(counts.values()) <= 2_500

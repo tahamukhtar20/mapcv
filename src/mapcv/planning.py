@@ -12,6 +12,7 @@ from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, XYZImageryConfig
 from shapely.geometry import box
 
 from mapcv.labels import parse_geojson, parse_kml
+from mapcv.sampler import random_patch_capacity
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
 # 2 * pi * R * cos(lat) / (256 * 2**z) metres per pixel.
@@ -116,7 +117,7 @@ def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[i
 def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
     sampler = config.sampler
     if sampler.mode == "random":
-        return sampler.random_count
+        return random_patch_capacity(height, width, sampler)
     return len(
         grid_sample_anchors(
             height, width, sampler.patch_size, sampler.stride, sampler.edge_strategy
@@ -192,6 +193,11 @@ def plan(config: MapcvConfig) -> Plan:
     labels = summarize_labels(config)
     if labels is not None:
         plan_warnings.extend(labels.warnings)
+    if config.sampler.mode == "random" and 0 < patches < config.sampler.random_count:
+        plan_warnings.append(
+            f"random_count is {config.sampler.random_count} but only {patches} distinct patch "
+            "positions exist on this raster; all of them will be used"
+        )
     if patches == 0:
         plan_warnings.append(
             "no patch fits the region with these sampler settings; enlarge the region or "

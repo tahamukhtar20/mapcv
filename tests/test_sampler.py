@@ -9,7 +9,7 @@ import numpy.typing as npt
 import pytest
 
 from mapcv import SamplerConfig, sample_patches, sample_patches_at_anchors
-from mapcv._mapcv_rs import grid_sample_anchors, random_sample_anchors
+from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
 
 
 def test_grid_drop_only_full_patches() -> None:
@@ -65,11 +65,111 @@ def test_random_drop_anchors_in_bounds() -> None:
         assert r + 32 <= 100 and c + 32 <= 100
 
 
-def test_random_pad_anchors_any_position() -> None:
+def test_random_pad_anchors_fit_inside_the_raster() -> None:
+    # 20x20 with 16px patches has 5x5 positions; asking for 200 returns all 25.
     anchors = random_sample_anchors(20, 20, 16, 200, 0, "pad")
-    assert len(anchors) == 200
+    assert len(anchors) == 25
     for r, c in anchors:
-        assert 0 <= r < 20 and 0 <= c < 20
+        assert 0 <= r <= 4 and 0 <= c <= 4
+
+
+@pytest.mark.parametrize("strategy", ["drop", "pad", "shift"])
+def test_random_anchors_never_repeat(strategy: str) -> None:
+    for seed in range(20):
+        anchors = random_sample_anchors(300, 300, 256, 100, seed, strategy)
+        assert len(anchors) == 100
+        assert len(set(anchors)) == 100
+
+
+@pytest.mark.parametrize("strategy", ["drop", "pad", "shift"])
+def test_random_count_is_capped_at_the_distinct_anchors(strategy: str) -> None:
+    capacity = random_anchor_capacity(300, 300, 256, strategy)
+    assert capacity == 45 * 45
+    anchors = random_sample_anchors(300, 300, 256, 10_000, 3, strategy)
+    assert len(anchors) == capacity
+    assert set(anchors) == {(r, c) for r in range(45) for c in range(45)}
+
+
+def test_random_raster_smaller_than_patch() -> None:
+    assert random_sample_anchors(100, 100, 256, 5, 1, "drop") == []
+    assert random_anchor_capacity(100, 100, 256, "drop") == 0
+    assert random_sample_anchors(100, 100, 256, 5, 1, "pad") == [(0, 0)]
+    assert random_sample_anchors(100, 100, 256, 5, 1, "shift") == [(0, 0)]
+    assert random_anchor_capacity(100, 100, 256, "pad") == 1
+
+
+@pytest.mark.parametrize("strategy", ["drop", "pad", "shift"])
+def test_random_anchors_cover_the_edges_uniformly(strategy: str) -> None:
+    # 100x100 raster, 20px patches -> 81 positions per axis. The last 20 are
+    # anchors in rows/columns 61..80 form the band next to the far edge.
+    positions, band, seeds, count = 81, 20, 300, 100
+    total = seeds * count
+    last_row_band = last_col_band = first_row = last_row = first_col = last_col = 0
+    for seed in range(seeds):
+        for r, c in random_sample_anchors(100, 100, 20, count, seed, strategy):
+            assert r + 20 <= 100 and c + 20 <= 100
+            last_row_band += r >= positions - band
+            last_col_band += c >= positions - band
+            first_row += r == 0
+            last_row += r == positions - 1
+            first_col += c == 0
+            last_col += c == positions - 1
+    expected = band / positions
+    # Binomial standard deviation of each share is ~0.0025 here.
+    assert last_row_band / total == pytest.approx(expected, abs=0.012)
+    assert last_col_band / total == pytest.approx(expected, abs=0.012)
+    # The top-left and bottom-right anchors are drawn as often as any other.
+    for hits in (first_row, last_row, first_col, last_col):
+        assert hits / total == pytest.approx(1 / positions, abs=0.006)
+
+
+def test_random_anchors_are_deterministic_per_seed() -> None:
+    for strategy in ("drop", "pad", "shift"):
+        a = random_sample_anchors(500, 400, 64, 50, 11, strategy)
+        assert a == random_sample_anchors(500, 400, 64, 50, 11, strategy)
+        assert a != random_sample_anchors(500, 400, 64, 50, 12, strategy)
+    # Seed 0 works and differs from its neighbour.
+    assert random_sample_anchors(500, 400, 64, 50, 0, "drop") != random_sample_anchors(
+        500, 400, 64, 50, 1, "drop"
+    )
+
+
+def test_random_zero_dimension_raises() -> None:
+    with pytest.raises(ValueError):
+        random_sample_anchors(0, 10, 4, 5, 42, "pad")
+    with pytest.raises(ValueError):
+        random_anchor_capacity(10, 10, 0, "pad")
+
+
+def test_sample_patches_random_warns_when_count_exceeds_the_positions() -> None:
+    img = _solid_strip(64, 64, 3)
+    cfg = SamplerConfig(
+        patch_size=56, mode="random", random_count=100, random_seed=0, edge_strategy="drop"
+    )
+    with pytest.warns(UserWarning, match=r"only 81 distinct patch position"):
+        patches, _, meta = sample_patches(img, None, cfg)
+    assert len(meta) == 81
+    assert len({(m["row"], m["col"]) for m in meta}) == 81
+    assert patches.shape == (81, 56, 56, 3)
+
+
+def test_sample_patches_random_does_not_warn_when_count_is_met(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    img = _solid_strip(64, 64, 3)
+    cfg = SamplerConfig(patch_size=16, mode="random", random_count=10, random_seed=0)
+    sample_patches(img, None, cfg)
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+
+
+def test_sample_patches_random_drop_on_a_tiny_raster_says_nothing_fits() -> None:
+    img = _solid_strip(8, 8, 3)
+    cfg = SamplerConfig(
+        patch_size=16, mode="random", random_count=4, random_seed=0, edge_strategy="drop"
+    )
+    with pytest.warns(UserWarning, match=r"none.*edge_strategy: pad"):
+        _, _, meta = sample_patches(img, None, cfg)
+    assert meta == []
 
 
 def test_random_reproducible_with_same_seed() -> None:

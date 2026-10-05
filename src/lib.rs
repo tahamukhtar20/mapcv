@@ -111,12 +111,25 @@ fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
 }
 
 /// Return all XYZ tiles covering the given bounding box at the specified zoom levels.
-#[must_use]
+///
+/// `west > east` is read as a box crossing the antimeridian (as in mercantile).
+/// A point or line covers the tiles containing it.
+///
+/// # Errors
+/// Raises `ValueError` for a NaN coordinate, for `south > north`, and when the
+/// box would cover more than 2^24 tiles.
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
-fn tiles(west: f64, south: f64, east: f64, north: f64, zooms: Vec<u8>) -> Vec<PyTileIndex> {
-    let result = tile_math::tiles(west, south, east, north, &zooms);
-    result.into_iter().map(Into::into).collect()
+fn tiles(
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    zooms: Vec<u8>,
+) -> PyResult<Vec<PyTileIndex>> {
+    let result = tile_math::tiles(west, south, east, north, &zooms)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(result.into_iter().map(Into::into).collect())
 }
 
 /// Return the Web Mercator bounding box (EPSG:3857, meters) for an XYZ tile.
@@ -136,10 +149,17 @@ fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
 }
 
 /// Expand a bbox outward to the nearest tile boundaries at the given zoom level.
-#[must_use]
+///
+/// A point or line snaps to the tiles containing it.
+///
+/// # Errors
+/// Raises `ValueError` for a NaN coordinate, for `south > north`, and for
+/// `west > east` (a box crossing the antimeridian, which must be split).
 #[pyfunction]
-fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyBBox {
-    tile_math::snap_bbox(west, south, east, north, zoom).into()
+fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyResult<PyBBox> {
+    tile_math::snap_bbox(west, south, east, north, zoom)
+        .map(Into::into)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Fetch satellite tiles concurrently from a URL template.
@@ -226,8 +246,12 @@ fn grid_sample_anchors(
 
 /// Generate random patch anchor positions using a seeded PRNG.
 ///
-/// Returns `count` `(row, col)` top-left corners. `edge_strategy` is `"pad"`
-/// (default), `"drop"`, or `"shift"`.
+/// Returns up to `count` distinct `(row, col)` top-left corners, drawn
+/// uniformly without replacement from the positions whose patch fits inside
+/// the raster. When `count` exceeds the number of such positions (see
+/// `random_anchor_capacity`) all of them are returned. `edge_strategy` is
+/// `"pad"` (default), `"drop"`, or `"shift"`; it only matters for a raster
+/// smaller than the patch, where `"drop"` returns nothing.
 #[pyfunction]
 #[pyo3(signature = (height, width, patch_size, count, seed = 42, edge_strategy = "pad"))]
 fn random_sample_anchors(
@@ -239,6 +263,19 @@ fn random_sample_anchors(
     edge_strategy: &str,
 ) -> PyResult<Vec<(usize, usize)>> {
     sampler::random_anchors(height, width, patch_size, count, seed, edge_strategy)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Number of distinct anchors `random_sample_anchors` can return.
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, edge_strategy = "pad"))]
+fn random_anchor_capacity(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    edge_strategy: &str,
+) -> PyResult<usize> {
+    sampler::random_anchor_capacity(height, width, patch_size, edge_strategy)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -379,6 +416,9 @@ fn write_patches_rs(
 
 /// Decode and stitch satellite tile bytes into a single `(H, W, 3)` RGB array.
 ///
+/// Tiles from both sides of the antimeridian raise `ValueError`; stitch each
+/// side separately.
+///
 /// Accepts a list of `(PyTileIndex, bytes)` pairs as returned by `fetch_tiles`.
 /// Returns `(image_array, min_tile_x, min_tile_y)`.
 #[allow(clippy::needless_pass_by_value)]
@@ -387,6 +427,16 @@ fn stitch_tiles(
     py: Python,
     tile_data: Vec<(PyTileIndex, Vec<u8>)>,
 ) -> PyResult<(Py<PyArray3<u8>>, u32, u32)> {
+    let indices: Vec<TileIndex> = tile_data
+        .iter()
+        .map(|(t, _)| TileIndex {
+            x: t.x,
+            y: t.y,
+            z: t.z,
+        })
+        .collect();
+    tile_math::check_no_antimeridian_wrap(&indices)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("stitch_tiles: {e}")))?;
     let raw: Vec<(u32, u32, u8, Vec<u8>)> = tile_data
         .into_iter()
         .map(|(t, bytes)| (t.x, t.y, t.z, bytes))
@@ -443,6 +493,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rasterize, m)?)?;
     m.add_function(wrap_pyfunction!(grid_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;

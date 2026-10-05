@@ -59,6 +59,7 @@ def _write(
     start_idx: int = 0,
     image_format: str = "png",
     jpg_quality: int = 95,
+    jpg_subsampling: str = "4:2:0",
 ) -> Any:
     n = images.shape[0] if hasattr(images, "shape") and images.ndim else 0
     return write_patches_rs(
@@ -71,6 +72,7 @@ def _write(
         str(tmp_path),
         image_format,
         jpg_quality,
+        jpg_subsampling,
     )
 
 
@@ -165,6 +167,13 @@ def test_write_patches_rejects_unknown_format(tmp_path: Path, image_format: str)
 def test_write_patches_rejects_jpg_quality_out_of_range(tmp_path: Path, quality: int) -> None:
     with pytest.raises(ValueError, match="jpg_quality"):
         _write(tmp_path, _images((1, 4, 4, 3)), image_format="jpg", jpg_quality=quality)
+
+
+@pytest.mark.parametrize("subsampling", ["4:2:2", "420", "", "4:4:4 "])
+def test_write_patches_rejects_unknown_jpg_subsampling(tmp_path: Path, subsampling: str) -> None:
+    with pytest.raises(ValueError, match="jpg_subsampling"):
+        _write(tmp_path, _images((1, 4, 4, 3)), image_format="jpg", jpg_subsampling=subsampling)
+    assert not any(tmp_path.iterdir())
 
 
 def test_write_patches_rejects_index_overflow(tmp_path: Path) -> None:

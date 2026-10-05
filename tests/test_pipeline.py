@@ -18,7 +18,13 @@ from mapcv.pipeline import run_generate
 from mapcv.sampler import PatchMeta
 from mapcv.splitter import SplitLists, SplitterConfig
 from mapcv.targets import ImageOnlyTarget, SegmentationTarget, WindowTarget, create_target
-from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord
+from mapcv.manifest import (
+    Manifest,
+    ManifestEntry,
+    ManifestMismatchError,
+    PatchSummary,
+    TargetRecord,
+)
 from mapcv.writers import FilesWriter, check_compatible, create_writer
 
 
@@ -119,6 +125,21 @@ def test_generate_keeps_global_anchors_across_chunk_seams_and_resumes(
     assert [(entry["row"], entry["col"]) for entry in resumed.patches] == coordinates
     assert sources[1].windows == []
     assert sources[1].closed
+
+
+def test_resume_refuses_a_changed_jpg_subsampling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
+    config = _config(tmp_path)
+    run_generate(config)
+    manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
+    assert manifest.writer is not None
+    assert manifest.writer["jpg_subsampling"] == "4:2:0"
+
+    config.writer = config.writer.model_copy(update={"jpg_subsampling": "4:4:4"})
+    with pytest.raises(ManifestMismatchError, match="writer"):
+        run_generate(config)
 
 
 def test_generate_warns_when_labels_miss_the_imagery(
@@ -531,6 +552,7 @@ def test_files_writer_describes_its_layout(tmp_path: Path) -> None:
         "layout": "files",
         "image_format": "npy",
         "jpg_quality": 95,
+        "jpg_subsampling": "4:2:0",
         "mask_format": "png",
     }
     assert npy.layout == "files"

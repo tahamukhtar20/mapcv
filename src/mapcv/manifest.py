@@ -295,6 +295,9 @@ def _upgrade_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     writer = data.get("writer")
     if writer is not None:
         writer = {"layout": "files", **writer, "mask_format": "png"}
+        # mapcv 0.2 wrote JPEG patches with full-resolution chroma and had no setting for it.
+        is_jpg = writer.get("image_format") == "jpg"
+        writer.setdefault("jpg_subsampling", "4:4:4" if is_jpg else "4:2:0")
     source = {
         "name": "image",
         "source_type": data.get("source_type", "xyz"),

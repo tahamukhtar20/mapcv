@@ -46,6 +46,8 @@ class WriterConfig(BaseModel):
     staging_dir: Path
     image_format: Literal["png", "jpg", "npy"] = "png"
     jpg_quality: int = Field(default=95, ge=1, le=100)
+    # 4:2:0 (Pillow's default) halves the chroma resolution for a much smaller file; 4:4:4 keeps it.
+    jpg_subsampling: Literal["4:2:0", "4:4:4"] = "4:2:0"
 
 
 def _entry(
@@ -172,6 +174,7 @@ def write_patches(
         str(masks_dir),
         config.image_format,
         config.jpg_quality,
+        config.jpg_subsampling,
     )
 
     for fname, mask_fname, row, col, padded, chunk, counts, empty_ratio in results:

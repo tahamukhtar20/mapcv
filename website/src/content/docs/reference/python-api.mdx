@@ -140,7 +140,7 @@ class Manifest(BaseModel):
     sources: list[SourceRecord] = []          # name, source_type, product_id, bands, dtype,
                                               # crs, transform, patch_shape
     target: TargetRecord | None = None        # type, class_map, ignore_index, dtype, labels, options
-    writer: dict[str, Any] | None = None      # layout, image_format, jpg_quality, mask_format
+    writer: dict[str, Any] | None = None      # layout, image_format, jpg_quality, jpg_subsampling, mask_format
     sampler: dict[str, Any] | None = None
     patches: list[ManifestEntry] = []
 

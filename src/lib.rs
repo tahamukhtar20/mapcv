@@ -376,7 +376,8 @@ fn rasterize(
 /// `image_patches` is a C-contiguous `(N, ps, ps, 3)` uint8 array.
 /// `mask_patches`  is an optional C-contiguous `(N, ps, ps)` uint8 array.
 /// `meta`          is a list of `(row, col, padded)` tuples, one per patch.
-/// `image_format`  is `"png"` or `"jpg"`; `jpg_quality` is in `1..=100`.
+/// `image_format`  is `"png"` or `"jpg"`; `jpg_quality` is in `1..=100`;
+/// `jpg_subsampling` is `"4:2:0"` or `"4:4:4"` (JPEG only).
 ///
 /// Returns a list of `(filename, mask_filename, row, col, padded, strip_index,
 /// class_counts, empty_ratio)` in patch order. `class_counts` is a list of
@@ -392,7 +393,7 @@ fn rasterize(
     clippy::type_complexity
 )]
 #[pyfunction]
-#[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95))]
+#[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95, jpg_subsampling="4:2:0"))]
 fn write_patches_rs<'py>(
     py: Python<'py>,
     image_patches: &Bound<'py, PyAny>,
@@ -404,6 +405,7 @@ fn write_patches_rs<'py>(
     masks_dir: String,
     image_format: &str,
     jpg_quality: u8,
+    jpg_subsampling: &str,
 ) -> PyResult<
     Vec<(
         String,
@@ -450,7 +452,8 @@ fn write_patches_rs<'py>(
             )));
         }
     }
-    patch_writer::check_format(image_format, jpg_quality).map_err(PyValueError::new_err)?;
+    patch_writer::check_format(image_format, jpg_quality, jpg_subsampling)
+        .map_err(PyValueError::new_err)?;
     if start_idx.checked_add(n_patches).is_none() {
         return Err(PyValueError::new_err(format!(
             "start_idx {start_idx} + {n_patches} patches overflows the patch index"
@@ -474,6 +477,7 @@ fn write_patches_rs<'py>(
     let images_path = std::path::PathBuf::from(images_dir);
     let masks_path = std::path::PathBuf::from(masks_dir);
     let fmt = image_format.to_owned();
+    let subsampling = jpg_subsampling.to_owned();
 
     let results = py
         .detach(|| {
@@ -490,6 +494,7 @@ fn write_patches_rs<'py>(
                 &masks_path,
                 &fmt,
                 jpg_quality,
+                &subsampling,
             )
         })
         .map_err(PyRuntimeError::new_err)?;

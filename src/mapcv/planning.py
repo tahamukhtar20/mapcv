@@ -33,6 +33,7 @@ _JPG_COMPRESSION = 0.15
 _MASK_COMPRESSION = 0.05
 # GeoTIFF (Deflate with a predictor): like PNG for 8-bit data, and about a fifth off float32 bytes.
 _TIF_FLOAT_COMPRESSION = 0.8
+_OBJECT_BYTES = 250
 
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
@@ -47,6 +48,8 @@ class LabelSummary:
     polygons: int
     classes: Dict[str, int]
     warnings: List[str] = field(default_factory=list)
+    # Features whose geometry intersects the region (each is one detection object).
+    in_region: int = 0
 
 
 @dataclass
@@ -66,6 +69,8 @@ class Plan:
     chunk_memory_bytes: int
     labels: Optional[LabelSummary]
     warnings: List[str] = field(default_factory=list)
+    # Detection: label features in the region, each one object (``None`` for other tasks).
+    objects: Optional[int] = None
 
     @property
     def is_large(self) -> bool:
@@ -181,21 +186,29 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
     if not labels.path.exists():
         return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
     data = labels.path.read_bytes()
+    points = config.task == "detection" and config.detection_options.point_box_size is not None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
         if labels.path.suffix.lower() == ".kml":
             geometries, class_map = parse_kml(data, labels.label_field, labels.classes)
         else:
-            geometries, class_map = parse_geojson(data, labels.label_field, labels.classes)
+            geometries, class_map = parse_geojson(
+                data, labels.label_field, labels.classes, points=points
+            )
     messages = [str(warning.message) for warning in caught]
     region = config.region
     area = box(region.west, region.south, region.east, region.north)
-    if geometries and not any(geometry.intersects(area) for geometry, _ in geometries):
+    in_region = sum(1 for geometry, _ in geometries if geometry.intersects(area))
+    if geometries and not in_region:
+        if config.task == "detection":
+            what, outcome = "feature", "no patch would have objects"
+        else:
+            what, outcome = "polygon", "every mask would be background"
         messages.append(
-            "no label polygon intersects the region, so every mask would be background. "
+            f"no label {what} intersects the region, so {outcome}. "
             "Check that labels are longitude/latitude (not swapped) and cover the region."
         )
-    return LabelSummary(str(labels.path), len(geometries), class_map, messages)
+    return LabelSummary(str(labels.path), len(geometries), class_map, messages, in_region)
 
 
 def plan(config: MapcvConfig) -> Plan:
@@ -253,6 +266,9 @@ def plan(config: MapcvConfig) -> Plan:
     labels = summarize_labels(config)
     if labels is not None:
         plan_warnings.extend(labels.warnings)
+        if config.task == "detection":
+            # A box in the COCO file, the YOLO label and the chunk store.
+            output += labels.in_region * _OBJECT_BYTES
     if config.sampler.mode == "random" and 0 < patches < config.sampler.random_count:
         plan_warnings.append(
             f"random_count is {config.sampler.random_count} but only {patches} distinct patch "
@@ -280,6 +296,7 @@ def plan(config: MapcvConfig) -> Plan:
         chunk_memory_bytes=chunk_memory,
         labels=labels,
         warnings=plan_warnings,
+        objects=labels.in_region if labels is not None and config.task == "detection" else None,
     )
 
 

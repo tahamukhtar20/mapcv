@@ -129,6 +129,7 @@ def main() -> None:
             template,
             "labels.geojson",
             "class",
+            "",  # task: default segmentation
             "",  # patch size: default 256
             "",  # output folder: default ./dataset
             "",  # split: default yes
@@ -179,6 +180,41 @@ def main() -> None:
     check(f"{NX * NY}" in out and "building" in out, "info output incomplete", out)
     out = run(["split", "dataset", "--test-ratio", "0.25"], root)
     check("Splits written" in out, "split did not report", out)
+
+    # The same area as an object detection dataset: COCO and YOLO boxes.
+    boxes_config = root / "boxes.yaml"
+    boxes_config.write_text(
+        "task: detection\n" + text.replace("staging_dir: './dataset'", "staging_dir: './boxes'"),
+        encoding="utf-8",
+    )
+    out = run(["generate", "boxes.yaml", "--yes"], root)
+    boxes = root / "boxes"
+    manifest = json.loads((boxes / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["task"] == "detection", "not a detection manifest", out)
+    patches = manifest["patches"]
+    check(len(patches) == NX * NY, f"{len(patches)} detection patches", out)
+    objects = sum(sum(p["summary"]["class_objects"].values()) for p in patches)
+    check(objects > 0, "no objects in the detection dataset", out)
+    images = sorted(f"images/{p.name}" for p in (boxes / "images").iterdir())
+    check(images == sorted(p["files"]["image"] for p in patches), "images/ != manifest", out)
+    lines = 0
+    for name in ("train", "val", "test"):
+        coco = json.loads(
+            (boxes / "annotations" / f"instances_{name}.json").read_text(encoding="utf-8")
+        )
+        listed = (boxes / "splits" / f"{name}.txt").read_text(encoding="utf-8").split()
+        check(sorted(i["file_name"] for i in coco["images"]) == sorted(listed), name, out)
+        lines += len(coco["annotations"])
+    labels = sum(
+        len(p.read_text(encoding="utf-8").splitlines()) for p in (boxes / "labels").iterdir()
+    )
+    check(labels >= lines > 0, f"{labels} YOLO lines for {lines} split COCO boxes", out)
+    dataset_yaml = (boxes / "dataset.yaml").read_text(encoding="utf-8")
+    check("names:" in dataset_yaml and "train: train.txt" in dataset_yaml, dataset_yaml, out)
+    out = run(["info", "boxes"], root)
+    check("objects" in out and "building" in out, "info shows no object counts", out)
+    out = run(["generate", "boxes.yaml", "--yes"], root)
+    check("Nothing left to do" in out, "a finished detection run did not resume", out)
 
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)

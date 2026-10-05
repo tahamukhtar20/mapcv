@@ -23,6 +23,7 @@ GeomWithClass = Tuple[BaseGeometry, int]
 ClassMap = Dict[str, int]
 
 _POLYGON_TYPES = frozenset({"Polygon", "MultiPolygon"})
+_POINT_TYPES = frozenset({"Point", "MultiPoint"})
 
 
 def _to_mercator(
@@ -133,10 +134,13 @@ def assign_class_ids(
     return ids, class_map
 
 
-def _warn_skipped(source: str, unlabeled: int, unmapped: int, non_polygon: int) -> None:
+def _warn_skipped(
+    source: str, unlabeled: int, unmapped: int, non_polygon: int, points: bool = False
+) -> None:
     reasons = []
     if non_polygon:
-        reasons.append(f"{non_polygon} without polygon geometry (points/lines)")
+        kinds = "lines" if points else "points/lines"
+        reasons.append(f"{non_polygon} without polygon geometry ({kinds})")
     if unlabeled:
         reasons.append(f"{unlabeled} without a label value")
     if unmapped:
@@ -152,12 +156,13 @@ def _with_class_ids(
     label_field: Optional[str],
     classes: Optional[ClassMap],
     non_polygon: int,
+    points: bool = False,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     ids, class_map = assign_class_ids(labels, label_field, classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
-    _warn_skipped(source, unlabeled, unmapped, non_polygon)
+    _warn_skipped(source, unlabeled, unmapped, non_polygon, points)
     return result, class_map
 
 
@@ -214,13 +219,15 @@ def parse_geojson(
     data: bytes,
     label_field: Optional[str] = None,
     classes: Optional[ClassMap] = None,
+    points: bool = False,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
     Accepts a FeatureCollection or a single Feature in WGS-84 lon/lat.
     Polygons inside GeometryCollections are kept; points and lines are
-    skipped with a warning. See :func:`assign_class_ids` for class IDs.
-    Returns (geometries, class_map).
+    skipped with a warning, except that ``points=True`` keeps Point and
+    MultiPoint features (detection draws a box around them). See
+    :func:`assign_class_ids` for class IDs. Returns (geometries, class_map).
     """
     obj: Any = json.loads(data.decode("utf-8"))
     top_type: str = obj.get("type", "")
@@ -239,11 +246,14 @@ def parse_geojson(
         geom_dict: Any = feat.get("geometry")
         if geom_dict is None:
             continue
-        geom = _polygon_parts(shape(geom_dict))
+        parsed = shape(geom_dict)
+        geom = _polygon_parts(parsed)
+        if geom is None and points and parsed.geom_type in _POINT_TYPES and not parsed.is_empty:
+            geom = parsed
         if geom is None:
             non_polygon += 1
             continue
         geometries.append(geom)
         props: Dict[str, Any] = feat.get("properties") or {}
         labels.append(_normalize_label(props.get(label_field)) if label_field else None)
-    return _with_class_ids("GeoJSON", geometries, labels, label_field, classes, non_polygon)
+    return _with_class_ids("GeoJSON", geometries, labels, label_field, classes, non_polygon, points)

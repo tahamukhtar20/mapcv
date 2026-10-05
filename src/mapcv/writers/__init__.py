@@ -2,16 +2,35 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
+from mapcv.manifest import Manifest
+from mapcv.splitter import SplitLists
 from mapcv.targets.base import Target
+from mapcv.targets.detection import DetectionTarget
 from mapcv.writer import WriterConfig
 from mapcv.writers.base import Writer
+from mapcv.writers.detection import DetectionWriter
 from mapcv.writers.files import FilesWriter
 
-__all__ = ["FilesWriter", "Writer", "check_compatible", "create_writer"]
+__all__ = [
+    "DetectionWriter",
+    "FilesWriter",
+    "Writer",
+    "check_compatible",
+    "create_writer",
+    "refresh_split_outputs",
+]
 
 
-def create_writer(config: WriterConfig) -> Writer:
-    """The writer a ``writer:`` block asks for (today always one file per patch)."""
+def create_writer(config: WriterConfig, target: Optional[Target] = None) -> Writer:
+    """The writer a ``writer:`` block asks for, for ``target``'s annotations.
+
+    One file per patch; detection targets also get COCO/YOLO annotation files.
+    """
+    if isinstance(target, DetectionTarget):
+        return DetectionWriter(config, target.options)
     return FilesWriter(config)
 
 
@@ -28,3 +47,15 @@ def check_compatible(target: Target, writer: Writer) -> None:
         f"the '{writer.layout}' writer layout cannot write {what}; "
         "choose a layout that supports this task"
     )
+
+
+def refresh_split_outputs(
+    manifest: Manifest, staging_dir: Path, split_lists: Optional[SplitLists]
+) -> None:
+    """Rebuild the outputs that depend on the split after ``mapcv split``.
+
+    Detection datasets get new per-split COCO files, YOLO image lists and
+    ``dataset.yaml``; other tasks have none.
+    """
+    if manifest.task == "detection":
+        DetectionWriter.from_manifest(manifest, staging_dir).finalize(manifest, split_lists)

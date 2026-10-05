@@ -1,11 +1,11 @@
 ---
 title: Dataset format
-description: Folder layout, file naming, image and mask encoding, the manifest v3 JSON schema and the split files written by mapcv.
+description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, the manifest v3 JSON schema and the split files written by mapcv.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`).
+Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks.
 
 <FileTree>
 - dataset/
@@ -150,7 +150,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
-| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"` |
+| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"` or `"detection"` |
 | `sources` | list | The imagery, one object per source (today always one, named `"image"`). See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
 | `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`), plus `world_files: true` when world files are written. A resume notices a format change |
@@ -175,12 +175,12 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch) |
-| `class_map` | object | Label value → mask ID. Empty when every polygon is class 1 |
-| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`); `null` when they are background |
-| `dtype` | string | Data type of the mask values: `"uint8"` today |
-| `labels` | object | The `labels` settings (without the path and the ignore value) plus the `sha256` of the label file, so a resume notices edited labels |
-| `options` | object | Task-specific settings; empty for segmentation |
+| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch) or `"detection"` (boxes) |
+| `class_map` | object | Label value → class ID (mask value, COCO `category_id`). Empty when every polygon is class 1 |
+| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`); `null` when they are background, and for detection |
+| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `null` for detection (no masks) |
+| `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file, so a resume notices edited labels |
+| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection |
 
 ### Patch entries
 
@@ -190,7 +190,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `chunk` | int | Index of the processing chunk that wrote the patch (used to resume) |
 | `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: `image` (the source's name) and, with labels, `mask`; with `world_files`, `image_world` and `mask_world` |
-| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`) |
+| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection has `class_objects` instead: the number of boxes per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects) |
 
 Readers should ignore keys they do not know: later 0.3 releases may add keys (new tasks add `files` roles and `summary` keys) without changing `version`. Renaming or removing a key changes `version`.
 
@@ -221,6 +221,93 @@ print(source["crs"], (left, bottom, right, top))
 | 1 | mapcv 0.1 | As version 2, without `sampler`, `writer`, `labels`, `crs` and `transform`; `row` is relative to a strip, not the raster |
 
 A version-2 dataset can be split, inspected and **resumed** by mapcv 0.3 when its settings match the config, with `labels.ignore_index: null` because 0.2 wrote background where there is no imagery. A finished 0.2 dataset is left untouched; a resumed one that gains patches is saved as version 3. Version-1 datasets, and version-2 datasets made with `sampler.mode: random` (0.3 draws random anchors differently), can be split and inspected but not resumed. Details: [Migrating to 0.3](/mapcv/project/migration/#migrating-to-03).
+
+## Detection datasets
+
+With `task: detection` the images go to `images/` and each patch's objects become boxes in COCO JSON and YOLO text files (the [`detection.formats`](/mapcv/reference/configuration/#detection) you chose). There are no masks.
+
+<FileTree>
+- dataset/
+  - images/
+    - patch_0000000.png same naming and encoding as above
+    - …
+  - labels/ YOLO
+    - patch_0000000.txt one line per object; no file for a patch without objects
+    - …
+  - annotations/ COCO
+    - instances_train.json
+    - instances_val.json
+    - instances_test.json `instances_all.json` instead when there is no split
+    - objects/ the exact boxes per processing chunk, which the files above are built from
+  - train.txt YOLO image lists: `./images/patch_….png`
+  - val.txt
+  - test.txt
+  - dataset.yaml Ultralytics dataset file (written with a split)
+  - manifest.json
+  - splits/
+</FileTree>
+
+**What an object is.** One label feature is one object: a MultiPolygon is one object, and a feature cut into pieces by a patch edge is one object whose box covers every visible piece. Its box is the axis-aligned bounding box of the part that is visible in the patch: inside the patch, inside the raster (not in padding) and over pixels with imagery (failed tiles and NoData are cut out). Holes do not change a box. An object is kept when at least `min_visible` of its area is visible and the box is at least `min_box_pixels` wide and high; GeoJSON points become `point_box_size` squares when that is set.
+
+**Coordinates.** Boxes are in pixels of the patch, with the origin at its top-left **corner**: `x` to the right, `y` down, continuous, so pixel `(col, row)` covers `[col, col+1] × [row, row+1]` and a box spans at most `[0, patch_size]`. Values are rounded to 1/10,000 of a pixel.
+
+### COCO
+
+One file per split, each a standard COCO detection document (`pycocotools.coco.COCO(path)` loads it; so do torchvision's `CocoDetection`, Detectron2 and MMDetection). The image root is `images/`.
+
+```json title="dataset/annotations/instances_train.json (shortened)"
+{
+  "info": {"description": "mapcv object detection dataset, train patches", "mapcv_version": "0.3.0"},
+  "licenses": [],
+  "categories": [
+    {"id": 1, "name": "building", "supercategory": "object"}
+  ],
+  "images": [
+    {"id": 1, "file_name": "patch_0000000.png", "width": 256, "height": 256}
+  ],
+  "annotations": [
+    {"id": 1, "image_id": 1, "category_id": 1, "bbox": [12.4021, 0.0, 30.1157, 17.9002], "area": 431.0863, "iscrowd": 0, "truncated": true}
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `images[].id` | The patch number + 1 (`patch_0000041.png` is image 42), the same in every split file and after `mapcv split` |
+| `images[].file_name` | The image's file name in `images/` |
+| `annotations[].id` | Objects numbered from 1 over all patches in manifest order, so an object keeps its ID whichever split it lands in |
+| `category_id` | The class ID from `target.class_map`; `1` (named `object`) without `labels.label_field` |
+| `bbox` | `[x, y, width, height]` in patch pixels (see above) |
+| `area` | The visible area of the object in square pixels (not the box area), as COCO's evaluation expects |
+| `iscrowd` | Always `0` |
+| `truncated` | `true` when part of the object is not visible in this patch: cut by the patch or raster edge, or over pixels without imagery. Not part of the COCO standard; tools ignore it |
+
+Images without objects are listed with no annotations, so evaluation counts their false positives. `categories` lists every class of the class map, ascending by ID, even one without objects.
+
+### YOLO
+
+`labels/<image stem>.txt` has one line per object, `class cx cy w h`: the class index, the box centre and the box size, each divided by the patch size, so between 0 and 1. Class indices are 0-based in ascending class-ID order: with `{building: 1, road: 2}`, `building` is `0` and `road` is `1`. A patch without objects has no label file, Ultralytics' convention for background images.
+
+```text title="dataset/labels/patch_0000000.txt"
+0 0.1072654297 0.0349613281 0.1176394531 0.0699226563
+```
+
+`dataset.yaml` follows Ultralytics' format: `path` is the dataset folder (absolute, so it works from any working directory; edit it if you move the dataset, or delete the line and Ultralytics uses the file's own folder), `train`, `val` and `test` are the image lists next to it, and `names` maps class indices to names. Ultralytics finds each image's labels by replacing `/images/` with `/labels/` in its path, which is why detection images live in `images/`.
+
+```yaml title="dataset/dataset.yaml"
+path: /home/me/dataset
+train: train.txt
+val: val.txt
+test: test.txt
+names:
+  0: building
+```
+
+`dataset.yaml` and the image lists need a split; without one mapcv writes `instances_all.json` and the YOLO label files and warns. `mapcv split` rebuilds the COCO files, the lists and `dataset.yaml` for the new split, with the same IDs.
+
+### `annotations/objects/`
+
+One JSON file per processing chunk (`chunk_000012.json`, the manifest entries' `chunk`), mapping each patch's image file name to its objects as `[category_id, x, y, width, height, area, truncated]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without recomputing any box. Read the COCO or YOLO files instead; this folder is mapcv's own.
 
 ## Split files
 

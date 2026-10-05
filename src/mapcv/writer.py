@@ -96,8 +96,9 @@ def _entry(
     counts: Optional[Dict[str, int]],
     empty_ratio: float,
     extra_files: Optional[Dict[str, str]] = None,
+    images_dir: str = IMAGES_DIR,
 ) -> ManifestEntry:
-    files = {"image": f"{IMAGES_DIR}/{image_name}"}
+    files = {"image": f"{images_dir}/{image_name}"}
     summary = PatchSummary(empty_ratio=empty_ratio)
     if mask_name is not None:
         files["mask"] = f"{MASKS_DIR}/{mask_name}"
@@ -266,8 +267,13 @@ def write_patches(
     config: WriterConfig,
     manifest: Manifest,
     chunk_index: int = 0,
+    *,
+    images_dir: str = IMAGES_DIR,
 ) -> None:
     """Write patches to ``Images/`` and ``Masks/`` and append their entries to ``manifest``.
+
+    ``images_dir`` names the image folder (detection datasets use ``images``, the
+    folder name Ultralytics expects next to ``labels``).
 
     Images: PNG/JPG (uint8 RGB) are encoded by the Rust writer; NPY keeps any
     channel count and dtype, stored bands-first; TIF is a GeoTIFF (also any
@@ -285,7 +291,7 @@ def write_patches(
     if mask_patches is not None:
         _check_masks(mask_patches, len(meta), config.mask_format)
 
-    images_dir = config.staging_dir / IMAGES_DIR
+    images_path = config.staging_dir / images_dir
     masks_dir = config.staging_dir / MASKS_DIR
     start = len(manifest.patches)
     stems = [f"patch_{start + index:07d}" for index in range(len(meta))]
@@ -307,7 +313,7 @@ def write_patches(
     ):
         raise ValueError("PNG/JPG output requires uint8 image patches shaped (N, H, W, 3)")
 
-    images_dir.mkdir(parents=True, exist_ok=True)
+    images_path.mkdir(parents=True, exist_ok=True)
     if mask_patches is not None:
         masks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,7 +325,7 @@ def write_patches(
             [(item["row"], item["col"], item["padded"]) for item in meta],
             start,
             chunk_index,
-            str(images_dir),
+            str(images_path),
             str(masks_dir),
             config.image_format,
             config.jpg_quality,
@@ -338,12 +344,12 @@ def write_patches(
             ]
     else:
         if config.image_format == "npy":
-            _write_npy_images(image_patches, stems, images_dir)
+            _write_npy_images(image_patches, stems, images_path)
         else:
             _write_geotiffs(
                 image_patches,
                 [f"{stem}.tif" for stem in stems],
-                images_dir,
+                images_path,
                 meta,
                 manifest,
                 _image_nodata(image_patches.dtype, manifest),
@@ -362,11 +368,11 @@ def write_patches(
     if config.world_files:
         if rust_images:
             _write_world_files(
-                images_dir, stems, "pgw" if image_suffix == "png" else "jgw", meta, manifest
+                images_path, stems, "pgw" if image_suffix == "png" else "jgw", meta, manifest
             )
             for entry_files, stem in zip(world, stems):
                 entry_files["image_world"] = (
-                    f"{IMAGES_DIR}/{stem}.{'pgw' if image_suffix == 'png' else 'jgw'}"
+                    f"{images_dir}/{stem}.{'pgw' if image_suffix == 'png' else 'jgw'}"
                 )
         if mask_patches is not None and mask_suffix == "png":
             _write_world_files(masks_dir, stems, "pgw", meta, manifest)
@@ -385,5 +391,6 @@ def write_patches(
                 counts[index],
                 empty_ratios[index],
                 world[index],
+                images_dir,
             )
         )

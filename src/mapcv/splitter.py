@@ -102,7 +102,15 @@ def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> i
 
 
 def _stratum(entry: ManifestEntry, ignore_key: Optional[str] = None) -> Tuple[int, str]:
-    """Stratify on labeled fraction and, when masked, the dominant foreground class."""
+    """Stratify on labeled fraction and, when masked, the dominant foreground class.
+
+    Detection patches (``class_objects`` in the summary) are stratified on whether
+    they hold objects and on their most frequent object class.
+    """
+    objects = entry["summary"].get("class_objects")
+    if objects is not None:
+        frequent = max(sorted(objects), key=lambda k: objects[k]) if objects else ""
+        return (1 if objects else 0), frequent
     counts = {k: v for k, v in _class_counts(entry, ignore_key).items() if k != "0"}
     dominant = max(sorted(counts), key=lambda k: counts[k]) if counts else ""
     return _classify_entry(entry, ignore_key), dominant

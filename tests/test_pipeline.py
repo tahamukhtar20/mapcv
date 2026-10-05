@@ -433,7 +433,7 @@ def _plug(
 
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", open_source)
     monkeypatch.setattr("mapcv.pipeline.create_target", lambda config: target)
-    monkeypatch.setattr("mapcv.pipeline.create_writer", lambda config: writer)
+    monkeypatch.setattr("mapcv.pipeline.create_writer", lambda config, target=None: writer)
     return sources
 
 

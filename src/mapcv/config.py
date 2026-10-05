@@ -372,9 +372,49 @@ class LabelsConfig(BaseModel):
         return self
 
 
-SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation",)
+SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection")
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ("detection", "instance", "classification", "change", "regression")
+PLANNED_TASKS: Tuple[str, ...] = ("instance", "classification", "change", "regression")
+
+DetectionFormat = Literal["coco", "yolo"]
+DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
+
+
+def _all_formats() -> List[DetectionFormat]:
+    return list(DETECTION_FORMATS)
+
+
+class DetectionOptions(BaseModel):
+    """Settings of ``task: detection`` (the ``detection:`` block).
+
+    One object is one label feature (a MultiPolygon is one object). Its box is the
+    axis-aligned box of the part that is visible in the patch: inside the patch,
+    inside the raster and over pixels that have imagery.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    # Keep an object only if at least this fraction of its area is visible in the patch
+    # (0 keeps every object with a visible area).
+    min_visible: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Drop boxes narrower or shorter than this many pixels (slivers at patch edges).
+    min_box_pixels: float = Field(default=2.0, ge=0.0)
+    # Output formats, written in this order; both by default.
+    formats: List[DetectionFormat] = Field(default_factory=lambda: _all_formats())
+    # Side in pixels of the square box drawn around each point feature (GeoJSON
+    # Point/MultiPoint). Unset: point features are skipped with a warning.
+    point_box_size: Optional[float] = Field(default=None, gt=0.0)
+
+    @field_validator("formats")
+    @classmethod
+    def _check_formats(cls, formats: List[DetectionFormat]) -> List[DetectionFormat]:
+        if not formats:
+            raise ValueError("detection.formats needs at least one of: coco, yolo")
+        if len(formats) != len(set(formats)):
+            raise ValueError("detection.formats must not contain duplicates")
+        # One canonical order, so the manifest records the same options for [yolo, coco].
+        return [name for name in DETECTION_FORMATS if name in formats]
 
 
 def _validate_task(task: Any) -> Any:
@@ -396,13 +436,15 @@ class MapcvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # What the dataset is for; decides the target each patch is annotated with.
-    task: Literal["segmentation"] = "segmentation"
+    task: Literal["segmentation", "detection"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig
     labels: Optional[LabelsConfig] = None
     sampler: SamplerConfig
     writer: WriterConfig
     split: Optional[SplitterConfig] = None
+    # Options of task: detection; defaults apply when the block is omitted.
+    detection: Optional[DetectionOptions] = None
 
     _check_task = field_validator("task", mode="before")(_validate_task)
 
@@ -445,6 +487,49 @@ class MapcvConfig(BaseModel):
                     "shrink the region or use imagery that covers the poles"
                 )
         return self
+
+    @model_validator(mode="after")
+    def _validate_task_settings(self) -> "MapcvConfig":
+        if self.detection is not None and self.task != "detection":
+            raise ValueError(
+                f"the detection block only applies to task: detection (task is '{self.task}'); "
+                "remove it or set task: detection"
+            )
+        if self.task == "detection":
+            self._check_detection()
+        return self
+
+    def _check_detection(self) -> None:
+        labels = self.labels
+        if labels is None:
+            raise ValueError("task: detection needs labels: the boxes come from the label features")
+        if "ignore_index" in labels.model_fields_set:
+            raise ValueError(
+                "labels.ignore_index marks mask pixels without imagery and detection writes no "
+                "masks; remove it (objects over no-imagery areas keep only their visible part)"
+            )
+        if labels.all_touched:
+            raise ValueError(
+                "labels.all_touched is a rasterization setting and detection does not "
+                "rasterize; remove it"
+            )
+        options = self.detection_options
+        if options.point_box_size is not None and labels.path.suffix.lower() == ".kml":
+            raise ValueError(
+                "detection.point_box_size reads point features from GeoJSON; KML points are "
+                "not supported, so convert the labels to GeoJSON or remove point_box_size"
+            )
+        if self.sampler.edge_strategy == "pad" and self.sampler.pad_mode == "reflect":
+            raise ValueError(
+                "sampler.pad_mode: reflect mirrors objects into the padding of edge patches, "
+                "where they would have no box; use pad_mode: zero, or edge_strategy: shift "
+                "or drop"
+            )
+
+    @property
+    def detection_options(self) -> DetectionOptions:
+        """The ``detection`` block, or its defaults when it is omitted."""
+        return self.detection if self.detection is not None else DetectionOptions()
 
     @classmethod
     def from_yaml(cls, path: Union[str, "os.PathLike[str]"]) -> "MapcvConfig":

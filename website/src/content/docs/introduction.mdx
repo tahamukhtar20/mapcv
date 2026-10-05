@@ -35,6 +35,8 @@ Building a segmentation dataset from map imagery usually means stitching tiles b
 | `splits/train.txt`, `val.txt`, `test.txt` | One image filename per line |
 | `splits/<percent>/labeled.txt` | Optional labeled/unlabeled subsets of `train` for semi-supervised learning |
 
+With `task: detection`, each label feature becomes a box instead: COCO JSON per split, YOLO label files and an Ultralytics `dataset.yaml` replace the masks (see [Object detection datasets](/mapcv/tutorials/object-detection/)).
+
 Details: [Dataset format](/mapcv/reference/dataset-format/).
 
 ## What mapcv does not do

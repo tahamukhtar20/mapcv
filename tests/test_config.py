@@ -312,3 +312,16 @@ def test_source_and_url_template_are_exclusive(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="not both"):
         MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_ignore_index_defaults_to_255_and_can_be_disabled(tmp_path: Path) -> None:
+    labels = "labels:\n  path: labels.geojson\n"
+    assert MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels)).labels.ignore_index == 255  # type: ignore[union-attr]
+    off = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels + "  ignore_index: null\n"))
+    assert off.labels is not None and off.labels.ignore_index is None
+
+
+def test_classes_cannot_use_the_ignore_index(tmp_path: Path) -> None:
+    labels = "labels:\n  path: l.geojson\n  label_field: kind\n  classes: {road: 255}\n"
+    with pytest.raises(Exception, match="ignore_index"):
+        MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels))

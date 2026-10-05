@@ -135,6 +135,18 @@ LABELS_MISS_MESSAGE = (
 _FAILED_TILES_WARNING = 0.5
 
 
+def _check_ignore_index(config: MapcvConfig, class_map: Dict[str, int]) -> None:
+    """Fail when a class would get the mask value reserved for ignored pixels."""
+    ignore = config.labels.ignore_index if config.labels else None
+    clashing = sorted(name for name, cid in class_map.items() if cid == ignore)
+    if clashing:
+        raise ValueError(
+            f"class {clashing[0]!r} gets mask value {ignore}, which labels.ignore_index "
+            "reserves for pixels without imagery; map it to another ID with labels.classes "
+            "or set labels.ignore_index to a free value (or null)"
+        )
+
+
 def _labels_fingerprint(config: MapcvConfig) -> Optional[Dict[str, Any]]:
     """Label settings plus a hash of the label file, so resume notices edits."""
     if config.labels is None:
@@ -234,6 +246,7 @@ def _process_anchor_chunk(
         row_offset=row_start,
         col_offset=col_start,
         valid_mask=valid_mask,
+        ignore_index=config.labels.ignore_index if config.labels else None,
     )
     return images, masks, metadata
 
@@ -249,6 +262,7 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
         source = open_raster_source(config.region, config.imagery)
     try:
         geometries, class_map = _parse_labels(config, source.metadata.crs)
+        _check_ignore_index(config, class_map)
         _warn_if_labels_miss_raster(geometries, source)
         label_bounds = _label_bounds(geometries)
         patch_shape = (

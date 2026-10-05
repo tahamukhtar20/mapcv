@@ -5,7 +5,8 @@ Copy this file into your project. It reads a mapcv dataset directory::
     dataset/
       manifest.json        patch list, class map, bands, patch shape, CRS
       Images/              patch_0000000.png | .jpg | .npy
-      Masks/               patch_0000000.png (uint8 class ids, 0 = background)
+      Masks/               patch_0000000.png (uint8 class ids, 0 = background,
+                           255 = no imagery: pass ignore_index=255 to your loss)
       splits/              train.txt, val.txt, test.txt, 10/labeled.txt, ...
 
 and yields one dict per patch::

@@ -199,3 +199,51 @@ def test_windowed_label_selection_matches_full_rasterization(all_touched: bool) 
         expected = rasterize(geometries, (int(height), int(width)), transform, all_touched)
         actual = rasterize(nearby, (int(height), int(width)), transform, all_touched)
         np.testing.assert_array_equal(actual, expected)
+
+
+def _labeled_config(tmp_path: Path, labels_json: str, **labels: Any) -> MapcvConfig:
+    path = tmp_path / "labels.geojson"
+    path.write_text(labels_json)
+    config = _config(tmp_path)
+    config.labels = LabelsConfig(path=path, **labels)
+    config.sampler.edge_strategy = "pad"
+    return config
+
+
+# A square covering the whole fake raster (transform is identity in these tests).
+_COVER_ALL = (
+    '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"kind":"7"},'
+    '"geometry":{"type":"Polygon","coordinates":[[[400000,4000000],[600000,4000000],'
+    "[600000,6000000],[400000,6000000],[400000,4000000]]]}}]}"
+)
+
+
+def test_generated_masks_mark_padding_with_the_ignore_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PIL import Image
+
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
+    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    config = _labeled_config(tmp_path, _COVER_ALL)
+    run_generate(config)
+
+    manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
+    assert manifest.labels is not None and manifest.labels["ignore_index"] == 255
+    padded = [entry for entry in manifest.patches if entry["padded"]]
+    assert padded
+    for entry in padded:
+        assert entry["mask_filename"] is not None
+        mask = np.asarray(Image.open(config.writer.staging_dir / "Masks" / entry["mask_filename"]))
+        assert set(np.unique(mask)) == {1, 255}  # the class inside, ignore in the padding
+        assert set(entry["per_class_pixel_counts"]) == {"1", "255"}
+
+
+def test_a_class_on_the_ignore_value_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: FakeRasterSource())
+    monkeypatch.setattr("mapcv.pipeline.transform_geometry_to_crs", lambda geometry, crs: geometry)
+    config = _labeled_config(tmp_path, _COVER_ALL.replace('"7"', '"255"'), label_field="kind")
+    with pytest.raises(ValueError, match="labels.ignore_index"):
+        run_generate(config)

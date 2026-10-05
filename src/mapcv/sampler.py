@@ -77,6 +77,7 @@ def _extract_array_patch(
     col: int,
     patch_size: int,
     pad_mode: Literal["zero", "reflect"],
+    fill: int = 0,
 ) -> Tuple[npt.NDArray[Any], bool]:
     height, width = array.shape[:2]
     chunk = array[
@@ -95,7 +96,7 @@ def _extract_array_patch(
     use_reflect = pad_mode == "reflect" and chunk.shape[0] >= 2 and chunk.shape[1] >= 2
     if use_reflect:
         return np.pad(chunk, pad_spec, mode="reflect"), True
-    return np.pad(chunk, pad_spec, mode="constant", constant_values=0), True
+    return np.pad(chunk, pad_spec, mode="constant", constant_values=fill), True
 
 
 def sample_patches_at_anchors(
@@ -107,12 +108,15 @@ def sample_patches_at_anchors(
     row_offset: int = 0,
     col_offset: int = 0,
     valid_mask: Optional[npt.NDArray[np.bool_]] = None,
+    ignore_index: Optional[int] = None,
 ) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
     """Extract configured patches at explicit local anchors.
 
     Metadata coordinates are translated to the global raster using the supplied
     offsets. When ``valid_mask`` is provided, its false pixels define imagery
-    emptiness instead of treating numeric zero as NoData.
+    emptiness instead of treating numeric zero as NoData. With ``ignore_index``,
+    mask pixels without imagery (padding, and invalid pixels when ``valid_mask``
+    is given) get that value instead of a class, so losses can skip them.
     """
     image_patches: List[npt.NDArray[Any]] = []
     mask_patches: List[npt.NDArray[np.uint8]] = []
@@ -122,12 +126,25 @@ def sample_patches_at_anchors(
     for row, col in anchors:
         image_patch, padded = _extract_array_patch(image, row, col, patch_size, config.pad_mode)
         mask_patch: Optional[npt.NDArray[np.uint8]] = None
-        if mask is not None:
-            extracted_mask, _ = _extract_array_patch(mask, row, col, patch_size, config.pad_mode)
-            mask_patch = extracted_mask.astype(np.uint8, copy=False)
-
+        valid_patch: Optional[npt.NDArray[np.bool_]] = None
         if valid_mask is not None:
             valid_patch, _ = _extract_array_patch(valid_mask, row, col, patch_size, "zero")
+        if mask is not None:
+            if ignore_index is None:
+                extracted_mask, _ = _extract_array_patch(
+                    mask, row, col, patch_size, config.pad_mode
+                )
+                mask_patch = extracted_mask.astype(np.uint8, copy=False)
+            else:
+                # Never mirror labels into padding: pad with the ignore value.
+                extracted_mask, _ = _extract_array_patch(
+                    mask, row, col, patch_size, "zero", fill=ignore_index
+                )
+                mask_patch = extracted_mask.astype(np.uint8, copy=True)
+                if valid_patch is not None:
+                    mask_patch[~valid_patch] = ignore_index
+
+        if valid_patch is not None:
             empty_ratio = float(1.0 - np.count_nonzero(valid_patch) / valid_patch.size)
         elif image_patch.ndim == 3:
             empty = np.all(image_patch == 0, axis=-1)
@@ -138,7 +155,10 @@ def sample_patches_at_anchors(
         if empty_ratio > config.max_empty_ratio:
             continue
         if config.min_label_ratio > 0.0 and mask_patch is not None:
-            labeled_ratio = float(np.count_nonzero(mask_patch) / mask_patch.size)
+            labeled = mask_patch != 0
+            if ignore_index is not None:
+                labeled &= mask_patch != ignore_index
+            labeled_ratio = float(np.count_nonzero(labeled) / mask_patch.size)
             if labeled_ratio < config.min_label_ratio:
                 continue
 

@@ -15,7 +15,7 @@ A notebook version is in the repository: [`examples/notebooks/02-train-a-segment
 
 1. ### Load the splits
 
-   Save the `MapcvDataset` class from [Use your dataset](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) as `mapcv_dataset.py`. It reads `splits/<split>.txt`, returns `(image, mask)` tensors shaped `(C, H, W)` and `(H, W)`, and marks NoData pixels with `IGNORE_INDEX = 255`.
+   Save the `MapcvDataset` class from [Use your dataset](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) as `mapcv_dataset.py`. It reads `splits/<split>.txt`, returns `(image, mask)` tensors shaped `(C, H, W)` and `(H, W)`, and exports `IGNORE_INDEX = 255`, the mask value mapcv writes where there is no imagery.
 
    ```python
    import torch

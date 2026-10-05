@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -298,3 +300,59 @@ def test_invalid_pixels_and_padding_are_counted_as_empty() -> None:
 
     assert patches.shape[0] == 0
     assert metadata == []
+
+
+# ---------------------------------------------------------------------------
+# ignore_index: no labels invented where there is no imagery
+# ---------------------------------------------------------------------------
+
+
+def _labeled_corner() -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+    image = np.full((6, 6, 3), 100, dtype=np.uint8)
+    mask = np.zeros((6, 6), dtype=np.uint8)
+    mask[4:, 4:] = 2  # a class touching the bottom-right edge
+    return image, mask
+
+
+@pytest.mark.parametrize("pad_mode", ["zero", "reflect"])
+def test_padding_gets_the_ignore_value_not_mirrored_or_background(
+    pad_mode: Literal["zero", "reflect"],
+) -> None:
+    image, mask = _labeled_corner()
+    config = SamplerConfig(patch_size=4, edge_strategy="pad", pad_mode=pad_mode)
+    _, masks, meta = sample_patches_at_anchors(image, mask, [(4, 4)], config, ignore_index=255)
+    assert masks is not None and meta[0]["padded"]
+    patch = masks[0]
+    assert (patch[:2, :2] == 2).all()  # real labels kept
+    assert (patch[2:, :] == 255).all() and (patch[:, 2:] == 255).all()  # padding ignored
+    assert (mask[4:, 4:] == 2).all()  # the source mask is not modified
+
+
+def test_invalid_imagery_pixels_get_the_ignore_value() -> None:
+    image, mask = _labeled_corner()
+    valid = np.ones((6, 6), dtype=bool)
+    valid[0, :] = False  # e.g. a failed tile row or NaN in a band
+    config = SamplerConfig(patch_size=6)
+    _, masks, _ = sample_patches_at_anchors(
+        image, mask, [(0, 0)], config, valid_mask=valid, ignore_index=255
+    )
+    assert masks is not None
+    assert (masks[0][0] == 255).all() and (masks[0][1:4] == 0).all()
+
+
+def test_without_ignore_index_padding_follows_pad_mode_as_before() -> None:
+    image, mask = _labeled_corner()
+    config = SamplerConfig(patch_size=4, edge_strategy="pad", pad_mode="zero")
+    _, masks, _ = sample_patches_at_anchors(image, mask, [(4, 4)], config)
+    assert masks is not None and (masks[0][2:, :] == 0).all()
+
+
+def test_min_label_ratio_does_not_count_ignored_pixels() -> None:
+    image = np.full((4, 4, 3), 100, dtype=np.uint8)
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    valid = np.zeros((4, 4), dtype=bool)  # nothing valid: every mask pixel becomes 255
+    config = SamplerConfig(patch_size=4, min_label_ratio=0.1)
+    _, _, meta = sample_patches_at_anchors(
+        image, mask, [(0, 0)], config, valid_mask=valid, ignore_index=255
+    )
+    assert meta == []

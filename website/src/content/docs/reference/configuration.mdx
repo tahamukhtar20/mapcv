@@ -144,6 +144,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`).
 | `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. A relative path is resolved against the config file's folder |
 | `label_field` | string \| null | `null` | Feature property holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
+| `ignore_index` | int 1–255 or `null` | `255` | Mask value for pixels with no imagery under them: padding, failed tiles and NoData. Pass it to your loss (`CrossEntropyLoss(ignore_index=255)`). No class may use it; `null` writes background (`0`) there instead |
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.

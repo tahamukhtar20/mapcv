@@ -68,6 +68,33 @@ def test_download_region_fetches_every_tile_in_the_snapped_bbox(
     assert len({(tile.x, tile.y) for tile, _ in results}) == len(results) > 0
 
 
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        (179.9, 0.0, -179.9, 0.1),  # crosses the antimeridian
+        (4.88, 52.375, 4.89, 52.37),  # south above north
+    ],
+)
+def test_download_region_rejects_unrepresentable_bbox_before_fetching(
+    monkeypatch: pytest.MonkeyPatch, bbox: Tuple[float, float, float, float]
+) -> None:
+    calls: List[Tuple[int, str]] = []
+    monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
+    with pytest.raises(ValueError):
+        download_region(*bbox, 15, source="esri_satellite")
+    with pytest.raises(ValueError):
+        stitch_region(*bbox, 15, source="esri_satellite")
+    assert calls == []
+
+
+def test_download_region_point_fetches_one_tile(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A zero-area box used to snap to the whole world (~2^30 tiles at zoom 15).
+    calls: List[Tuple[int, str]] = []
+    monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
+    results = download_region(0.0, 0.0, 0.0, 0.0, 15, source="esri_satellite")
+    assert [(tile.x, tile.y, tile.z) for tile, _ in results] == [(16384, 16384, 15)]
+
+
 def test_stitch_region_returns_image_and_transform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch([]))
     image, transform = stitch_region(4.88, 52.37, 4.89, 52.375, 15, source="esri_satellite")

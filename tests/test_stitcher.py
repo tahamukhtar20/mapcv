@@ -108,6 +108,21 @@ def test_dtype_is_uint8() -> None:
     assert arr.dtype == np.uint8
 
 
+def test_tiles_on_both_sides_of_the_antimeridian_are_rejected() -> None:
+    # Columns 0 and 7 at zoom 3 are neighbours across 180°, not 8 tiles apart.
+    tiles = [(PyTileIndex(0, 3, 3), RED), (PyTileIndex(7, 3, 3), GREEN)]
+    with pytest.raises(ValueError, match="antimeridian"):
+        stitch_tiles(tiles)
+
+
+def test_whole_world_row_with_a_missing_tile_still_stitches() -> None:
+    tiles = [(PyTileIndex(x, 0, 2), RED) for x in (0, 2, 3)]
+    arr, min_x, _ = stitch_tiles(tiles)
+    assert arr.shape == (256, 4 * 256, 3)
+    assert min_x == 0
+    assert arr[0, 256].tolist() == [0, 0, 0]
+
+
 def test_corrupt_png_raises() -> None:
     t = PyTileIndex(0, 0, 0)
     with pytest.raises(BaseException):

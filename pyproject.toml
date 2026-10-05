@@ -7,14 +7,14 @@ name = "mapcv"
 version = "0.2.0"
 description = "A high-performance satellite imagery dataset creation tool for computer vision"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [
     { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: GIS",
     "Topic :: Scientific/Engineering :: Image Recognition",

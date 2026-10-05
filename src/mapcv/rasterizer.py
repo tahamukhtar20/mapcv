@@ -46,6 +46,11 @@ def rasterize(
     mapping pixel (col, row) -> world (x, y), matching rasterio's Affine.
     Background pixels are 0; polygons in later list positions overwrite
     earlier ones. Non-polygon geometries are silently skipped.
+
+    Pixels are burned exactly as ``rasterio.features.rasterize`` (GDAL) burns
+    them: by default a pixel is burned when its centre is inside the polygon,
+    with GDAL's rules for centres that lie exactly on an edge; with
+    ``all_touched=True``, every pixel an edge passes through is burned too.
     """
     height, width = out_shape
     polygons: List[Tuple[RingSet, int]] = []

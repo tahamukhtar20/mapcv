@@ -22,6 +22,7 @@ from rasterio.features import rasterize as rio_rasterize
 from rasterio.transform import Affine
 from shapely.geometry import MultiPolygon, Polygon, mapping
 from shapely.wkt import dumps as wkt_dumps
+from shapely.wkt import loads as wkt_loads
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(exist_ok=True)
@@ -359,26 +360,66 @@ def generate_rasterize_golden() -> None:
     for _ in range(13):
         geom_cases.append((_random_convex_polygon(rng2), rng2.randint(1, 5)))
 
+    # Boundary cases (#70, #71, #124). World y = 128 - pixel row.
+    def _px(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        return [(x, size - y) for x, y in points]
+
+    geom_cases += [
+        # pixel-aligned square: all_touched burns its 2x2 interior only
+        (_rect_polygon(1, 1, 3, 3), 1),
+        # edges through pixel centres on all four sides
+        (_rect_polygon(10.5, 10.5, 20.5, 20.5), 2),
+        # diamond with every vertex on a pixel centre
+        (Polygon(_px([(64.5, 40.5), (80.5, 56.5), (64.5, 72.5), (48.5, 56.5)])), 3),
+        # #70: all_touched must burn every pixel the edges cross
+        (Polygon(_px([(0.1, 0.5), (3.1, 3.5), (0.0, 4.0)])), 1),
+        # #71: near-horizontal edges straddling a centre row
+        (
+            Polygon(
+                _px([(0, 30), (40, 30), (40, 31), (20, 30.5 + 1e-13), (10, 30.5 - 1e-13), (0, 31)])
+            ),
+            1,
+        ),
+        # near-horizontal sliver lying on a centre row
+        (Polygon(_px([(5, 64.5), (120, 64.5000001), (120, 64.6)])), 4),
+        # hole whose edges run through pixel centres
+        (
+            Polygon(
+                _rect_polygon(80, 80, 120, 120).exterior.coords,
+                [_rect_polygon(90.5, 90.5, 110.5, 110.5).exterior.coords],
+            ),
+            5,
+        ),
+    ]
+
     masks: Dict[str, Any] = {}
     meta: List[Dict[str, Any]] = []
 
-    for i, (geom, class_id) in enumerate(geom_cases):
+    # Every case once with all_touched=False (cases 0..N-1), then again with
+    # all_touched=True (cases N..2N-1).
+    runs = [(geom, cid, False) for geom, cid in geom_cases]
+    runs += [(geom, cid, True) for geom, cid in geom_cases]
+    for i, (geom, class_id, all_touched) in enumerate(runs):
+        # Rasterize the geometry as the test will read it back from the WKT.
+        wkt = wkt_dumps(geom, rounding_precision=-1)
+        geom = wkt_loads(wkt)
         mask = rio_rasterize(
             [(mapping(geom), class_id)],
             out_shape=(size, size),
             transform=transform,
             dtype="uint8",
             fill=0,
-            all_touched=False,
+            all_touched=all_touched,
         )
         masks[f"case_{i}"] = mask
         meta.append(
             {
                 "case": i,
-                "wkt": wkt_dumps(geom),
+                "wkt": wkt,
                 "class_id": class_id,
                 "transform": list(_RASTER_TRANSFORM),
                 "out_shape": [size, size],
+                "all_touched": all_touched,
                 "nonzero": int(np.count_nonzero(mask)),
             }
         )
@@ -386,7 +427,7 @@ def generate_rasterize_golden() -> None:
     np.savez_compressed(GOLDEN_DIR / "rasterize_golden.npz", **masks)
     (GOLDEN_DIR / "rasterize_golden_meta.json").write_text(json.dumps(meta, indent=2))
     total_nonzero = sum(m["nonzero"] for m in meta)
-    print(f"  {len(geom_cases)} rasterize cases, {total_nonzero} total nonzero pixels")
+    print(f"  {len(runs)} rasterize cases, {total_nonzero} total nonzero pixels")
 
 
 def generate_label_parse_golden() -> None:

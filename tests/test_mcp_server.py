@@ -664,10 +664,12 @@ def test_schema_tool_has_every_config_field(project: Path) -> None:
     actual = set(_schema_paths(found["schema"], found["schema"]))
     assert expected - actual == set()
     rules = found["rules"]
-    assert rules["tasks"] == ["segmentation", "detection", "instance"]
+    assert rules["tasks"] == ["segmentation", "detection", "instance", "classification"]
     assert rules["imagery_types"] == ["xyz", "eopf_zarr", "geotiff"]
     assert rules["labels_allowed_per_task"]["segmentation"] == ["none", "vector", "raster"]
     assert rules["labels_allowed_per_task"]["detection"] == ["vector"]
+    assert rules["labels_allowed_per_task"]["classification"] == ["vector", "raster"]
+    assert "classification" in rules["task_options_block"]
     assert "npy" not in rules["image_formats_per_imagery"]["xyz"]
     assert "npy" in rules["image_formats_per_imagery"]["geotiff"]
     # Every invalid combination carries the message the validators give.

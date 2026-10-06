@@ -1,6 +1,6 @@
 ---
 name: mapcv
-description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO) or per-object masks (instance, COCO RLE). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Sentinel-2, GeoTIFF/COG) and polygon labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet) or a label raster, or asks about a mapcv config, plan, dataset or error.
+description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO), per-object masks (instance, COCO RLE) or one label or a label set per patch (classification, CSV and JSON). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Sentinel-2, GeoTIFF/COG) and polygon labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet) or a label raster, or asks about a mapcv config, plan, dataset or error.
 ---
 
 # mapcv: datasets from imagery and labels
@@ -97,7 +97,22 @@ sampler: {patch_size: 256, edge_strategy: drop}
 writer: {staging_dir: masks, image_format: png}
 ```
 
-Keep the `region`, `imagery` and `split` blocks as in the first recipe. Detection and instance need vector labels, not a label raster.
+### Classification (a label, or a set of labels, per patch)
+
+```yaml
+task: classification
+labels: {path: landuse.geojson, label_field: class}   # or a type: raster label raster
+classification:
+  mode: single            # single: the class covering most of the patch | multi: every class that qualifies
+  min_fraction: 0.5       # coverage a class needs, a share of the patch's valid pixels (0 = any labeled pixel)
+  empty: skip             # skip drops patches no class qualifies for | background keeps them as "background"
+sampler: {patch_size: 128, edge_strategy: drop}   # not pad_mode: reflect; min_label_ratio must be 0 with empty: background
+writer: {staging_dir: scenes, image_format: png}  # no mask_format
+```
+
+The coverage is measured on the mask that segmentation would write. `labels.csv` (`image,labels`, plus `split`), `labels_<split>.csv`, `classes.txt` and `labels.json` sit next to `images/`; with `mode: multi` the labels of a patch are joined by a space, so class names must not contain whitespace.
+
+Keep the `region`, `imagery` and `split` blocks as in the first recipe. Detection and instance need vector labels, not a label raster; classification takes either.
 
 ### Sentinel-2 L2A (EOPF Zarr)
 
@@ -182,4 +197,4 @@ After an error in `generate`, finished chunks are kept: fix the cause and call i
 
 ## What you get
 
-`dataset/` holds `Images/` (and `Masks/` for segmentation), `manifest.json` (version 3), `splits/{train,val,test}.txt` and `patches.geojson`; detection adds `annotations/`, `labels/` and `dataset.yaml`; instance adds `annotations/` (COCO RLE). Splits are spatial blocks by default, so neighbouring patches do not leak between train and test. Training guides: https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/
+`dataset/` holds `Images/` (and `Masks/` for segmentation), `manifest.json` (version 3), `splits/{train,val,test}.txt` and `patches.geojson`; detection adds `annotations/`, `labels/` and `dataset.yaml`; instance adds `annotations/` (COCO RLE); classification has `images/`, `labels.csv`, `labels_<split>.csv`, `classes.txt` and `labels.json` and no masks. Splits are spatial blocks by default, so neighbouring patches do not leak between train and test. Training guides: https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/

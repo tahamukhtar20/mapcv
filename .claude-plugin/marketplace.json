@@ -9,7 +9,7 @@
     {
       "name": "mapcv",
       "source": "./agent",
-      "description": "The mapcv skill and MCP server: inspect labels, write and validate a config, plan, generate and check datasets for segmentation, detection and instance segmentation.",
+      "description": "The mapcv skill and MCP server: inspect labels, write and validate a config, plan, generate and check datasets for segmentation, detection, instance segmentation and classification.",
       "homepage": "https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
       "keywords": ["remote-sensing", "dataset", "geospatial"]
     }

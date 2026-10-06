@@ -209,6 +209,22 @@ def test_info_reports_objects_for_detection_datasets(tmp_path: Path) -> None:
     assert data["splits"] == {"train": 2, "val": 0, "test": 0}
 
 
+def test_info_reports_patches_per_label_for_classification_datasets(tmp_path: Path) -> None:
+    folder = tmp_path / "scenes"
+    folder.mkdir()
+    manifest = _manifest("classification")
+    for entry, labels in zip(manifest.patches, ([1], [1, 2], [0])):
+        entry["summary"] = PatchSummary(labels=labels, empty_ratio=0.0)
+    manifest.save(folder / "manifest.json")
+    data = info(_state(tmp_path), "scenes").data
+    assert data["task"] == "classification" and data["patches"] == 3
+    assert data["class_balance"] == [
+        {"id": 0, "name": "background", "patches": 1, "share": 0.3333},
+        {"id": 1, "name": "house", "patches": 2, "share": 0.6667},
+        {"id": 2, "name": "pond", "patches": 1, "share": 0.3333},
+    ]
+
+
 def test_info_and_split_failures(tmp_path: Path) -> None:
     state = _state(tmp_path, allow_write=True)
     with pytest.raises(ToolFailure, match="No manifest"):

@@ -13,12 +13,14 @@ from mapcv.targets.detection import DetectionTarget
 from mapcv.targets.instance import InstanceTarget
 from mapcv.writer import WriterConfig
 from mapcv.writers.base import Writer
+from mapcv.writers.change import ChangeWriter
 from mapcv.writers.classification import ClassificationWriter
 from mapcv.writers.detection import DetectionWriter
 from mapcv.writers.files import FilesWriter
 from mapcv.writers.instance import InstanceWriter
 
 __all__ = [
+    "ChangeWriter",
     "ClassificationWriter",
     "DetectionWriter",
     "FilesWriter",
@@ -46,10 +48,14 @@ def create_writer(
         ValueError: Several sources for a task whose layout holds one image per patch.
     """
     target_type = target.type if target is not None else None
+    if target_type == "change":
+        if sources is None:
+            raise ValueError("task: change needs two imagery sources: before and after")
+        return ChangeWriter(config, sources)
     if sources is not None and target_type not in FilesWriter.TARGET_TYPES:
         raise ValueError(
             f"task: {target_type} writes one image per patch; several imagery sources are "
-            "supported for segmentation datasets"
+            "supported for segmentation and change datasets"
         )
     if sources is not None:
         return FilesWriter(config, sources)

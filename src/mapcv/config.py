@@ -172,6 +172,12 @@ def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
         # A label raster may be a URL, which is not a path to resolve.
         if not isinstance(path, str) or urlsplit(path).scheme == "":
             labels["path"] = _join(base, path)
+    change = data.get("change")
+    if isinstance(change, dict):
+        for key in ("before", "after"):
+            label_set = change.get(key)
+            if isinstance(label_set, dict) and "path" in label_set:
+                label_set["path"] = _join(base, label_set["path"])
     writer = data.get("writer")
     if isinstance(writer, dict) and "staging_dir" in writer:
         writer["staging_dir"] = _join(base, writer["staging_dir"])
@@ -609,11 +615,17 @@ AnyLabelsConfig = Annotated[
 ]
 
 
-SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection", "instance", "classification")
+SUPPORTED_TASKS: Tuple[str, ...] = (
+    "segmentation",
+    "detection",
+    "instance",
+    "classification",
+    "change",
+)
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ("change", "regression")
+PLANNED_TASKS: Tuple[str, ...] = ("regression",)
 # Tasks whose datasets can hold several imagery sources (``imagery`` as a list).
-MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation",)
+MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation", "change")
 
 DetectionFormat = Literal["coco", "yolo"]
 DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
@@ -701,6 +713,44 @@ class ClassificationOptions(BaseModel):
     empty: Literal["skip", "background"] = "skip"
 
 
+class ChangeOptions(BaseModel):
+    """Settings of ``task: change`` (the ``change:`` block).
+
+    The change mask comes either from ``labels`` (features, or a label raster, that
+    mark what changed: every labeled pixel is change) or from two label sets,
+    ``before`` and ``after``: a pixel changed where they differ (an object appeared or
+    disappeared there or, when both sets map ``label_field`` with the same
+    ``classes``, changed class). Changed pixels get ``change_value``, others 0, and
+    pixels without imagery in either image the ignore value.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    # The mask value of changed pixels: 1, or 255 for loaders that expect 0/255 masks.
+    change_value: int = Field(default=1, ge=1, le=255)
+    before: Optional[LabelsConfig] = None
+    after: Optional[LabelsConfig] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _vector_label_sets(cls, raw: Any) -> Any:
+        # Label sets are vector files; ``type: vector`` may be left out, as under ``labels``.
+        if not isinstance(raw, dict):
+            return raw
+        out = dict(raw)
+        for key in ("before", "after"):
+            value = out.get(key)
+            if isinstance(value, dict):
+                if value.get("type", "vector") != "vector":
+                    raise ValueError(
+                        f"change.{key} must be vector labels (features that mark objects); "
+                        "use labels with type: raster for a change raster instead"
+                    )
+                out[key] = {"type": "vector", **value}
+        return out
+
+
 # The label of classification patches that no class qualifies for (``empty: background``).
 BACKGROUND_LABEL = "background"
 
@@ -755,7 +805,9 @@ class MapcvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # What the dataset is for; decides the target each patch is annotated with.
-    task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"
+    task: Literal["segmentation", "detection", "instance", "classification", "change"] = (
+        "segmentation"
+    )
     region: RegionConfig
     # One source, or a list of named sources sampled on the first one's grid.
     imagery: AnyImageryConfig
@@ -769,6 +821,8 @@ class MapcvConfig(BaseModel):
     instance: Optional[InstanceOptions] = None
     # Options of task: classification; defaults apply when the block is omitted.
     classification: Optional[ClassificationOptions] = None
+    # Options of task: change; defaults apply when the block is omitted.
+    change: Optional[ChangeOptions] = None
 
     _check_task = field_validator("task", mode="before")(_validate_task)
 
@@ -900,7 +954,62 @@ class MapcvConfig(BaseModel):
             self._check_instance()
         if self.task == "classification":
             self._check_classification()
+        if self.change is not None and self.task != "change":
+            raise ValueError(
+                f"the change block only applies to task: change (task is '{self.task}'); "
+                "remove it or set task: change"
+            )
+        if self.task == "change":
+            self._check_change()
         return self
+
+    def _check_change(self) -> None:
+        if not self.multi_source or len(self.sources) != 2:
+            raise ValueError(
+                "task: change needs two imagery sources as a list, the image before and the "
+                "image after (for example names before and after)"
+            )
+        options = self.change_options
+        before, after = options.before, options.after
+        if (before is None) != (after is None):
+            raise ValueError(
+                "change.before and change.after come together: give both label sets, or "
+                "neither and labels that mark the change"
+            )
+        if before is not None and after is not None:
+            if self.labels is not None:
+                raise ValueError(
+                    "give either labels (what changed) or change.before and change.after (two "
+                    "label sets whose difference is the change), not both"
+                )
+            if (before.label_field is None) != (after.label_field is None) or (
+                before.label_field is not None
+                and (before.classes is None or before.classes != after.classes)
+            ):
+                raise ValueError(
+                    "to compare classes, change.before and change.after both need label_field "
+                    "and the same classes mapping (so a class has one ID in both); without "
+                    "label_field only the presence of objects is compared"
+                )
+            if before.ignore_index != after.ignore_index:
+                raise ValueError(
+                    "change.before and change.after need the same ignore_index (the mask "
+                    "value of pixels without imagery)"
+                )
+            ignore = before.ignore_index
+        elif self.labels is None:
+            raise ValueError(
+                "task: change needs labels that mark what changed, or change.before and "
+                "change.after (two label sets whose difference is the change)"
+            )
+        else:
+            ignore = self.labels.ignore_index
+        if ignore is not None and options.change_value == ignore:
+            raise ValueError(
+                f"change.change_value {options.change_value} is also the ignore value; set "
+                "labels.ignore_index (or change.before/after.ignore_index) to another value, "
+                "or null"
+            )
 
     def _check_detection(self) -> None:
         labels = self.labels
@@ -1031,6 +1140,11 @@ class MapcvConfig(BaseModel):
     def instance_options(self) -> InstanceOptions:
         """The ``instance`` block, or its defaults when it is omitted."""
         return self.instance if self.instance is not None else InstanceOptions()
+
+    @property
+    def change_options(self) -> ChangeOptions:
+        """The ``change`` block, or its defaults when it is omitted."""
+        return self.change if self.change is not None else ChangeOptions()
 
     @property
     def classification_options(self) -> ClassificationOptions:

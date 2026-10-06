@@ -114,6 +114,22 @@ The coverage is measured on the mask that segmentation would write. `labels.csv`
 
 Keep the `region`, `imagery` and `split` blocks as in the first recipe. Detection and instance need vector labels, not a label raster; classification takes either.
 
+### Change detection (before/after pairs, LEVIR-CD layout)
+
+```yaml
+task: change
+imagery:                         # exactly two sources on one grid: before, then after
+  - {type: geotiff, name: before, path: city_2023.tif}
+  - {type: geotiff, name: after, path: city_2025.tif}
+labels: {path: changes.geojson}  # every feature marks change ...
+# ... or compare two label sets instead of labels:
+# change: {before: {path: buildings_2023.geojson}, after: {path: buildings_2025.geojson}}
+change: {change_value: 1}        # 255 (with labels.ignore_index: null) for 0/255 masks
+writer: {staging_dir: dataset, image_format: png}
+```
+
+Output: `A/` (before), `B/` (after) and `label/` (0 = no change, `change_value` = change, 255 = no imagery) with the same file names, plus `splits/`.
+
 ### Sentinel-2 L2A (EOPF Zarr)
 
 Needs `pip install "mapcv[zarr]"` and Python 3.10 to 3.13.

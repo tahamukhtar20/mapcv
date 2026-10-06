@@ -94,7 +94,8 @@ What the dataset is for. It decides what each patch is annotated with and is rec
 | `detection` | supported | A box per object, written as COCO JSON and YOLO labels; needs `labels`. Settings in the [`detection`](#detection) block |
 | `instance` | supported | A binary mask per object (instance segmentation), written as COCO JSON with RLE masks and optionally an instance-ID PNG per patch; needs vector `labels`. Settings in the [`instance`](#instance) block |
 | `classification` | supported | One label, or a set of labels, per patch, written as `labels.csv` and `labels.json`; needs `labels` (vector or raster). Settings in the [`classification`](#classification) block |
-| `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+| `change` | supported | A before/after image pair and a binary change mask per patch, in LEVIR-CD's `A/`, `B/`, `label/` layout; needs two [imagery sources](#several-imagery-sources) and labels that mark the change, or two label sets to compare. Settings in the [`change`](#change) block |
+| `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
 
 ```yaml
 task: segmentation
@@ -170,6 +171,34 @@ classification:
 
 **Validation** (with `task: classification`): `labels` is required, vector or `type: raster`; `writer.mask_format` is rejected (no masks are written), as is `writer.world_files` with images that are not PNG or JPG; `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because the mirrored part of an edge patch would show imagery that no label counts; `sampler.min_label_ratio` greater than 0 is rejected with `empty: background`, because it would drop exactly the background patches (without `background`, it keeps its segmentation meaning: the labeled share of the whole patch must reach it). Class names must not hold control characters, and with `mode: multi` no whitespace, because a patch's labels are joined with a space in `labels.csv`; with `empty: background` no class may be named `background`. A resumed run must use the same `classification` settings and `labels.all_touched`.
 
+## `change`
+
+Optional, and only allowed with `task: change` (another task with a `change` block is an error). A change dataset needs `imagery` as a list of exactly **two** [sources on one grid](#several-imagery-sources): the image **before** (first) and **after** (second). Each patch gets both images and a change mask, all on the before image's grid. Files: [Dataset format](/mapcv/reference/dataset-format/#change-detection-datasets).
+
+The mask comes from one of two places:
+
+- **`labels`** that mark what changed, vector or a label raster (`type: raster`): every labeled pixel is change. For a raster, pixels it does not label (outside it, its NoData, `ignore_values`) keep the ignore value.
+- **`change.before` and `change.after`**, two vector label sets (same fields as [`labels`](#polygon-labels-type-vector)): a pixel changed where their masks differ, for example a building that appeared or was demolished. Without `label_field` only the presence of an object counts; with `label_field` and the **same** `classes` mapping in both, a change of class counts too.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `change_value` | int, 1–255 | `1` | Mask value of changed pixels; unchanged pixels are `0`. Use `255` (with `labels.ignore_index: null`) for loaders that expect LEVIR-CD's 0/255 masks |
+| `before`, `after` | vector labels | — | The two label sets to compare, instead of `labels`. Relative paths resolve against the config's folder |
+
+```yaml
+task: change
+imagery:
+  - {type: geotiff, name: before, path: city_2023.tif}
+  - {type: geotiff, name: after, path: city_2025.tif}
+change:
+  before: {path: buildings_2023.geojson}
+  after: {path: buildings_2025.geojson}
+```
+
+Pixels without imagery in either image get the ignore value (`labels.ignore_index`, or the label sets' shared `ignore_index`; default 255), as in segmentation masks.
+
+**Validation** (with `task: change`): exactly two imagery sources; either `labels` or both `change.before` and `change.after`, not both; the two label sets need the same `ignore_index`, and comparing classes needs `label_field` and an identical `classes` mapping in both; `change_value` must differ from the ignore value. A resumed run must use the same labels (their files' hashes are recorded) and `change_value`.
+
 ## `region`
 
 The area of interest as a WGS-84 longitude/latitude bounding box.
@@ -187,7 +216,7 @@ For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. F
 
 ## `imagery`
 
-Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`. For segmentation datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
+Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
 
 ### Several imagery sources
 
@@ -208,7 +237,7 @@ writer: {staging_dir: ./dataset, image_format: tif}
 | Other sources | Same CRS as the first, and pixels the same size or a whole number of them across (2×, 3×…) on a grid that shares pixel corners with the first. Coarser pixels are repeated onto the grid (nearest neighbour, exact); nothing is interpolated. A source with finer pixels must come first |
 | Coverage | A pixel has imagery only where **every** source has it. Pixels outside a source count as empty and are `ignore_index` in masks |
 | Output | `Images/<name>/patch_*.<ext>` per source, one shared `Masks/` folder, and one `files` key per source name in the manifest |
-| Tasks | `segmentation` (with or without labels). Tasks that write one image per patch (detection, instance, classification) take a single source |
+| Tasks | `segmentation` (with or without labels) and [`change`](#change) (exactly two). Tasks that write one image per patch (detection, instance, classification) take a single source |
 
 A source on a grid that does not line up (another CRS, a half-pixel shift, a non-integer pixel ratio) fails before anything is written, and the error says how it differs. Resample it onto the first source's grid first (for example with `gdalwarp -tap -tr`).
 

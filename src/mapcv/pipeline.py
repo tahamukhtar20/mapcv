@@ -285,7 +285,7 @@ def run_generate(
                     source, chunk_anchors, config.sampler, target, others
                 )
                 if other_patches:
-                    if not isinstance(writer, FilesWriter):  # create_writer makes one for these
+                    if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
                         raise RuntimeError("several imagery sources need the files layout")
                     writer.write(
                         images, annotations, metadata, manifest, chunk_index, others=other_patches

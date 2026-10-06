@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mapcv.config import MapcvConfig, RasterLabelsConfig
 from mapcv.targets.base import Annotation, AnnotationBatch, Target, WindowTarget
+from mapcv.targets.change import ChangeTarget
 from mapcv.targets.classification import ClassificationTarget, PatchLabels
 from mapcv.targets.detection import DetectedObject, DetectionTarget, PatchObjects
 from mapcv.targets.instance import Instance, InstanceTarget, PatchInstances
@@ -14,6 +15,7 @@ from mapcv.targets.segmentation import SegmentationTarget
 __all__ = [
     "Annotation",
     "AnnotationBatch",
+    "ChangeTarget",
     "ClassificationTarget",
     "DetectedObject",
     "DetectionTarget",
@@ -49,6 +51,8 @@ def create_target(config: MapcvConfig) -> Target:
         if config.labels is None:  # the config refuses this; keep the type checker honest
             raise ValueError("task: classification needs labels")
         return ClassificationTarget(config.labels, config.classification_options)
+    if config.task == "change":
+        return ChangeTarget(config.change_options, config.labels)
     if config.task != "segmentation":  # the config only accepts supported tasks
         raise ValueError(f"task '{config.task}' has no target")
     if config.labels is None:

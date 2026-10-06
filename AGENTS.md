@@ -9,9 +9,9 @@ strict version.
 A GDAL-free Python + Rust library and CLI that turns a region, imagery and labels into
 ready-to-train remote-sensing datasets.
 
-- **Imagery:** XYZ tiles, Sentinel-2 EOPF Zarr, GeoTIFF/COG (local, https, s3).
+- **Imagery:** XYZ tiles, Sentinel-2 EOPF Zarr, GeoTIFF/COG (local, https, s3); several sources sampled on one grid.
 - **Labels:** GeoJSON, KML, GeoPackage, Shapefile or GeoParquet features, or label rasters.
-- **Tasks:** segmentation; detection with COCO/YOLO output; instance segmentation with COCO RLE masks; classification with CSV/JSON patch labels.
+- **Tasks:** segmentation; detection with COCO/YOLO output; instance segmentation with COCO RLE masks; classification with CSV/JSON patch labels; change detection (before/after pairs, LEVIR-CD layout).
 - **Output:** image/mask patches, `manifest.json` (v3) and leakage-safe `splits/`.
 
 ## Setup

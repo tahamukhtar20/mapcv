@@ -8,7 +8,8 @@
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
 │                                        f|detection|instance|  example instead of     │
-│                                        classification>        asking.                │
+│                                        classification|change  asking.                │
+│                                        >                                             │
 │ --interactive      --no-interactive                           Ask questions          │
 │                                                               (default: when run in  │
 │                                                               a terminal without     │
@@ -34,5 +35,7 @@
  mapcv init masks.yaml --template instance   a mask per object (COCO RLE)
 
  mapcv init tiles.yaml --template classification   a label per patch (CSV)
+
+ mapcv init pairs.yaml --template change   before/after pairs and change masks
 
 

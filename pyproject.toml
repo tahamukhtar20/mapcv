@@ -92,6 +92,11 @@ zarr = [
     "s3fs>=2024.10; python_version < '3.14'",
 ]
 
+# The MCP server for AI agents (`mapcv mcp`); the official MCP Python SDK (MIT).
+mcp = [
+    "mcp>=2.3,<3",
+]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "mapcv._mapcv_rs"
@@ -112,6 +117,9 @@ exclude = [
     { path = "about.hbs", format = "sdist" },
     { path = "AGENTS.md", format = "sdist" },
     { path = "CLAUDE.md", format = "sdist" },
+    # The Claude Code plugin and the agent skill live in the repository only.
+    { path = "agent/**/*", format = "sdist" },
+    { path = ".claude-plugin/**/*", format = "sdist" },
     # Builds from the sdist use the builder's own Rust, not the CI pin.
     { path = "rust-toolchain.toml", format = "sdist" },
 ]

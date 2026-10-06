@@ -1,0 +1,155 @@
+---
+title: Use mapcv with AI agents
+description: Let Claude Code, Claude Desktop, Cursor or VS Code build datasets with mapcv through its MCP server, with a read-only default, a folder it cannot leave and a plan before every download.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+mapcv ships an [MCP](https://modelcontextprotocol.io/) server and an agent skill. Together they let a coding agent go through the same journey you would, **inspect the labels → write a config → validate → plan → generate → check**, without guessing at config keys: the agent reads the schema from the real models and gets mapcv's own error messages.
+
+<Aside type="note" title="Version">
+The `mcp` extra and the `mapcv mcp` command are in mapcv 0.3 and later. Until then, install from the repository: `pip install "mapcv[mcp] @ git+https://github.com/tahamukhtar20/mapcv"` (needs a Rust toolchain).
+</Aside>
+
+## Install
+
+The server is an optional extra, so the base install stays small:
+
+```bash
+pip install "mapcv[mcp]"
+mapcv mcp --help
+```
+
+Without the extra, `mapcv mcp` prints the install command and exits. The examples below use [`uvx`](https://docs.astral.sh/uv/), which runs the server without installing anything into your project; replace it with `mapcv mcp` if you installed mapcv yourself.
+
+Every client starts the server the same way:
+
+```bash
+uvx --from "mapcv[mcp]" mapcv mcp                        # read-only, in the current folder
+uvx --from "mapcv[mcp]" mapcv mcp --root ~/datasets      # the only folder it may touch
+uvx --from "mapcv[mcp]" mapcv mcp --root ~/datasets --allow-write
+```
+
+<Tabs syncKey="agent">
+  <TabItem label="Claude Code">
+    The plugin installs the skill and registers the server in one step:
+
+    ```text
+    /plugin marketplace add tahamukhtar20/mapcv
+    /plugin install mapcv@mapcv
+    ```
+
+    The plugin asks once whether the agent may write datasets (off by default). The server works in the folder Claude Code was started in.
+
+    To register only the server, without the skill:
+
+    ```bash
+    claude mcp add mapcv -- uvx --from "mapcv[mcp]" mapcv mcp
+    claude mcp add --scope project mapcv-write -- uvx --from "mapcv[mcp]" mapcv mcp --allow-write
+    ```
+  </TabItem>
+  <TabItem label="Claude Desktop">
+    Open **Settings → Developer → Edit Config** and add the server to `claude_desktop_config.json`. Desktop does not start servers in your project folder, so always give an absolute `--root`:
+
+    ```json
+    {
+      "mcpServers": {
+        "mapcv": {
+          "command": "uvx",
+          "args": ["--from", "mapcv[mcp]", "mapcv", "mcp", "--root", "/Users/you/datasets"]
+        }
+      }
+    }
+    ```
+
+    Add `"--allow-write"` to `args` to let it generate datasets. Restart Claude Desktop afterwards.
+  </TabItem>
+  <TabItem label="Cursor">
+    Add the server to `.cursor/mcp.json` in your project, or to `~/.cursor/mcp.json` for every project:
+
+    ```json
+    {
+      "mcpServers": {
+        "mapcv": {
+          "type": "stdio",
+          "command": "uvx",
+          "args": ["--from", "mapcv[mcp]", "mapcv", "mcp"]
+        }
+      }
+    }
+    ```
+
+    Cursor starts it in the project folder. Add `"--allow-write"` to `args` to allow writing.
+  </TabItem>
+  <TabItem label="VS Code">
+    Add the server to `.vscode/mcp.json` (note the top-level key is `servers`):
+
+    ```json
+    {
+      "servers": {
+        "mapcv": {
+          "type": "stdio",
+          "command": "uvx",
+          "args": ["--from", "mapcv[mcp]", "mapcv", "mcp"]
+        }
+      }
+    }
+    ```
+
+    Or run **MCP: Add Server** from the Command Palette. Add `"--allow-write"` to `args` to allow writing.
+  </TabItem>
+</Tabs>
+
+Any other MCP client works too: the server speaks MCP over stdio.
+
+## Safety model
+
+An agent can run long jobs, download imagery and write files, so the server is built to be hard to misuse. These rules are enforced by the server, not left to the agent's judgement.
+
+| Rule | What it means |
+| --- | --- |
+| **Read-only by default** | Without `--allow-write` the tools `write_config`, `generate` and `split` do not exist. The agent can inspect labels, validate and plan, and read a finished dataset. |
+| **One folder** | `--root` (default: the current folder) is the only place the server reads or writes. Every path an agent passes, **and every path a config resolves to** (`labels.path`, a local `imagery.path`, `writer.staging_dir`), must be inside it after symbolic links are resolved. `..`, absolute paths elsewhere and links that point out are refused with a message that names the root. A symbolic link inside an existing dataset folder that points outside is refused too. |
+| **Plan first, confirm big jobs** | `generate` plans before it starts and refuses a job that `plan` marks `large` (over 20,000 tiles, or about 5 GB of download plus output) unless the call passes `confirm_large=true`. The refusal carries the plan, so the agent can show it to you and ask. |
+| **Credentials stay hidden** | Whatever `url_template` carries (keys in the query, tokens in the path, user information) is removed from every tool result and error, the way the CLI shows only `scheme://host/...`. Do not paste a key into the chat: write the config with a placeholder and put the real key into the file yourself. |
+| **Config files only** | `write_config` writes only `.yaml` or `.yml` files, and only after the content validates as a mapcv config. |
+| **Interruptible** | `generate` reports progress per chunk and stops when the call is cancelled. Finished chunks are kept; calling it again resumes. |
+
+What the server does **not** do: it does not limit which hosts a config's `url_template` or remote GeoTIFF may contact, and a config can name any `https://` imagery. Review the config the agent wrote, as you would any file it produces. And as with the CLI, the imagery provider's terms are yours to check: see [Providers & licensing](/mapcv/project/providers/).
+
+## Tools
+
+| Tool | Needs `--allow-write` | What it does |
+| --- | --- | --- |
+| `describe_config_schema` | no | The JSON schema of the config, generated from the pydantic models, plus the rules between fields (which tasks need labels, which image formats each imagery type accepts, the exact message of each invalid combination). Found by validating real configs, so it cannot go stale. |
+| `validate_config` | no | The checks and messages of `mapcv validate`, for a file or for text. A config with mistakes returns `valid: false` and each error with its field. |
+| `inspect_labels` | no | Fields of a vector label file (GeoJSON, KML, GeoPackage, Shapefile or GeoParquet) with distinct values and counts, feature and geometry counts, the extent in lon/lat (usable as `region`) and which fields can be `labels.label_field`. |
+| `plan` | no | Tiles, patches, sizes, memory and warnings, like `mapcv plan`, plus `large` and the reason. Downloads nothing. |
+| `info` | no | A dataset's task, source, class balance and split sizes, like `mapcv info`. |
+| `write_config` | yes | Validates, then saves a config inside the root. Refuses to overwrite unless asked. |
+| `generate` | yes | Plans, then builds or resumes the dataset, like `mapcv generate`. Output is byte-identical to the CLI's. |
+| `split` | yes | Re-splits a dataset from its manifest, like `mapcv split`. |
+
+Each result is structured JSON (also sent as text, for clients that only show text) with a one-line summary first. Errors are results marked as errors, with the message mapcv would print and no traceback.
+
+## The agent skill
+
+`agent/skills/mapcv/SKILL.md` in the [repository](https://github.com/tahamukhtar20/mapcv/tree/main/agent) teaches an agent the journey, config recipes per task (segmentation, detection, instance) and imagery (XYZ, Sentinel-2, GeoTIFF/COG, label rasters), a reminder to check the provider's terms, and what to do about the real error messages. The Claude Code plugin installs it. For other agents that read `SKILL.md` skill folders, copy the `agent/skills/mapcv/` folder into their skills folder.
+
+## A session
+
+Start the server with `--allow-write` in a folder that holds `buildings.geojson`, then ask:
+
+> Make a segmentation dataset of the buildings in `buildings.geojson` from Esri imagery at about 0.4 m per pixel, 256 px patches. Show me the plan before you download anything.
+
+The agent calls `inspect_labels` (the file has a `class` field with two values and an extent), writes `mapcv.yaml` with `write_config`, runs `validate_config` and `plan`, and shows you the tile count, patch count and output size. After you agree it calls `generate`, then `info`. If a plan is marked large, it has to ask you first.
+
+## For language models
+
+This site publishes plain-text versions for models: `https://tahamukhtar20.github.io/mapcv/llms.txt` (an index), `llms-full.txt` (every page) and `llms-small.txt` (a shorter version), all generated from these pages at build time.
+
+## See also
+
+- [`mapcv mcp`](/mapcv/reference/cli/#mapcv-mcp) in the CLI reference
+- [Configuration](/mapcv/reference/configuration/) for every key
+- [Troubleshooting](/mapcv/guides/troubleshooting/) for the messages an agent may relay

@@ -95,10 +95,12 @@ A dataclass:
 ### `run_generate`
 
 ```python
-def run_generate(config: MapcvConfig) -> GenerateResult
+def run_generate(
+    config: MapcvConfig, on_chunk: Callable[[int, int], None] | None = None
+) -> GenerateResult
 ```
 
-Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. `on_chunk(done, total)` is called before the first chunk and after every chunk is saved; an exception it raises stops the run there, and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels). Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 

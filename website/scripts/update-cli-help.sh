@@ -14,7 +14,7 @@ snapshot() {
 }
 
 snapshot > "$out/main.txt"
-for command in init plan generate info split validate; do
+for command in init plan generate info split validate mcp; do
   snapshot "$command" > "$out/$command.txt"
 done
 "${mapcv_cmd[@]}" --version > "$out/version.txt"

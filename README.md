@@ -125,6 +125,10 @@ imagery:
   # nodata: 0                # override the file's NoData
 ```
 
+## AI agents
+
+`pip install "mapcv[mcp]"` adds `mapcv mcp`, an MCP server that lets Claude Code, Claude Desktop, Cursor or VS Code inspect labels, validate, plan and generate datasets. It is read-only by default, confined to one folder (`--root`), and refuses large jobs until you confirm them. In Claude Code, `/plugin marketplace add tahamukhtar20/mapcv` then `/plugin install mapcv@mapcv` also installs the agent skill. See [Use mapcv with AI agents](https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/).
+
 ## Documentation
 
 Full documentation including configuration reference, CLI reference, and API reference is available at **[tahamukhtar20.github.io/mapcv](https://tahamukhtar20.github.io/mapcv)**.

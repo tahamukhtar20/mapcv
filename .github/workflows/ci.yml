@@ -59,6 +59,12 @@ jobs:
     - name: Run Rust unit tests
       run: cargo test --locked
 
+    - name: Check Rust licences, advisories and sources (cargo-deny)
+      uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      with:
+        command: check
+        arguments: --all-features
+
     # The checks below read the sources; building the extension is the test job's work.
     - name: Install dependencies
       run: uv sync --locked --all-extras --no-install-project

@@ -78,6 +78,17 @@ def _proj_executor() -> ThreadPoolExecutor:
     return _proj_pool
 
 
+def _forget_proj_pool() -> None:
+    # A forked child (multiprocessing's ``fork`` start method, a DataLoader worker) inherits
+    # the executor without its threads, and ``submit`` would wait for them forever.
+    global _proj_pool
+    _proj_pool = None
+
+
+if hasattr(os, "register_at_fork"):  # not on Windows
+    os.register_at_fork(after_in_child=_forget_proj_pool)
+
+
 LABEL_RASTER_MISS_MESSAGE = (
     "the label raster does not overlap the imagery, so every mask pixel will be {value}. "
     "Check labels.path and the region"

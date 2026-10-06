@@ -14,6 +14,9 @@ label-pixel boundaries.
 
 from __future__ import annotations
 
+import os
+import signal
+import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -281,3 +284,47 @@ def test_small_arrays_are_projected_on_the_calling_thread(
     got_x, got_y = sampler._project(x[:3, :3], y[:3, :3])
     ref_x, ref_y = project_point_by_point(reference, x[:3, :3], y[:3, :3])
     assert np.array_equal(got_x, ref_x) and np.array_equal(got_y, ref_y)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_a_forked_child_projects_with_a_fresh_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child forked after the thread pool was used must not wait for the parent's
+    (vanished) worker threads: it gets a pool of its own and the same coordinates."""
+    monkeypatch.setattr(raster_labels, "_PROJ_THREADS", 4)
+    monkeypatch.setattr(raster_labels, "_MIN_PIECE", 1_000)
+    imagery_crs, label_epsg, window, pixel = _CASES["utm-to-wgs84"]
+    sampler = sampler_for(
+        label_raster(
+            tmp_path / "labels.tif", label_epsg, Affine(pixel, 0.0, 0.0, 0.0, -pixel, 0.0)
+        ),
+        imagery_crs,
+    )
+    x, y = centres(window)
+    parent_x, parent_y = sampler._project(x, y)
+    assert raster_labels._proj_pool is not None, "the parent should have used the pool"
+
+    result = tmp_path / "child.npy"
+    pid = os.fork()
+    if pid == 0:  # the child: never returns into pytest
+        status = 1
+        try:
+            child_x, child_y = sampler._project(x, y)
+            np.save(result, np.stack([child_x, child_y]))
+            status = 0
+        finally:
+            os._exit(status)
+    deadline = time.monotonic() + 30
+    finished = 0
+    while finished == 0 and time.monotonic() < deadline:
+        finished, status = os.waitpid(pid, os.WNOHANG)
+        time.sleep(0.05)
+    if finished == 0:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        pytest.fail("the forked child did not finish in 30 s: it waits for a dead thread pool")
+    assert os.waitstatus_to_exitcode(status) == 0
+    child_x, child_y = np.load(result)
+    assert np.array_equal(child_x, parent_x) and np.array_equal(child_y, parent_y)

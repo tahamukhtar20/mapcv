@@ -24,7 +24,7 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
-    task: Literal["segmentation", "detection"] = "segmentation"   # more tasks are planned
+    task: Literal["segmentation", "detection", "instance"] = "segmentation"   # more tasks are planned
     region: RegionConfig
     imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | RasterLabelsConfig | None = None  # by labels.type: vector | raster
@@ -32,9 +32,13 @@ class MapcvConfig(BaseModel):
     writer: WriterConfig
     split: SplitterConfig | None = None
     detection: DetectionOptions | None = None   # task: detection only
+    instance: InstanceOptions | None = None     # task: instance only
 
     @property
     def detection_options(self) -> DetectionOptions: ...   # the block, or its defaults
+
+    @property
+    def instance_options(self) -> InstanceOptions: ...     # the block, or its defaults
 
     @classmethod
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
@@ -45,6 +49,12 @@ class DetectionOptions(BaseModel):
     min_box_pixels: float = 2.0
     formats: list[Literal["coco", "yolo"]] = ["coco", "yolo"]
     point_box_size: float | None = None
+
+
+class InstanceOptions(BaseModel):
+    min_visible: float = 0.3
+    min_area: int = 4
+    id_mask: bool = False
 ```
 
 Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
@@ -110,7 +120,7 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
 
 ### `split_dataset`
 

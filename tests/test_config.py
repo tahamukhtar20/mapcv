@@ -340,14 +340,14 @@ def test_task_defaults_to_segmentation(tmp_path: Path) -> None:
     assert explicit.task == "segmentation"
 
 
-@pytest.mark.parametrize("task", ["instance", "classification", "change", "regression"])
+@pytest.mark.parametrize("task", ["classification", "change", "regression"])
 def test_planned_tasks_are_not_supported_yet(tmp_path: Path, task: str) -> None:
     with pytest.raises(ValidationError) as caught:
         MapcvConfig.from_yaml(_write(tmp_path, f"task: {task}\n" + _MINIMAL))
     message = str(caught.value)
     assert f"task '{task}' is not supported yet" in message
-    assert "supported: segmentation, detection" in message
-    assert "planned: instance, classification, change, regression" in message
+    assert "supported: segmentation, detection, instance" in message
+    assert "planned: classification, change, regression" in message
 
 
 @pytest.mark.parametrize("task", ["segmentaton", "Segmentation", 3])

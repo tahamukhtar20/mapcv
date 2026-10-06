@@ -5,14 +5,15 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, an optional `detection` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection` or `task: instance`, an optional `detection` or `instance` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
-task: segmentation  # what the dataset is for: segmentation (default) or detection
+task: segmentation  # what the dataset is for: segmentation (default), detection or instance
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
 labels:   { … }   # which polygons or label raster (optional: omit for an image-only dataset)
 detection: { … }  # box settings (optional, task: detection only)
+instance: { … }   # mask settings (optional, task: instance only)
 sampler:  { … }   # how to cut patches (required)
 writer:   { … }   # where and how to write (required)
 split:    { … }   # train/val/test lists (optional: omit to skip splitting)
@@ -90,7 +91,8 @@ What the dataset is for. It decides what each patch is annotated with and is rec
 | --- | --- | --- |
 | `segmentation` (default) | supported | A class mask per patch, from `labels` (none without `labels`: an image-only dataset) |
 | `detection` | supported | A box per object, written as COCO JSON and YOLO labels; needs `labels`. Settings in the [`detection`](#detection) block |
-| `instance`, `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+| `instance` | supported | A binary mask per object (instance segmentation), written as COCO JSON with RLE masks and optionally an instance-ID PNG per patch; needs vector `labels`. Settings in the [`instance`](#instance) block |
+| `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
 
 ```yaml
 task: segmentation
@@ -119,6 +121,29 @@ detection:
 ```
 
 **Validation** (with `task: detection`): `labels` is required; `labels.ignore_index`, `labels.all_touched` and `writer.mask_format` are mask settings and are rejected when set, as is `writer.world_files` with images that are not PNG or JPG; `point_box_size` needs GeoJSON labels (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
+
+## `instance`
+
+Optional, and only allowed with `task: instance` (another task with an `instance` block is an error). Omit it for the defaults. One **instance** is one label feature: a MultiPolygon is one instance, and so is a feature that a patch edge cuts into pieces. Its mask is the part of the feature that is **visible** in the patch: inside the patch, inside the raster (not in padding) and over pixels with imagery. Every instance is burned on its own with the same rasterizer and pixel rule as segmentation masks (`labels.all_touched` applies), so overlapping instances each keep their exact mask. Walkthrough: [Instance segmentation datasets](/mapcv/tutorials/instance-segmentation/); files: [Dataset format](/mapcv/reference/dataset-format/#instance-segmentation-datasets).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `min_visible` | float, 0–1 | `0.3` | Keep an instance in a patch only if at least this fraction of its area is visible there. `0` keeps every visible part; `1` keeps only whole instances. A feature too large for any patch to show this fraction is never kept, and mapcv warns about it |
+| `min_area` | int ≥ 1 | `4` | Drop instances whose mask has fewer pixels than this (slivers along patch edges, features smaller than a pixel) |
+| `id_mask` | bool | `false` | Also write one 16-bit instance-ID PNG per patch to `masks/` (`writer.mask_format` then sets its format). A patch with more than 65,535 instances is an error |
+
+```yaml
+task: instance
+labels:
+  path: buildings.geojson
+  label_field: class
+instance:
+  min_visible: 0.3
+  min_area: 4
+  id_mask: false
+```
+
+**Validation** (with `task: instance`): `labels` is required and must be vector labels (a label raster has no objects; use `task: segmentation`); `labels.ignore_index` is rejected when set (instance masks only hold pixels that have imagery); `writer.mask_format` is rejected unless `instance.id_mask` is on; `writer.world_files` is rejected with images that are not PNG or JPG unless `id_mask` is on; `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without masks. `sampler.min_label_ratio` keeps a patch only when its instances (overlaps counted once) cover at least that fraction of it. A resumed run must use the same `instance` settings and `labels.all_touched`.
 
 ## `region`
 

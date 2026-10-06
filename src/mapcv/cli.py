@@ -46,8 +46,8 @@ from mapcv.writers.detection import categories
 app = typer.Typer(
     name="mapcv",
     help=(
-        "Turn a region and polygon labels into a ready-to-train segmentation or detection "
-        "dataset.\n\n"
+        "Turn a region and polygon labels into a ready-to-train segmentation, detection or "
+        "instance dataset.\n\n"
         "Start with [bold]mapcv init[/bold], check the cost with [bold]mapcv plan[/bold], "
         "then build with [bold]mapcv generate[/bold]."
     ),
@@ -114,8 +114,8 @@ def _main(
         False, "--quiet", "-q", help="Hide progress output; still show errors and summaries."
     ),
 ) -> None:
-    """Turn a region and polygon labels into a ready-to-train segmentation or detection
-    dataset."""
+    """Turn a region and polygon labels into a ready-to-train segmentation, detection or
+    instance dataset."""
     pipeline._console.quiet = quiet
 
 
@@ -193,6 +193,15 @@ def _imagery_label(config: MapcvConfig) -> str:
 
 
 def _task_label(config: MapcvConfig) -> str:
+    if config.task == "instance":
+        instance = config.instance_options
+        detail = (
+            f"instance · COCO RLE masks · min_visible {instance.min_visible:g} · "
+            f"masks ≥ {instance.min_area} px"
+        )
+        if instance.id_mask:
+            detail += " · instance-ID PNGs"
+        return detail
     if config.task != "detection":
         return config.task
     options = config.detection_options
@@ -289,9 +298,10 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         f"[dim]({config.sampler.mode}, stride {config.sampler.stride})[/dim]",
     )
     if estimate.objects is not None:
+        what = "mask" if config.task == "instance" else "box"
         table.add_row(
             "Objects",
-            f"≈ {estimate.objects:,} [dim](label features in the region; one box each, in "
+            f"≈ {estimate.objects:,} [dim](label features in the region; one {what} each, in "
             "every patch that shows enough of it)[/dim]",
         )
     table.add_row(
@@ -350,7 +360,7 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
 
 
 def _object_table(manifest: Manifest) -> Optional[Table]:
-    """Objects and patches with objects per class, for detection datasets."""
+    """Objects and patches with objects per class, for detection and instance datasets."""
     objects: Counter[str] = Counter()
     patches: Counter[str] = Counter()
     for entry in manifest.patches:
@@ -379,7 +389,7 @@ def _object_table(manifest: Manifest) -> Optional[Table]:
 
 
 def _class_table(manifest: Manifest) -> Optional[Table]:
-    if manifest.task == "detection":
+    if manifest.task in ("detection", "instance"):
         return _object_table(manifest)
     totals: Counter[str] = Counter()
     for entry in manifest.patches:
@@ -438,7 +448,7 @@ def _print_result(result: GenerateResult) -> None:
     written.extend(
         name
         for name in ("annotations/", "labels/", "dataset.yaml")
-        if manifest.task == "detection" and (result.staging_dir / name).exists()
+        if manifest.task in ("detection", "instance") and (result.staging_dir / name).exists()
     )
     table.add_row("Files", f"{result.staging_dir}/ ({', '.join(written)})")
     _console.print(
@@ -447,11 +457,11 @@ def _print_result(result: GenerateResult) -> None:
     classes = _class_table(manifest)
     if classes is not None:
         _console.print(classes)
-    guide = (
-        "tutorials/object-detection/#train-a-detector"
-        if manifest.task == "detection"
-        else "guides/use-your-dataset/"
-    )
+    guides = {
+        "detection": "tutorials/object-detection/#train-a-detector",
+        "instance": "tutorials/instance-segmentation/#train-a-model",
+    }
+    guide = guides.get(manifest.task, "guides/use-your-dataset/")
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
@@ -470,6 +480,7 @@ class Template(str, Enum):
     sentinel2 = "sentinel2"
     geotiff = "geotiff"
     detection = "detection"
+    instance = "instance"
 
 
 _HEADER = f"""\
@@ -663,11 +674,56 @@ split:                       # dataset.yaml for Ultralytics needs train and val 
 """
 )
 
+_INSTANCE_TEMPLATE = (
+    _HEADER
+    + """
+task: instance               # one mask per object (COCO RLE) instead of a class mask
+
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: xyz
+  zoom: 18
+  source: esri_satellite     # or url_template: "https://.../{z}/{x}/{y}.png"
+  max_connections: 4         # keep requests modest; respect the provider's limits
+
+labels:
+  path: buildings.geojson    # .geojson or .kml, in lon/lat; one instance per feature
+  label_field: null          # property holding the class; null = every feature is class 1
+
+instance:
+  min_visible: 0.3           # keep an instance in a patch if >= 30% of its area is visible there
+  min_area: 4                # drop masks with fewer pixels than this (edge slivers)
+  id_mask: false             # true: also write a 16-bit instance-ID PNG per patch (masks/)
+
+sampler:
+  patch_size: 256
+  stride: 0                  # 0 = patch_size (no overlap)
+  mode: grid
+  edge_strategy: drop        # pad | drop | shift (pad: masks stop at the raster edge)
+
+writer:
+  staging_dir: ./dataset
+  image_format: png          # png | jpg
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42
+"""
+)
+
 _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
     Template.geotiff: _GEOTIFF_TEMPLATE,
     Template.detection: _DETECTION_TEMPLATE,
+    Template.instance: _INSTANCE_TEMPLATE,
 }
 
 
@@ -1118,10 +1174,14 @@ def _wizard() -> str:
         label_lines.append(f"  label_field: {field}" if field else "  label_field: null")
         _console.print(
             "  [bold]segmentation[/bold]  a class mask per patch\n"
-            "  [bold]detection[/bold]     a box per object (COCO and YOLO)"
+            "  [bold]detection[/bold]     a box per object (COCO and YOLO)\n"
+            "  [bold]instance[/bold]      a mask per object (COCO RLE, optional instance-ID PNG)"
         )
         task = Prompt.ask(
-            "Task", choices=["segmentation", "detection"], default="segmentation", console=_console
+            "Task",
+            choices=["segmentation", "detection", "instance"],
+            default="segmentation",
+            console=_console,
         )
         if task == "detection":
             formats = Prompt.ask(
@@ -1134,6 +1194,17 @@ def _wizard() -> str:
                 "  min_visible: 0.3           # share of an object's area a patch must show",
                 "  min_box_pixels: 2          # drop thinner boxes (slivers at patch edges)",
                 f"  formats: {chosen}",
+            ]
+        elif task == "instance":
+            id_mask = Confirm.ask(
+                "Also write a 16-bit instance-ID PNG per patch?", default=False, console=_console
+            )
+            task_lines = ["task: instance", ""]
+            detection_lines = [
+                "instance:",
+                "  min_visible: 0.3           # share of an instance's area a patch must show",
+                "  min_area: 4                # drop masks with fewer pixels (edge slivers)",
+                f"  id_mask: {'true' if id_mask else 'false'}",
             ]
 
     _console.print("\n[bold cyan]4/4 Patches and output[/bold cyan]")
@@ -1188,7 +1259,8 @@ def _wizard() -> str:
         "  [cyan]mapcv init[/cyan]                         guided, writes mapcv.yaml\n\n"
         "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
         "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
-        "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO"
+        "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
+        "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)"
     ),
 )
 def init(

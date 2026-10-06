@@ -259,6 +259,41 @@ def visible_parts(
     return out
 
 
+def clip_to_frame(
+    geometries: npt.NDArray[np.object_],
+    bounds: npt.NDArray[np.float64],
+    frame: Tuple[int, int, int, int],
+    row: int,
+    col: int,
+    valid_patch: Optional[npt.NDArray[np.bool_]],
+) -> Optional[Tuple[npt.NDArray[np.intp], npt.NDArray[np.object_]]]:
+    """The parts of the geometries (window pixels) that a patch shows, or ``None`` for none.
+
+    ``frame`` is ``(x0, y0, x1, y1)``, the patch inside its window (beyond it is
+    padding); ``(row, col)`` is the patch's top-left pixel in the window and
+    ``valid_patch`` marks the patch pixels that have imagery. Only geometries whose
+    bounds touch the frame are cut. Returns their indices (in order) and their
+    polygonal parts inside the frame and over pixels with imagery; a part may be empty.
+    """
+    x0, y0, x1, y1 = frame
+    hit = np.flatnonzero(
+        (bounds[:, 0] < x1) & (bounds[:, 2] > x0) & (bounds[:, 1] < y1) & (bounds[:, 3] > y0)
+    )
+    if not len(hit):
+        return None
+    clipped = _areal(shapely.intersection(geometries[hit], shapely.box(x0, y0, x1, y1)))
+    if valid_patch is not None:
+        # Only the pixels under the candidates matter; cut the mask down to them.
+        cx0 = max(x0, int(np.floor(bounds[hit, 0].min())))
+        cy0 = max(y0, int(np.floor(bounds[hit, 1].min())))
+        cx1 = min(x1, int(np.ceil(bounds[hit, 2].max())))
+        cy1 = min(y1, int(np.ceil(bounds[hit, 3].max())))
+        sub = valid_patch[cy0 - row : cy1 - row, cx0 - col : cx1 - col]
+        if sub.size:
+            clipped = visible_parts(clipped, sub, cx0, cy0)
+    return hit, clipped
+
+
 class DetectionWindow:
     """Window of a detection target: the nearby features in window pixel coordinates."""
 
@@ -297,22 +332,12 @@ class DetectionWindow:
         x1, y1 = min(col + patch_size, self._width), min(row + patch_size, self._height)
         if x1 <= x0 or y1 <= y0 or not len(self._geometries):
             return empty
-        bounds = self._bounds
-        hit = np.flatnonzero(
-            (bounds[:, 0] < x1) & (bounds[:, 2] > x0) & (bounds[:, 1] < y1) & (bounds[:, 3] > y0)
+        candidates = clip_to_frame(
+            self._geometries, self._bounds, (x0, y0, x1, y1), row, col, valid_patch
         )
-        if not len(hit):
+        if candidates is None:
             return empty
-        clipped = _areal(shapely.intersection(self._geometries[hit], shapely.box(x0, y0, x1, y1)))
-        if valid_patch is not None:
-            # Only the pixels under the candidates matter; cut the mask down to them.
-            cx0 = max(x0, int(np.floor(bounds[hit, 0].min())))
-            cy0 = max(y0, int(np.floor(bounds[hit, 1].min())))
-            cx1 = min(x1, int(np.ceil(bounds[hit, 2].max())))
-            cy1 = min(y1, int(np.ceil(bounds[hit, 3].max())))
-            sub = valid_patch[cy0 - row : cy1 - row, cx0 - col : cx1 - col]
-            if sub.size:
-                clipped = visible_parts(clipped, sub, cx0, cy0)
+        hit, clipped = candidates
         visible_areas = shapely.area(clipped)
         boxes = shapely.bounds(clipped)
         options = self._options

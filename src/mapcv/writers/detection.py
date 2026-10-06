@@ -106,8 +106,8 @@ def _chunk_file(staging: Path, chunk: int) -> Path:
     return staging / OBJECTS_DIR / f"chunk_{chunk:06d}.json"
 
 
-def load_objects(manifest: Manifest, staging: Path) -> List[List[ObjectRow]]:
-    """Every patch's stored objects, in manifest order.
+def load_objects(manifest: Manifest, staging: Path, noun: str = "boxes") -> List[List[ObjectRow]]:
+    """Every patch's stored objects, in manifest order (``noun`` names them in errors).
 
     Raises:
         ValueError: A chunk file or a patch in it is missing (the dataset is incomplete).
@@ -120,7 +120,7 @@ def load_objects(manifest: Manifest, staging: Path) -> List[List[ObjectRow]]:
             path = _chunk_file(staging, chunk)
             if not path.exists():
                 raise ValueError(
-                    f"{path} is missing, so the boxes of chunk {chunk} are unknown; "
+                    f"{path} is missing, so the {noun} of chunk {chunk} are unknown; "
                     "regenerate the dataset into a new writer.staging_dir"
                 )
             by_chunk[chunk] = json.loads(path.read_text(encoding="utf-8"))["patches"]
@@ -128,7 +128,7 @@ def load_objects(manifest: Manifest, staging: Path) -> List[List[ObjectRow]]:
         stored = by_chunk[chunk].get(name)
         if stored is None:
             raise ValueError(
-                f"{_chunk_file(staging, chunk)} has no boxes for {name}; regenerate the "
+                f"{_chunk_file(staging, chunk)} has no {noun} for {name}; regenerate the "
                 "dataset into a new writer.staging_dir"
             )
         result.append(stored)

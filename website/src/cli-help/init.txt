@@ -7,7 +7,7 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
-│                                        f|detection>           example instead of     │
+│                                        f|detection|instance>  example instead of     │
 │                                                               asking.                │
 │ --interactive      --no-interactive                           Ask questions          │
 │                                                               (default: when run in  │
@@ -30,4 +30,7 @@
  mapcv init my.yaml --template sentinel2   a ready-made example
 
  mapcv init boxes.yaml --template detection   boxes for COCO and YOLO
+
+ mapcv init masks.yaml --template instance   a mask per object (COCO RLE)
+
 

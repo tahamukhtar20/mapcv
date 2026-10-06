@@ -36,6 +36,8 @@ _MASK_COMPRESSION = 0.05
 # GeoTIFF (Deflate with a predictor): like PNG for 8-bit data, and about a fifth off float32 bytes.
 _TIF_FLOAT_COMPRESSION = 0.8
 _OBJECT_BYTES = 250
+# An instance: its COCO annotation with the RLE mask, and the same again in the chunk store.
+_INSTANCE_BYTES = 500
 
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
@@ -50,7 +52,7 @@ class LabelSummary:
     polygons: int
     classes: Dict[str, int]
     warnings: List[str] = field(default_factory=list)
-    # Features whose geometry intersects the region (each is one detection object).
+    # Features whose geometry intersects the region (each is one detection or instance object).
     in_region: int = 0
     #: What the label raster is (CRS, size, pixel size), for raster labels.
     raster: Optional[str] = None
@@ -73,7 +75,8 @@ class Plan:
     chunk_memory_bytes: int
     labels: Optional[LabelSummary]
     warnings: List[str] = field(default_factory=list)
-    # Detection: label features in the region, each one object (``None`` for other tasks).
+    # Detection and instance segmentation: label features in the region, each one object
+    # (``None`` for other tasks).
     objects: Optional[int] = None
 
     @property
@@ -246,6 +249,8 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
     if geometries and not in_region:
         if config.task == "detection":
             what, outcome = "feature", "no patch would have objects"
+        elif config.task == "instance":
+            what, outcome = "feature", "no patch would have instances"
         else:
             what, outcome = "polygon", "every mask would be background"
         messages.append(
@@ -302,6 +307,9 @@ def plan(config: MapcvConfig) -> Plan:
     has_masks = config.task == "segmentation" and config.labels is not None
     mask_ratio = 1.0 if config.writer.mask_format == "npy" else _MASK_COMPRESSION
     mask_bytes = int(pixels_per_patch * mask_ratio) if has_masks else 0
+    if config.task == "instance" and config.instance_options.id_mask:
+        # One 16-bit instance-ID mask per patch (compressed PNG or GeoTIFF, raw as NPY).
+        mask_bytes = int(2 * pixels_per_patch * mask_ratio)
     output = patches * (image_bytes + mask_bytes)
     window_rows = min(height, chunk_rows + patch_size)
     # Window, validity mask, label mask and extracted patches each hold a copy.
@@ -313,6 +321,8 @@ def plan(config: MapcvConfig) -> Plan:
         if config.task == "detection":
             # A box in the COCO file, the YOLO label and the chunk store.
             output += labels.in_region * _OBJECT_BYTES
+        elif config.task == "instance":
+            output += labels.in_region * _INSTANCE_BYTES
     if config.sampler.mode == "random" and 0 < patches < config.sampler.random_count:
         plan_warnings.append(
             f"random_count is {config.sampler.random_count} but only {patches} distinct patch "
@@ -340,7 +350,9 @@ def plan(config: MapcvConfig) -> Plan:
         chunk_memory_bytes=chunk_memory,
         labels=labels,
         warnings=plan_warnings,
-        objects=labels.in_region if labels is not None and config.task == "detection" else None,
+        objects=labels.in_region
+        if labels is not None and config.task in ("detection", "instance")
+        else None,
     )
 
 

@@ -83,3 +83,36 @@ The wheels link the `jpeg-encoder` crate (`(MIT OR Apache-2.0) AND IJG`), which
 writes the JPEG patches. Its DCT code is ported from the Independent JPEG Group's
 software, so this software is based in part on the work of the Independent JPEG
 Group.
+
+## COCO API (Microsoft COCO Toolbox)
+
+`src/mapcv/_rle.py` writes the compressed run-length strings of COCO instance
+segmentations. Its `counts_to_string` follows `rleToString()` in `common/maskApi.c` of
+the COCO API (<https://github.com/cocodataset/cocoapi>), Simplified BSD licence; the
+run-length computation around it is mapcv's own. pycocotools, which builds on the same
+code, is used only in mapcv's tests, to check the output.
+
+```
+Copyright (c) 2014, Piotr Dollar and Tsung-Yi Lin
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

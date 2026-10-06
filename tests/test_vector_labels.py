@@ -24,6 +24,7 @@ import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -37,6 +38,7 @@ from pyproj import CRS, Transformer
 from shapely.geometry import Point, Polygon, box
 from typer.testing import CliRunner
 
+from mapcv import vector_files
 from mapcv.cli import _ask_bbox_or_file, app, label_fields
 from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.labels import (
@@ -311,6 +313,69 @@ def test_a_shapefile_without_dbf_works_without_a_label_field(tmp_path: Path) -> 
     assert len(got) == 5 and class_map == {}
     with pytest.raises(ValueError, match="'class' is not a column"):
         load_vector_labels(path, "class")
+
+
+def test_sidecar_suffixes_of_any_case_mix_are_found(tmp_path: Path) -> None:
+    path = copy_shapefile(tmp_path)
+    for suffix, mixed in ((".dbf", ".Dbf"), (".prj", ".PrJ"), (".cpg", ".cPg")):
+        path.with_suffix(suffix).rename(path.with_suffix(mixed))
+    assert_same(load(path)[0], reference()[0])
+    assert label_file_sha256(path)
+
+
+def test_the_hash_of_a_lone_shp_covers_just_that_file(tmp_path: Path) -> None:
+    path = copy_shapefile(tmp_path, skip=[".shx", ".dbf", ".prj", ".cpg"])
+    assert label_file_sha256(path) == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def shape(shape_type: int, points: Any, parts: Any = (0,)) -> Any:
+    """A stand-in for a pyshp shape: ``_shape_geometry`` only reads these three fields."""
+    return SimpleNamespace(shapeType=shape_type, points=list(points), parts=list(parts))
+
+
+def geometry_of(record: Any) -> Any:
+    return vector_files._shape_geometry(record)
+
+
+def test_shape_geometry_kinds() -> None:
+    square = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+    assert geometry_of(shape(0, [])) is None
+    assert geometry_of(shape(1, [(1.0, 2.0)])).equals(Point(1, 2))
+    assert geometry_of(shape(18, [(1.0, 2.0), (3.0, 4.0)])).geom_type == "MultiPoint"
+    assert geometry_of(shape(3, square, [0])).geom_type == "LineString"
+    assert geometry_of(shape(13, square + square, [0, 5])).geom_type == "MultiLineString"
+    # A polygon of one ring is returned as a ring, for the caller to build in bulk.
+    ring = geometry_of(shape(5, square, [0]))
+    assert isinstance(ring, vector_files._SingleRing) and len(ring.ring) == 5
+    inner = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8), (0.2, 0.2)]
+    holed = geometry_of(shape(5, square + inner, [0, 5]))
+    assert holed.geom_type == "Polygon" and holed.area == pytest.approx(0.64)
+    two = [(5.0, 5.0), (5.0, 6.0), (6.0, 6.0), (6.0, 5.0), (5.0, 5.0)]
+    assert geometry_of(shape(5, square + two, [0, 5])).geom_type == "MultiPolygon"
+    # A ring of fewer than three points is dropped: a real ring and a stray pair make one polygon.
+    assert geometry_of(shape(5, square + [(9.0, 9.0), (9.5, 9.5)], [0, 5])).geom_type == "Polygon"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        shape(1, []),  # a point without coordinates
+        shape(3, [(0.0, 0.0)], [0]),  # a line of one point
+        shape(5, [(0.0, 0.0), (1.0, 1.0)], [0]),  # a polygon without a ring
+        shape(31, [(0.0, 0.0)] * 4, [0]),  # a MultiPatch
+        shape(77, [(0.0, 0.0)] * 4, [0]),  # an unknown type
+    ],
+)
+def test_shapes_without_usable_geometry_raise_type_error(record: Any) -> None:
+    with pytest.raises(TypeError):
+        geometry_of(record)
+
+
+def test_shape_parts_out_of_order_are_a_value_error() -> None:
+    with pytest.raises(ValueError, match="part offsets"):
+        geometry_of(shape(5, [(0.0, 0.0)] * 10, [5, 0]))
+    with pytest.raises(ValueError, match="part offsets"):
+        geometry_of(shape(5, [(0.0, 0.0)] * 4, [0, 9]))
 
 
 def test_a_shapefile_without_shx_is_read_in_order(tmp_path: Path) -> None:
@@ -616,6 +681,43 @@ def test_not_a_geopackage_and_missing_files(tmp_path: Path) -> None:
             load_vector_labels(tmp_path / name, None)
 
 
+def test_a_layer_whose_geometries_are_all_null_is_empty_not_an_error(tmp_path: Path) -> None:
+    srs = [(32633, "UTM 33N", "EPSG", 32633, "undefined")]
+    path = make_gpkg(tmp_path / "a.gpkg", [(None, "x"), (None, "y")], srs, 32633)
+    got, class_map, messages = load(path, "label")
+    assert got == [] and class_map == {} and messages == []
+
+
+def test_a_crs_that_cannot_be_transformed_is_an_error(tmp_path: Path) -> None:
+    """A local engineering CRS has no relation to WGS-84."""
+    wkt = (
+        'ENGCRS["local",EDATUM["x"],CS[Cartesian,2],AXIS["x",east],AXIS["y",north],'
+        'LENGTHUNIT["metre",1]]'
+    )
+    srs = [(100002, "local", "my-company", 1, wkt)]
+    path = make_gpkg(tmp_path / "a.gpkg", [(gpkg_blob(SQUARE, 100002), "x")], srs, 100002)
+    with pytest.raises(ValueError, match="cannot reproject from its CRS"):
+        load_vector_labels(path, "label")
+
+
+def test_damaged_geopackage_tables_are_value_errors(tmp_path: Path) -> None:
+    no_srs = make_gpkg(tmp_path / "no_srs.gpkg", [(gpkg_blob(SQUARE), "x")])
+    connection = sqlite3.connect(no_srs)
+    connection.execute("DROP TABLE gpkg_spatial_ref_sys")
+    connection.commit()
+    connection.close()
+    with pytest.raises(ValueError, match="cannot read gpkg_spatial_ref_sys"):
+        load_vector_labels(no_srs, "label")
+
+    no_table = make_gpkg(tmp_path / "no_table.gpkg", [(gpkg_blob(SQUARE), "x")])
+    connection = sqlite3.connect(no_table)
+    connection.execute("DROP TABLE feat")
+    connection.commit()
+    connection.close()
+    with pytest.raises(ValueError, match="cannot read the features"):
+        load_vector_labels(no_table, None)
+
+
 def test_a_geopackage_with_no_features_table(tmp_path: Path) -> None:
     path = make_gpkg(tmp_path / "a.gpkg", [])
     connection = sqlite3.connect(path)
@@ -708,6 +810,26 @@ def test_malformed_geoparquet_metadata(pq: Any, tmp_path: Path, change: Any, mes
         load_vector_labels(path, "class")
 
 
+def test_geoparquet_primary_column_must_exist(pq: Any, tmp_path: Path) -> None:
+    def change(geo: Dict[str, Any]) -> None:
+        geo["columns"]["nope"] = geo["columns"].pop("geometry")
+        geo["primary_column"] = "nope"
+
+    path = rewrite_geo(DATA / "labels.parquet", tmp_path / "bad.parquet", change)
+    with pytest.raises(ValueError, match="geometry column 'nope' is not in the file"):
+        load_vector_labels(path, "class")
+
+
+def test_geoparquet_column_metadata_must_be_an_object(pq: Any, tmp_path: Path) -> None:
+    path = rewrite_geo(
+        DATA / "labels.parquet",
+        tmp_path / "bad.parquet",
+        lambda geo: geo["columns"].update(geometry="WKB"),
+    )
+    with pytest.raises(ValueError, match="'geo' metadata is malformed"):
+        load_vector_labels(path, "class")
+
+
 def test_parquet_without_geo_metadata_and_corrupt_parquet(pq: Any, tmp_path: Path) -> None:
     import pyarrow as pa
 
@@ -761,6 +883,19 @@ def test_invalid_geojson_is_a_value_error(tmp_path: Path) -> None:
     bad.write_text("{not json")
     with pytest.raises(ValueError, match="not valid GeoJSON"):
         load_vector_labels(bad, None)
+
+
+def test_invalid_utf8_geojson_is_a_value_error(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.geojson"
+    bad.write_bytes(b'{"type": "FeatureCollection", "features": [], "x": "\xff\xfe"}')
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        load_vector_labels(bad, None)
+
+
+def test_the_wizard_lists_attributes_of_vector_tables_only() -> None:
+    with pytest.raises(ValueError, match="listed by the caller"):
+        vector_attributes(GEOJSON)
+    assert vector_layers(GEOJSON) == [] and vector_layers(DATA / "polygons.shp") == []
 
 
 def test_label_file_hash(tmp_path: Path) -> None:
@@ -944,6 +1079,41 @@ def test_wizard_area_from_a_shapefile_and_parquet(pq: Any, tmp_path: Path) -> No
         assert isinstance(config.labels, LabelsConfig) and config.labels.label_field == "class"
 
 
+def test_wizard_asks_for_the_layer_of_a_separate_label_file(tmp_path: Path) -> None:
+    out = tmp_path / "mapcv.yaml"
+    path = str(DATA / "labels_2layers.gpkg")
+    area = "16.358,48.188,16.392,48.206"
+    steps = ["esri", area, "17", path, "buildings", "class", "", "256", "./ds", "y"]
+    result = runner.invoke(app, ["init", str(out), "--interactive"], input="\n".join(steps) + "\n")
+    assert result.exit_code == 0, result.output
+    config = MapcvConfig.from_yaml(out)
+    assert isinstance(config.labels, LabelsConfig) and config.labels.layer == "buildings"
+
+
+def test_wizard_helpers_survive_unreadable_label_files(tmp_path: Path) -> None:
+    from mapcv.cli import _ask_label_field, _ask_layer
+
+    bad = tmp_path / "bad.gpkg"
+    bad.write_text("not sqlite")
+    assert _ask_layer(bad) is None  # the file is read next, which says why it cannot be
+    assert _ask_layer(DATA / "labels.gpkg") is None  # one layer: nothing to ask
+    noprj = copy_shapefile(tmp_path, skip=[".prj"])
+    assert _ask_label_field(noprj) is None  # reported, and the config is written for editing
+
+
+def test_label_fields_of_a_kml_file(tmp_path: Path) -> None:
+    kml = tmp_path / "a.kml"
+    kml.write_text(
+        '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark>'
+        '<ExtendedData><SchemaData><SimpleData name="kind">roof</SimpleData></SchemaData>'
+        "</ExtendedData><Polygon><outerBoundaryIs><LinearRing><coordinates>"
+        "0,0,0 0,1,0 1,1,0 0,0,0</coordinates></LinearRing></outerBoundaryIs></Polygon>"
+        "</Placemark></Document></kml>",
+        encoding="utf-8",
+    )
+    assert label_fields(kml) == {"kind": ["roof"]}
+
+
 def test_wizard_area_prompt_reports_an_unreadable_file_and_asks_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1088,7 +1258,7 @@ E2E = [
 ]
 
 
-@pytest.mark.parametrize("task", ["segmentation", "detection"])
+@pytest.mark.parametrize("task", ["segmentation", "detection", "instance"])
 @pytest.mark.parametrize("name, equivalent, layer", E2E)
 def test_generate_is_byte_identical_to_the_geojson_run(
     runs: Runs, name: str, equivalent: str, layer: Optional[str], task: str
@@ -1099,6 +1269,8 @@ def test_generate_is_byte_identical_to_the_geojson_run(
     extra: Dict[str, Any] = {"task": task}
     if task == "detection":
         extra["detection"] = {"point_box_size": 24, "min_visible": 0.0}
+    if task == "instance":
+        extra["instance"] = {"min_visible": 0.0}
     base: Dict[str, Any] = {"label_field": "class"}
     own: Dict[str, Any] = {"path": str(DATA / name), **base}
     if layer:
@@ -1113,9 +1285,12 @@ def test_generate_is_byte_identical_to_the_geojson_run(
         masks = [Image.open(BytesIO(d)) for n, d in files.items() if n.startswith("Masks/")]
         classes = {int(v) for m in masks for v in np.unique(np.asarray(m))}
         assert classes - {0, 255}
-    else:
+    elif task == "detection":
         boxes = [data for name, data in files.items() if name.startswith("labels/")]
         assert any(boxes)
+    else:  # instance: COCO annotations with masks
+        coco = [d for n, d in files.items() if n.startswith("annotations/") and n.endswith(".json")]
+        assert any(b'"iscrowd"' in data for data in coco)
     # The whole manifest agrees but the label file's hash (and the layer, when one is set).
     labels = manifest["target"]["labels"]
     assert labels.pop("sha256") != expected_manifest["target"]["labels"].pop("sha256")

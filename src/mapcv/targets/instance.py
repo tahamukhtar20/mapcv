@@ -25,7 +25,6 @@ Conventions (shared with the COCO writer):
 
 from __future__ import annotations
 
-import hashlib
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple, cast
@@ -38,7 +37,7 @@ from mapcv._patching import PadMode
 from mapcv._rle import encode_part, mask_bbox
 from mapcv.config import InstanceOptions, LabelsConfig
 from mapcv.imagery import RasterMetadata
-from mapcv.labels import ClassMap, GeomWithClass
+from mapcv.labels import ClassMap, GeomWithClass, label_file_sha256
 from mapcv.manifest import TargetRecord
 from mapcv.rasterizer import rasterize
 from mapcv.targets.base import Transform, WindowTarget
@@ -260,9 +259,8 @@ class InstanceTarget:
         return self._class_map
 
     def prepare(self, source: RasterMetadata) -> None:
-        data = self._labels.path.read_bytes()
-        self._sha256 = hashlib.sha256(data).hexdigest()
-        parsed, self._class_map = _parse_labels(self._labels, data, source.crs)
+        self._sha256 = label_file_sha256(self._labels.path)
+        parsed, self._class_map = _parse_labels(self._labels, source.crs)
         features: List[GeomWithClass] = [
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
         ]

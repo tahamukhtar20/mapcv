@@ -377,7 +377,7 @@ def _parts(record: Any) -> List[npt.NDArray[np.float64]]:
     points = points.reshape(len(record.points), -1)[:, :2]
     starts = [int(start) for start in record.parts] or [0]
     ends = [*starts[1:], len(points)]
-    if starts != sorted(starts) or starts[0] < 0 or ends[-1] > len(points):
+    if starts != sorted(starts) or starts[0] < 0 or starts[-1] > len(points):
         raise ValueError("the part offsets of a shape are invalid")
     return [points[start:end] for start, end in zip(starts, ends)]
 
@@ -491,7 +491,7 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
         )
     try:
         wkt = prj.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError as exc:
+    except OSError as exc:  # pragma: no cover - the file vanished or is unreadable
         raise ValueError(f"{prj.name}: cannot read it ({exc}).") from exc
     crs = _crs_from(wkt, prj.name)
     dbf = _sidecar(path, ".dbf")
@@ -521,11 +521,6 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
             _read_shapefile_features(reader, dbf_file is not None, columns, table, path.name)
         except ValueError:
             raise
-        except UnicodeDecodeError as exc:
-            raise ValueError(
-                f"{path.name}: its attributes are not valid {encoding}. Put the file's real "
-                f"encoding in {path.stem}.cpg (for example ISO-8859-1 or windows-1252)."
-            ) from exc
         except Exception as exc:  # noqa: BLE001 - pyshp raises many types for corrupt input
             if "decode" in str(exc).lower():
                 raise ValueError(
@@ -537,7 +532,7 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
                 f"{path.name}: cannot read the shapefile ({type(exc).__name__}: {exc}). "
                 "The file may be corrupt or truncated."
             ) from exc
-    except OSError as exc:
+    except OSError as exc:  # pragma: no cover - a file vanished or is unreadable
         raise ValueError(f"{path.name}: cannot read the shapefile ({exc}).") from exc
     finally:
         for handle in reversed(handles):

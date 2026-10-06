@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import warnings
+from functools import lru_cache
 from math import pi
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -28,6 +29,46 @@ ClassMap = Dict[str, int]
 
 _POLYGON_TYPES = frozenset({"Polygon", "MultiPolygon"})
 _POINT_TYPES = frozenset({"Point", "MultiPoint"})
+_LINE_TYPES = frozenset({"LineString", "MultiLineString", "LinearRing"})
+
+#: Buffer distances in metres: ``(line, point)``, either ``None`` for "do not buffer".
+BufferDistances = Tuple[Optional[float], Optional[float]]
+
+
+def _utm_epsg(lon: float, lat: float) -> int:
+    """The WGS-84 UTM zone (EPSG code) holding a lon/lat position."""
+    zone = min(60, max(1, int((lon + 180.0) // 6.0) + 1))
+    return (32600 if lat >= 0.0 else 32700) + zone
+
+
+@lru_cache(maxsize=128)
+def _utm_transformers(epsg: int) -> Tuple[Any, Any]:
+    from pyproj import Transformer
+
+    return (
+        Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True),
+        Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True),
+    )
+
+
+def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
+    """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
+
+    The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
+    metre to within 0.1%, and the polygon is brought back to lon/lat.
+    """
+    centroid = geometry.centroid
+    to_utm, to_lonlat = _utm_transformers(_utm_epsg(centroid.x, centroid.y))
+
+    def project(transformer: Any) -> Any:
+        def apply(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            x, y = transformer.transform(coords[:, 0], coords[:, 1])
+            return np.column_stack((x, y))
+
+        return apply
+
+    projected = shapely.transform(geometry, project(to_utm))
+    return shapely.transform(projected.buffer(distance, quad_segs=8), project(to_lonlat))
 
 
 def _to_mercator(
@@ -224,6 +265,7 @@ def parse_geojson(
     label_field: Optional[str] = None,
     classes: Optional[ClassMap] = None,
     points: bool = False,
+    buffer: Optional[BufferDistances] = None,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
@@ -250,7 +292,9 @@ def parse_geojson(
         geometries.append(shape(geom_dict) if geom_dict is not None else None)
         props: Dict[str, Any] = feat.get("properties") or {}
         raw_labels.append(props.get(label_field) if label_field else None)
-    return _polygon_features("GeoJSON", geometries, raw_labels, label_field, classes, points)
+    return _polygon_features(
+        "GeoJSON", geometries, raw_labels, label_field, classes, points, buffer=buffer
+    )
 
 
 def _polygon_features(
@@ -261,14 +305,17 @@ def _polygon_features(
     classes: Optional[ClassMap],
     points: bool,
     unreadable: Optional[Set[int]] = None,
+    buffer: Optional[BufferDistances] = None,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Keep the polygon (and, with ``points``, point) features and give them class IDs.
 
     The one place where every vector format gets the same rules: a feature without a
-    geometry is ignored; polygons inside a GeometryCollection are kept; other geometries
-    are skipped and counted. ``unreadable`` lists features (by index) that are counted as
+    geometry is ignored; polygons inside a GeometryCollection are kept; with ``buffer``,
+    lines and points become polygons (see :func:`buffer_metres`); other geometries are
+    skipped and counted. ``unreadable`` lists features (by index) that are counted as
     having no polygon geometry because the format stored a kind mapcv cannot read.
     """
+    line_m, point_m = buffer if buffer is not None else (None, None)
     kept: List[BaseGeometry] = []
     labels: List[Optional[str]] = []
     non_polygon = 0
@@ -278,8 +325,13 @@ def _polygon_features(
                 non_polygon += 1
             continue
         geom = _polygon_parts(parsed)
-        if geom is None and points and parsed.geom_type in _POINT_TYPES and not parsed.is_empty:
-            geom = parsed
+        if geom is None and not parsed.is_empty:
+            if line_m is not None and parsed.geom_type in _LINE_TYPES:
+                geom = buffer_metres(parsed, line_m / 2.0)
+            elif point_m is not None and parsed.geom_type in _POINT_TYPES:
+                geom = buffer_metres(parsed, point_m / 2.0)
+            elif points and parsed.geom_type in _POINT_TYPES:
+                geom = parsed
         if geom is None:
             non_polygon += 1
             continue
@@ -333,6 +385,7 @@ def load_vector_labels(
     classes: Optional[ClassMap] = None,
     points: bool = False,
     layer: Optional[str] = None,
+    buffer: Optional[BufferDistances] = None,
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Read a vector label file of any supported format into ``(geometry, class_id)`` pairs.
 
@@ -350,6 +403,8 @@ def load_vector_labels(
       ``UserWarning`` together with features that have no label or an unmapped one.
     * ``layer`` picks the table of a GeoPackage with more than one; it is an error for the
       other formats.
+    * ``buffer`` ``(line, point)`` widths in metres turn lines into polygons that wide and
+      points into discs that wide (not for KML, whose lines and points are not read).
 
     Args:
         path: The label file. Shapefiles are found with their ``.dbf``, ``.prj`` and
@@ -373,8 +428,13 @@ def load_vector_labels(
         data = path.read_bytes()
         try:
             if kind == "KML":
+                if buffer is not None:
+                    raise ValueError(
+                        f"{path.name}: buffering needs line and point features, which mapcv "
+                        "does not read from KML; convert the file to GeoJSON or GeoPackage"
+                    )
                 return parse_kml(data, label_field, classes)
-            return parse_geojson(data, label_field, classes, points=points)
+            return parse_geojson(data, label_field, classes, points=points, buffer=buffer)
         except UnicodeDecodeError as exc:
             raise ValueError(f"{path.name} is not valid UTF-8 text ({exc}).") from exc
         except json.JSONDecodeError as exc:
@@ -387,7 +447,7 @@ def load_vector_labels(
     if not label_field:
         raw_labels = [None] * len(table.geometries)
     return _polygon_features(
-        kind, table.geometries, raw_labels, label_field, classes, points, table.unreadable
+        kind, table.geometries, raw_labels, label_field, classes, points, table.unreadable, buffer
     )
 
 

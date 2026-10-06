@@ -32,6 +32,7 @@ from mapcv._mapcv_rs import parse_kml_rs
 from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
+    LabelsConfig,
     MapcvConfig,
     RASTER_LABEL_TYPES,
     UNION_TAGS,
@@ -278,6 +279,11 @@ def _settings_table(config: MapcvConfig) -> Table:
             else ""
         )
         table.add_row("Labels", f"{where} · values of band {values.band}{scaling}")
+    elif config.labels.files is not None:
+        for index, file in enumerate(config.labels.files):
+            what = f"field: {file.label_field}" if file.label_field else f"class: {file.class_name}"
+            layer = f" · layer: {file.layer}" if file.layer else ""
+            table.add_row("Labels" if index == 0 else "", f"{file.path}{layer} · {what}")
     else:
         field = config.labels.label_field or "none — every polygon is class 1"
         layer = f" · layer: {config.labels.layer}" if config.labels.layer else ""
@@ -1879,16 +1885,24 @@ def validate(
         label_file = eopf_local_path(labels.path)
         if label_file is not None and not label_file.exists():
             _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")
-    elif labels is not None and not labels.path.exists():
-        _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {labels.path}")
+    elif labels is not None:
+        for key, path in labels.keyed_files():
+            if not path.exists():
+                _console.print(f"[yellow]Warning:[/yellow] {key} not found: {path}")
+    if isinstance(labels, LabelsConfig) and labels.annotated_area is not None:
+        if not labels.annotated_area.exists():
+            area = labels.annotated_area
+            _console.print(f"[yellow]Warning:[/yellow] labels.annotated_area not found: {area}")
     change = config.change
     if change is not None:
         for key, label_set in (
             ("change.before.path", change.before),
             ("change.after.path", change.after),
         ):
-            if label_set is not None and not label_set.path.exists():
-                _console.print(f"[yellow]Warning:[/yellow] {key} not found: {label_set.path}")
+            if label_set is not None:
+                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                    if not path.exists():
+                        _console.print(f"[yellow]Warning:[/yellow] {file_key} not found: {path}")
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

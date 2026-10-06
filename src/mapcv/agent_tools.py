@@ -56,6 +56,7 @@ from mapcv.config import (
     UNION_TAGS,
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
+    LabelsConfig,
     MapcvConfig,
     RASTER_LABEL_TYPES,
     ContinuousLabelsConfig,
@@ -304,11 +305,11 @@ class Sandbox:
                 continue
 
 
-def _vector_label_paths(key: str, labels: Any) -> List[Tuple[str, Path]]:
+def _vector_label_paths(key: str, path: Path) -> List[Tuple[str, Path]]:
     """A vector label file and, for a Shapefile, its sidecar files."""
-    found: List[Tuple[str, Path]] = [(key, labels.path)]
-    if labels.path.suffix.lower() == ".shp" and labels.path.is_file():
-        found.extend((f"{key} (sidecar)", file) for file in shapefile_files(labels.path)[1:])
+    found: List[Tuple[str, Path]] = [(key, path)]
+    if path.suffix.lower() == ".shp" and path.is_file():
+        found.extend((f"{key} (sidecar)", file) for file in shapefile_files(path)[1:])
     return found
 
 
@@ -321,7 +322,11 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
         if local is not None:
             found.append(("labels.path", local))
     elif labels is not None:
-        found.extend(_vector_label_paths("labels.path", labels))
+        # Every label file is read: each one must be inside the root.
+        for key, path in labels.keyed_files():
+            found.extend(_vector_label_paths(key, path))
+        if labels.annotated_area is not None:
+            found.append(("labels.annotated_area", labels.annotated_area))
     # Change detection may compare two label sets instead: both are read.
     change = config.change
     if change is not None:
@@ -330,7 +335,8 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
             ("change.after.path", change.after),
         ):
             if label_set is not None:
-                found.extend(_vector_label_paths(key, label_set))
+                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                    found.extend(_vector_label_paths(file_key, path))
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
             local = eopf_local_path(imagery.path)
@@ -638,9 +644,21 @@ def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str,
             "scale": labels.scale,
             "offset": labels.offset,
         }
+    if labels.files is not None:
+        return {
+            "type": "vector",
+            "files": [
+                {
+                    **file.model_dump(mode="json", by_alias=True),
+                    "path": state.sandbox.rel(file.path),
+                }
+                for file in labels.files
+            ],
+            "classes": labels.classes,
+        }
     return {
         "type": "vector",
-        "path": state.sandbox.rel(labels.path),
+        "path": state.sandbox.rel(labels.first_path),
         "label_field": labels.label_field,
         "classes": labels.classes,
         "layer": labels.layer,
@@ -684,16 +702,24 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
         label_file = eopf_local_path(labels.path)
         if label_file is not None and not label_file.exists():
             messages.append(f"labels.path not found: {state.sandbox.rel(label_file)}")
-    elif labels is not None and not labels.path.exists():
-        messages.append(f"labels.path not found: {state.sandbox.rel(labels.path)}")
+    elif labels is not None:
+        for key, path in labels.keyed_files():
+            if not path.exists():
+                messages.append(f"{key} not found: {state.sandbox.rel(path)}")
+    if isinstance(labels, LabelsConfig) and labels.annotated_area is not None:
+        if not labels.annotated_area.exists():
+            where = state.sandbox.rel(labels.annotated_area)
+            messages.append(f"labels.annotated_area not found: {where}")
     change = config.change
     if change is not None:
         for key, label_set in (
             ("change.before.path", change.before),
             ("change.after.path", change.after),
         ):
-            if label_set is not None and not label_set.path.exists():
-                messages.append(f"{key} not found: {state.sandbox.rel(label_set.path)}")
+            if label_set is not None:
+                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                    if not path.exists():
+                        messages.append(f"{file_key} not found: {state.sandbox.rel(path)}")
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

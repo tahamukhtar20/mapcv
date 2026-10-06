@@ -602,7 +602,8 @@ def _model_paths(model: Any, prefix: str = "", seen: Optional[Tuple[Any, ...]] =
 
     seen = (*(seen or ()), model)
     paths: List[str] = []
-    for name, info in model.model_fields.items():
+    for field, info in model.model_fields.items():
+        name = info.alias or field  # the schema (and the YAML) use the alias
         paths.append(f"{prefix}{name}")
         stack = [info.annotation]
         while stack:

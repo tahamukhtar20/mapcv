@@ -29,7 +29,7 @@ from shapely.geometry.base import BaseGeometry
 from mapcv._patching import PadMode
 from mapcv.config import DetectionOptions, LabelsConfig
 from mapcv.imagery import RasterMetadata
-from mapcv.labels import ClassMap, GeomWithClass, label_file_sha256
+from mapcv.labels import ClassMap, GeomWithClass
 from mapcv.manifest import TargetRecord
 from mapcv.targets.base import Transform, WindowTarget
 from mapcv.targets.segmentation import (
@@ -37,6 +37,8 @@ from mapcv.targets.segmentation import (
     _parse_labels,
     _raster_bounds,
     _warn_if_labels_miss_raster,
+    label_settings,
+    labels_sha256,
 )
 
 # Box coordinates and areas are rounded to 1/10,000 of a pixel.
@@ -416,7 +418,7 @@ class DetectionTarget:
         return self._class_map
 
     def prepare(self, source: RasterMetadata) -> None:
-        self._sha256 = label_file_sha256(self._labels.path)
+        self._sha256 = labels_sha256(self._labels)
         points = self._options.point_box_size is not None
         parsed, self._class_map = _parse_labels(self._labels, source.crs, points=points)
         features: List[GeomWithClass] = [
@@ -463,9 +465,7 @@ class DetectionTarget:
         if self._sha256 is None:
             raise RuntimeError("DetectionTarget.prepare() must run first")
         # labels.type is left out, as for segmentation: polygon-label records predate it.
-        settings = self._labels.model_dump(
-            mode="json", exclude={"path", "ignore_index", "all_touched", "type"}
-        )
+        settings = label_settings(self._labels, {"ignore_index", "all_touched", "type"})
         settings["sha256"] = self._sha256
         return TargetRecord(
             type="detection",

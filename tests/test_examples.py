@@ -42,9 +42,9 @@ def test_example_config_is_valid(config_path: Path, monkeypatch: pytest.MonkeyPa
     config = MapcvConfig.from_yaml(Path("mapcv.yaml"))
 
     assert isinstance(config.labels, LabelsConfig)
-    assert config.labels.path.exists()
-    assert config.labels.path.stat().st_size < _MAX_LABEL_BYTES
-    label_file = json.loads(config.labels.path.read_text())
+    assert config.labels.first_path.exists()
+    assert config.labels.first_path.stat().st_size < _MAX_LABEL_BYTES
+    label_file = json.loads(config.labels.first_path.read_text())
     assert "ODbL" in label_file["osm"]["license"]
     assert not config.writer.staging_dir.is_absolute()
 

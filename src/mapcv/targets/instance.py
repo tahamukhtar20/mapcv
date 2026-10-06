@@ -37,7 +37,7 @@ from mapcv._patching import PadMode
 from mapcv._rle import encode_part, mask_bbox
 from mapcv.config import InstanceOptions, LabelsConfig
 from mapcv.imagery import RasterMetadata
-from mapcv.labels import ClassMap, GeomWithClass, label_file_sha256
+from mapcv.labels import ClassMap, GeomWithClass
 from mapcv.manifest import TargetRecord
 from mapcv.rasterizer import rasterize
 from mapcv.targets.base import Transform, WindowTarget
@@ -47,6 +47,8 @@ from mapcv.targets.segmentation import (
     _parse_labels,
     _raster_bounds,
     _warn_if_labels_miss_raster,
+    label_settings,
+    labels_sha256,
 )
 
 # A 16-bit instance-ID mask numbers at most this many instances per patch.
@@ -259,7 +261,7 @@ class InstanceTarget:
         return self._class_map
 
     def prepare(self, source: RasterMetadata) -> None:
-        self._sha256 = label_file_sha256(self._labels.path)
+        self._sha256 = labels_sha256(self._labels)
         parsed, self._class_map = _parse_labels(self._labels, source.crs)
         features: List[GeomWithClass] = [
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
@@ -305,7 +307,7 @@ class InstanceTarget:
         if self._sha256 is None:
             raise RuntimeError("InstanceTarget.prepare() must run first")
         # labels.type is left out, as for segmentation: polygon-label records predate it.
-        settings = self._labels.model_dump(mode="json", exclude={"path", "ignore_index", "type"})
+        settings = label_settings(self._labels, {"ignore_index", "type"})
         settings["sha256"] = self._sha256
         return TargetRecord(
             type="instance",

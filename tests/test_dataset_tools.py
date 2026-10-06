@@ -86,7 +86,8 @@ def _entries(staging: Path, split: str) -> List[Any]:
 def _image(path: Path) -> npt.NDArray[Any]:
     """A patch file as ``(H, W, C)``."""
     if path.suffix == ".npy":
-        return np.moveaxis(np.load(path), 0, -1)
+        array = np.load(path)
+        return array[:, :, None] if array.ndim == 2 else np.moveaxis(array, 0, -1)
     import rasterio
 
     if path.suffix == ".tif":
@@ -191,7 +192,10 @@ def test_band_stats_and_class_weights_over_the_train_split(
         imagery,
         scene["labels"],
         region=scene["region"],
-        writer={"image_format": image_format},
+        writer={
+            "image_format": image_format,
+            "mask_format": "npy" if image_format == "npy" else "png",
+        },
     )
     run_generate(config)
     staging = tmp_path / "dataset"
@@ -201,7 +205,7 @@ def test_band_stats_and_class_weights_over_the_train_split(
     assert any((m == 255).any() for m in masks), "no patch has pixels without imagery"
 
     path, stats = write_stats(staging)
-    assert path == staging / "stats.json" and json.loads(path.read_text()) == stats
+    assert path == staging / "stats.json" and json.loads(path.read_text(encoding="utf-8")) == stats
     assert stats["split"] == "train" and stats["patches"] == len(train)
     found = stats["sources"]["image"]
     assert len(found["bands"]) == count
@@ -370,9 +374,44 @@ def test_regression_targets_and_detection_objects(tmp_path: Path, scene: Dict[st
         a
         for path in (tmp_path / "boxes").rglob("*.json")
         if path.name != "manifest.json"
-        for a in json.loads(path.read_text()).get("annotations", [])
+        for a in json.loads(path.read_text(encoding="utf-8")).get("annotations", [])
     ]
     assert coco is not None and found == {"a": len(annotations)} and annotations
+
+
+def test_classification_balance_empty_splits_and_weight_edges(
+    tmp_path: Path, scene: Dict[str, Any]
+) -> None:
+    import csv
+
+    from mapcv.stats import _median_frequency_weights
+
+    region = region_inside(reference_transform(), WIDTH, HEIGHT)
+    config = MapcvConfig.model_validate(
+        {
+            "task": "classification",
+            "region": region,
+            "imagery": {"type": "geotiff", "path": str(tmp_path / "rgb.tif")},
+            "labels": {"path": str(scene["labels"]), "label_field": "kind", "classes": {"a": 1}},
+            "classification": {"mode": "multi", "min_fraction": 0.0},
+            "sampler": {"patch_size": PATCH, "edge_strategy": "drop"},
+            "writer": {"staging_dir": str(tmp_path / "classes")},
+        }
+    )
+    run_generate(config)
+    staging = tmp_path / "classes"
+    with (staging / "labels.csv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    expected = sum(1 for row in rows if "a" in row["labels"].split("|"))
+    found = dataset_stats(staging, "all")["classes"]["patches"]
+    assert found.get("a") == expected and expected > 0
+
+    # A split without patches: no statistics, but no failure either.
+    (staging / "splits").mkdir(exist_ok=True)
+    (staging / "splits" / "val.txt").write_text("", encoding="utf-8")
+    empty = dataset_stats(staging, "val")
+    assert (empty["split"], empty["patches"], empty["sources"]) == ("val", 0, {})
+    assert _median_frequency_weights({"1": 0}, {}) == {}
 
 
 # ── verify ───────────────────────────────────────────────────────────────────
@@ -398,7 +437,7 @@ def test_a_fresh_dataset_verifies_deeply_and_with_checksums(dataset: Path) -> No
     assert report.patches == len(manifest.patches) and report.files == 2 * report.patches
 
     write_checksums(dataset)
-    lines = (dataset / CHECKSUMS_FILENAME).read_text().splitlines()
+    lines = (dataset / CHECKSUMS_FILENAME).read_text(encoding="utf-8").splitlines()
     import hashlib
 
     for line in lines:
@@ -456,6 +495,67 @@ def test_verify_split_lists_and_missing_or_broken_manifests(dataset: Path, tmp_p
     assert "cannot be read" in verify_dataset(tmp_path / "broken").problems[0]
 
 
+@pytest.mark.parametrize("image_format", ["png", "jpg", "tif"])
+def test_deep_verify_reads_every_format(
+    tmp_path: Path, scene: Dict[str, Any], image_format: str
+) -> None:
+    config = _config(
+        tmp_path,
+        {"type": "geotiff", "path": str(tmp_path / "rgb.tif")},
+        scene["labels"],
+        region=scene["region"],
+        writer={
+            "image_format": image_format,
+            "mask_format": "tif" if image_format == "tif" else "png",
+        },
+    )
+    run_generate(config)
+    staging = tmp_path / "dataset"
+    assert verify_dataset(staging, deep=True).ok
+    entry = Manifest.load(staging / "manifest.json").patches[0]
+    path = staging / entry["files"]["image"]
+    if image_format == "tif":
+        import rasterio
+
+        with rasterio.open(path) as src:
+            profile, data = src.profile, src.read()
+        profile.update(width=PATCH // 2)
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(data[:, :, : PATCH // 2])
+    else:
+        Image.new("RGB", (PATCH // 2, PATCH)).save(path, "JPEG" if image_format == "jpg" else "PNG")
+    problems = verify_dataset(staging, deep=True).problems
+    assert len(problems) == 1
+    assert "has shape (64, 32, 3) (H, W, C), the manifest says (64, 64, 3)" in problems[0]
+
+
+def test_checksums_without_split_lists_and_with_blank_lines(tmp_path: Path) -> None:
+    from mapcv.verify import _check_image
+
+    ref = reference_transform()
+    write_raster(tmp_path / "rgb.tif", ref, WIDTH, HEIGHT, seed=7)
+    config = MapcvConfig.model_validate(
+        {
+            "region": region_inside(ref, WIDTH, HEIGHT),
+            "imagery": {"type": "geotiff", "path": str(tmp_path / "rgb.tif")},
+            "sampler": {"patch_size": PATCH, "edge_strategy": "drop"},
+            "writer": {"staging_dir": str(tmp_path / "plain")},
+        }
+    )
+    run_generate(config)
+    staging = tmp_path / "plain"
+    assert not (staging / "splits").exists()
+    sums = write_checksums(staging)
+    listed = sums.read_text(encoding="utf-8").splitlines()
+    assert listed[-1].endswith("  manifest.json")
+    sums.write_text("\n".join(listed) + "\n\n\n", encoding="utf-8")
+    report = verify_dataset(staging)
+    assert report.ok and report.checked_hashes == len(listed)
+    # Shapes other than three dimensions are not compared.
+    image = staging / Manifest.load(staging / "manifest.json").patches[0]["files"]["image"]
+    assert _check_image(image, []) is None
+
+
 # ── card ─────────────────────────────────────────────────────────────────────
 
 
@@ -480,14 +580,40 @@ def test_card_front_matter_and_sections(dataset: Path) -> None:
     assert manifest.target.labels["sha256"] in body
 
     write_stats(dataset)
-    stats = json.loads((dataset / "stats.json").read_text())
+    stats = json.loads((dataset / "stats.json").read_text(encoding="utf-8"))
     with_stats = card_text(dataset)
     mean = stats["sources"]["image"]["mean"][0]
     assert "## Normalisation" in with_stats and f"| `image` | b1 | {mean:.6g} |" in with_stats
 
 
+def test_card_of_tile_detection_datasets(dataset: Path) -> None:
+    data = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
+    data["task"] = "detection"
+    data["target"]["ignore_index"] = None
+    source = data["sources"][0]
+    source.update(source_type="xyz", product_id="esri_satellite", crs=None, transform=None)
+    source.pop("fingerprint", None)
+    data["sources"].append({**source, "name": "carto", "product_id": "cartodb_positron"})
+    (dataset / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+    (dataset / "splits" / "test.txt").unlink()
+    body = card_text(dataset)
+    assert "task_categories:\n- object-detection" in body
+    assert "| `image` | xyz | Esri World Imagery | ? | ? |" in body
+    assert "| `carto` | xyz | CARTO Positron basemap |" in body
+    assert "| 0 | background |" not in body and "ignore" not in body.split("## Splits")[0]
+    assert "| test |" not in body and "fingerprint" not in body
+    assert (
+        "## Attribution\n\n- Source: Esri, Maxar" in body
+        and "- © OpenStreetMap contributors © CARTO\n" in body
+    )
+
+
 def test_card_attribution_and_task_names() -> None:
-    from mapcv.card import _attribution, _size_category
+    from mapcv.card import _attribution, _gsd, _size_category
+
+    assert _gsd(SourceRecord()) is None
+    broken = SourceRecord(crs="EPSG:999999", transform=(1.0, 0.0, 0.0, 0.0, -1.0, 0.0))
+    assert _gsd(broken) is None
 
     esri = SourceRecord(source_type="xyz", product_id="esri_satellite")
     assert "Esri" in (_attribution(esri) or "")
@@ -519,12 +645,12 @@ def test_cli_commands(dataset: Path, tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["card", str(dataset)], env=ENV)
     assert result.exit_code == 0, result.output
-    assert (dataset / "README.md").read_text() == card_text(dataset)
+    assert (dataset / "README.md").read_text(encoding="utf-8") == card_text(dataset)
     result = runner.invoke(app, ["card", str(dataset)], env=ENV)
     assert result.exit_code == 1 and "--force" in result.output
     (dataset / "README.md").write_text("mine")
     assert runner.invoke(app, ["card", str(dataset), "--force"], env=ENV).exit_code == 0
-    assert (dataset / "README.md").read_text() != "mine"
+    assert (dataset / "README.md").read_text(encoding="utf-8") != "mine"
     with pytest.raises(FileExistsError):
         write_card(dataset)
     result = runner.invoke(app, ["card", str(tmp_path / "nowhere")], env=ENV)

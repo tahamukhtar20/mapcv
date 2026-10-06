@@ -516,7 +516,9 @@ def test_xyz_imagery_with_raster_labels_matches_rasterio(
     tmp_path: Path, tile_server: str, case: str
 ) -> None:
     xyz = {"type": "xyz", "zoom": 16, "url_template": tile_server, "strip_rows": 1}
-    source = open_raster_source(RegionConfig(**XYZ_REGION), XYZImageryConfig.model_validate(xyz))
+    source = open_raster_source(
+        RegionConfig.model_validate(XYZ_REGION), XYZImageryConfig.model_validate(xyz)
+    )
     meta = source.metadata
     source.close()
     assert meta.crs == "EPSG:3857"

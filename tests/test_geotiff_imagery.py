@@ -500,7 +500,7 @@ def test_window_covers_the_region_on_the_pixel_grid(tmp_path: Path) -> None:
     for epsg, pixel in CRS_CASES:
         raster = make_raster(tmp_path, epsg=epsg, pixel=pixel, name=f"w{epsg}.tif")
         region_dict = raster.region(margin=0.2)
-        region = RegionConfig(**region_dict)
+        region = RegionConfig.model_validate(region_dict)
         source = GeoTiffRasterSource(region, GeoTiffImageryConfig(path=str(raster.path)))
         meta = source.metadata
         left, bottom, right, top = rasterio.warp.transform_bounds(
@@ -541,7 +541,7 @@ def test_region_outside_the_file_is_an_error(tmp_path: Path) -> None:
 
 def test_unusable_files_and_settings_fail_clearly(tmp_path: Path) -> None:
     raster = make_raster(tmp_path, count=2, overviews=(2,))
-    region = RegionConfig(**raster.region())
+    region = RegionConfig.model_validate(raster.region())
     with pytest.raises(ValueError, match="has 2 band"):
         GeoTiffRasterSource(region, GeoTiffImageryConfig(path=str(raster.path), bands=[3]))
     with pytest.raises(ValueError, match="1 overview level"):
@@ -554,7 +554,7 @@ def test_unusable_files_and_settings_fail_clearly(tmp_path: Path) -> None:
     wide = make_raster(tmp_path, dtype="uint16", name="u16.tif")
     with pytest.raises(ValueError, match="uint16"):
         GeoTiffRasterSource(
-            RegionConfig(**wide.region()),
+            RegionConfig.model_validate(wide.region()),
             GeoTiffImageryConfig(path=str(wide.path)),
             image_format="jpg",
         )

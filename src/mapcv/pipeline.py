@@ -24,6 +24,7 @@ from rich.progress import (
 
 from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv._patching import extract_array_patch
+from mapcv.aoi import AreaOfInterest, column_clusters
 from mapcv.config import GeoTiffImageryConfig, MapcvConfig
 from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
 from mapcv.imagery import (
@@ -261,6 +262,13 @@ def run_generate(
             )
         if config.writer.stack_sources:
             _check_stackable(records)
+        aoi = (
+            AreaOfInterest(config.region, source.metadata.crs, source.metadata.transform)
+            if config.region.path is not None
+            else None
+        )
+        # An area of interest is recorded so a resumed run notices other polygons.
+        region_record: Dict[str, Any] = {"region": aoi.record()} if aoi is not None else {}
         expected = Manifest(
             mapcv_version=mapcv_version(),
             task=config.task,
@@ -268,16 +276,27 @@ def run_generate(
             target=target.record(),
             writer=writer.fingerprint(),
             sampler=config.sampler.model_dump(mode="json"),
+            **region_record,
         )
         manifest = load_or_create_manifest(manifest_path, expected)
 
         resumed_patches = len(manifest.patches)
+        patch_size = config.sampler.patch_size
         anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
+        groups = _group_anchors(anchors, source.metadata.chunk_rows)
+        if aoi is not None:
+            # Only patches over the polygons, read in windows around them.
+            anchors = aoi.keep(anchors, patch_size)
+            groups = [
+                cluster
+                for group in _group_anchors(anchors, source.metadata.chunk_rows)
+                for cluster in column_clusters(group, patch_size)
+            ]
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
         # Number chunks over the whole raster so a resumed run records the same
         # chunk index for each patch as an uninterrupted one.
         chunks = []
-        for chunk_index, group in enumerate(_group_anchors(anchors, source.metadata.chunk_rows)):
+        for chunk_index, group in enumerate(groups):
             remaining = [anchor for anchor in group if anchor not in completed_anchors]
             if remaining:
                 chunks.append((chunk_index, remaining))
@@ -307,6 +326,11 @@ def run_generate(
                     )
                 else:
                     writer.write(images, annotations, metadata, manifest, chunk_index)
+                if aoi is not None:
+                    for entry in manifest.patches[len(manifest.patches) - len(metadata) :]:
+                        entry["summary"]["region"] = aoi.region_of(
+                            entry["row"], entry["col"], patch_size
+                        )
                 # Persist after every chunk so an interrupted run resumes from here.
                 manifest.save(manifest_path)
                 progress.advance(task)

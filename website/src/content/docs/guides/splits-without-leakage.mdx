@@ -14,6 +14,7 @@ mapcv writes `splits/train.txt`, `val.txt` and `test.txt` at the end of `generat
 | `spatial` (default) | Square blocks of the raster | None from overlapping pixels; much less from neighbouring ones | You want test scores that predict performance on new areas. Almost always |
 | `stratified` | Individual patches, balanced by labeled fraction and dominant class (detection and instance: most frequent object class; classification: the patch's label) | Yes, if patches overlap or are adjacent | Reproducing an earlier patch-level split, e.g. from mapcv 0.1 |
 | `random` | Individual patches, shuffled | Yes, if patches overlap or are adjacent | Quick experiments on non-overlapping, far-apart patches |
+| `region` | Whole regions of an [area of interest](/mapcv/reference/configuration/#region) (`region.path` with `name_field`) | None between regions that are apart; adjacent regions lose their overlapping train/val patches | Several sites, cities or tiles: test on places the model never saw |
 
 `test_ratio` is a fraction of all patches; `val_ratio` is a fraction of what is left. With the defaults (`0.20`, `0.10`), that is about 72 % train, 8 % val, 20 % test before any spatial adjustments.
 

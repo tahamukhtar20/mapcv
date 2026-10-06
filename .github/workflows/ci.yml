@@ -65,6 +65,20 @@ jobs:
         command: check
         arguments: --all-features
 
+    # The wheels must ship a notice for every crate they link (about.toml, about.hbs).
+    - name: Install cargo-about
+      uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+      with:
+        tool: cargo-about@0.9.2
+
+    - name: Check the bundled licence notices are up to date (cargo-about)
+      run: |
+        cargo about generate --locked --fail --all-features -c about.toml -o LICENSES-THIRD-PARTY.md about.hbs
+        git diff --exit-code -- LICENSES-THIRD-PARTY.md || {
+          echo "::error file=LICENSES-THIRD-PARTY.md::The licence notices are out of date. Run: cargo about generate --locked --fail --all-features -c about.toml -o LICENSES-THIRD-PARTY.md about.hbs"
+          exit 1
+        }
+
     # The checks below read the sources; building the extension is the test job's work.
     - name: Install dependencies
       run: uv sync --locked --all-extras --no-install-project

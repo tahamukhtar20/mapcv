@@ -78,6 +78,7 @@ an output format.
   needs a `!` in the PR title, a `BREAKING CHANGE:` footer and a MIGRATION.md entry.
 - **Licensing.** Code derived from another project carries its notice in the source and in
   `THIRD_PARTY_NOTICES.md`. New crates and packages must be MIT, Apache-2.0 or BSD-compatible.
+  After changing Rust dependencies, regenerate `LICENSES-THIRD-PARTY.md` (command in CONTRIBUTING.md); CI checks it.
 - **Dependencies.** No GDAL, and no new runtime dependency without a reason in the PR.
   Test-only tools go in dev or test groups.
 

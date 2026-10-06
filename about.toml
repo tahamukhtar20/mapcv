@@ -1,0 +1,90 @@
+# cargo-about: notices for the Rust crates (and the C code they vendor) that are
+# statically linked into the wheels. Regenerate LICENSES-THIRD-PARTY.md with
+#
+#   cargo about generate --locked --fail --all-features -c about.toml -o LICENSES-THIRD-PARTY.md about.hbs
+#
+# CI regenerates it and fails when the committed file is stale.
+
+# Keep in step with the allowlist in deny.toml (cargo-deny is the policy check;
+# this list only has to cover what the crates use).
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "IJG",
+]
+
+# Every platform the release workflow builds wheels for (Linux gnu and musl,
+# macOS universal2, Windows), so platform-only crates (windows-sys,
+# security-framework ...) are covered and the output is the same on every OS.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# Build scripts and dev tools are not part of the binary. (Proc-macro crates
+# cannot be told apart from normal dependencies and stay listed.)
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# mapcv itself is covered by LICENSE.
+private = { ignore = true }
+
+# aws-lc-sys vendors AWS-LC, a BoringSSL/OpenSSL fork. Its LICENSE file lists the
+# copyright holders of the vendored code, which cargo-about's per-licence
+# splitting would drop, so the whole file is included once. `license` only
+# selects how that copy is filed: cargo-deny checks the crate's real expression,
+# and each of its licences is in the file. The checksum pins the file's
+# contents: when a crate update changes it, the clarification is skipped and the
+# drift check fails (read the new file, then update the checksum).
+[aws-lc-sys.clarify]
+license = "Apache-2.0"
+
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
+
+# windows-link and windows-sys ship their licences as `license-mit` and
+# `license-apache-2.0`, names cargo-about does not recognise, so it would fall
+# back to a generic MIT text without Microsoft's copyright line.
+[windows-link.clarify]
+license = "MIT OR Apache-2.0"
+
+[[windows-link.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+
+[[windows-link.clarify.files]]
+path = "license-apache-2.0"
+license = "Apache-2.0"
+checksum = "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
+
+[windows-sys.clarify]
+license = "MIT OR Apache-2.0"
+
+[[windows-sys.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+
+[[windows-sys.clarify.files]]
+path = "license-apache-2.0"
+license = "Apache-2.0"
+checksum = "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"

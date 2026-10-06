@@ -54,8 +54,8 @@ from mapcv.writers.detection import categories
 app = typer.Typer(
     name="mapcv",
     help=(
-        "Turn a region and polygon labels into a ready-to-train segmentation, detection or "
-        "instance dataset.\n\n"
+        "Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or "
+        "classification dataset.\n\n"
         "Start with [bold]mapcv init[/bold], check the cost with [bold]mapcv plan[/bold], "
         "then build with [bold]mapcv generate[/bold]."
     ),
@@ -122,8 +122,8 @@ def _main(
         False, "--quiet", "-q", help="Hide progress output; still show errors and summaries."
     ),
 ) -> None:
-    """Turn a region and polygon labels into a ready-to-train segmentation, detection or
-    instance dataset."""
+    """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
+    classification dataset."""
     pipeline._console.quiet = quiet
 
 
@@ -210,6 +210,12 @@ def _task_label(config: MapcvConfig) -> str:
         if instance.id_mask:
             detail += " · instance-ID PNGs"
         return detail
+    if config.task == "classification":
+        classification = config.classification_options
+        return (
+            f"classification · {classification.mode}-label · "
+            f"min_fraction {classification.min_fraction:g} · empty: {classification.empty}"
+        )
     if config.task != "detection":
         return config.task
     options = config.detection_options
@@ -397,9 +403,36 @@ def _object_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
+def _label_table(manifest: Manifest) -> Optional[Table]:
+    """Patches per label, for classification datasets (a multi-label patch counts for each)."""
+    patches: Counter[str] = Counter()
+    for entry in manifest.patches:
+        patches.update(str(cid) for cid in entry["summary"].get("labels") or [])
+    total = len(manifest.patches)
+    if not patches:
+        return None
+    names = {str(cid): name for cid, name in categories(manifest.class_map).items()}
+    names["0"] = "background"
+    table = Table(box=None, padding=(0, 2), show_edge=False)
+    table.add_column("label")
+    table.add_column("id", justify="right")
+    table.add_column("patches", justify="right")
+    table.add_column("share", justify="right")
+    for cid in sorted(patches, key=int):
+        table.add_row(
+            names.get(cid, f"class {cid}"),
+            cid,
+            f"{patches[cid]:,}",
+            f"{patches[cid] / total:.1%}",
+        )
+    return table
+
+
 def _class_table(manifest: Manifest) -> Optional[Table]:
     if manifest.task in ("detection", "instance"):
         return _object_table(manifest)
+    if manifest.task == "classification":
+        return _label_table(manifest)
     totals: Counter[str] = Counter()
     for entry in manifest.patches:
         totals.update(entry["summary"].get("class_pixels") or {})
@@ -459,6 +492,8 @@ def _print_result(result: GenerateResult) -> None:
         for name in ("annotations/", "labels/", "dataset.yaml")
         if manifest.task in ("detection", "instance") and (result.staging_dir / name).exists()
     )
+    if manifest.task == "classification":
+        written.extend(("labels.csv", "labels.json", "classes.txt"))
     table.add_row("Files", f"{result.staging_dir}/ ({', '.join(written)})")
     _console.print(
         Panel(table, title="[bold]Dataset ready[/bold]", title_align="left", border_style="green")
@@ -469,6 +504,7 @@ def _print_result(result: GenerateResult) -> None:
     guides = {
         "detection": "tutorials/object-detection/#train-a-detector",
         "instance": "tutorials/instance-segmentation/#train-a-model",
+        "classification": "tutorials/classification/#train-a-classifier",
     }
     guide = guides.get(manifest.task, "guides/use-your-dataset/")
     _console.print(
@@ -490,6 +526,7 @@ class Template(str, Enum):
     geotiff = "geotiff"
     detection = "detection"
     instance = "instance"
+    classification = "classification"
 
 
 _HEADER = f"""\
@@ -729,12 +766,57 @@ split:
 """
 )
 
+_CLASSIFICATION_TEMPLATE = (
+    _HEADER
+    + """
+task: classification         # one label (or a set of labels) per patch, as a CSV, instead of masks
+
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: xyz
+  zoom: 18
+  source: esri_satellite     # or url_template: "https://.../{z}/{x}/{y}.png"
+  max_connections: 4         # keep requests modest; respect the provider's limits
+
+labels:
+  path: landuse.geojson      # .geojson, .kml, .gpkg, .shp or .parquet; or type: raster (a label raster)
+  label_field: landuse       # property holding the class name
+
+classification:
+  mode: single               # single: the class covering most of the patch | multi: every class that qualifies
+  min_fraction: 0.0          # share of the patch's valid pixels a class needs (0 = any labeled pixel)
+  empty: skip                # skip: drop patches no class qualifies for | background: keep them as "background"
+
+sampler:
+  patch_size: 64
+  stride: 0                  # 0 = patch_size (no overlap)
+  mode: grid
+  edge_strategy: drop        # pad | drop | shift
+
+writer:
+  staging_dir: ./dataset     # images/, labels.csv, labels.json, classes.txt
+  image_format: png          # png | jpg
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42
+"""
+)
+
 _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
     Template.geotiff: _GEOTIFF_TEMPLATE,
     Template.detection: _DETECTION_TEMPLATE,
     Template.instance: _INSTANCE_TEMPLATE,
+    Template.classification: _CLASSIFICATION_TEMPLATE,
 }
 
 
@@ -1228,11 +1310,12 @@ def _wizard() -> str:
         _console.print(
             "  [bold]segmentation[/bold]  a class mask per patch\n"
             "  [bold]detection[/bold]     a box per object (COCO and YOLO)\n"
-            "  [bold]instance[/bold]      a mask per object (COCO RLE, optional instance-ID PNG)"
+            "  [bold]instance[/bold]      a mask per object (COCO RLE, optional instance-ID PNG)\n"
+            "  [bold]classification[/bold]  a label (or set of labels) per patch, as a CSV"
         )
         task = Prompt.ask(
             "Task",
-            choices=["segmentation", "detection", "instance"],
+            choices=["segmentation", "detection", "instance", "classification"],
             default="segmentation",
             console=_console,
         )
@@ -1258,6 +1341,20 @@ def _wizard() -> str:
                 "  min_visible: 0.3           # share of an instance's area a patch must show",
                 "  min_area: 4                # drop masks with fewer pixels (edge slivers)",
                 f"  id_mask: {'true' if id_mask else 'false'}",
+            ]
+        elif task == "classification":
+            mode = Prompt.ask(
+                "One label per patch, or every class present?",
+                choices=["single", "multi"],
+                default="single",
+                console=_console,
+            )
+            task_lines = ["task: classification", ""]
+            detection_lines = [
+                "classification:",
+                f"  mode: {mode}",
+                "  min_fraction: 0.0          # share of the patch a class needs (0 = any pixel)",
+                "  empty: skip                # skip | background (keep unlabeled patches)",
             ]
 
     _console.print("\n[bold cyan]4/4 Patches and output[/bold cyan]")
@@ -1313,7 +1410,8 @@ def _wizard() -> str:
         "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
         "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
         "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
-        "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)"
+        "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)\n\n"
+        "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)"
     ),
 )
 def init(
@@ -1487,7 +1585,12 @@ def info(
         table.add_row("CRS", source.crs)
     if target is not None and target.ignore_index is not None:
         without = "imagery or label" if _raster_labels(manifest) else "imagery"
-        table.add_row("Ignore", f"mask value {target.ignore_index} marks pixels without {without}")
+        if manifest.task == "classification":  # no masks: the value only decides what counts
+            table.add_row("Ignore", f"pixels without {without} do not count towards coverage")
+        else:
+            table.add_row(
+                "Ignore", f"mask value {target.ignore_index} marks pixels without {without}"
+            )
     padded = sum(1 for entry in manifest.patches if entry["padded"])
     if padded:
         table.add_row("Padded", f"{padded:,} patch(es) touch the raster edge")
@@ -1594,3 +1697,45 @@ def validate(
         local = eopf_local_path(config.imagery.path)
         if local is not None and not local.exists():
             _console.print(f"[yellow]Warning:[/yellow] imagery.path not found: {local}")
+
+
+@app.command(
+    "mcp",
+    rich_help_panel="3. Utilities",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv mcp[/cyan]                         read-only, in this folder\n\n"
+        "  [cyan]mapcv mcp --root ~/work --allow-write[/cyan]   may write datasets under ~/work"
+    ),
+)
+def mcp_server(
+    root: Path = typer.Option(
+        Path("."),
+        "--root",
+        help="The only folder the server may read or write (default: the current folder).",
+    ),
+    allow_write: bool = typer.Option(
+        False,
+        "--allow-write",
+        envvar="MAPCV_MCP_ALLOW_WRITE",
+        help="Also offer the tools that write: write_config, generate and split.",
+    ),
+) -> None:
+    """Run an MCP server over stdio so AI agents can build datasets with mapcv.
+
+    Needs [bold]pip install "mapcv\\[mcp]"[/bold]. Without [bold]--allow-write[/bold] the
+    server can only read, validate and plan.
+    """
+    try:
+        from mapcv.mcp_server import serve
+    except ImportError as exc:
+        err = Console(stderr=True)
+        err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
+        err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
+        err.print(f"[dim]{escape(str(exc))} (mapcv needs mcp 2.x)[/dim]")
+        raise typer.Exit(code=1)
+    try:
+        serve(root, allow_write)
+    except ValueError as exc:
+        _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)

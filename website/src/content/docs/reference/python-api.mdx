@@ -24,7 +24,7 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
-    task: Literal["segmentation", "detection", "instance"] = "segmentation"   # more tasks are planned
+    task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"   # more tasks are planned
     region: RegionConfig
     imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | RasterLabelsConfig | None = None  # by labels.type: vector | raster
@@ -33,12 +33,16 @@ class MapcvConfig(BaseModel):
     split: SplitterConfig | None = None
     detection: DetectionOptions | None = None   # task: detection only
     instance: InstanceOptions | None = None     # task: instance only
+    classification: ClassificationOptions | None = None   # task: classification only
 
     @property
     def detection_options(self) -> DetectionOptions: ...   # the block, or its defaults
 
     @property
     def instance_options(self) -> InstanceOptions: ...     # the block, or its defaults
+
+    @property
+    def classification_options(self) -> ClassificationOptions: ...   # the block, or its defaults
 
     @classmethod
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
@@ -95,10 +99,12 @@ A dataclass:
 ### `run_generate`
 
 ```python
-def run_generate(config: MapcvConfig) -> GenerateResult
+def run_generate(
+    config: MapcvConfig, on_chunk: Callable[[int, int], None] | None = None
+) -> GenerateResult
 ```
 
-Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. `on_chunk(done, total)` is called before the first chunk and after every chunk is saved; an exception it raises stops the run there, and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels). Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 
@@ -120,7 +126,7 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files; for a classification dataset, the `split` column of `labels.csv` and the `labels_<split>.csv` files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
 
 ### `split_dataset`
 

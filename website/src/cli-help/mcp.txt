@@ -1,0 +1,24 @@
+ Usage: mapcv mcp [OPTIONS]
+
+ Run an MCP server over stdio so AI agents can build datasets with mapcv.
+
+ Needs pip install "mapcv[mcp]". Without --allow-write the
+ server can only read, validate and plan.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --root                 <path>  The only folder the server may read or write          │
+│                                (default: the current folder).                        │
+│                                [default: .]                                          │
+│ --allow-write                  Also offer the tools that write: write_config,        │
+│                                generate and split.                                   │
+│                                [env var: MAPCV_MCP_ALLOW_WRITE]                      │
+│ --help         -h              Show this message and exit.                           │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv mcp                         read-only, in this folder
+
+ mapcv mcp --root ~/work --allow-write   may write datasets under ~/work
+
+

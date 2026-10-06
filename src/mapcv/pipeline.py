@@ -7,7 +7,7 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, List, Optional, Tuple
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
 
 import numpy.typing as npt
 from rich.console import Console
@@ -127,11 +127,18 @@ def _process_anchor_chunk(
     return images, window.collate(annotations, patch_size), metadata
 
 
-def run_generate(config: MapcvConfig) -> GenerateResult:
+def run_generate(
+    config: MapcvConfig, on_chunk: Optional[Callable[[int, int], None]] = None
+) -> GenerateResult:
     """Generate a patch dataset from the configured imagery source.
 
     The pipeline is task-agnostic: the target (``create_target``) says what each
     patch is annotated with and the writer (``create_writer``) how it reaches disk.
+
+    ``on_chunk(done, total)``, if given, is called with the chunks written so far and
+    the chunks of this run: once before the first chunk and after every chunk (whose
+    manifest is already saved). An exception it raises stops the run there; the
+    finished chunks stay and the same call again resumes.
     """
     started = time.monotonic()
     staging = config.writer.staging_dir
@@ -196,7 +203,9 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
             )
         with _chunk_progress(disable=not chunks) as progress:
             task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
-            for chunk_index, chunk_anchors in chunks:
+            if on_chunk is not None:
+                on_chunk(0, len(chunks))
+            for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
                 images, annotations, metadata = _process_anchor_chunk(
                     source, chunk_anchors, config.sampler, target
                 )
@@ -204,6 +213,8 @@ def run_generate(config: MapcvConfig) -> GenerateResult:
                 # Persist after every chunk so an interrupted run resumes from here.
                 manifest.save(manifest_path)
                 progress.advance(task)
+                if on_chunk is not None:
+                    on_chunk(done, len(chunks))
 
         # A finished dataset is left untouched (a 0.2 manifest stays version 2).
         if chunks or not manifest_path.exists():
@@ -254,8 +265,8 @@ def run_split(
     """Split an existing dataset (manifest version 1, 2 or 3); return split counts.
 
     The manifest is read, never rewritten. Outputs that depend on the split
-    (``patches.geojson``, and a detection dataset's COCO files, YOLO image lists
-    and ``dataset.yaml``) are rebuilt.
+    (``patches.geojson``, a detection dataset's COCO files, YOLO image lists
+    and ``dataset.yaml``, and a classification dataset's label tables) are rebuilt.
     """
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():

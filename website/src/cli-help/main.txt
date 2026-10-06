@@ -1,7 +1,7 @@
  Usage: mapcv [OPTIONS] COMMAND [ARGS]...
 
- Turn a region and polygon labels into a ready-to-train segmentation, detection or
- instance dataset.
+ Turn a region and polygon labels into a ready-to-train segmentation, detection,
+ instance or classification dataset.
 
  Start with mapcv init, check the cost with mapcv plan, then build with mapcv generate.
 
@@ -26,5 +26,6 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ 3. Utilities ───────────────────────────────────────────────────────────────────────╮
 │ validate  Check a config without reading labels or imagery (use plan for estimates). │
+│ mcp       Run an MCP server over stdio so AI agents can build datasets with mapcv.   │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -5,15 +5,16 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection` or `task: instance`, an optional `detection` or `instance` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, `task: instance` or `task: classification`, an optional `detection`, `instance` or `classification` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance`, `classification` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
-task: segmentation  # what the dataset is for: segmentation (default), detection or instance
+task: segmentation  # what the dataset is for: segmentation (default), detection, instance or classification
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
 labels:   { … }   # which polygons or label raster (optional: omit for an image-only dataset)
 detection: { … }  # box settings (optional, task: detection only)
 instance: { … }   # mask settings (optional, task: instance only)
+classification: { … }  # label rule (optional, task: classification only)
 sampler:  { … }   # how to cut patches (required)
 writer:   { … }   # where and how to write (required)
 split:    { … }   # train/val/test lists (optional: omit to skip splitting)
@@ -92,7 +93,8 @@ What the dataset is for. It decides what each patch is annotated with and is rec
 | `segmentation` (default) | supported | A class mask per patch, from `labels` (none without `labels`: an image-only dataset) |
 | `detection` | supported | A box per object, written as COCO JSON and YOLO labels; needs `labels`. Settings in the [`detection`](#detection) block |
 | `instance` | supported | A binary mask per object (instance segmentation), written as COCO JSON with RLE masks and optionally an instance-ID PNG per patch; needs vector `labels`. Settings in the [`instance`](#instance) block |
-| `classification`, `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+| `classification` | supported | One label, or a set of labels, per patch, written as `labels.csv` and `labels.json`; needs `labels` (vector or raster). Settings in the [`classification`](#classification) block |
+| `change`, `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
 
 ```yaml
 task: segmentation
@@ -144,6 +146,29 @@ instance:
 ```
 
 **Validation** (with `task: instance`): `labels` is required and must be vector labels (a label raster has no objects; use `task: segmentation`); `labels.ignore_index` is rejected when set (instance masks only hold pixels that have imagery); `writer.mask_format` is rejected unless `instance.id_mask` is on; `writer.world_files` is rejected with images that are not PNG or JPG unless `id_mask` is on; `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without masks. `sampler.min_label_ratio` keeps a patch only when its instances (overlaps counted once) cover at least that fraction of it. A resumed run must use the same `instance` settings and `labels.all_touched`.
+
+## `classification`
+
+Optional, and only allowed with `task: classification` (another task with a `classification` block is an error). Omit it for the defaults. A patch's label comes from how much of it each class covers. **Coverage** is a class's pixels divided by the patch's **valid** pixels, counted on the very mask that segmentation would write for the same `labels` (the same rasterizer and pixel rule for polygons, `labels.all_touched` included; the same nearest-neighbour sampling for a label raster). A pixel is valid when it has imagery (inside the raster, not NoData or a failed tile) and is not `labels.ignore_index`; for a label raster that includes pixels outside the label raster, on its NoData and on `labels.ignore_values`. Background (mask value 0) is not a class and has no coverage. Where polygons overlap, the mask's later-wins rule applies: the later feature's class takes the shared pixels. Coverage is computed as `pixels / valid pixels` in 64-bit floating point. (With a label raster and `labels.ignore_index: null`, pixels without a label become background in the mask and so stay in the denominator; only pixels without imagery are left out.) Walkthrough: [Patch classification datasets](/mapcv/tutorials/classification/); files: [Dataset format](/mapcv/reference/dataset-format/#classification-datasets).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `mode` | `single` \| `multi` | `single` | `single`: the patch gets the class with the largest coverage (a tie goes to the lowest class ID), if that class qualifies. `multi`: the patch gets every class that qualifies, in ascending class ID order (a multi-hot label) |
+| `min_fraction` | float, 0–1 | `0.0` | A class qualifies when its coverage is **at least** this and above zero, so `0` means "any labeled pixel". `0.5` with `single` is a strict majority rule |
+| `empty` | `skip` \| `background` | `skip` | What happens to a patch no class qualifies for. `skip` drops it (it is not written); `background` keeps it with the label `background` (class ID 0). A patch without a single valid pixel is always dropped, because there is nothing to judge; `sampler.max_empty_ratio` drops patches that are mostly without imagery |
+
+```yaml
+task: classification
+labels:
+  path: landuse.geojson
+  label_field: class
+classification:
+  mode: multi
+  min_fraction: 0.1
+  empty: background
+```
+
+**Validation** (with `task: classification`): `labels` is required, vector or `type: raster`; `writer.mask_format` is rejected (no masks are written), as is `writer.world_files` with images that are not PNG or JPG; `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because the mirrored part of an edge patch would show imagery that no label counts; `sampler.min_label_ratio` greater than 0 is rejected with `empty: background`, because it would drop exactly the background patches (without `background`, it keeps its segmentation meaning: the labeled share of the whole patch must reach it). Class names must not hold control characters, and with `mode: multi` no whitespace, because a patch's labels are joined with a space in `labels.csv`; with `empty: background` no class may be named `background`. A resumed run must use the same `classification` settings and `labels.all_touched`.
 
 ## `region`
 
@@ -255,7 +280,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` 
 | `layer` | string \| null | `null` | GeoPackage only: the layer (table) to read. Required when the file has several; leave unset with one. An error for other formats |
 | `label_field` | string \| null | `null` | Feature property (GeoJSON, KML) or column (the other formats) holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
-| `ignore_index` | int 1–255 or `null` | `255` | Mask value for pixels with no imagery under them: padding, failed tiles and NoData. Pass it to your loss (`CrossEntropyLoss(ignore_index=255)`). No class may use it; `null` writes background (`0`) there instead |
+| `ignore_index` | int 1–255 or `null` | `255` | Mask value for pixels with no imagery under them: padding, failed tiles and NoData. Pass it to your loss (`CrossEntropyLoss(ignore_index=255)`). No class may use it; `null` writes background (`0`) there instead. With `task: classification` no mask is written and imagery-less pixels never count either way |
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
@@ -295,7 +320,7 @@ labels:
 
 **Alignment.** Each imagery pixel takes the value of the label pixel that contains the imagery pixel's **centre**. The centre (`col + 0.5`, `row + 0.5` in the corner-based affine transform) is projected exactly into the label raster's CRS (pyproj; computed in parallel threads, with exactly the coordinates a call per point gives), then the inverse of the label raster's transform gives a fractional label pixel, which is rounded down (`floor(x + 1e-10)`: a centre exactly on a boundary between two label pixels takes the right / lower one, as GDAL does). Files tagged `PixelIsPoint` are shifted by half a pixel to corner-based, as in GDAL. The result equals `rasterio.warp.reproject(..., resampling=Resampling.nearest, tolerance=0)` onto the patch's transform. (GDAL's default `tolerance=0.125` approximates the transformation and can pick a neighbouring label pixel near boundaries.) When the label raster shares the imagery's CRS and pixel grid, windows are copied directly, with the same result.
 
-**Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation` only: `task: detection` needs polygon labels (one feature per object) and refuses `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
+**Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation` and, for one label per patch, `task: classification`; `task: detection` and `task: instance` need polygon labels (one feature per object) and refuse `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
 
 ## `sampler`
 
@@ -307,7 +332,7 @@ labels:
 | `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |
 | `pad_mode` | `zero` \| `reflect` | `zero` | How `pad` fills the missing part of an edge patch |
 | `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
-| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts |
+| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts; for classification, the valid pixels of any class over the whole patch |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
 | `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |
 
@@ -337,7 +362,7 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | `world_files` | bool | `false` | Write a world file next to every PNG (`.pgw`) and JPG (`.jgw`) patch, images and masks, so QGIS and GDAL place them on the map. World files hold no CRS (it is `crs` in the manifest). Not needed for `tif`, which carries its georeferencing inside; an error when neither images nor masks are PNG or JPG |
 | `footprints` | bool | `true` | Write `patches.geojson` after the split: one WGS-84 footprint polygon per patch with its file name, split, row and column, and class pixel counts. Open it in QGIS to see where each patch is. Needs `pyproj` (`pip install "mapcv[zarr]"`) unless the imagery is XYZ or EPSG:4326; without it mapcv warns and skips the file |
 
-The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` when it is on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY.
+The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` when it is on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection and classification datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY.
 
 **GeoTIFF output.** `tif` patches (and masks) are written by mapcv itself, without GDAL: striped, Deflate-compressed with the horizontal predictor (the floating-point predictor for `float32`), one band per channel. They carry the source's EPSG code and each patch's own affine transform, so QGIS, rasterio and TerraTorch open them in place. Images declare `NaN` as no-data when they are floating point (and nothing for integer data, where 0 is a real value); masks declare `labels.ignore_index` as no-data, so GIS tools show the pixels without imagery as transparent. See [Dataset format](/mapcv/reference/dataset-format/#geotiff-patches).
 

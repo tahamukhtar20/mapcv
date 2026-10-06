@@ -38,6 +38,9 @@ _TIF_FLOAT_COMPRESSION = 0.8
 _OBJECT_BYTES = 250
 # An instance: its COCO annotation with the RLE mask, and the same again in the chunk store.
 _INSTANCE_BYTES = 500
+# A classification patch: its row in labels.csv, labels_<split>.csv and labels.json, and its
+# coverage in the manifest.
+_CLASSIFICATION_BYTES = 250
 
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
@@ -212,9 +215,14 @@ def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> 
     if not box(west, south, east, north).intersects(
         box(region.west, region.south, region.east, region.north)
     ):
+        outcome = (
+            "no patch would get a label"
+            if config.task == "classification"
+            else "every mask pixel would be ignored"
+        )
         messages.append(
-            "the label raster does not overlap the region, so every mask pixel would be "
-            "ignored. Check labels.path and the region."
+            f"the label raster does not overlap the region, so {outcome}. "
+            "Check labels.path and the region."
         )
     description = (
         f"raster {sampler.name} · {sampler.crs} · {info.width:,} × {info.height:,} px · "
@@ -247,6 +255,8 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
             what, outcome = "feature", "no patch would have objects"
         elif config.task == "instance":
             what, outcome = "feature", "no patch would have instances"
+        elif config.task == "classification":
+            what, outcome = "polygon", "no patch would get a label"
         else:
             what, outcome = "polygon", "every mask would be background"
         messages.append(
@@ -307,6 +317,8 @@ def plan(config: MapcvConfig) -> Plan:
         # One 16-bit instance-ID mask per patch (compressed PNG or GeoTIFF, raw as NPY).
         mask_bytes = int(2 * pixels_per_patch * mask_ratio)
     output = patches * (image_bytes + mask_bytes)
+    if config.task == "classification":
+        output += patches * _CLASSIFICATION_BYTES
     window_rows = min(height, chunk_rows + patch_size)
     # Window, validity mask, label mask and extracted patches each hold a copy.
     chunk_memory = window_rows * width * (channels * bytes_per_value * 2 + 2)

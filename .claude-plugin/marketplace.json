@@ -1,0 +1,17 @@
+{
+  "name": "mapcv",
+  "description": "mapcv: remote-sensing training datasets from a region, imagery and labels",
+  "owner": {
+    "name": "Muhammad Taha Mukhtar",
+    "url": "https://github.com/tahamukhtar20"
+  },
+  "plugins": [
+    {
+      "name": "mapcv",
+      "source": "./agent",
+      "description": "The mapcv skill and MCP server: inspect labels, write and validate a config, plan, generate and check datasets for segmentation, detection, instance segmentation and classification.",
+      "homepage": "https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
+      "keywords": ["remote-sensing", "dataset", "geospatial"]
+    }
+  ]
+}

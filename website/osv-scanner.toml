@@ -6,3 +6,9 @@ id = "GHSA-ch52-4w7c-c8xp"
 reason = """http-cache-semantics, pulled in by Astro's build tooling, has no fixed
 release. The site is built to static files in CI and never serves cached HTTP
 responses to users, so the max-stale issue cannot be reached."""
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = """braces, pulled in by starlight-llms-txt through micromatch, has no fixed
+release. It only expands the glob patterns written in astro.config.mjs while the
+site is built; no user input reaches it and nothing of it runs on the served site."""

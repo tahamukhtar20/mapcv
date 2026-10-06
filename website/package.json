@@ -11,6 +11,7 @@
     "astro": "^7.3.5"
   },
   "devDependencies": {
-    "starlight-links-validator": "^0.26.0"
+    "starlight-links-validator": "^0.26.0",
+    "starlight-llms-txt": "^0.12.0"
   }
 }

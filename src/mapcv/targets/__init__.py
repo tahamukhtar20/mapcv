@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mapcv.config import MapcvConfig, RasterLabelsConfig
 from mapcv.targets.base import Annotation, AnnotationBatch, Target, WindowTarget
+from mapcv.targets.classification import ClassificationTarget, PatchLabels
 from mapcv.targets.detection import DetectedObject, DetectionTarget, PatchObjects
 from mapcv.targets.instance import Instance, InstanceTarget, PatchInstances
 from mapcv.targets.none import ImageOnlyTarget
@@ -13,12 +14,14 @@ from mapcv.targets.segmentation import SegmentationTarget
 __all__ = [
     "Annotation",
     "AnnotationBatch",
+    "ClassificationTarget",
     "DetectedObject",
     "DetectionTarget",
     "ImageOnlyTarget",
     "Instance",
     "InstanceTarget",
     "PatchInstances",
+    "PatchLabels",
     "PatchObjects",
     "RasterSegmentationTarget",
     "SegmentationTarget",
@@ -42,6 +45,10 @@ def create_target(config: MapcvConfig) -> Target:
         if isinstance(config.labels, RasterLabelsConfig):  # refused by the config too
             raise ValueError("task: instance needs vector labels, not a label raster")
         return InstanceTarget(config.labels, config.instance_options, config.sampler.patch_size)
+    if config.task == "classification":
+        if config.labels is None:  # the config refuses this; keep the type checker honest
+            raise ValueError("task: classification needs labels")
+        return ClassificationTarget(config.labels, config.classification_options)
     if config.task != "segmentation":  # the config only accepts supported tasks
         raise ValueError(f"task '{config.task}' has no target")
     if config.labels is None:

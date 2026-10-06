@@ -1,0 +1,30 @@
+{
+  "name": "mapcv",
+  "displayName": "mapcv",
+  "description": "Build remote-sensing training datasets (segmentation, detection, instance segmentation, classification) from a region, imagery and labels. Adds the mapcv skill and its MCP server.",
+  "author": {
+    "name": "Muhammad Taha Mukhtar",
+    "url": "https://github.com/tahamukhtar20"
+  },
+  "homepage": "https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
+  "repository": "https://github.com/tahamukhtar20/mapcv",
+  "license": "MIT",
+  "keywords": ["remote-sensing", "satellite-imagery", "dataset", "segmentation", "object-detection", "geospatial"],
+  "userConfig": {
+    "allow_write": {
+      "type": "boolean",
+      "title": "Let the agent write datasets",
+      "description": "Off: the agent can inspect labels, validate configs and plan, but writes nothing. On: it can also save configs, generate datasets and re-split them, inside the folder Claude Code was started in.",
+      "default": false
+    }
+  },
+  "mcpServers": {
+    "mapcv": {
+      "command": "uvx",
+      "args": ["--from", "mapcv[mcp]", "mapcv", "mcp"],
+      "env": {
+        "MAPCV_MCP_ALLOW_WRITE": "${user_config.allow_write}"
+      }
+    }
+  }
+}

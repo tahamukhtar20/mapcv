@@ -105,8 +105,17 @@ def _stratum(entry: ManifestEntry, ignore_key: Optional[str] = None) -> Tuple[in
     """Stratify on labeled fraction and, when masked, the dominant foreground class.
 
     Detection patches (``class_objects`` in the summary) are stratified on whether
-    they hold objects and on their most frequent object class.
+    they hold objects and on their most frequent object class. Classification patches
+    (``labels``) are stratified on whether they have a class label (not just
+    ``background``) and on the assigned class with the largest coverage (ties: the
+    lowest class ID).
     """
+    labels = entry["summary"].get("labels")
+    if labels is not None:
+        coverage = entry["summary"].get("class_coverage") or {}
+        classes = sorted((str(cid) for cid in labels if cid != 0), key=int)
+        leading = max(classes, key=lambda k: coverage.get(k, 0.0)) if classes else ""
+        return (1 if classes else 0), leading
     objects = entry["summary"].get("class_objects")
     if objects is not None:
         frequent = max(sorted(objects), key=lambda k: objects[k]) if objects else ""

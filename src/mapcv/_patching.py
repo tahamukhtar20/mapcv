@@ -74,6 +74,16 @@ class MaskWindow:
         self._mask = mask
         self._ignore_index = ignore_index
 
+    @property
+    def mask(self) -> npt.NDArray[np.uint8]:
+        """The window's class mask (before ``ignore_index`` is applied to pixels without imagery)."""
+        return self._mask
+
+    @property
+    def ignore_index(self) -> Optional[int]:
+        """The value marking pixels without imagery, or ``None``."""
+        return self._ignore_index
+
     def annotate(
         self,
         row: int,

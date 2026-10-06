@@ -20,7 +20,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
 from mapcv import vector_files
-from mapcv._mapcv_rs import parse_kml_rs
+from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 
 _RE: float = 6_378_137.0
 
@@ -223,7 +223,7 @@ def parse_kml(
     Points, lines, and unlabeled placemarks are skipped with a warning.
     Returns (geometries, class_map).
     """
-    raw_polys, non_polygon = parse_kml_rs(data, label_field)
+    raw_polys, non_polygon = _parse_kml_bytes(data, label_field)
     geometries: List[BaseGeometry] = []
     labels: List[Optional[str]] = []
     for poly_group, label in raw_polys:

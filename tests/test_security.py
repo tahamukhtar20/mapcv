@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from mapcv._mapcv_rs import PyTileIndex, fetch_tiles, stitch_tiles
+from mapcv._mapcv_rs import TileIndex, fetch_tiles, stitch_tiles
 
 
 def _make_tile(r: int, g: int, b: int) -> bytes:
@@ -31,7 +31,7 @@ def test_url_sanitization_on_failure(httpserver: Any) -> None:
     base_url = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     url_template = f"{base_url}?api_key=SECRET_123#fragment-secret"
 
-    t = PyTileIndex(0, 0, 0)
+    t = TileIndex(0, 0, 0)
 
     with pytest.raises(RuntimeError) as excinfo:
         fetch_tiles(
@@ -49,8 +49,8 @@ def test_url_sanitization_on_failure(httpserver: Any) -> None:
 
 def test_stitch_rejects_canvas_above_byte_budget() -> None:
     """A sparse tile extent must be rejected before a huge canvas is allocated."""
-    t1 = PyTileIndex(0, 0, 16)
-    t2 = PyTileIndex(2731, 0, 16)
+    t1 = TileIndex(0, 0, 16)
+    t2 = TileIndex(2731, 0, 16)
 
     with pytest.raises(RuntimeError, match="exceeding"):
         stitch_tiles([(t1, RED), (t2, RED)])
@@ -58,8 +58,8 @@ def test_stitch_rejects_canvas_above_byte_budget() -> None:
 
 def test_stitch_usize_overflow_prevention() -> None:
     """stitch_tiles should handle coordinate differences that would overflow u32."""
-    t1 = PyTileIndex(0, 0, 31)
-    t2 = PyTileIndex(4294967295, 0, 31)
+    t1 = TileIndex(0, 0, 31)
+    t2 = TileIndex(4294967295, 0, 31)
 
     with pytest.raises(RuntimeError, match="canvas"):
         stitch_tiles([(t1, RED), (t2, RED)])

@@ -17,7 +17,7 @@ from rich.progress import (
 )
 
 from mapcv._mapcv_rs import (
-    PyTileIndex,
+    TileIndex,
     fetch_tiles as fetch_tiles_rs,
     snap_bbox,
     stitch_tiles as stitch_tiles_rs,
@@ -83,7 +83,7 @@ def download_region(
     policy: str = "lenient",
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
-) -> List[Tuple[PyTileIndex, bytes]]:
+) -> List[Tuple[TileIndex, bytes]]:
     """Fetch all tiles for a bbox at the given zoom and return (tile, bytes) pairs.
 
     policy controls failure handling: "strict" raises on any failure, "lenient"
@@ -136,7 +136,7 @@ def download_region(
     else:
         _console.print(f"[dim]{fetched}/{total} tiles fetched, {failed_count} failed[/dim]")
 
-    return cast(List[Tuple[PyTileIndex, bytes]], results)
+    return results
 
 
 def stitch_region(

@@ -80,9 +80,16 @@ fn u8_array<'py, D: Dimension>(
         .map_err(|e| PyValueError::new_err(format!("{name} cannot be read: {e}")))
 }
 
-/// Python-visible XYZ tile index.
-#[pyclass(from_py_object)]
-#[derive(Clone)]
+/// Python-visible XYZ tile index: compared and hashed by value, and picklable.
+#[pyclass(
+    name = "TileIndex",
+    module = "mapcv._mapcv_rs",
+    frozen,
+    eq,
+    hash,
+    from_py_object
+)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct PyTileIndex {
     #[pyo3(get)]
     x: u32,
@@ -99,6 +106,15 @@ impl PyTileIndex {
     fn new(x: u32, y: u32, z: u8) -> Self {
         PyTileIndex { x, y, z }
     }
+
+    fn __repr__(&self) -> String {
+        format!("TileIndex(x={}, y={}, z={})", self.x, self.y, self.z)
+    }
+
+    /// The constructor arguments, so `pickle` and `copy` rebuild the tile.
+    fn __getnewargs__(&self) -> (u32, u32, u8) {
+        (self.x, self.y, self.z)
+    }
 }
 impl From<TileIndex> for PyTileIndex {
     fn from(t: TileIndex) -> Self {
@@ -110,9 +126,17 @@ impl From<TileIndex> for PyTileIndex {
     }
 }
 
-/// Python-visible geographic bounding box (WGS-84 degrees).
-#[pyclass(from_py_object)]
-#[derive(Clone)]
+/// Python-visible bounding box (WGS-84 degrees, or Web Mercator metres from
+/// `xy_bounds`): compared and hashed by value, and picklable.
+#[pyclass(
+    name = "BBox",
+    module = "mapcv._mapcv_rs",
+    frozen,
+    eq,
+    hash,
+    from_py_object
+)]
+#[derive(Clone, PartialEq)]
 struct PyBBox {
     #[pyo3(get)]
     west: f64,
@@ -134,6 +158,29 @@ impl PyBBox {
             south,
             east,
             north,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BBox(west={:?}, south={:?}, east={:?}, north={:?})",
+            self.west, self.south, self.east, self.north
+        )
+    }
+
+    /// The constructor arguments, so `pickle` and `copy` rebuild the box.
+    fn __getnewargs__(&self) -> (f64, f64, f64, f64) {
+        (self.west, self.south, self.east, self.north)
+    }
+}
+
+impl std::hash::Hash for PyBBox {
+    /// Hashes the coordinates' bits, with `-0.0` as `0.0` so that equal boxes hash
+    /// alike (`NaN` never equals itself, so its hash does not matter).
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for value in [self.west, self.south, self.east, self.north] {
+            let normalised = if value == 0.0 { 0.0_f64 } else { value };
+            normalised.to_bits().hash(state);
         }
     }
 }
@@ -414,7 +461,7 @@ fn rasterize(
 )]
 #[pyfunction]
 #[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95, jpg_subsampling="4:2:0"))]
-fn write_patches_rs<'py>(
+fn write_patches<'py>(
     py: Python<'py>,
     image_patches: &Bound<'py, PyAny>,
     mask_patches: Option<&Bound<'py, PyAny>>,
@@ -546,7 +593,7 @@ fn write_patches_rs<'py>(
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (data, dtype, shape, transforms, names, directory, epsg, geographic, nodata=None, band_names=None, level=None))]
-fn write_geotiffs_rs<'py>(
+fn write_geotiffs<'py>(
     py: Python<'py>,
     data: &Bound<'py, PyAny>,
     dtype: &str,
@@ -668,7 +715,7 @@ fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64,
 #[allow(clippy::type_complexity)]
 #[pyfunction]
 #[pyo3(signature = (data, label_field=None))]
-fn parse_kml_rs(
+fn parse_kml(
     data: &[u8],
     label_field: Option<&str>,
 ) -> PyResult<(Vec<(Vec<kml_parser::Polygon>, Option<String>)>, usize)> {
@@ -709,6 +756,7 @@ fn photometric_name(code: u16) -> String {
 #[pyclass(name = "GeoTiff", module = "mapcv._mapcv_rs", frozen)]
 struct PyGeoTiff {
     inner: geotiff::GeoTiff,
+    path: String,
 }
 
 #[pymethods]
@@ -716,9 +764,14 @@ impl PyGeoTiff {
     #[new]
     #[pyo3(signature = (path, cache_bytes = geotiff::DEFAULT_CACHE_BYTES))]
     fn new(py: Python<'_>, path: String, cache_bytes: usize) -> PyResult<Self> {
-        py.detach(move || geotiff::GeoTiff::open(&path, cache_bytes))
-            .map(|inner| PyGeoTiff { inner })
+        py.detach(|| geotiff::GeoTiff::open(&path, cache_bytes))
+            .map(|inner| PyGeoTiff { inner, path })
             .map_err(geotiff_error)
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let path = pyo3::types::PyString::new(py, &self.path).repr()?;
+        Ok(format!("GeoTiff({path})"))
     }
 
     /// Structure and georeferencing as a dict.
@@ -854,11 +907,14 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(tile_decoder::decode_tile_window, m)?)?;
-    m.add_function(wrap_pyfunction!(write_patches_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(write_geotiffs_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_kml_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(write_patches, m)?)?;
+    m.add_function(wrap_pyfunction!(write_geotiffs, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_kml, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
+    // The names before mapcv 0.3, for code that imported them.
+    m.add("PyTileIndex", m.getattr("TileIndex")?)?;
+    m.add("PyBBox", m.getattr("BBox")?)?;
     m.add_class::<PyGeoTiff>()?;
     Ok(())
 }

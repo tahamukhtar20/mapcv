@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from typing import Any
-from mapcv._mapcv_rs import PyTileIndex, fetch_tiles
+from mapcv._mapcv_rs import TileIndex, fetch_tiles
 
 # Minimal valid PNG signatures followed by distinct payloads; the fetcher only
 # checks the signature, decoding happens later.
@@ -19,8 +19,8 @@ def test_fetch_tiles_mock(httpserver: Any) -> None:
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
 
     tile_list = [
-        PyTileIndex(2621, 6331, 14),
-        PyTileIndex(2622, 6331, 14),
+        TileIndex(2621, 6331, 14),
+        TileIndex(2622, 6331, 14),
     ]
 
     progress_updates: list[int] = []
@@ -49,8 +49,8 @@ def test_fetch_tiles_lenient(httpserver: Any) -> None:
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     tile_list = [
-        PyTileIndex(1, 1, 14),
-        PyTileIndex(2, 1, 14),
+        TileIndex(1, 1, 14),
+        TileIndex(2, 1, 14),
     ]
 
     results, failed, _ = fetch_tiles(
@@ -71,7 +71,7 @@ def test_fetch_tiles_strict(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"NOT FOUND", status=404)
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    tile_list = [PyTileIndex(1, 1, 14)]
+    tile_list = [TileIndex(1, 1, 14)]
 
     with pytest.raises(RuntimeError, match="HTTP 404"):
         fetch_tiles(tile_list, url_template, callback=None, max_connections=2, policy="strict")
@@ -82,7 +82,7 @@ def test_fetch_tiles_ignore_returns_black_pixels(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"NOT FOUND", status=404)
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    tile_list = [PyTileIndex(1, 1, 14)]
+    tile_list = [TileIndex(1, 1, 14)]
 
     results, failed, _ = fetch_tiles(
         tile_list,
@@ -106,7 +106,7 @@ def test_fetch_tiles_ignore_ignores_ratio(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/2/1.png").respond_with_data(b"NOT FOUND", status=404)
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    tile_list = [PyTileIndex(1, 1, 14), PyTileIndex(2, 1, 14)]
+    tile_list = [TileIndex(1, 1, 14), TileIndex(2, 1, 14)]
 
     # 2/2 failed = 100 % > 0 % threshold, but policy is "ignore" so it should pass
     results, failed, _ = fetch_tiles(
@@ -129,9 +129,9 @@ def test_fetch_tiles_max_failed_ratio_exceeded(httpserver: Any) -> None:
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
     tile_list = [
-        PyTileIndex(1, 1, 14),
-        PyTileIndex(2, 1, 14),
-        PyTileIndex(3, 1, 14),
+        TileIndex(1, 1, 14),
+        TileIndex(2, 1, 14),
+        TileIndex(3, 1, 14),
     ]
 
     # 2/3 ~= 66.7% > 50% threshold
@@ -155,7 +155,7 @@ def test_fetch_tiles_reports_why_tiles_failed(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/2/1.png").respond_with_data(b"gone", status=410)
     httpserver.expect_request("/tile/14/3/1.png").respond_with_data(b"gone", status=410)
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    tiles = [PyTileIndex(x, 1, 14) for x in (1, 2, 3)]
+    tiles = [TileIndex(x, 1, 14) for x in (1, 2, 3)]
 
     _, failed, (causes, example) = fetch_tiles(tiles, url_template, policy="ignore")
 
@@ -167,7 +167,7 @@ def test_fetch_tiles_reports_why_tiles_failed(httpserver: Any) -> None:
 def test_fetch_tiles_reasons_empty_without_failures(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(PNG_1, status=200)
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    assert fetch_tiles([PyTileIndex(1, 1, 14)], url_template)[2] == ([], None)
+    assert fetch_tiles([TileIndex(1, 1, 14)], url_template)[2] == ([], None)
 
 
 def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:
@@ -176,7 +176,7 @@ def test_fetch_tiles_max_failed_ratio_not_exceeded(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/2/1.png").respond_with_data(b"NOT FOUND", status=404)
 
     url_template = httpserver.url_for("/tile/{z}/{x}/{y}.png")
-    tile_list = [PyTileIndex(1, 1, 14), PyTileIndex(2, 1, 14)]
+    tile_list = [TileIndex(1, 1, 14), TileIndex(2, 1, 14)]
 
     # 1/2 = 50 % which is not > 60 % threshold
     results, failed, _ = fetch_tiles(
@@ -198,7 +198,7 @@ def test_fetch_tiles_non_image_response_is_a_failure(httpserver: Any) -> None:
         b"<html>quota exceeded</html>", content_type="text/html"
     )
     results, failed, _ = fetch_tiles(
-        [PyTileIndex(1, 1, 14)],
+        [TileIndex(1, 1, 14)],
         httpserver.url_for("/tile/{z}/{x}/{y}.png"),
         policy="lenient",
         max_failed_ratio=1.0,
@@ -208,7 +208,7 @@ def test_fetch_tiles_non_image_response_is_a_failure(httpserver: Any) -> None:
 
     with pytest.raises(RuntimeError, match="not an image"):
         fetch_tiles(
-            [PyTileIndex(1, 1, 14)], httpserver.url_for("/tile/{z}/{x}/{y}.png"), policy="strict"
+            [TileIndex(1, 1, 14)], httpserver.url_for("/tile/{z}/{x}/{y}.png"), policy="strict"
         )
 
 
@@ -216,7 +216,7 @@ def test_fetch_tiles_lenient_ratio_is_case_insensitive(httpserver: Any) -> None:
     httpserver.expect_request("/tile/14/1/1.png").respond_with_data(b"NOT FOUND", status=404)
     with pytest.raises(RuntimeError, match="Too many failed tiles"):
         fetch_tiles(
-            [PyTileIndex(1, 1, 14)],
+            [TileIndex(1, 1, 14)],
             httpserver.url_for("/tile/{z}/{x}/{y}.png"),
             policy="LENIENT",
             max_failed_ratio=0.0,
@@ -225,9 +225,9 @@ def test_fetch_tiles_lenient_ratio_is_case_insensitive(httpserver: Any) -> None:
 
 def test_fetch_tiles_invalid_arguments_raise_value_error() -> None:
     with pytest.raises(ValueError, match="Unknown policy"):
-        fetch_tiles([PyTileIndex(1, 1, 14)], "http://localhost/{z}/{x}/{y}.png", policy="nope")
+        fetch_tiles([TileIndex(1, 1, 14)], "http://localhost/{z}/{x}/{y}.png", policy="nope")
     with pytest.raises(ValueError, match="max_connections"):
-        fetch_tiles([PyTileIndex(1, 1, 14)], "http://localhost/{z}/{x}/{y}.png", max_connections=0)
+        fetch_tiles([TileIndex(1, 1, 14)], "http://localhost/{z}/{x}/{y}.png", max_connections=0)
 
 
 def test_fetch_tiles_truncated_body_follows_policy() -> None:
@@ -256,7 +256,7 @@ def test_fetch_tiles_truncated_body_follows_policy() -> None:
     thread.start()
     try:
         results, failed, _ = fetch_tiles(
-            [PyTileIndex(1, 1, 14)],
+            [TileIndex(1, 1, 14)],
             f"http://127.0.0.1:{port}/{{z}}/{{x}}/{{y}}.png",
             policy="ignore",
         )

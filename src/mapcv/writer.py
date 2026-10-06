@@ -11,7 +11,8 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mapcv._georef import epsg_code, is_geographic, world_file_text
-from mapcv._mapcv_rs import write_geotiffs_rs, write_patches_rs
+from mapcv._mapcv_rs import write_geotiffs
+from mapcv._mapcv_rs import write_patches as _write_patch_files
 from mapcv.manifest import (
     IMAGES_DIR,
     MANIFEST_VERSION,
@@ -229,7 +230,7 @@ def _write_geotiffs(
     count, height, width = array.shape[:3]
     bands = array.shape[3] if array.ndim == 4 else 1
     transforms = [manifest.transform_at(item["row"], item["col"]) for item in meta]
-    write_geotiffs_rs(
+    write_geotiffs(
         array.reshape(-1).view(np.uint8),
         array.dtype.name,
         (count, height, width, bands),
@@ -360,7 +361,7 @@ def write_patches(
 
     counts: List[Optional[Dict[str, int]]] = [None] * len(meta)
     if rust_images:
-        results = write_patches_rs(
+        results = _write_patch_files(
             np.ascontiguousarray(image_patches),
             np.ascontiguousarray(mask_patches) if rust_masks else None,
             [(item["row"], item["col"], item["padded"]) for item in meta],
@@ -478,7 +479,7 @@ def write_source_images(
                 f"PNG/JPG output requires uint8 image patches shaped (N, H, W, 3); imagery "
                 f"'{source.name}' gives {image_patches.dtype.name} {image_patches.shape[1:]}"
             )
-        write_patches_rs(
+        _write_patch_files(
             np.ascontiguousarray(image_patches),
             None,
             [(item["row"], item["col"], item["padded"]) for item in meta],

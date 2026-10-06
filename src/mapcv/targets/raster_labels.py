@@ -85,7 +85,7 @@ def _forget_proj_pool() -> None:
     _proj_pool = None
 
 
-if hasattr(os, "register_at_fork"):  # not on Windows
+if hasattr(os, "register_at_fork"):  # pragma: no branch - Windows has no fork
     os.register_at_fork(after_in_child=_forget_proj_pool)
 
 

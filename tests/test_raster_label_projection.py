@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -286,7 +287,20 @@ def test_small_arrays_are_projected_on_the_calling_thread(
     assert np.array_equal(got_x, ref_x) and np.array_equal(got_y, ref_y)
 
 
+def test_forgetting_the_pool_lets_the_next_projection_create_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(raster_labels, "_proj_pool", object())
+    raster_labels._forget_proj_pool()
+    assert raster_labels._proj_pool is None
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="a forked child of a multi-threaded process crashed (SIGSEGV) on macOS CI; "
+    "fork is not supported there after threads exist and the default start method is spawn",
+)
 @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
 def test_a_forked_child_projects_with_a_fresh_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

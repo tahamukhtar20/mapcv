@@ -23,7 +23,9 @@ class SplitterConfig(BaseModel):
     split and drops train/val patches that overlap a held-out patch, so
     overlapping or neighbouring patches cannot leak between splits.
     ``stratified`` and ``random`` split individual patches and are only
-    leakage-free when patches neither overlap nor repeat.
+    leakage-free when patches neither overlap nor repeat. ``region`` assigns whole
+    regions of an area of interest (``region.path``) to one split each, the cleanest
+    split when the regions are far apart.
     """
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -33,7 +35,7 @@ class SplitterConfig(BaseModel):
     val_ratio: float = Field(default=0.10, ge=0.0, le=1.0)
     labeled_ratios: List[float] = Field(default_factory=lambda: [0.10, 0.20, 0.30])
     seed: int = 42
-    strategy: Literal["spatial", "stratified", "random"] = "spatial"
+    strategy: Literal["spatial", "stratified", "random", "region"] = "spatial"
     # Default: 4 x patch size, smaller for small rasters (at least 10 blocks).
     block_size: Optional[int] = Field(default=None, ge=1)
     sample_limit: Optional[int] = Field(default=None, ge=1)
@@ -231,6 +233,35 @@ def _spatial_split(
     return test, val, train, len(dropped_val) + len(dropped_train)
 
 
+def _region_split(
+    entries: List[ManifestEntry],
+    config: SplitterConfig,
+    rng: random.Random,
+    patch_size: Optional[int],
+) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry], int]:
+    """Whole regions (``summary.region``) to one split each, in a seeded random order;
+    patches that still overlap a held-out patch (adjacent regions) are dropped."""
+    regions: DefaultDict[str, List[ManifestEntry]] = defaultdict(list)
+    for entry in entries:
+        region = entry["summary"].get("region")
+        if region is None:
+            raise ValueError(
+                "split.strategy 'region' needs patches made with region.path (an area of "
+                "interest); this dataset records no regions"
+            )
+        regions[str(region)].append(entry)
+    ordered = [regions[name] for name in sorted(regions)]
+    rng.shuffle(ordered)
+    test, val, train = _assign_groups(ordered, config)
+    if patch_size is None:
+        return test, val, train, 0
+    dropped_val = _overlapping(val, test, patch_size)
+    val = [entry for i, entry in enumerate(val) if i not in dropped_val]
+    dropped_train = _overlapping(train, test + val, patch_size)
+    train = [entry for i, entry in enumerate(train) if i not in dropped_train]
+    return test, val, train, len(dropped_val) + len(dropped_train)
+
+
 def _stratified_split(
     entries: List[ManifestEntry],
     config: SplitterConfig,
@@ -335,7 +366,7 @@ def _split(
             stacklevel=stacklevel,
         )
         strategy = "stratified"
-    elif strategy != "spatial" and stride is not None and patch_size is not None:
+    elif strategy not in ("spatial", "region") and stride is not None and patch_size is not None:
         if stride < patch_size or (manifest.sampler or {}).get("mode") == "random":
             warnings.warn(
                 f"Patches overlap or repeat, so a '{strategy}' split leaks pixels between "
@@ -347,6 +378,16 @@ def _split(
     dropped = 0
     if strategy == "spatial":
         test, val, train, dropped = _spatial_split(entries, config, rng, patch_size)
+    elif strategy == "region":
+        test, val, train, dropped = _region_split(entries, config, rng, patch_size)
+        regions = len({entry["summary"].get("region") for entry in entries})
+        if regions < 3:
+            warnings.warn(
+                f"Only {regions} region(s): a region split leaves some of train, val and "
+                "test empty; split the area of interest into more regions.",
+                UserWarning,
+                stacklevel=stacklevel,
+            )
     elif strategy == "stratified":
         test, val, train = _stratified_split(entries, config, rng, ignore_key)
     else:

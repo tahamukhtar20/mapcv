@@ -166,7 +166,32 @@ def _join(base: Path, value: object) -> object:
     return os.path.normpath(base / value)
 
 
+def area_polygons(
+    path: Path, name_field: Optional[str] = None, layer: Optional[str] = None
+) -> List[Tuple[Any, str]]:
+    """The polygons of an area-of-interest file in WGS-84 lon/lat, with their region names:
+    the ``name_field`` value, or the polygon's number (1, 2, ...) in file order."""
+    from mapcv.labels import load_vector_labels
+
+    try:
+        raw, names = load_vector_labels(path, name_field, layer=layer)
+    except ValueError as exc:
+        if "distinct values" in str(exc):
+            raise ValueError(
+                f"region.name_field '{name_field}' has more than 255 distinct names; give "
+                "polygons of one region the same name, or leave name_field out to number them"
+            ) from None
+        raise
+    if name_field is None:
+        return [(geometry, str(index)) for index, (geometry, _) in enumerate(raw, start=1)]
+    by_id = {class_id: name for name, class_id in names.items()}
+    return [(geometry, by_id[class_id]) for geometry, class_id in raw]
+
+
 def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
+    region = data.get("region")
+    if isinstance(region, dict) and isinstance(region.get("path"), str):
+        region["path"] = _join(base, region["path"])
     labels = data.get("labels")
     if isinstance(labels, dict) and "path" in labels:
         path = labels["path"]
@@ -232,7 +257,12 @@ WEB_MERCATOR_MAX_LATITUDE = 85.05112878
 
 
 class RegionConfig(BaseModel):
-    """Geographic bounding box in WGS-84 degrees."""
+    """The area of interest: a WGS-84 bounding box, or polygons in a vector file.
+
+    With ``path`` (an area-of-interest file, any vector label format) the box is the
+    polygons' bounds, and only patches that touch a polygon are made. Each polygon is
+    a region: named by its ``name_field`` value, or numbered 1, 2, ... in file order.
+    """
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")
@@ -241,6 +271,9 @@ class RegionConfig(BaseModel):
     south: float
     east: float
     north: float
+    path: Optional[Path] = None
+    name_field: Optional[str] = None
+    layer: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -248,6 +281,41 @@ class RegionConfig(BaseModel):
         if isinstance(raw, dict) and "zoom" in raw:
             raise ValueError(_REGION_ZOOM_REMOVED)
         return raw
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bounds_from_area(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict) or raw.get("path") is None:
+            return raw
+        if any(key in raw for key in ("west", "south", "east", "north")):
+            raise ValueError(
+                "give region either path (area-of-interest polygons) or west/south/east/north, "
+                "not both"
+            )
+        path = Path(raw["path"])
+        if path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
+            raise ValueError(
+                "region.path must be a polygon file (.geojson, .json, .kml, .gpkg, .shp, "
+                f".parquet or .geoparquet), got '{path.name}'"
+            )
+        if not path.exists():
+            raise ValueError(f"region.path not found: {path}")
+        polygons = area_polygons(path, raw.get("name_field"), raw.get("layer"))
+        if not polygons:
+            raise ValueError(f"region.path '{path.name}' holds no polygon")
+        west = min(geometry.bounds[0] for geometry, _ in polygons)
+        south = min(geometry.bounds[1] for geometry, _ in polygons)
+        east = max(geometry.bounds[2] for geometry, _ in polygons)
+        north = max(geometry.bounds[3] for geometry, _ in polygons)
+        return {**raw, "west": west, "south": south, "east": east, "north": north}
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_area(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data: Dict[str, Any] = handler(self)
+        for key in ("path", "name_field", "layer"):
+            if data.get(key, 0) is None:
+                del data[key]
+        return data
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> "RegionConfig":
@@ -262,6 +330,8 @@ class RegionConfig(BaseModel):
                     f"region.{name} must be a latitude in -90..90, got {value}; check that "
                     "longitude and latitude are not swapped"
                 )
+        if self.path is None and (self.name_field is not None or self.layer is not None):
+            raise ValueError("region.name_field and region.layer need region.path")
         if self.west >= self.east:
             raise ValueError("region.west must be less than region.east")
         if self.south >= self.north:
@@ -988,7 +1058,7 @@ def _validate_task(task: Any) -> Any:
         return task
     supported = ", ".join(SUPPORTED_TASKS)
     planned = f" (planned: {', '.join(PLANNED_TASKS)})" if PLANNED_TASKS else ""
-    if task in PLANNED_TASKS:
+    if task in PLANNED_TASKS:  # pragma: no cover - none planned now
         raise ValueError(f"task '{task}' is not supported yet; supported: {supported}{planned}")
     raise ValueError(f"unknown task '{task}'; supported: {supported}{planned}")
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import shapely
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
@@ -16,6 +17,7 @@ from mapcv.config import (
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
+    area_polygons,
     RasterLabelsConfig,
     XYZImageryConfig,
     eopf_local_path,
@@ -394,6 +396,15 @@ def plan(config: MapcvConfig) -> Plan:
         description = primary.description
 
     patches = _patch_count(height, width, config)
+    if region.path is not None:
+        # Only patches over the area of interest are made: scale by the share of the box
+        # its polygons cover (an estimate; generate counts them exactly).
+        polygons = [
+            geometry for geometry, _ in area_polygons(region.path, region.name_field, region.layer)
+        ]
+        covered = shapely.area(shapely.union_all(polygons))
+        ratio = covered / box(region.west, region.south, region.east, region.north).area
+        patches = min(patches, max(len(polygons), math.ceil(patches * ratio)))
     pixels_per_patch = patch_size * patch_size
     image_bytes = sum(_image_bytes(config, size) for size in sizes)
     # Segmentation writes one uint8 mask per patch when there are labels: compressed as

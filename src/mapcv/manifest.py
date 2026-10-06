@@ -56,8 +56,9 @@ class PatchSummary(TypedDict, total=False):
     pixels are left out), and ``labels``: the class IDs the patch is labeled with
     (ascending; ``0`` is the ``background`` label of ``classification.empty: background``).
     Regression adds ``values``: the number of target pixels with a value (``valid``)
-    and, when there are any, their ``min``, ``max`` and ``mean``. Other tasks add their
-    own keys.
+    and, when there are any, their ``min``, ``max`` and ``mean``. With an area of
+    interest (``region.path``), ``region`` names the region covering most of the patch.
+    Other tasks add their own keys.
     """
 
     class_pixels: Dict[str, int]
@@ -65,6 +66,7 @@ class PatchSummary(TypedDict, total=False):
     class_coverage: Dict[str, float]
     labels: List[int]
     values: Dict[str, Any]
+    region: str
     empty_ratio: float
 
 
@@ -416,6 +418,8 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> List[str]:
         )
     if manifest.sampler != expected.sampler:
         mismatches.append("sampler")
+    if (manifest.model_extra or {}).get("region") != (expected.model_extra or {}).get("region"):
+        mismatches.append("region")
     if manifest.writer != expected.writer:
         mismatches.append("writer")
     return mismatches

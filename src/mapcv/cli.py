@@ -254,8 +254,11 @@ def _settings_table(config: MapcvConfig) -> Table:
     if config.task != "segmentation":
         table.add_row("Task", _task_label(config))
     region = config.region
+    area = f"{region.path} · " if region.path is not None else ""
     table.add_row(
-        "Region", f"{region.west}, {region.south} → {region.east}, {region.north} (W, S → E, N)"
+        "Region",
+        f"{area}{region.west:.6g}, {region.south:.6g} → {region.east:.6g}, {region.north:.6g} "
+        "(W, S → E, N)",
     )
     table.add_row("Imagery", _imagery_label(config))
     change = config.change_options
@@ -664,7 +667,7 @@ writer:
   # world_files: false      # .pgw/.jgw next to PNG/JPG patches, for QGIS
 
 split:                       # remove to skip splitting
-  strategy: spatial          # spatial (no leakage between splits) | stratified | random
+  strategy: spatial          # spatial (no leakage between splits) | stratified | random | region
   test_ratio: 0.20
   val_ratio: 0.10
   labeled_ratios: [0.10, 0.20, 0.30]   # semi-supervised labeled subsets of train
@@ -1829,7 +1832,9 @@ def split(
     ),
     seed: int = typer.Option(42, help="Random seed."),
     strategy: str = typer.Option(
-        "spatial", help="spatial (leakage-safe blocks) | stratified | random."
+        "spatial",
+        help="spatial (leakage-safe blocks) | stratified | random | region (whole regions "
+        "of an area of interest).",
     ),
     block_size: Optional[int] = typer.Option(
         None, help="Spatial block size in pixels (default: 4 × patch size)."

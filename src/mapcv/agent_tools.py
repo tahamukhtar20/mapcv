@@ -343,6 +343,8 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
             if local is not None:
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 found.append((where, local))
+    if config.region.path is not None:
+        found.extend(_vector_label_paths("region.path", config.region.path))
     found.append(("writer.staging_dir", config.writer.staging_dir))
     return found
 
@@ -460,6 +462,16 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
         message = "the config must be a YAML mapping with region, imagery, sampler and writer"
         raise ConfigInvalid(message, [{"field": "config", "message": message}])
     _resolve_relative_paths(data, base)
+    # Validation reads region.path (an area of interest) for its bounds: check it is
+    # inside the root first, so a config cannot make the server open a file outside it.
+    region = data.get("region")
+    if isinstance(region, dict) and isinstance(region.get("path"), str):
+        target = Path(region["path"])
+        state.sandbox.inside(
+            (target if target.is_absolute() else Path.cwd() / target).resolve(),
+            "region.path",
+            region["path"],
+        )
     try:
         config = MapcvConfig.model_validate(data)
     except ValidationError as exc:

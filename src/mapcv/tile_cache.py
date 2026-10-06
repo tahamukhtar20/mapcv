@@ -117,14 +117,14 @@ class CacheUsage:
 
 def _tile_files(root: Path) -> Iterator[Path]:
     if root.is_dir():
-        yield from root.rglob(f"*{_SUFFIX}")
+        yield from (path for path in root.rglob(f"*{_SUFFIX}") if path.is_file())
 
 
 def _expiry(path: Path) -> Optional[float]:
     try:
         with path.open("rb") as handle:
             head = handle.read(len(_MAGIC) + _HEADER.size)
-    except OSError:
+    except OSError:  # pragma: no cover - removed or unreadable since it was listed
         return None
     if len(head) != len(_MAGIC) + _HEADER.size or not head.startswith(_MAGIC):
         return None
@@ -140,7 +140,7 @@ def usage(now: Optional[float] = None) -> CacheUsage:
         found.tiles += 1
         try:
             found.bytes += path.stat().st_size
-        except OSError:
+        except OSError:  # pragma: no cover - removed since it was listed
             pass
         expiry = _expiry(path)
         if expiry is None or expiry <= now:
@@ -161,7 +161,7 @@ def clear(expired_only: bool = False, now: Optional[float] = None) -> int:
         try:
             path.unlink()
             removed += 1
-        except FileNotFoundError:
+        except FileNotFoundError:  # pragma: no cover - removed by another process
             pass
     # Drop the folders the deletion emptied, deepest first; leave anything else.
     if root.is_dir():

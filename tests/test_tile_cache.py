@@ -145,14 +145,19 @@ def test_usage_and_clear(tmp_path: Path) -> None:
     a.put(1, 0, 1, b"123", NONE)
     b.put(0, 0, 1, b"1", ("max-age=10", None, None, None))
     (root / "keep.txt").write_text("not a tile")
+    (root / "folder.tile").mkdir()  # not a file: never counted or deleted
+    (root / "folder.tile" / "inside").write_text("")
+    (root / "foreign.tile").write_bytes(b"not a cache file")  # unreadable: expired
     found = tile_cache.usage(now=NOW + 20)
-    assert (found.tiles, found.expired) == (3, 2) and found.bytes > 9
-    assert tile_cache.usage(now=NOW).expired == 0
+    assert (found.tiles, found.expired) == (4, 3) and found.bytes > 9
+    assert tile_cache.usage(now=NOW).expired == 1
 
-    assert tile_cache.clear(expired_only=True, now=NOW + 20) == 2
+    assert tile_cache.clear(expired_only=True, now=NOW + 20) == 3
+    assert (root / "folder.tile").is_dir() and not (root / "foreign.tile").exists()
     assert a.get(1, 0, 1) == b"123" and not b.folder.exists()
     assert tile_cache.clear() == 1
     assert tile_cache.usage().tiles == 0 and (root / "keep.txt").exists()
+    assert (root / "folder.tile" / "inside").exists()
     assert not a.folder.exists()
 
 
@@ -224,6 +229,7 @@ def server() -> Iterator[TileServer]:
     tiles = TileServer()
     yield tiles
     tiles.server.shutdown()
+    tiles.server.server_close()
 
 
 def test_fetch_tiles_returns_caching_headers(server: TileServer) -> None:
@@ -377,3 +383,11 @@ def test_mcp_generate_never_uses_the_cache(server: TileServer, tmp_path: Path) -
     assert one.primary_imagery.cache is False  # type: ignore[union-attr]
     two = prepare_generate(state, "two.yaml").config
     assert [source.cache for source in two.sources] == [False, False]  # type: ignore[union-attr]
+
+    from mapcv.agent_tools import _without_tile_cache
+
+    geotiff = MapcvConfig.model_validate(
+        {**data, "imagery": [{"type": "geotiff", "name": "g", "path": "a.tif"}, data["imagery"][0]]}
+    )
+    kept, xyz = _without_tile_cache(geotiff).sources
+    assert kept is geotiff.sources[0] and xyz.cache is False  # type: ignore[union-attr]

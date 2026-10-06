@@ -9,8 +9,9 @@ imagery pixel takes the value of the label pixel that contains its **centre**
    corner-based, in rasterio's ``(a, b, c, d, e, f)`` order, so pixel ``(0, 0)``
    spans ``[0, 1) x [0, 1)`` and its centre is ``(0.5, 0.5)``.
 2. When the label raster has another CRS, the centres are projected into it with
-   pyproj, exactly, point by point. (GDAL's warper approximates the transformation
-   with an error of up to 0.125 pixel by default; mapcv does not.)
+   pyproj, exactly, every point on its own (in parallel threads; the coordinates are
+   bit for bit those of one call per point). (GDAL's warper approximates the
+   transformation with an error of up to 0.125 pixel by default; mapcv does not.)
 3. The inverse of the label raster's affine transform gives fractional label pixel
    coordinates. The transform is corner-based for ``PixelIsPoint`` files too: the
    reader shifts it by half a pixel, as GDAL and rasterio do.
@@ -31,7 +32,9 @@ copied directly instead; the result is identical to the general path.
 from __future__ import annotations
 
 import math
+import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -60,6 +63,20 @@ _WHOLE_PIXEL_TOLERANCE = 1e-9
 _BLOCK_PIXELS = 1 << 20
 # Label pixels read around the window estimated from its perimeter.
 _MARGIN = 1
+# Cross-CRS projection runs in this many threads, on pieces of at least ``_MIN_PIECE``
+# points (smaller arrays stay on the calling thread). PROJ transforms one point after
+# another, whatever the array size, and pyproj releases the GIL while it does.
+_PROJ_THREADS = min(8, os.cpu_count() or 1)
+_MIN_PIECE = 1 << 15
+_proj_pool: Optional[ThreadPoolExecutor] = None
+
+
+def _proj_executor() -> ThreadPoolExecutor:
+    global _proj_pool
+    if _proj_pool is None:
+        _proj_pool = ThreadPoolExecutor(max_workers=_PROJ_THREADS, thread_name_prefix="mapcv-proj")
+    return _proj_pool
+
 
 LABEL_RASTER_MISS_MESSAGE = (
     "the label raster does not overlap the imagery, so every mask pixel will be {value}. "
@@ -221,15 +238,42 @@ class LabelRasterSampler:
             pu, pv, p0, qu, qv, q0 = self._composed(transform)
             return qu * u + qv * v + q0, pu * u + pv * v + p0
         a, b, c, d, e, f = transform
-        x = a * u + b * v + c
-        y = d * u + e * v + f
-        x, y = np.broadcast_arrays(x, y)
-        lx, ly = self._to_label.transform(np.ascontiguousarray(x), np.ascontiguousarray(y))
-        lx = np.asarray(lx, dtype=np.float64)
-        ly = np.asarray(ly, dtype=np.float64)
+        lx, ly = self._project(a * u + b * v + c, d * u + e * v + f)
         la, lb, lc, ld, le, lf = self.transform
         det = la * le - lb * ld
         return (la * (ly - lf) - ld * (lx - lc)) / det, (le * (lx - lc) - lb * (ly - lf)) / det
+
+    def _project(
+        self, x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
+    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        """Imagery-CRS coordinates (broadcast) projected into the label CRS.
+
+        PROJ transforms the points of an array one after another, so the array is cut
+        into pieces that run in parallel threads (pyproj releases the GIL and gives each
+        thread its own PROJ context). Every point goes through the same operation whatever
+        piece it falls in: the coordinates are bit for bit those of a call per point
+        (``tests/test_raster_label_projection.py`` checks this for several CRS pairs).
+        """
+        x, y = np.broadcast_arrays(x, y)
+        shape = x.shape
+        # Copies, projected in place.
+        lx = np.array(x, dtype=np.float64, order="C").reshape(-1)
+        ly = np.array(y, dtype=np.float64, order="C").reshape(-1)
+        transformer = self._to_label
+
+        def piece(lo: int, hi: int) -> None:
+            transformer.transform(lx[lo:hi], ly[lo:hi], inplace=True)
+
+        pieces = min(_PROJ_THREADS, len(lx) // _MIN_PIECE)
+        if pieces < 2:
+            piece(0, len(lx))
+        else:
+            bounds = [len(lx) * i // pieces for i in range(pieces + 1)]
+            executor = _proj_executor()
+            futures = [executor.submit(piece, bounds[i], bounds[i + 1]) for i in range(pieces)]
+            for future in futures:
+                future.result()
+        return lx.reshape(shape), ly.reshape(shape)
 
     def grid_offset(self, transform: Transform) -> Optional[Tuple[int, int]]:
         """``(row, col)`` of the window's first pixel in the label raster when both share

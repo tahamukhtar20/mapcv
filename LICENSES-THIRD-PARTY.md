@@ -20,7 +20,7 @@ Code that mapcv derived from other projects is acknowledged in
 - base64 0.22.1: MIT OR Apache-2.0
 - base64 0.23.1: MIT OR Apache-2.0
 - bitflags 2.11.1: MIT OR Apache-2.0
-- bytemuck 1.25.0: Zlib OR Apache-2.0 OR MIT
+- bytemuck 1.25.2: Zlib OR Apache-2.0 OR MIT
 - byteorder-lite 0.1.0: Unlicense OR MIT
 - bytes 1.11.1: MIT
 - cfg-if 1.0.4: MIT OR Apache-2.0
@@ -36,7 +36,7 @@ Code that mapcv derived from other projects is acknowledged in
 - encoding_rs 0.8.35: (Apache-2.0 OR MIT) AND BSD-3-Clause
 - errno 0.3.14: MIT OR Apache-2.0
 - fdeflate 0.3.7: MIT OR Apache-2.0
-- flate2 1.1.9: MIT OR Apache-2.0
+- flate2 1.1.10: MIT OR Apache-2.0
 - form_urlencoded 1.2.2: MIT OR Apache-2.0
 - futures 0.3.34: MIT OR Apache-2.0
 - futures-channel 0.3.34: MIT OR Apache-2.0
@@ -78,6 +78,7 @@ Code that mapcv derived from other projects is acknowledged in
 - matrixmultiply 0.3.10: MIT OR Apache-2.0
 - memchr 2.8.0: Unlicense OR MIT
 - miniz_oxide 0.8.9: MIT OR Zlib OR Apache-2.0
+- miniz_oxide 0.9.1: MIT OR Zlib OR Apache-2.0
 - mio 1.2.0: MIT
 - moxcms 0.8.1: BSD-3-Clause OR Apache-2.0
 - ndarray 0.16.1: MIT OR Apache-2.0
@@ -144,6 +145,7 @@ Code that mapcv derived from other projects is acknowledged in
 - utf8_iter 1.0.4: Apache-2.0 OR MIT
 - want 0.3.1: MIT
 - weezl 0.1.12: MIT OR Apache-2.0
+- weezl 0.2.1: MIT OR Apache-2.0
 - windows-link 0.2.1: MIT OR Apache-2.0
 - windows-sys 0.61.2: MIT OR Apache-2.0
 - writeable 0.6.3: Unicode-3.0
@@ -155,8 +157,8 @@ Code that mapcv derived from other projects is acknowledged in
 - zerotrie 0.2.4: Unicode-3.0
 - zerovec 0.11.6: Unicode-3.0
 - zerovec-derive 0.11.3: Unicode-3.0
-- zstd 0.13.3: MIT
-- zstd-safe 7.3.0: BSD-3-Clause
+- zstd 0.14.0: BSD-3-Clause
+- zstd-safe 8.0.0: BSD-3-Clause
 - zstd-sys 2.1.0+zstd.1.5.7: BSD-3-Clause
 - zune-core 0.5.3: MIT OR Apache-2.0 OR Zlib
 - zune-jpeg 0.5.15: MIT OR Apache-2.0 OR Zlib
@@ -876,7 +878,7 @@ pub(crate) static GB18030_2022_OVERRIDE_BYTES: [[u8; 2]; 18] = [
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Used by: zstd-safe 7.3.0, zstd-sys 2.1.0+zstd.1.5.7
+Used by: zstd-safe 8.0.0, zstd-sys 2.1.0+zstd.1.5.7, zstd 0.14.0
 
 ``````text
 BSD 3-Clause License
@@ -1511,7 +1513,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Used by: flate2 1.1.9
+Used by: flate2 1.1.10
 
 ``````text
 Copyright (c) 2014-2026 Alex Crichton
@@ -2768,7 +2770,7 @@ SOFTWARE.
 
 ### MIT License
 
-Used by: bytemuck 1.25.0
+Used by: bytemuck 1.25.2
 
 ``````text
 MIT License
@@ -2931,7 +2933,7 @@ SOFTWARE.
 
 ### MIT License
 
-Used by: miniz_oxide 0.8.9
+Used by: miniz_oxide 0.8.9, miniz_oxide 0.9.1
 
 ``````text
 MIT License
@@ -2964,7 +2966,7 @@ SOFTWARE.
 
 ### MIT License
 
-Used by: miniz_oxide 0.8.9
+Used by: miniz_oxide 0.8.9, miniz_oxide 0.9.1
 
 ``````text
 MIT License
@@ -3358,7 +3360,7 @@ THE SOFTWARE.
 
 ### MIT License
 
-Used by: weezl 0.1.12
+Used by: weezl 0.1.12, weezl 0.2.1
 
 ``````text
 The MIT License (MIT)
@@ -3383,22 +3385,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-
-``````
-
-### MIT License
-
-Used by: zstd 0.13.3
-
-``````text
-The MIT License (MIT)
-Copyright (c) 2016 Alexandre Bury
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ``````
 

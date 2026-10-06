@@ -98,18 +98,23 @@ def _crash(state: ToolState, exc: BaseException) -> CallToolResult:
     )
 
 
+def _failure(state: ToolState, exc: Exception) -> CallToolResult:
+    """The error result for an exception a tool raised."""
+    if isinstance(exc, tools.ConfigInvalid):
+        return _fail(state, exc.message, {"valid": False, "errors": exc.errors})
+    if isinstance(exc, ToolFailure):
+        return _fail(state, exc.message, exc.data or None)
+    if isinstance(exc, (ValueError, RuntimeError, OSError)):
+        return _fail(state, str(exc) or type(exc).__name__)
+    return _crash(state, exc)  # a bug: never let its text reach the model
+
+
 def _guard(state: ToolState, call: Callable[[], ToolResult]) -> CallToolResult:
     """Run a tool and turn every outcome into a result the model can read."""
     try:
         return _ok(state, call())
-    except tools.ConfigInvalid as exc:
-        return _fail(state, exc.message, {"valid": False, "errors": exc.errors})
-    except ToolFailure as exc:
-        return _fail(state, exc.message, exc.data or None)
-    except (ValueError, RuntimeError, OSError) as exc:
-        return _fail(state, str(exc) or type(exc).__name__)
-    except Exception as exc:  # noqa: BLE001 - never let a bug leak its text to the model
-        return _crash(state, exc)
+    except Exception as exc:  # noqa: BLE001 - sorted by _failure
+        return _failure(state, exc)
 
 
 async def _run(state: ToolState, func: Callable[..., ToolResult], *args: Any) -> CallToolResult:
@@ -328,14 +333,8 @@ def _guard_job(state: ToolState, func: Callable[..., _T], *args: Any) -> _T:
     """Like :func:`_guard` for a step whose success value is not a result."""
     try:
         return func(*args)
-    except tools.ConfigInvalid as exc:
-        raise _Refused(_fail(state, exc.message, {"valid": False, "errors": exc.errors})) from None
-    except ToolFailure as exc:
-        raise _Refused(_fail(state, exc.message, exc.data or None)) from None
-    except (ValueError, RuntimeError, OSError) as exc:
-        raise _Refused(_fail(state, str(exc) or type(exc).__name__)) from None
-    except Exception as exc:  # noqa: BLE001
-        raise _Refused(_crash(state, exc)) from None
+    except Exception as exc:  # noqa: BLE001 - sorted by _failure
+        raise _Refused(_failure(state, exc)) from None
 
 
 def serve(root: Union[str, Path] = ".", allow_write: bool = False) -> None:

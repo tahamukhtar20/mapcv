@@ -1629,8 +1629,7 @@ def mcp_server(
         err = Console(stderr=True)
         err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
         err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
-        if (exc.name or "").split(".")[0] == "mcp" and "mcpserver" in str(exc):
-            err.print("[dim]An older mcp release is installed: mapcv needs mcp 2.x.[/dim]")
+        err.print(f"[dim]{escape(str(exc))} (mapcv needs mcp 2.x)[/dim]")
         raise typer.Exit(code=1)
     try:
         serve(root, allow_write)

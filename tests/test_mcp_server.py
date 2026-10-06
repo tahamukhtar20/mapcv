@@ -760,3 +760,72 @@ def test_mapcv_mcp_serves_over_stdio(project: Path) -> None:
 
     anyio.run(main)
     assert len(json.loads((project / "dataset" / "manifest.json").read_text())["patches"]) == 30
+
+
+# ── What the model is told when a tool breaks ────────────────────────────────
+
+
+def test_tool_exceptions_become_error_results(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import agent_tools
+
+    raised: List[Exception] = [
+        ValueError("a user mistake"),
+        agent_tools.ConfigInvalid("the config has errors", [{"field": "region", "message": "bad"}]),
+        TypeError("internal detail with SECRET"),
+    ]
+
+    def boom(*args: Any) -> None:
+        raise raised.pop(0)
+
+    monkeypatch.setattr(agent_tools, "plan", boom)
+
+    async def scenario(client: Client) -> None:
+        mistake = await call(client, "plan", config="mapcv.yaml")
+        assert mistake.is_error and "a user mistake" in text_of(mistake)
+        invalid = await call(client, "plan", config="mapcv.yaml")
+        assert invalid.is_error and data(invalid)["errors"] == [
+            {"field": "region", "message": "bad"}
+        ]
+        crash = await call(client, "plan", config="mapcv.yaml")
+        assert crash.is_error and "Internal error (TypeError)" in text_of(crash)
+        assert "internal detail" not in text_of(crash)  # a bug's text stays in the server log
+
+    run_client(project, scenario, write=False)
+
+
+def test_a_failing_generate_step_is_reported(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import agent_tools
+
+    def boom(*args: Any) -> None:
+        raise OSError("the disk is gone")
+
+    monkeypatch.setattr(agent_tools, "prepare_generate", boom)
+
+    async def scenario(client: Client) -> None:
+        result = await call(client, "generate", config="mapcv.yaml")
+        assert result.is_error and "the disk is gone" in text_of(result)
+
+    run_client(project, scenario)
+
+
+def test_serve_keeps_progress_bars_off_the_protocol_stream(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import pipeline
+    from mapcv import mcp_server
+
+    seen: List[Any] = []
+
+    class _Server:
+        def run(self, transport: str) -> None:
+            seen.extend([transport, pipeline._console.quiet, pipeline._console.file is sys.stderr])
+
+    monkeypatch.setattr(mcp_server, "build_server", lambda root, allow_write: _Server())
+    before = pipeline._console.quiet
+    mcp_server.serve(project, allow_write=True)
+    assert seen == ["stdio", True, True]
+    assert pipeline._console.quiet is before  # restored for whatever runs next in this process

@@ -235,7 +235,7 @@ class Sandbox:
             candidate = self.root / candidate
         try:
             resolved = candidate.resolve()
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover - exotic paths
             raise ToolFailure(f"`{what}` {value!r} cannot be resolved: {exc}") from None
         return self.inside(resolved, what, value)
 
@@ -255,7 +255,7 @@ class Sandbox:
         """``path`` relative to the root with ``/`` separators; ``.`` for the root itself."""
         try:
             relative = Path(path).resolve().relative_to(self.root)
-        except (ValueError, OSError):
+        except (ValueError, OSError):  # pragma: no cover - exotic paths
             return str(path)
         return relative.as_posix()
 
@@ -274,7 +274,7 @@ class Sandbox:
             target = path if path.is_absolute() else Path.cwd() / path
             try:
                 resolved = target.resolve()
-            except (OSError, RuntimeError, ValueError) as exc:
+            except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover - exotic paths
                 raise ToolFailure(f"{what} {str(path)!r} cannot be resolved: {exc}") from None
             self.inside(resolved, what, str(path))
 

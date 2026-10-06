@@ -9,10 +9,18 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import unquote, urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from mapcv.downloader import URL_TEMPLATES
-from mapcv.labels import _normalize_label
+from mapcv.labels import VECTOR_LABEL_SUFFIXES, _normalize_label
 from mapcv.sampler import SamplerConfig
 from mapcv.splitter import SplitterConfig
 from mapcv.writer import WriterConfig
@@ -34,7 +42,6 @@ DEFAULT_SENTINEL2_L2A_BANDS: List[str] = [
 ]
 
 
-_LABEL_SUFFIXES = frozenset({".kml", ".geojson", ".json"})
 _RASTER_LABEL_SUFFIXES = frozenset({".tif", ".tiff"})
 
 
@@ -327,7 +334,10 @@ ImageryConfig = Annotated[
 
 
 class LabelsConfig(BaseModel):
-    """Vector label file (KML or GeoJSON) settings: polygons burned into the masks.
+    """Vector label file settings: polygons burned into the masks (or boxed, for detection).
+
+    The file is GeoJSON, KML, a GeoPackage, a Shapefile or GeoParquet, chosen by its suffix.
+    ``layer`` picks the table of a GeoPackage that has several.
 
     ``classes`` maps label values to mask IDs (1..255). Without it, integer
     labels in 1..255 are used as-is and other labels get IDs in sorted order.
@@ -345,6 +355,15 @@ class LabelsConfig(BaseModel):
     classes: Optional[Dict[str, int]] = None
     all_touched: bool = False
     ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
+    layer: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_layer(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        # Records and manifests written before ``layer`` existed have no such key.
+        data: Dict[str, Any] = handler(self)
+        if data.get("layer", 0) is None:
+            del data["layer"]
+        return data
 
     @field_validator("path")
     @classmethod
@@ -354,12 +373,19 @@ class LabelsConfig(BaseModel):
                 f"labels.path '{path.name}' is a raster: set labels.type: raster and map its "
                 "values with labels.classes"
             )
-        if path.suffix.lower() not in _LABEL_SUFFIXES:
+        if path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
             raise ValueError(
-                f"labels.path must be a .kml, .geojson, or .json file, got '{path.name}' "
-                "(convert KMZ or Shapefiles to GeoJSON first)"
+                "labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or "
+                f".geoparquet file, got '{path.name}' (convert KMZ to KML first)"
             )
         return path
+
+    @field_validator("layer")
+    @classmethod
+    def _check_layer_name(cls, layer: Optional[str]) -> Optional[str]:
+        if layer is not None and not layer.strip():
+            raise ValueError("labels.layer must not be empty; omit it to use the only layer")
+        return layer
 
     @field_validator("classes", mode="before")
     @classmethod
@@ -378,6 +404,11 @@ class LabelsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _classes_need_field(self) -> "LabelsConfig":
+        if self.layer is not None and self.path.suffix.lower() != ".gpkg":
+            raise ValueError(
+                "labels.layer picks a table of a GeoPackage (.gpkg); "
+                f"'{self.path.name}' has just one, so remove labels.layer"
+            )
         if self.classes is not None and self.label_field is None:
             raise ValueError("labels.classes requires labels.label_field")
         if self.classes is not None and self.ignore_index in self.classes.values():
@@ -557,8 +588,8 @@ class DetectionOptions(BaseModel):
     min_box_pixels: float = Field(default=2.0, ge=0.0)
     # Output formats, written in this order; both by default.
     formats: List[DetectionFormat] = Field(default_factory=lambda: _all_formats())
-    # Side in pixels of the square box drawn around each point feature (GeoJSON
-    # Point/MultiPoint). Unset: point features are skipped with a warning.
+    # Side in pixels of the square box drawn around each point feature (not KML:
+    # points are not read there). Unset: point features are skipped with a warning.
     point_box_size: Optional[float] = Field(default=None, gt=0.0)
 
     @field_validator("formats")

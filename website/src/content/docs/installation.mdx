@@ -37,13 +37,14 @@ mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built w
 | Windows x86-64 | yes |
 | Other (for example Windows on ARM) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
 
-The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML and pyproj (its wheel bundles PROJ, so there is nothing else to install). There is no GDAL or rasterio dependency. XYZ tiles and GeoTIFF/COG files (local, `https://` or public `s3://`) work with the base install alone; only Sentinel-2 needs an extra.
+The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML, pyproj (its wheel bundles PROJ, so there is nothing else to install) and pyshp (a pure-Python Shapefile reader, so Shapefile labels work out of the box; GeoPackage needs only the standard library). There is no GDAL or rasterio dependency. XYZ tiles and GeoTIFF/COG files (local, `https://` or public `s3://`) work with the base install alone; only Sentinel-2 needs an extra.
 
 ## Optional extras
 
 | Extra | Install | Adds | Python |
 | --- | --- | --- | --- |
 | `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
+| `parquet` | `pip install "mapcv[parquet]"` | GeoParquet label files (`.parquet`, `.geoparquet`): pyarrow | 3.10 – 3.14 |
 
 <Aside type="caution" title="Sentinel-2 and Python 3.14">
 The `zarr` extra depends on zarr 2, whose `numcodecs` dependency has no Python 3.14 wheels. On Python 3.14, `pip install "mapcv[zarr]"` succeeds but installs **none** of the extra packages; a Sentinel-2 run then stops with a message explaining that Sentinel-2 support needs Python 3.10–3.13. Use a Python 3.13 environment for Sentinel-2.

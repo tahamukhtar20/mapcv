@@ -6,7 +6,7 @@ description: What mapcv does, who it is for, and what you get out of it.
 import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import PipelineDiagram from '../../components/PipelineDiagram.astro';
 
-**mapcv turns a region and polygon labels into a ready-to-train semantic-segmentation dataset.** You describe *where* (a longitude/latitude box), *what imagery* (XYZ map tiles or a Sentinel-2 L2A product) and, optionally, *what to label* (a GeoJSON or KML file). mapcv fetches the imagery, burns the polygons into masks on exactly the same pixel grid, cuts fixed-size patches, and writes them with a manifest and leakage-safe train/val/test splits.
+**mapcv turns a region and polygon labels into a ready-to-train semantic-segmentation dataset.** You describe *where* (a longitude/latitude box), *what imagery* (XYZ map tiles or a Sentinel-2 L2A product) and, optionally, *what to label* (a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file). mapcv fetches the imagery, burns the polygons into masks on exactly the same pixel grid, cuts fixed-size patches, and writes them with a manifest and leakage-safe train/val/test splits.
 
 <PipelineDiagram variant="overview" />
 

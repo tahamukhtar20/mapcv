@@ -17,7 +17,6 @@ Conventions (shared with the COCO and YOLO writers):
 
 from __future__ import annotations
 
-import hashlib
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple, cast
@@ -30,7 +29,7 @@ from shapely.geometry.base import BaseGeometry
 from mapcv._patching import PadMode
 from mapcv.config import DetectionOptions, LabelsConfig
 from mapcv.imagery import RasterMetadata
-from mapcv.labels import ClassMap, GeomWithClass
+from mapcv.labels import ClassMap, GeomWithClass, label_file_sha256
 from mapcv.manifest import TargetRecord
 from mapcv.targets.base import Transform, WindowTarget
 from mapcv.targets.segmentation import (
@@ -417,10 +416,9 @@ class DetectionTarget:
         return self._class_map
 
     def prepare(self, source: RasterMetadata) -> None:
-        data = self._labels.path.read_bytes()
-        self._sha256 = hashlib.sha256(data).hexdigest()
+        self._sha256 = label_file_sha256(self._labels.path)
         points = self._options.point_box_size is not None
-        parsed, self._class_map = _parse_labels(self._labels, data, source.crs, points=points)
+        parsed, self._class_map = _parse_labels(self._labels, source.crs, points=points)
         features: List[GeomWithClass] = [
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
         ]

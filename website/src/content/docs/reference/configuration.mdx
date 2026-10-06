@@ -107,7 +107,7 @@ Optional, and only allowed with `task: detection` (another task with a `detectio
 | `min_visible` | float, 0–1 | `0.3` | Keep an object in a patch only if at least this fraction of its area is visible there. `0` keeps every visible part; `1` keeps only whole objects. An object too large for any patch to show this fraction is never kept, and mapcv warns about it |
 | `min_box_pixels` | float ≥ 0 | `2` | Drop boxes narrower **or** shorter than this many pixels (slivers along patch edges) |
 | `formats` | list of `coco`, `yolo` | `[coco, yolo]` | Which annotation files to write. At least one; no duplicates |
-| `point_box_size` | float > 0 \| `null` | `null` | Turn GeoJSON `Point`/`MultiPoint` features into square boxes of this many pixels, centred on the point. `null`: points are skipped with a warning, as for segmentation |
+| `point_box_size` | float > 0 \| `null` | `null` | Turn `Point`/`MultiPoint` features (not in KML) into square boxes of this many pixels, centred on the point. `null`: points are skipped with a warning, as for segmentation |
 
 ```yaml
 task: detection
@@ -120,7 +120,7 @@ detection:
   formats: [coco, yolo]
 ```
 
-**Validation** (with `task: detection`): `labels` is required; `labels.ignore_index`, `labels.all_touched` and `writer.mask_format` are mask settings and are rejected when set, as is `writer.world_files` with images that are not PNG or JPG; `point_box_size` needs GeoJSON labels (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
+**Validation** (with `task: detection`): `labels` is required; `labels.ignore_index`, `labels.all_touched` and `writer.mask_format` are mask settings and are rejected when set, as is `writer.world_files` with images that are not PNG or JPG; `point_box_size` needs point labels from GeoJSON, GeoPackage, Shapefile or GeoParquet (KML points are not read); `sampler.pad_mode: reflect` is rejected with `edge_strategy: pad`, because mirrored padding would show objects without boxes. `sampler.min_label_ratio` keeps a patch only when its boxes' visible areas (overlaps counted once) cover at least that fraction of it. Detection writes no masks. A resumed run must use the same `detection` settings.
 
 ## `instance`
 
@@ -244,22 +244,23 @@ Needs no extra install. Reads one file as it is: patches keep the file's CRS, pi
 
 ## `labels`
 
-Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` picks where the masks come from: `vector` (the default, so configs without `type` keep working) burns polygons from a GeoJSON or KML file; `raster` reads a classified GeoTIFF, see [Raster labels](#raster-labels-type-raster).
+Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` picks where the masks come from: `vector` (the default, so configs without `type` keep working) burns polygons from a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file; `raster` reads a classified GeoTIFF, see [Raster labels](#raster-labels-type-raster).
 
 ### Polygon labels (`type: vector`)
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `vector` | `vector` | Polygon labels |
-| `path` | path | required | A `.geojson`, `.json` or `.kml` file in WGS-84 longitude/latitude. A relative path is resolved against the config file's folder |
-| `label_field` | string \| null | `null` | Feature property holding the class. `null`: every polygon is class `1` |
+| `path` | path | required | A `.geojson`, `.json`, `.kml`, `.gpkg`, `.shp`, `.parquet` or `.geoparquet` file. GeoJSON and KML are WGS-84 longitude/latitude; the others may use any CRS they state and are reprojected. A relative path is resolved against the config file's folder |
+| `layer` | string \| null | `null` | GeoPackage only: the layer (table) to read. Required when the file has several; leave unset with one. An error for other formats |
+| `label_field` | string \| null | `null` | Feature property (GeoJSON, KML) or column (the other formats) holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
 | `ignore_index` | int 1–255 or `null` | `255` | Mask value for pixels with no imagery under them: padding, failed tiles and NoData. Pass it to your loss (`CrossEntropyLoss(ignore_index=255)`). No class may use it; `null` writes background (`0`) there instead |
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
-**Validation:** suffix must be `.kml`, `.geojson` or `.json` (convert KMZ or Shapefiles first; a `.tif` asks for `type: raster`); `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+**Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` in `target.labels` when it is set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
 
 ### Raster labels (`type: raster`)
 

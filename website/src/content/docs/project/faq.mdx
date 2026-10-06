@@ -5,7 +5,7 @@ description: Short answers to common questions about mapcv.
 
 ### Do I need GDAL?
 
-No. mapcv's tile math, fetching, rasterization and patch writing are in Rust, and it reads GeoJSON and KML itself. You may still find GDAL's `ogr2ogr` handy to convert Shapefiles or GeoPackages to GeoJSON once ([Prepare labels](/mapcv/guides/prepare-labels/#export-from-common-tools)).
+No. mapcv's tile math, fetching, rasterization and patch writing are in Rust, and it reads GeoJSON, KML, GeoPackage, Shapefile and GeoParquet itself (GeoPackage with Python's `sqlite3` and Shapely, Shapefile with the pure-Python pyshp, GeoParquet with pyarrow). You may still find GDAL's `ogr2ogr` handy to convert other formats once ([Prepare labels](/mapcv/guides/prepare-labels/#export-from-common-tools)).
 
 ### Which Python versions are supported?
 

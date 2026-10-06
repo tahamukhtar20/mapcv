@@ -1,6 +1,6 @@
 # Agent guide for mapcv
 
-Instructions for coding agents (Jules, Claude Code, Codex, Copilot, CodeRabbit) and anyone new to
+Instructions for coding agents (Jules, Claude Code, Codex, Copilot) and anyone new to
 the codebase. Human-facing setup lives in [CONTRIBUTING.md](CONTRIBUTING.md); this file is the short,
 strict version.
 

@@ -104,7 +104,6 @@ exclude = [
     { path = "deny.toml", format = "sdist" },
     { path = "AGENTS.md", format = "sdist" },
     { path = "CLAUDE.md", format = "sdist" },
-    { path = ".coderabbit.yaml", format = "sdist" },
     # Builds from the sdist use the builder's own Rust, not the CI pin.
     { path = "rust-toolchain.toml", format = "sdist" },
 ]

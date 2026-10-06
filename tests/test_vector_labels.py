@@ -718,6 +718,52 @@ def test_damaged_geopackage_tables_are_value_errors(tmp_path: Path) -> None:
         load_vector_labels(no_table, None)
 
 
+def test_geopackage_features_come_back_in_fid_order(tmp_path: Path) -> None:
+    """Feature order decides overlaps and instance IDs, so it must not depend on how the
+    rows are stored. GDAL (pyogrio) returns the same file in fid order, checked by hand."""
+    path = make_gpkg(tmp_path / "a.gpkg", [])
+    connection = sqlite3.connect(path)
+    for fid, label in ((3, "c"), (1, "a"), (2, "b")):  # physical order 3, 1, 2
+        blob = gpkg_blob(box(16.0 + (4 - fid), 48.0, 16.5 + (4 - fid), 48.5))
+        connection.execute(
+            "INSERT INTO feat (fid, geom, label) VALUES (?, ?, ?)", (fid, blob, label)
+        )
+    # With only the geometry selected, an index on it covers the query: SQLite then scans the
+    # index (in geometry order, here 3, 2, 1) unless the query says ORDER BY.
+    connection.execute("CREATE INDEX feat_scan ON feat (geom)")
+    connection.commit()
+    connection.close()
+    for field in (None, "label"):
+        got = load(path, field)[0]
+        assert [round(g.bounds[0]) for g, _ in got] == [19, 18, 17], field  # fid 1, 2, 3
+    assert [c for _, c in load(path, "label")[0]] == [1, 2, 3]  # a, b, c
+
+
+def test_geopackage_order_without_an_integer_key(tmp_path: Path) -> None:
+    path = tmp_path / "a.gpkg"
+    make_gpkg(path, [(gpkg_blob(box(1, 1, 2, 2)), "a"), (gpkg_blob(box(3, 3, 4, 4)), "b")])
+    connection = sqlite3.connect(path)
+    # No primary key at all: ordered by rowid (insertion order).
+    connection.executescript("DROP TABLE feat; CREATE TABLE feat (geom BLOB, label TEXT);")
+    for x, label in ((5, "z"), (1, "y")):
+        connection.execute(
+            "INSERT INTO feat VALUES (?, ?)", (gpkg_blob(box(x, 0, x + 1, 1)), label)
+        )
+    connection.commit()
+    connection.close()
+    assert [g.bounds[0] for g, _ in load(path, "label")[0]] == [5.0, 1.0]
+    # WITHOUT ROWID with a text key: no rowid to order by, still readable.
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "DROP TABLE feat;"
+        "CREATE TABLE feat (name TEXT PRIMARY KEY, geom BLOB, label TEXT) WITHOUT ROWID;"
+    )
+    connection.execute("INSERT INTO feat VALUES ('k', ?, 'q')", (gpkg_blob(box(0, 0, 1, 1)),))
+    connection.commit()
+    connection.close()
+    assert len(load(path, "label")[0]) == 1
+
+
 def test_a_geopackage_with_no_features_table(tmp_path: Path) -> None:
     path = make_gpkg(tmp_path / "a.gpkg", [])
     connection = sqlite3.connect(path)

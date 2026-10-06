@@ -232,6 +232,26 @@ def _gpkg_crs(connection: sqlite3.Connection, srs_id: int, what: str) -> Any:
     )
 
 
+def _gpkg_order(connection: sqlite3.Connection, table: str, info: List[Any]) -> str:
+    """The ``ORDER BY`` clause that gives a feature table its stable, file order.
+
+    Feature order decides which polygon wins where polygons overlap and the order and IDs
+    of instances, and SQLite returns rows in any order without ``ORDER BY``. A feature
+    table has an integer primary key (``fid``): rows are ordered by it, as GDAL does. A
+    table without one is ordered by ``rowid``.
+    """
+    keys = [row for row in info if row[5]]
+    if len(keys) == 1 and str(keys[0][2]).upper() == "INTEGER":
+        return f" ORDER BY {_quote(str(keys[0][1]))}"
+    try:
+        connection.execute(f"SELECT rowid FROM {_quote(table)} LIMIT 0")
+    except sqlite3.OperationalError:
+        # A WITHOUT ROWID table with no integer key (not a valid GeoPackage feature table)
+        # has no row number to order by; SQLite returns it in primary-key order anyway.
+        return ""
+    return " ORDER BY rowid"
+
+
 def _gpkg_wkb(blob: Any, what: str) -> Optional[bytes]:
     """The WKB inside a GeoPackage geometry blob, or ``None`` for an empty geometry."""
     if blob is None:
@@ -304,10 +324,11 @@ def read_gpkg(
         attributes = [str(row[1]) for row in info if str(row[1]) != geometry_column and not row[5]]
         columns = _require_columns(fields, attributes, f"layer '{table}'", "layer")
         select = ", ".join(_quote(name) for name in [geometry_column, *columns])
+        order = _gpkg_order(connection, table, info)
         blobs: List[Optional[bytes]] = []
         values: Dict[str, List[Any]] = {name: [] for name in columns}
         try:
-            cursor = connection.execute(f"SELECT {select} FROM {_quote(table)}")
+            cursor = connection.execute(f"SELECT {select} FROM {_quote(table)}{order}")
             while True:
                 rows = cursor.fetchmany(_READ_CHUNK)
                 if not rows:

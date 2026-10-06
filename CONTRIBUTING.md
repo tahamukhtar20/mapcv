@@ -66,6 +66,14 @@ CI fails when it is stale:
 cargo about generate --locked --fail --all-features -c about.toml -o LICENSES-THIRD-PARTY.md about.hbs
 ```
 
+**Fuzzing the file parsers** (GeoTIFF/COG, KML, tile decoders; needs `rustup toolchain install nightly` and `cargo install cargo-fuzz`):
+```bash
+fuzz/run.sh geotiff_open 60    # also: geotiff_structured, chunk_decode, kml_parse, tile_decode
+```
+CI runs every target for a minute on pull requests that touch a parser, and for ten minutes each night.
+A crash is saved under `fuzz/artifacts/<target>/`; fix the parser (return an error, never panic or allocate by a size the file claims) and add a regression test with the minimized input.
+The parsers build without PyO3 for this: `cargo test --no-default-features` runs their unit tests without a Python toolchain.
+
 ## Coding Conventions
 
 ### Python

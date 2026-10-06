@@ -13,6 +13,13 @@ const MAX_LNG: f64 = 180.0;
 const MIN_LNG: f64 = -180.0;
 const MAX_ZOOM: u8 = 32;
 
+/// Standard tile pixel dimension used by XYZ tile servers.
+pub(crate) const TILE_PX: usize = 256;
+/// `TILE_PX` as `f64`, derived from `TILE_PX` to stay in sync.
+// 256 is exactly representable in f64 (2^8), so no precision is lost.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) const TILE_PX_F: f64 = TILE_PX as f64;
+
 /// An XYZ tile coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileIndex {

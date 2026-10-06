@@ -9,10 +9,13 @@
 //! same pixels. Every other tile is reported back as *undecoded* and the caller
 //! decodes it with Pillow.
 
-use crate::fetcher::TILE_PX;
+use crate::tile_math::TILE_PX;
 use image::{DynamicImage, ExtendedColorType, ImageDecoder, ImageFormat, ImageReader};
+#[cfg(feature = "python")]
 use numpy::{IntoPyArray, PyArray2, PyArray3};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyBytes;
 use rayon::prelude::*;
 use std::io::Cursor;
@@ -25,6 +28,7 @@ const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024 * 1024;
 const TILES_PER_THREAD_BATCH: usize = 4;
 
 /// What [`decode_tile_window`] returns: window, validity mask, undecoded tiles.
+#[cfg(feature = "python")]
 type DecodedWindow<'py> = (
     Bound<'py, PyArray3<u8>>,
     Bound<'py, PyArray2<bool>>,
@@ -293,6 +297,7 @@ pub fn decode_window(
 ///
 /// # Errors
 /// Raises `ValueError` when the window exceeds the memory budget.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (tiles, origin_x, origin_y, row_start, row_stop, col_start, col_stop))]
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]

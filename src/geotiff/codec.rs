@@ -9,6 +9,9 @@ use std::io::Read;
 
 type Result<T> = std::result::Result<T, GeoTiffError>;
 
+/// Largest decoded tile or strip (larger ones need too much memory per chunk).
+pub const MAX_CHUNK_BYTES: usize = 1 << 30;
+
 /// TIFF `Compression` codes the reader decodes.
 pub mod compression {
     /// No compression.
@@ -96,6 +99,10 @@ pub struct ChunkFormat<'a> {
     pub samples: usize,
     /// Width of the chunk in pixels (the tile width, or the image width for strips).
     pub width: usize,
+    /// Rows of a full chunk (the tile height, or `RowsPerStrip`); the chunk being
+    /// decoded may have fewer (the last strip). JPEG and WebP data that claims
+    /// more is rejected before it is decoded.
+    pub height: usize,
     /// TIFF photometric interpretation (6 = `YCbCr` is converted to RGB for JPEG).
     pub photometric: u16,
     /// Contents of the `JPEGTables` tag, if any.
@@ -109,8 +116,23 @@ pub struct ChunkFormat<'a> {
 /// Returns [`GeoTiffError::Invalid`] when the data is corrupt or decodes to
 /// fewer bytes than the chunk needs.
 pub fn decode_chunk(fmt: &ChunkFormat<'_>, raw: &[u8], rows: usize) -> Result<Vec<u8>> {
-    let row_bytes = fmt.width * fmt.samples * fmt.sample_bytes;
-    let expected = row_bytes * rows;
+    // The sizes come from the file's tags: refuse overflow and chunks past the limit
+    // before allocating anything.
+    let row_bytes = fmt
+        .width
+        .checked_mul(fmt.samples)
+        .and_then(|n| n.checked_mul(fmt.sample_bytes))
+        .filter(|&n| n > 0)
+        .ok_or_else(|| corrupt("the chunk has no pixels or is too wide"))?;
+    let expected = row_bytes
+        .checked_mul(rows)
+        .filter(|&n| n > 0 && n <= MAX_CHUNK_BYTES)
+        .ok_or_else(|| {
+            corrupt(&format!(
+                "{rows} rows of {row_bytes} bytes are not within 1..={MAX_CHUNK_BYTES} bytes"
+            ))
+        })?;
+    check_expansion(fmt.compression, raw.len(), expected)?;
     let mut out = match fmt.compression {
         compression::NONE => {
             if raw.len() < expected {
@@ -152,6 +174,29 @@ pub fn decode_chunk(fmt: &ChunkFormat<'_>, raw: &[u8], rows: usize) -> Result<Ve
         _ => to_native(&mut out, fmt.order, fmt.sample_bytes),
     }
     Ok(out)
+}
+
+/// Refuse a chunk whose declared size no stream of `raw_len` bytes can decompress
+/// to, before a buffer of that size is allocated: a few bytes of data must not
+/// claim a gigabyte. The ratios are each format's maximum (Deflate 1032:1, `PackBits`
+/// 64:1, LZW about 2730:1, ZSTD 32768:1 for a run-length block) rounded up, with
+/// slack for stream headers.
+fn check_expansion(code: u16, raw_len: usize, expected: usize) -> Result<()> {
+    let ratio = match code {
+        compression::LZW => 4096,
+        compression::DEFLATE | compression::OLD_DEFLATE => 1100,
+        compression::ZSTD => 1 << 16,
+        compression::PACKBITS => 64,
+        _ => return Ok(()),
+    };
+    let most = raw_len.saturating_add(64).saturating_mul(ratio);
+    if expected > most {
+        return Err(corrupt(&format!(
+            "{} compression of {raw_len} bytes cannot decompress to {expected} bytes",
+            compression_name(code)
+        )));
+    }
+    Ok(())
 }
 
 fn corrupt(message: &str) -> GeoTiffError {
@@ -246,6 +291,32 @@ fn packbits(raw: &[u8], expected: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Check the size an image stream claims for itself against the chunk the TIFF
+/// describes: as wide as the chunk, at least `rows` and at most `fmt.height`
+/// rows tall, and within the per-chunk byte limit.
+fn check_claimed_size(
+    fmt: &ChunkFormat<'_>,
+    codec: &str,
+    (width, height): (usize, usize),
+    rows: usize,
+    components: usize,
+) -> Result<()> {
+    let bytes = width
+        .checked_mul(height)
+        .and_then(|n| n.checked_mul(components));
+    if width != fmt.width
+        || height < rows
+        || height > fmt.height
+        || bytes.is_none_or(|n| n > MAX_CHUNK_BYTES)
+    {
+        return Err(corrupt(&format!(
+            "{codec} is {width}x{height}, expected {}x{rows} (up to {} rows)",
+            fmt.width, fmt.height
+        )));
+    }
+    Ok(())
+}
+
 fn jpeg(fmt: &ChunkFormat<'_>, raw: &[u8], rows: usize) -> Result<Vec<u8>> {
     use zune_jpeg::zune_core::bytestream::ZCursor;
     use zune_jpeg::zune_core::colorspace::ColorSpace;
@@ -283,6 +354,13 @@ fn jpeg(fmt: &ChunkFormat<'_>, raw: &[u8], rows: usize) -> Result<Vec<u8>> {
     } else {
         input
     };
+    // The frame header is the file's claim about the image: check it against the
+    // chunk the TIFF tags describe before the decoder allocates for it.
+    let header = decoder
+        .info()
+        .ok_or_else(|| corrupt("JPEG: no image information"))?;
+    let claimed = (usize::from(header.width), usize::from(header.height));
+    check_claimed_size(fmt, "JPEG", claimed, rows, output.num_components())?;
     decoder.set_options(options.jpeg_set_out_colorspace(output));
     let pixels = decoder
         .decode()
@@ -314,13 +392,8 @@ fn webp(fmt: &ChunkFormat<'_>, raw: &[u8], rows: usize) -> Result<Vec<u8>> {
         .map_err(|e| corrupt(&format!("WebP: {e}")))?;
     let (w, h) = decoder.dimensions();
     let (width, height) = (w as usize, h as usize);
-    if width != fmt.width || height < rows {
-        return Err(corrupt(&format!(
-            "WebP is {width}x{height}, expected {}x{rows}",
-            fmt.width
-        )));
-    }
     let channels = if decoder.has_alpha() { 4 } else { 3 };
+    check_claimed_size(fmt, "WebP", (width, height), rows, channels)?;
     let mut pixels = vec![0u8; width * height * channels];
     decoder
         .read_image(&mut pixels)
@@ -425,6 +498,7 @@ mod tests {
             sample_bytes,
             samples,
             width: 3,
+            height: 3,
             photometric: 1,
             jpeg_tables: None,
         }
@@ -503,6 +577,94 @@ mod tests {
         assert!(err.contains("JPEG 2000"), "{err}");
         let err = check_supported(7, 16).unwrap_err().to_string();
         assert!(err.contains("JPEG compression with 16-bit"), "{err}");
+    }
+
+    // Chunk sizes come from the file's tags: an absurd one must not overflow or allocate.
+    #[test]
+    fn absurd_chunk_sizes_are_errors() {
+        let mut f = fmt(compression::DEFLATE, 1, 8, 65535);
+        f.width = 1 << 31;
+        for rows in [1usize, 1 << 31, usize::MAX] {
+            let err = decode_chunk(&f, &[0x78, 0x9c], rows).unwrap_err();
+            assert!(err.to_string().contains("rows of"), "{err}");
+        }
+        f.width = usize::MAX;
+        assert!(decode_chunk(&f, &[0x78, 0x9c], 2).is_err());
+        // Empty chunks have no row size to step by.
+        f.width = 0;
+        assert!(decode_chunk(&f, &[], 1).is_err());
+        f.width = 3;
+        assert!(decode_chunk(&f, &[], 0).is_err());
+    }
+
+    /// A 16x16 RGB image encoded as `format` with the `image` crate.
+    fn encoded_rgb(format: image::ImageFormat) -> Vec<u8> {
+        let pixels = image::RgbImage::from_fn(16, 16, |x, y| {
+            let level = |v: u32| u8::try_from(v * 15).unwrap();
+            image::Rgb([level(x), level(y), 99])
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        pixels.write_to(&mut out, format).unwrap();
+        out.into_inner()
+    }
+
+    // Found by fuzzing (geotiff_open): a JPEG whose frame header claims a huge image made
+    // the decoder allocate 12 GB for a chunk the TIFF says is 16x16.
+    #[test]
+    fn jpeg_claiming_a_huge_image_is_rejected_before_decoding() {
+        let mut jpeg = encoded_rgb(image::ImageFormat::Jpeg);
+        // SOF0: marker, length, precision, height, width, components.
+        let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 5..sof + 9].copy_from_slice(&[0xEA, 0x60, 0xEA, 0x60]); // 60000 x 60000
+        let mut f = fmt(compression::JPEG, 1, 1, 3);
+        (f.width, f.height) = (16, 16);
+        let err = decode_chunk(&f, &jpeg, 16).unwrap_err().to_string();
+        assert!(err.contains("JPEG is 60000x60000"), "{err}");
+        assert!(err.contains("up to 16 rows"), "{err}");
+        // The unmodified stream still decodes.
+        let pixels = decode_chunk(&f, &encoded_rgb(image::ImageFormat::Jpeg), 16).unwrap();
+        assert_eq!(pixels.len(), 16 * 16 * 3);
+    }
+
+    // A chunk may not hold more rows than the tags say a full chunk has.
+    #[test]
+    fn webp_taller_than_the_chunk_is_rejected() {
+        let webp = encoded_rgb(image::ImageFormat::WebP);
+        let mut f = fmt(compression::WEBP, 1, 1, 3);
+        (f.width, f.height) = (16, 8);
+        let err = decode_chunk(&f, &webp, 8).unwrap_err().to_string();
+        assert!(err.contains("WebP is 16x16"), "{err}");
+        assert!(err.contains("up to 8 rows"), "{err}");
+        f.height = 16;
+        assert_eq!(decode_chunk(&f, &webp, 16).unwrap().len(), 16 * 16 * 3);
+    }
+
+    // Found by fuzzing (geotiff_open): a few bytes of data declared as a 1 GiB chunk made
+    // each codec allocate the full size before noticing the stream was too short.
+    #[test]
+    fn tiny_streams_cannot_declare_huge_chunks() {
+        for code in [
+            compression::LZW,
+            compression::DEFLATE,
+            compression::ZSTD,
+            compression::PACKBITS,
+        ] {
+            let mut f = fmt(code, 1, 1, 1);
+            f.width = 1 << 15;
+            let err = decode_chunk(&f, &[1, 2, 3, 4], 1 << 15)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("cannot decompress to"), "{err}");
+        }
+        // A legitimate stream near the maximum ratio is still accepted: 1 MiB of zeros deflates to ~1 KB.
+        let zeros = {
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+            std::io::Write::write_all(&mut z, &vec![0u8; 1 << 20]).unwrap();
+            z.finish().unwrap()
+        };
+        let mut f = fmt(compression::DEFLATE, 1, 1, 1);
+        f.width = 1 << 10;
+        assert_eq!(decode_chunk(&f, &zeros, 1 << 10).unwrap().len(), 1 << 20);
     }
 
     #[test]

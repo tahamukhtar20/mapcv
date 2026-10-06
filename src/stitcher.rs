@@ -1,7 +1,7 @@
 //! Tile stitching: parallel PNG decode -> contiguous (H, W, 3) buffer.
 
-use crate::fetcher::{TILE_PX, TILE_PX_F};
 use crate::tile_math::{xy_bounds, TileIndex};
+use crate::tile_math::{TILE_PX, TILE_PX_F};
 use image::ImageReader;
 use rayon::prelude::*;
 use std::io::Cursor;

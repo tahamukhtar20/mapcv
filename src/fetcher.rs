@@ -1,6 +1,6 @@
 //! Asynchronous tile fetcher using reqwest and tokio.
 
-use crate::tile_math::TileIndex;
+use crate::tile_math::{TileIndex, TILE_PX};
 use futures::stream::{self, StreamExt};
 use image::{DynamicImage, ImageFormat};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -41,13 +41,6 @@ impl std::str::FromStr for FailurePolicy {
 // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
 const MAX_RETRIES: u32 = 3;
 const RETRY_BACKOFF_MS: u64 = 500;
-
-/// Standard tile pixel dimension used by XYZ tile servers.
-pub(crate) const TILE_PX: usize = 256;
-/// `TILE_PX` as `f64`, derived from `TILE_PX` to stay in sync.
-// 256 is exactly representable in f64 (2^8), so no precision is lost.
-#[allow(clippy::cast_precision_loss)]
-pub(crate) const TILE_PX_F: f64 = TILE_PX as f64;
 
 /// Outcome of a single tile fetch attempt.
 enum TileOutcome {

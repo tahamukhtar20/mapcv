@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "A high-performance satellite imagery dataset creation tool for computer vision"
 readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES-THIRD-PARTY.md"]
 authors = [
     { name = "Muhammad Taha Mukhtar", email = "tahamukhtar20@gmail.com" }
 ]
@@ -107,6 +107,8 @@ exclude = [
     { path = ".pre-commit-config.yaml", format = "sdist" },
     { path = "cliff.toml", format = "sdist" },
     { path = "deny.toml", format = "sdist" },
+    { path = "about.toml", format = "sdist" },
+    { path = "about.hbs", format = "sdist" },
     { path = "AGENTS.md", format = "sdist" },
     { path = "CLAUDE.md", format = "sdist" },
     # Builds from the sdist use the builder's own Rust, not the CI pin.

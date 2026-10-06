@@ -1,4 +1,5 @@
-//! Byte sources for the GeoTIFF reader: local files and HTTP(S)/S3 range requests.
+//! Byte sources for the GeoTIFF reader: local files, in-memory buffers and
+//! HTTP(S)/S3 range requests.
 //!
 //! The reader asks a source for a batch of `(offset, length)` byte ranges at a
 //! time: the IFD values of one directory, or the tiles/strips under one window.
@@ -131,6 +132,43 @@ impl ByteSource for LocalFile {
 
     fn describe(&self) -> String {
         self.path.clone()
+    }
+}
+
+/// A TIFF held in memory: for tests and the fuzz targets, which parse a file
+/// without touching the file system.
+pub struct MemorySource {
+    data: Vec<u8>,
+}
+
+impl MemorySource {
+    /// Wrap the bytes of a whole file.
+    #[must_use]
+    pub fn new(data: Vec<u8>) -> Self {
+        MemorySource { data }
+    }
+}
+
+impl ByteSource for MemorySource {
+    fn size(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn read_ranges(&self, ranges: &[(u64, usize)]) -> Result<Vec<Vec<u8>>> {
+        ranges
+            .iter()
+            .map(|&(offset, length)| {
+                check_range(offset, length, self.size(), "memory buffer")?;
+                // check_range proved offset + length <= len, so both fit in usize.
+                let start = usize::try_from(offset)
+                    .map_err(|_| GeoTiffError::Invalid("offset out of range".to_owned()))?;
+                Ok(self.data[start..start + length].to_vec())
+            })
+            .collect()
+    }
+
+    fn describe(&self) -> String {
+        "memory buffer".to_owned()
     }
 }
 

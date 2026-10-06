@@ -447,29 +447,8 @@ fn read_ifd(
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation)]
 mod tests {
+    use super::super::source::MemorySource;
     use super::*;
-
-    struct Mem(Vec<u8>);
-    impl ByteSource for Mem {
-        fn size(&self) -> u64 {
-            self.0.len() as u64
-        }
-        fn read_ranges(&self, ranges: &[(u64, usize)]) -> Result<Vec<Vec<u8>>> {
-            ranges
-                .iter()
-                .map(|&(o, l)| {
-                    let o = o as usize;
-                    self.0
-                        .get(o..o + l)
-                        .map(<[u8]>::to_vec)
-                        .ok_or_else(|| GeoTiffError::Invalid("out of range".into()))
-                })
-                .collect()
-        }
-        fn describe(&self) -> String {
-            "mem".into()
-        }
-    }
 
     /// A classic little-endian TIFF with one IFD: width (SHORT), height
     /// (LONG), an out-of-line DOUBLE pair and a skipped unknown tag.
@@ -498,7 +477,7 @@ mod tests {
 
     #[test]
     fn parses_inline_and_out_of_line_values() {
-        let tiff = read_tiff(&Mem(tiny_tiff(false))).unwrap();
+        let tiff = read_tiff(&MemorySource::new(tiny_tiff(false))).unwrap();
         assert!(!tiff.bigtiff);
         assert_eq!(tiff.ifds.len(), 1);
         let ifd = &tiff.ifds[0];
@@ -513,9 +492,9 @@ mod tests {
 
     #[test]
     fn rejects_ifd_loops_and_non_tiffs() {
-        let err = read_tiff(&Mem(tiny_tiff(true))).unwrap_err();
+        let err = read_tiff(&MemorySource::new(tiny_tiff(true))).unwrap_err();
         assert!(err.to_string().contains("loop"), "{err}");
-        let err = read_tiff(&Mem(b"\x89PNG\r\n\x1a\n0000".to_vec())).unwrap_err();
+        let err = read_tiff(&MemorySource::new(b"\x89PNG\r\n\x1a\n0000".to_vec())).unwrap_err();
         assert!(err.to_string().contains("not a TIFF"), "{err}");
     }
 }

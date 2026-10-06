@@ -9,11 +9,18 @@ publish = false
 
 [lib]
 name = "_mapcv_rs"
-crate-type = ["cdylib"]
+# `rlib` lets the fuzz crate (fuzz/) link the parsers without Python.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["python"]
+# The PyO3 bindings. Maturin builds with it (the wheel is unchanged); turn it off
+# (`--no-default-features`) to get the pure-Rust parsers without a Python toolchain.
+python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
-numpy = "0.29"
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"], optional = true }
+numpy = { version = "0.29", optional = true }
 # Tile and patch codecs only; AVIF, TIFF and the rest would add build time and dependencies.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # JPEG patch writer: 4:2:0 / 4:4:4 chroma, which the image crate cannot write.

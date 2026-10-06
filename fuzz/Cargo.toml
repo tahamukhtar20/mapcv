@@ -1,0 +1,64 @@
+[package]
+name = "mapcv-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the mapcv GeoTIFF, KML and tile parsers"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+# The parsers, without the PyO3 bindings (and so without a Python toolchain).
+mapcv = { package = "mapcv_rs", path = "..", default-features = false }
+# Encoders, so the structured targets can build valid compressed chunks.
+flate2 = "1"
+weezl = "0.1"
+zstd = { version = "0.13", default-features = false }
+
+[lib]
+name = "mapcv_fuzz"
+path = "src/lib.rs"
+
+# Not a member of the root package: it builds with its own lockfile and the nightly toolchain.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "geotiff_open"
+path = "fuzz_targets/geotiff_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "geotiff_structured"
+path = "fuzz_targets/geotiff_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunk_decode"
+path = "fuzz_targets/chunk_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kml_parse"
+path = "fuzz_targets/kml_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tile_decode"
+path = "fuzz_targets/tile_decode.rs"
+test = false
+doc = false
+bench = false

@@ -20,10 +20,11 @@ pub mod georef;
 pub mod ifd;
 pub mod source;
 
+use codec::MAX_CHUNK_BYTES;
 use georef::{Georef, RasterType};
 use ifd::{tag, ByteOrder, Ifd};
 use rayon::prelude::*;
-use source::{ByteSource, HttpSource, LocalFile};
+use source::{ByteSource, HttpSource, LocalFile, MemorySource};
 use std::fmt;
 
 /// Error from opening or reading a GeoTIFF.
@@ -47,8 +48,6 @@ impl std::error::Error for GeoTiffError {}
 
 type Result<T> = std::result::Result<T, GeoTiffError>;
 
-/// Largest decoded tile or strip (larger ones need too much memory per chunk).
-const MAX_CHUNK_BYTES: usize = 1 << 30;
 /// Largest window returned by one read.
 const MAX_WINDOW_BYTES: usize = 8 << 30;
 /// Default bound on the block cache of a remote file.
@@ -253,7 +252,17 @@ impl Level {
             )
         })?;
         let planes = if planar { samples } else { 1 };
-        let expected = width.div_ceil(chunk_width) * height.div_ceil(chunk_height) * planes;
+        // Dimensions up to 2^31 with 1-pixel chunks overflow a `usize` product.
+        let expected = width
+            .div_ceil(chunk_width)
+            .checked_mul(height.div_ceil(chunk_height))
+            .and_then(|n| n.checked_mul(planes))
+            .ok_or_else(|| {
+                GeoTiffError::Invalid(format!(
+                    "the TIFF declares an impossible number of chunks: {width}x{height} pixels \
+                     in {chunk_width}x{chunk_height} chunks"
+                ))
+            })?;
         if offsets.len() != expected || byte_counts.len() != expected {
             return Err(GeoTiffError::Invalid(format!(
                 "the TIFF has {} chunk offsets and {} byte counts, expected {expected}",
@@ -451,6 +460,14 @@ impl GeoTiff {
             Box::new(LocalFile::open(path_or_url)?)
         };
         GeoTiff::from_source(source)
+    }
+
+    /// Read the structure and georeferencing of a TIFF held in memory.
+    ///
+    /// # Errors
+    /// As [`GeoTiff::open`], except that nothing is read from the file system.
+    pub fn from_bytes(data: Vec<u8>) -> Result<GeoTiff> {
+        GeoTiff::from_source(Box::new(MemorySource::new(data)))
     }
 
     /// Read the structure and georeferencing of the TIFF in `source`.
@@ -697,6 +714,7 @@ impl GeoTiff {
             sample_bytes: level.dtype.size(),
             samples: level.chunk_samples(),
             width: level.chunk_width,
+            height: level.chunk_height,
             photometric: level.photometric,
             jpeg_tables: level.jpeg_tables.as_deref(),
         };
@@ -833,7 +851,22 @@ impl Plan {
         } else {
             vec![0]
         };
-        let row_bytes = cw * level.chunk_samples() * level.dtype.size();
+        let too_large = |rows: usize| {
+            GeoTiffError::Invalid(format!(
+                "a {cw}x{rows} block decodes to more than {MAX_CHUNK_BYTES} bytes; convert the \
+                 file to a tiled GeoTIFF (e.g. a COG)"
+            ))
+        };
+        let row_bytes = cw
+            .checked_mul(level.chunk_samples())
+            .and_then(|n| n.checked_mul(level.dtype.size()))
+            .ok_or_else(|| too_large(1))?;
+        // Bytes of `rows` decoded rows of one chunk, within the per-chunk limit.
+        let decoded_bytes = |rows: usize| {
+            rows.checked_mul(row_bytes)
+                .filter(|&bytes| bytes <= MAX_CHUNK_BYTES)
+                .ok_or_else(|| too_large(rows))
+        };
         let per_plane = level.chunks_across() * level.chunks_down();
         // Uncompressed strips are read row-exact rather than whole.
         let partial = !level.tiled && level.compression == codec::compression::NONE;
@@ -854,23 +887,27 @@ impl Plan {
                         if partial {
                             let first = inside.ra.max(cy * ch);
                             let last = inside.rb.min(cy * ch + request.rows);
-                            let skip = ((first - cy * ch) * row_bytes) as u64;
                             request.first_row = first;
                             request.rows = last - first;
                             request.partial_strip = true;
-                            request.range = Some((offset + skip, request.rows * row_bytes));
+                            let len = decoded_bytes(request.rows)?;
+                            // The first wanted row lies `skip` bytes into the strip.
+                            let start = (first - cy * ch)
+                                .checked_mul(row_bytes)
+                                .and_then(|skip| u64::try_from(skip).ok())
+                                .and_then(|skip| offset.checked_add(skip))
+                                .ok_or_else(|| {
+                                    GeoTiffError::Invalid(format!(
+                                        "strip offset {offset} is out of range"
+                                    ))
+                                })?;
+                            request.range = Some((start, len));
                         } else {
                             let len = usize::try_from(count).map_err(|_| {
                                 GeoTiffError::Invalid("chunk byte count is too large".to_owned())
                             })?;
+                            decoded_bytes(request.rows)?;
                             request.range = Some((offset, len));
-                        }
-                        if request.rows * row_bytes > MAX_CHUNK_BYTES {
-                            return Err(GeoTiffError::Invalid(format!(
-                                "a {cw}x{} block decodes to more than {MAX_CHUNK_BYTES} bytes; \
-                                 convert the file to a tiled GeoTIFF (e.g. a COG)",
-                                request.rows
-                            )));
                         }
                     }
                     requests.push(request);
@@ -950,8 +987,170 @@ fn copy_chunks(
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation)]
 mod tests {
     use super::*;
+
+    /// A little-endian TIFF (or BigTIFF) with one IFD whose tags each hold a single
+    /// inline value `(tag, field type, value)`, followed by 8 bytes of "pixels".
+    fn inline_tiff(bigtiff: bool, tags: &[(u16, u16, u64)]) -> Vec<u8> {
+        let mut f = b"II".to_vec();
+        if bigtiff {
+            f.extend(43u16.to_le_bytes());
+            f.extend(8u16.to_le_bytes());
+            f.extend(0u16.to_le_bytes());
+            f.extend(16u64.to_le_bytes());
+            f.extend((tags.len() as u64).to_le_bytes());
+        } else {
+            f.extend(42u16.to_le_bytes());
+            f.extend(8u32.to_le_bytes());
+            f.extend((tags.len() as u16).to_le_bytes());
+        }
+        for &(tag, field_type, value) in tags {
+            f.extend(tag.to_le_bytes());
+            f.extend(field_type.to_le_bytes());
+            if bigtiff {
+                f.extend(1u64.to_le_bytes());
+                f.extend(value.to_le_bytes());
+            } else {
+                f.extend(1u32.to_le_bytes());
+                f.extend((value as u32).to_le_bytes());
+            }
+        }
+        f.extend(if bigtiff { vec![0; 8] } else { vec![0; 4] });
+        f.extend([0u8; 8]);
+        f
+    }
+
+    const SHORT: u16 = 3;
+    const LONG: u16 = 4;
+    const LONG8: u16 = 16;
+    const HUGE: u64 = 1 << 31;
+
+    /// Read one pixel (band 0) at `row`, `col`.
+    fn read_pixel(tiff: &GeoTiff, row: i64, col: i64) -> Result<WindowData> {
+        let window = Window {
+            row0: row,
+            row1: row + 1,
+            col0: col,
+            col1: col + 1,
+        };
+        tiff.read_window(window, Some(&[0]), 0)
+    }
+
+    // Found by fuzzing (geotiff_structured): the chunk count overflowed `usize`.
+    #[test]
+    fn chunk_count_overflow_is_an_error() {
+        // 2^31 x 2^31 pixels in 1x1 chunks, band-interleaved with 65535 bands.
+        let file = inline_tiff(
+            false,
+            &[
+                (256, LONG, HUGE),
+                (257, LONG, HUGE),
+                (258, SHORT, 8),
+                (277, SHORT, 65535),
+                (284, SHORT, 2),
+                (322, LONG, 1),
+                (323, LONG, 1),
+                (324, LONG, 0),
+                (325, LONG, 0),
+            ],
+        );
+        let err = GeoTiff::from_bytes(file).err().expect("must be rejected");
+        assert!(
+            err.to_string().contains("impossible number of chunks"),
+            "{err}"
+        );
+    }
+
+    // Found by fuzzing (geotiff_structured): rows x row bytes overflowed `usize`.
+    #[test]
+    fn huge_tile_size_overflow_is_an_error() {
+        // One 2^31 x 2^31 tile with 300 bands: 2^31 * 300 bytes per row.
+        let file = inline_tiff(
+            false,
+            &[
+                (256, LONG, HUGE),
+                (257, LONG, HUGE),
+                (258, SHORT, 8),
+                (277, SHORT, 300),
+                (322, LONG, HUGE),
+                (323, LONG, HUGE),
+                (324, LONG, 8),
+                (325, LONG, 8),
+            ],
+        );
+        let tiff = GeoTiff::from_bytes(file).unwrap();
+        let err = read_pixel(&tiff, 0, 0).unwrap_err();
+        assert!(err.to_string().contains("decodes to more than"), "{err}");
+    }
+
+    // Found by fuzzing (geotiff_structured): skipping rows of an uncompressed strip
+    // multiplied the row count by the row size without a check.
+    #[test]
+    fn huge_strip_skip_overflow_is_an_error() {
+        let file = inline_tiff(
+            false,
+            &[
+                (256, LONG, HUGE),
+                (257, LONG, HUGE),
+                (258, SHORT, 8),
+                (277, SHORT, 65535),
+                (278, LONG, HUGE),
+                (273, LONG, 8),
+                (279, LONG, 8),
+            ],
+        );
+        let tiff = GeoTiff::from_bytes(file).unwrap();
+        let err = read_pixel(&tiff, 1 << 20, 0).unwrap_err();
+        assert!(err.to_string().contains("decodes to more than"), "{err}");
+    }
+
+    // Found by auditing Plan::new while fuzzing: `offset + skip` overflowed `u64`.
+    #[test]
+    fn strip_offset_near_u64_max_is_an_error() {
+        // 4x100 uncompressed bytes in one strip that "starts" 8 bytes before 2^64.
+        let file = inline_tiff(
+            true,
+            &[
+                (256, LONG, 4),
+                (257, LONG, 100),
+                (258, SHORT, 8),
+                (259, SHORT, 1),
+                (277, SHORT, 1),
+                (278, LONG, 100),
+                (273, LONG8, u64::MAX - 8),
+                (279, LONG8, 400),
+            ],
+        );
+        let tiff = GeoTiff::from_bytes(file).unwrap();
+        let err = read_pixel(&tiff, 50, 0).unwrap_err();
+        assert!(err.to_string().contains("out of range"), "{err}");
+    }
+
+    #[test]
+    fn in_memory_tiff_reads_pixels() {
+        // 2x2 uncompressed bytes at file offset 8 + 2 + 8 * 12 + 4 = 110.
+        let mut file = inline_tiff(
+            false,
+            &[
+                (256, LONG, 2),
+                (257, LONG, 2),
+                (258, SHORT, 8),
+                (259, SHORT, 1),
+                (277, SHORT, 1),
+                (278, LONG, 2),
+                (273, LONG, 110),
+                (279, LONG, 4),
+            ],
+        );
+        file.truncate(file.len() - 8);
+        file.extend([1, 2, 3, 4]);
+        let tiff = GeoTiff::from_bytes(file).unwrap();
+        assert_eq!((tiff.width(), tiff.height(), tiff.band_count()), (2, 2, 1));
+        let data = read_pixel(&tiff, 1, 0).unwrap();
+        assert_eq!(data.samples, Samples::U8(vec![3]));
+    }
 
     #[test]
     fn url_detection() {

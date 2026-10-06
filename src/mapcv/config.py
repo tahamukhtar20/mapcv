@@ -173,6 +173,11 @@ def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
         # A label raster may be a URL, which is not a path to resolve.
         if not isinstance(path, str) or urlsplit(path).scheme == "":
             labels["path"] = _join(base, path)
+    if isinstance(labels, dict) and "annotated_area" in labels:
+        labels["annotated_area"] = _join(base, labels["annotated_area"])
+    for file in labels.get("files") or [] if isinstance(labels, dict) else []:
+        if isinstance(file, dict) and "path" in file:
+            file["path"] = _join(base, file["path"])
     change = data.get("change")
     if isinstance(change, dict):
         for key in ("before", "after"):
@@ -391,6 +396,96 @@ AnyImageryConfig = Annotated[
 UNION_TAGS = frozenset({"xyz", "eopf_zarr", "geotiff", "single-source", "source-list"})
 
 
+class BufferConfig(BaseModel):
+    """Distances, in metres on the ground, that turn lines and points into polygons."""
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    line: Optional[float] = Field(default=None, gt=0)
+    point: Optional[float] = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _one_distance(self) -> "BufferConfig":
+        if self.line is None and self.point is None:
+            raise ValueError("labels.buffer needs a line or point distance in metres")
+        for name in ("line", "point"):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"labels.buffer.{name} must be a finite number of metres")
+        return self
+
+
+def _check_vector_suffix(path: Path, key: str) -> Path:
+    if path.suffix.lower() in _RASTER_LABEL_SUFFIXES:
+        raise ValueError(
+            f"{key} '{path.name}' is a raster: set labels.type: raster and map its "
+            "values with labels.classes"
+        )
+    if path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
+        raise ValueError(
+            f"{key} must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or "
+            f".geoparquet file, got '{path.name}' (convert KMZ to KML first)"
+        )
+    return path
+
+
+class LabelFile(BaseModel):
+    """One of several vector label files (``labels.files``).
+
+    Each feature's class is its ``label_field`` value or, with ``class``, the same
+    class for the whole file (all buildings, all roads). ``layer`` and ``buffer`` work
+    as under ``labels``.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    path: Path
+    layer: Optional[str] = None
+    label_field: Optional[str] = None
+    class_name: Optional[str] = Field(default=None, alias="class")
+    buffer: Optional[BufferConfig] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        data: Dict[str, Any] = handler(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+    @field_validator("path")
+    @classmethod
+    def _check_suffix(cls, path: Path) -> Path:
+        return _check_vector_suffix(path, "labels.files path")
+
+    @field_validator("class_name")
+    @classmethod
+    def _normalize_class(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        name = _normalize_label(value)
+        if name is None:
+            raise ValueError("labels.files class must be a non-empty name")
+        return name
+
+    @model_validator(mode="after")
+    def _one_class_source(self) -> "LabelFile":
+        if (self.label_field is None) == (self.class_name is None):
+            raise ValueError(
+                f"labels.files entry '{self.path.name}' needs exactly one of label_field (the "
+                "attribute holding each feature's class) or class (one class for the file)"
+            )
+        if self.layer is not None and self.path.suffix.lower() != ".gpkg":
+            raise ValueError(
+                f"labels.files entry '{self.path.name}': layer picks a table of a GeoPackage"
+            )
+        if self.buffer is not None and self.path.suffix.lower() == ".kml":
+            raise ValueError(
+                f"labels.files entry '{self.path.name}': buffering needs line and point "
+                "features, which mapcv does not read from KML"
+            )
+        return self
+
+
 class LabelsConfig(BaseModel):
     """Vector label file settings: polygons burned into the masks (or boxed, for detection).
 
@@ -408,35 +503,75 @@ class LabelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["vector"] = "vector"
-    path: Path
+    # One label file, or several in ``files`` (later files win where features overlap).
+    path: Optional[Path] = None
+    files: Optional[List[LabelFile]] = None
     label_field: Optional[str] = None
     classes: Optional[Dict[str, int]] = None
     all_touched: bool = False
     ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
     layer: Optional[str] = None
+    # Lines and points become polygons this many metres wide (lines) or across (points).
+    buffer: Optional[BufferConfig] = None
+    # Polygons of the area that was labeled; mask pixels outside it get ignore_index.
+    annotated_area: Optional[Path] = None
 
     @model_serializer(mode="wrap")
-    def _omit_unset_layer(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
-        # Records and manifests written before ``layer`` existed have no such key.
+    def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+        # Records and manifests written before these options existed have no such keys.
         data: Dict[str, Any] = handler(self)
-        if data.get("layer", 0) is None:
-            del data["layer"]
+        for key in ("layer", "buffer", "annotated_area", "files"):
+            if key in data and data[key] is None:
+                del data[key]
+        if data.get("path", 0) is None:
+            del data["path"]
         return data
+
+    @property
+    def label_files(self) -> List[LabelFile]:
+        """Every label file in order: ``files``, or one entry made from ``path``."""
+        if self.files is not None:
+            return list(self.files)
+        assert self.path is not None  # the validator requires path or files
+        # Built without validation: one label file may have no label_field (all class 1).
+        return [
+            LabelFile.model_construct(
+                path=self.path,
+                layer=self.layer,
+                label_field=self.label_field,
+                class_name=None,
+                buffer=self.buffer,
+            )
+        ]
+
+    def keyed_files(self, prefix: str = "labels") -> List[Tuple[str, Path]]:
+        """Each label file's path with its config key (``labels.path``, ``labels.files[1].path``)."""
+        if self.files is None:
+            assert self.path is not None
+            return [(f"{prefix}.path", self.path)]
+        return [
+            (f"{prefix}.files[{index}].path", file.path) for index, file in enumerate(self.files)
+        ]
+
+    @property
+    def first_path(self) -> Path:
+        """``path``, or the first of ``files`` (for messages that name one file)."""
+        return self.label_files[0].path
+
+    @field_validator("annotated_area")
+    @classmethod
+    def _check_area_suffix(cls, path: Optional[Path]) -> Optional[Path]:
+        if path is not None and path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
+            raise ValueError(
+                "labels.annotated_area must be a polygon file (.geojson, .json, .kml, .gpkg, "
+                f".shp, .parquet or .geoparquet), got '{path.name}'"
+            )
+        return path
 
     @field_validator("path")
     @classmethod
-    def _check_suffix(cls, path: Path) -> Path:
-        if path.suffix.lower() in _RASTER_LABEL_SUFFIXES:
-            raise ValueError(
-                f"labels.path '{path.name}' is a raster: set labels.type: raster and map its "
-                "values with labels.classes"
-            )
-        if path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
-            raise ValueError(
-                "labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or "
-                f".geoparquet file, got '{path.name}' (convert KMZ to KML first)"
-            )
-        return path
+    def _check_suffix(cls, path: Optional[Path]) -> Optional[Path]:
+        return None if path is None else _check_vector_suffix(path, "labels.path")
 
     @field_validator("layer")
     @classmethod
@@ -462,12 +597,24 @@ class LabelsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _classes_need_field(self) -> "LabelsConfig":
-        if self.layer is not None and self.path.suffix.lower() != ".gpkg":
+        if (self.path is None) == (self.files is None):
+            raise ValueError("labels needs path (one label file) or files (several), and not both")
+        if self.files is not None:
+            if not self.files:
+                raise ValueError("labels.files is empty; list at least one label file")
+            for key in ("label_field", "layer", "buffer"):
+                if getattr(self, key) is not None:
+                    raise ValueError(
+                        f"with labels.files, set {key} on each file instead of under labels"
+                    )
+        elif (
+            self.path is not None and self.layer is not None and self.path.suffix.lower() != ".gpkg"
+        ):
             raise ValueError(
                 "labels.layer picks a table of a GeoPackage (.gpkg); "
                 f"'{self.path.name}' has just one, so remove labels.layer"
             )
-        if self.classes is not None and self.label_field is None:
+        if self.classes is not None and self.label_field is None and self.files is None:
             raise ValueError("labels.classes requires labels.label_field")
         if self.classes is not None and self.ignore_index in self.classes.values():
             raise ValueError(
@@ -1001,6 +1148,39 @@ class MapcvConfig(BaseModel):
         return [source.name or "" for source in self.imagery]
 
     @model_validator(mode="after")
+    def _validate_label_options(self) -> "MapcvConfig":
+        labels = self.labels
+        if not isinstance(labels, LabelsConfig):
+            return self
+        if labels.annotated_area is not None:
+            if self.task not in ("segmentation", "classification"):
+                raise ValueError(
+                    "labels.annotated_area marks mask pixels outside the labeled area as "
+                    f"ignored; it applies to segmentation and classification, not {self.task}"
+                )
+            if labels.ignore_index is None:
+                raise ValueError(
+                    "labels.annotated_area needs labels.ignore_index: pixels outside the area "
+                    "get that value (255 by default; null would make them background)"
+                )
+        if labels.buffer is not None:
+            if labels.first_path.suffix.lower() == ".kml":
+                raise ValueError(
+                    "labels.buffer needs line and point features, which mapcv does not read "
+                    "from KML; convert the labels to GeoJSON or GeoPackage"
+                )
+            if (
+                self.task == "detection"
+                and labels.buffer.point is not None
+                and self.detection_options.point_box_size is not None
+            ):
+                raise ValueError(
+                    "detection.point_box_size and labels.buffer.point both turn points into "
+                    "shapes; keep one"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _validate_task_settings(self) -> "MapcvConfig":
         if isinstance(self.labels, ContinuousLabelsConfig) and self.task != "regression":
             raise ValueError(
@@ -1136,7 +1316,9 @@ class MapcvConfig(BaseModel):
                 "write none; remove it (GeoTIFF patches carry their georeferencing)"
             )
         options = self.detection_options
-        if options.point_box_size is not None and labels.path.suffix.lower() == ".kml":
+        if options.point_box_size is not None and any(
+            file.path.suffix.lower() == ".kml" for file in labels.label_files
+        ):
             raise ValueError(
                 "detection.point_box_size reads point features from GeoJSON; KML points are "
                 "not supported, so convert the labels to GeoJSON or remove point_box_size"

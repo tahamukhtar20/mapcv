@@ -23,7 +23,7 @@ from mapcv.config import (
 from mapcv.imagery import GeoTiffRasterSource
 from shapely.geometry import box
 
-from mapcv.labels import load_vector_labels
+from mapcv.targets.segmentation import load_labels
 from mapcv.sampler import random_patch_capacity
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
@@ -267,15 +267,17 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
 
 
 def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary:
-    if not labels.path.exists():
-        return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
+    where = ", ".join(str(path) for _, path in labels.keyed_files())
+    missing = [path for _, path in labels.keyed_files() if not path.exists()]
+    if missing:
+        return LabelSummary(where, 0, {}, [f"label file not found: {path}" for path in missing])
     points = config.task == "detection" and config.detection_options.point_box_size is not None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
-        geometries, class_map = load_vector_labels(
-            labels.path, labels.label_field, labels.classes, points=points, layer=labels.layer
-        )
+        geometries, class_map = load_labels(labels, points)
     messages = [str(warning.message) for warning in caught]
+    if labels.annotated_area is not None and not labels.annotated_area.exists():
+        messages.append(f"labels.annotated_area not found: {labels.annotated_area}")
     region = config.region
     area = box(region.west, region.south, region.east, region.north)
     in_region = sum(1 for geometry, _ in geometries if geometry.intersects(area))
@@ -294,7 +296,7 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
             f"no label {what} intersects the region, so {outcome}. "
             "Check that labels are longitude/latitude (not swapped) and cover the region."
         )
-    return LabelSummary(str(labels.path), len(geometries), class_map, messages, in_region)
+    return LabelSummary(where, len(geometries), class_map, messages, in_region)
 
 
 @dataclass

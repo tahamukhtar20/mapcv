@@ -76,6 +76,47 @@ Features are skipped, and counted in a warning, when they have no polygon geomet
 
 The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`, `GeoParquet`). A feature with no geometry at all (a null geometry) is ignored without being counted. A `label_field` that is not a column of a GeoPackage, Shapefile or GeoParquet file is an error that lists the columns, since for a table it can only be a typo (in GeoJSON and KML a missing property just means "no label").
 
+### Roads, rivers and trees: buffer lines and points
+
+Lines and points have no area, so they are skipped unless you give them one. `labels.buffer` turns a line into a band of the given width and a point into a disc of the given diameter, both in metres on the ground (drawn in the UTM zone of each feature), before they are rasterized like polygons:
+
+```yaml
+labels:
+  path: osm.geojson          # roads as lines, trees as points, fields as polygons
+  label_field: kind
+  classes: {field: 1, road: 2, tree: 3}
+  buffer: {line: 6, point: 8}
+```
+
+Pick widths you would draw by hand: a two-lane road is about 6–8 m, a footpath 2 m, a tree crown a few metres. Polygons are never buffered. KML lines and points are not read, so convert KML to GeoJSON first.
+
+### Labels from several files
+
+Labels often come from several sources: buildings from a cadastre, roads from OpenStreetMap, land use from a national map. List them under `labels.files` instead of merging them first; each file says where its classes come from, and later files are drawn over earlier ones:
+
+```yaml
+labels:
+  files:
+    - {path: landuse.gpkg, label_field: landuse}
+    - {path: buildings.geojson, class: building}
+    - {path: osm_roads.geojson, class: road, buffer: {line: 6}}
+  classes: {building: 1, road: 2, forest: 3, crop: 4}   # optional; else sorted names
+```
+
+A class name gets one ID across all files. Names that `classes` does not list are skipped with a warning. Editing any of the files makes a resumed run stop, as editing a single label file does.
+
+### Partly labeled scenes: the annotated area
+
+When only part of a scene was labeled, the unlabeled rest is not "background", and training on it as background teaches the model to miss objects. Outline the part you labeled with `labels.annotated_area`, and mask pixels outside it get `ignore_index` (255 by default) instead:
+
+```yaml
+labels:
+  path: buildings.geojson
+  annotated_area: surveyed_blocks.geojson   # polygons; their attributes are not used
+```
+
+Your loss then skips those pixels like pixels without imagery (`CrossEntropyLoss(ignore_index=255)`). With `task: classification` they do not count towards a class's coverage. A patch entirely outside the area keeps an all-ignored mask; drop such patches with `sampler.min_label_ratio`.
+
 ### GeoPackages with several layers
 
 A GeoPackage may hold several feature tables. With one, mapcv reads it; with more, name the one with the labels, or `plan` stops and lists them:

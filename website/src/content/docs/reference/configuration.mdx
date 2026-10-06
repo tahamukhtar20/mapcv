@@ -334,10 +334,33 @@ Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` 
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |
 | `ignore_index` | int 1–255 or `null` | `255` | Mask value for pixels with no imagery under them: padding, failed tiles and NoData. Pass it to your loss (`CrossEntropyLoss(ignore_index=255)`). No class may use it; `null` writes background (`0`) there instead. With `task: classification` no mask is written and imagery-less pixels never count either way |
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
+| `buffer` | `{line, point}` in metres | `null` | Turn line and point features into polygons: a line becomes a band `line` metres wide (a road, a river), a point a disc `point` metres across (a tree, a well). Give one or both; features of the other kind are skipped as before. The buffer is drawn in metres on the ground, in the UTM zone of each feature, then the polygon is labeled like any other. Not for KML (mapcv reads only its polygons) |
+| `files` | list | `null` | Several label files instead of `path` (see below) |
+| `annotated_area` | path | `null` | A polygon file (any of the formats above) outlining where the scene **was labeled**. Mask pixels outside it get `ignore_index` instead of background, so a partly labeled scene does not teach that unlabeled ground is background. For `task: segmentation` and `classification` (where the outside pixels do not count towards coverage); needs an `ignore_index`. Feature attributes are ignored. A relative path is resolved against the config file's folder |
+
+```yaml
+labels:
+  path: osm_roads_and_trees.geojson
+  label_field: kind
+  classes: {road: 1, tree: 2}
+  buffer: {line: 6, point: 8}       # roads 6 m wide, tree crowns 8 m across
+  annotated_area: surveyed.geojson  # outside it: ignore_index, not background
+```
+
+**Several label files.** List them under `files` instead of giving `path`: buildings from one source, roads from another, land use from a third. Each entry has a `path` (any of the formats above), its own `layer` and `buffer`, and **either** a `label_field` (each feature's class is that attribute's value) **or** a `class` (one class for every feature of the file). `classes`, `ignore_index`, `all_touched` and `annotated_area` stay under `labels` and apply to all files; `label_field`, `layer` and `buffer` move into the entries. Class IDs are given once over the names of all files (with `classes` when set, so a name has the same ID whichever file it comes from). **Later files win** where features overlap, so put the most trusted or most specific labels last:
+
+```yaml
+labels:
+  files:
+    - {path: landuse.gpkg, layer: landuse, label_field: landuse}   # forest, crop, ...
+    - {path: buildings.geojson, class: building}                   # drawn over land use
+    - {path: roads.geojson, class: road, buffer: {line: 6}}       # drawn over both
+  classes: {building: 1, road: 2, forest: 3, crop: 4}
+```
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
-**Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` in `target.labels` when it is set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+**Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` and `buffer` in `target.labels` when they are set (with `files`, each file's settings without its path, and one hash over all files), and the annotated area by its file's hash (`annotated_area_sha256`, so editing it is a resume mismatch); `annotated_area` must be a vector file, needs an `ignore_index` and applies to segmentation and classification only; `buffer` needs a distance above 0, and `buffer.point` and `detection.point_box_size` cannot both be set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
 
 ### Raster labels (`type: raster`)
 

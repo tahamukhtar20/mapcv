@@ -1110,7 +1110,7 @@ def test_wizard_reads_a_geopackage_and_asks_for_its_layer(tmp_path: Path) -> Non
     config = MapcvConfig.from_yaml(out)
     assert isinstance(config.labels, LabelsConfig)
     assert (config.labels.layer, config.labels.label_field) == ("landuse", "class")
-    assert config.labels.path.name == "labels_2layers.gpkg"
+    assert config.labels.first_path.name == "labels_2layers.gpkg"
     assert config.region.west == pytest.approx(16.36, abs=1e-4)
 
 

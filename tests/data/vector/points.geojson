@@ -1,0 +1,20 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "class": "building",
+    "rank": 1,
+    "score": 1.0
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     16.3615,
+     48.2025
+    ]
+   }
+  }
+ ]
+}

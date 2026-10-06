@@ -221,6 +221,16 @@ patches, masks, meta = sample_patches(image, mask, SamplerConfig(patch_size=256,
 `stitch_region` holds the whole region in memory. For anything bigger than a few thousand pixels a side, use `run_generate`, which works in chunks.
 </Aside>
 
+### `load_vector_labels`
+
+```python
+def load_vector_labels(path: Path, label_field: str | None = None,
+                       classes: dict[str, int] | None = None, points: bool = False,
+                       layer: str | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+```
+
+Read a label **file** of any supported format (chosen by its suffix: `.geojson`/`.json`, `.kml`, `.gpkg`, `.shp`, `.parquet`/`.geoparquet`) into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. GeoPackage, Shapefile and GeoParquet files in another CRS are reprojected with pyproj; a file that does not state its CRS is a `ValueError`. Every format follows the [labels rules](/mapcv/reference/configuration/#labels): `label_field` and `classes` give the IDs, polygons are kept, points only with `points=True`, and other features are skipped with a `UserWarning` that counts them. `layer` picks the table of a GeoPackage with several (an error for other formats). Problems with the file raise `ValueError` with the fix in the message; a missing file raises `FileNotFoundError`. GeoParquet needs the `mapcv[parquet]` extra.
+
 ### `parse_geojson`, `parse_kml`
 
 ```python

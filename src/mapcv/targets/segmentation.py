@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import warnings
 from typing import List, Optional, Tuple, cast
 
@@ -17,8 +16,8 @@ from mapcv.imagery import RasterMetadata, transform_geometry_to_crs
 from mapcv.labels import (
     ClassMap,
     GeomWithClass,
-    parse_geojson,
-    parse_kml,
+    label_file_sha256,
+    load_vector_labels,
     transform_all_to_mercator,
 )
 from mapcv.manifest import TargetRecord
@@ -32,16 +31,20 @@ LABELS_MISS_MESSAGE = (
 
 
 def _parse_labels(
-    labels: LabelsConfig, data: bytes, destination_crs: str, points: bool = False
+    labels: LabelsConfig, destination_crs: str, points: bool = False
 ) -> Tuple[List[GeomWithClass], ClassMap]:
     """Label geometries in ``destination_crs`` with their class IDs, and the class map.
 
-    ``points=True`` also keeps GeoJSON point features.
+    The file is read by :func:`mapcv.labels.load_vector_labels`, whatever its format.
+    ``points=True`` also keeps point features.
     """
-    if labels.path.suffix.lower() == ".kml":
-        raw, class_map = parse_kml(data, labels.label_field, labels.classes)
-    else:
-        raw, class_map = parse_geojson(data, labels.label_field, labels.classes, points=points)
+    raw, class_map = load_vector_labels(
+        labels.path,
+        labels.label_field,
+        labels.classes,
+        points=points,
+        layer=labels.layer,
+    )
 
     if destination_crs.upper() == "EPSG:3857":
         projected = transform_all_to_mercator([geometry for geometry, _ in raw])
@@ -143,9 +146,8 @@ class SegmentationTarget:
         return self._class_map
 
     def prepare(self, source: RasterMetadata) -> None:
-        data = self._labels.path.read_bytes()
-        self._sha256 = hashlib.sha256(data).hexdigest()
-        self._geometries, self._class_map = _parse_labels(self._labels, data, source.crs)
+        self._sha256 = label_file_sha256(self._labels.path)
+        self._geometries, self._class_map = _parse_labels(self._labels, source.crs)
         _check_ignore_index(self._labels.ignore_index, self._class_map)
         _warn_if_labels_miss_raster(self._geometries, source)
         self._bounds = _label_bounds(self._geometries)

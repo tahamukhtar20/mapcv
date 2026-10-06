@@ -187,15 +187,20 @@ loss_fn = torch.nn.CrossEntropyLoss(ignore_index=255)
 ## Normalise inputs
 
 - **XYZ RGB:** divide by 255, then optionally apply ImageNet mean/std if you fine-tune an ImageNet-pretrained encoder.
-- **Sentinel-2:** compute per-band mean and standard deviation over the **train** split only (ignoring `NaN`), then standardise:
+- **Sentinel-2 and GeoTIFF:** standardise each band with its mean and standard deviation over the **train** split only. `mapcv stats dataset` computes them (leaving out `NaN`, NoData and ignored pixels, streaming, so any dataset size fits in memory) and writes `stats.json`:
 
 ```python
+import json
+
 import numpy as np
 
-stack = np.stack([np.load(image_path) for image_path, _ in pairs])   # (N, bands, H, W)
-mean = np.nanmean(stack, axis=(0, 2, 3))
-std = np.nanstd(stack, axis=(0, 2, 3))
+stats = json.loads(Path("dataset/stats.json").read_text())["sources"]["image"]
+mean = np.array(stats["mean"], dtype=np.float32)[:, None, None]   # (bands, 1, 1)
+std = np.array(stats["std"], dtype=np.float32)[:, None, None]
+image = (np.nan_to_num(np.load(image_path)) - mean) / std
 ```
+
+The same values go into TerraTorch's `means` and `stds`. Run `mapcv stats` again after re-splitting.
 
 ## Class weights from the manifest
 
@@ -213,7 +218,7 @@ total = sum(counts.values())
 weights = {cid: total / (len(counts) * n) for cid, n in sorted(counts.items())}
 ```
 
-`mapcv info dataset` prints the same class shares over the whole dataset.
+`mapcv info dataset` prints the same class shares over the whole dataset. `mapcv stats dataset` writes median-frequency weights (Eigen & Fergus), which are less extreme than inverse frequency for rare classes, to `stats.json` under `classes.median_frequency_weights`.
 
 ## Semi-supervised subsets
 
@@ -244,3 +249,15 @@ For PNG or NPY patches take `rasterio.transform.Affine(*manifest.patch_transform
 <Aside type="tip">
 Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.
 </Aside>
+
+## Share or archive a dataset
+
+Before uploading a dataset (to the Hugging Face Hub, Zenodo or a team bucket), give it a card and pin its contents:
+
+```console
+$ mapcv stats dataset                     # normalisation values, shown in the card
+$ mapcv card dataset                      # README.md with Hugging Face metadata
+$ mapcv verify dataset --deep --write-checksums
+```
+
+Edit the card's `license` (it starts as `other`) to what the imagery provider's terms allow, and add anything the provider asks you to credit. Whoever receives the folder runs `mapcv verify dataset` (or `sha256sum -c SHA256SUMS`) to check that every file arrived unchanged.

@@ -490,3 +490,42 @@ Each list has one name per line and ends with a newline, so `wc -l` counts patch
 ```
 
 `strategy_used` differs from `settings.strategy` only when a `spatial` split of a mapcv 0.1 manifest fell back to `stratified`.
+
+## Files added on request
+
+`generate` writes none of these; the commands below add them to the dataset folder.
+
+| File | Written by | Content |
+| --- | --- | --- |
+| `stats.json` | [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats) | Per-band statistics of each source and the class balance, over one split |
+| `README.md` | [`mapcv card`](/mapcv/reference/cli/#mapcv-card) | A dataset card with Hugging Face YAML metadata |
+| `SHA256SUMS` | [`mapcv verify --write-checksums`](/mapcv/reference/cli/#mapcv-verify) | `<sha256>  <path>` per line (the `sha256sum` format) for every patch file, `manifest.json` and `splits/` |
+
+```json title="dataset/stats.json (abridged)"
+{
+  "mapcv_version": "0.3.0",
+  "task": "segmentation",
+  "split": "train",
+  "patches": 36,
+  "sources": {
+    "image": {
+      "bands": ["b1", "b2", "b3"],
+      "mean": [124.99, 124.60, 125.00],
+      "std": [71.82, 71.85, 71.78],
+      "min": [1.0, 1.0, 1.0],
+      "max": [249.0, 249.0, 249.0],
+      "pixels": [147456, 147456, 147456]
+    }
+  },
+  "classes": {
+    "pixels": {"background": 124479, "a": 22977},
+    "frequency": {"background": 0.844, "a": 0.156},
+    "median_frequency_weights": {"background": 0.769, "a": 1.43}
+  }
+}
+```
+
+- `split` is the split counted (`all` when the dataset has no split lists). `pixels` counts the pixels each band's values were taken over; a band without any is `null` in `mean`, `std`, `min` and `max`.
+- With `writer.stack_sources`, each source of the stack still has its own entry.
+- `classes` holds `pixels`, `frequency` and `median_frequency_weights` for `segmentation` and `change`, `objects` for `detection` and `instance`, and `patches` for `classification`; class names come from `target.class_map`, with `background` for `0`.
+- A `regression` dataset has `targets` instead: `mean`, `std`, `min`, `max` and `pixels` of the target values.

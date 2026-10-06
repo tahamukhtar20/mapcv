@@ -1,0 +1,15 @@
+ Usage: mapcv card [OPTIONS] {staging_dir}
+
+ Write a dataset card (README.md with Hugging Face metadata) for sharing.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --force            Replace an existing README.md.                                    │
+│ --help   -h        Show this message and exit.                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Example: mapcv card dataset/
+
+

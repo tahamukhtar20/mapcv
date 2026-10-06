@@ -1,0 +1,20 @@
+ Usage: mapcv stats [OPTIONS] {staging_dir}
+
+ Per-band mean and std, class balance and class weights, written to stats.json.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --split          <str>  train, val, test or all: the patches to count.               │
+│                         [default: train]                                             │
+│ --help   -h             Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv stats dataset/              train split (all patches without splits)
+
+ mapcv stats dataset/ --split all
+
+

@@ -1410,12 +1410,13 @@ def test_classification_defaults(tmp_path: Path) -> None:
 
 
 def test_classification_is_a_supported_task(tmp_path: Path) -> None:
-    for task in ("change", "regression"):
+    for task in ("regression",):
         with pytest.raises(ValidationError) as caught:
             MapcvConfig.model_validate(_raw(tmp_path, task=task))
         assert f"task '{task}' is not supported yet" in str(caught.value)
-        assert "supported: segmentation, detection, instance, classification" in str(caught.value)
-        assert "planned: change, regression" in str(caught.value)
+        supported = "supported: segmentation, detection, instance, classification, change"
+        assert supported in str(caught.value)
+        assert "planned: regression" in str(caught.value)
 
 
 @pytest.mark.parametrize(

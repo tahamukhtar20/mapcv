@@ -50,6 +50,7 @@ from mapcv import planning
 from mapcv._mapcv_rs import parse_kml_rs
 from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url, _task_label
 from mapcv.config import (
+    MULTI_SOURCE_TASKS,
     PLANNED_TASKS,
     SUPPORTED_TASKS,
     UNION_TAGS,
@@ -301,6 +302,14 @@ class Sandbox:
                 continue
 
 
+def _vector_label_paths(key: str, labels: Any) -> List[Tuple[str, Path]]:
+    """A vector label file and, for a Shapefile, its sidecar files."""
+    found: List[Tuple[str, Path]] = [(key, labels.path)]
+    if labels.path.suffix.lower() == ".shp" and labels.path.is_file():
+        found.extend((f"{key} (sidecar)", file) for file in shapefile_files(labels.path)[1:])
+    return found
+
+
 def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
     """The local paths a config reads or writes, named by their config key."""
     found: List[Tuple[str, Path]] = []
@@ -310,11 +319,16 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
         if local is not None:
             found.append(("labels.path", local))
     elif labels is not None:
-        found.append(("labels.path", labels.path))
-        if labels.path.suffix.lower() == ".shp" and labels.path.is_file():
-            found.extend(
-                ("labels.path (sidecar)", file) for file in shapefile_files(labels.path)[1:]
-            )
+        found.extend(_vector_label_paths("labels.path", labels))
+    # Change detection may compare two label sets instead: both are read.
+    change = config.change
+    if change is not None:
+        for key, label_set in (
+            ("change.before.path", change.before),
+            ("change.after.path", change.after),
+        ):
+            if label_set is not None:
+                found.extend(_vector_label_paths(key, label_set))
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
             local = eopf_local_path(imagery.path)
@@ -532,6 +546,10 @@ def _probed_rules() -> Dict[str, Any]:
         for kind, labels in _PROBE_LABELS.items():
             config = _base_config()
             config["task"] = task
+            if task == "change":
+                # Change detection compares two images: probe it with a before/after pair.
+                one = config["imagery"]
+                config["imagery"] = [{**one, "name": "before"}, {**one, "name": "after"}]
             if labels is not None:
                 config["labels"] = labels
             problem = _probe(config)
@@ -555,6 +573,8 @@ def _probed_rules() -> Dict[str, Any]:
     return {
         "tasks": list(SUPPORTED_TASKS),
         "planned_tasks_not_supported_yet": list(PLANNED_TASKS),
+        # imagery as a list of named sources on one grid: these tasks; change needs exactly 2.
+        "multi_source_tasks": list(MULTI_SOURCE_TASKS),
         "labels_allowed_per_task": labels_per_task,
         "task_options_block": [
             task for task in SUPPORTED_TASKS if task in MapcvConfig.model_fields
@@ -654,6 +674,14 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
             messages.append(f"labels.path not found: {state.sandbox.rel(label_file)}")
     elif labels is not None and not labels.path.exists():
         messages.append(f"labels.path not found: {state.sandbox.rel(labels.path)}")
+    change = config.change
+    if change is not None:
+        for key, label_set in (
+            ("change.before.path", change.before),
+            ("change.after.path", change.after),
+        ):
+            if label_set is not None and not label_set.path.exists():
+                messages.append(f"{key} not found: {state.sandbox.rel(label_set.path)}")
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

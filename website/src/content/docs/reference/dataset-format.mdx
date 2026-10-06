@@ -1,6 +1,6 @@
 ---
 title: Dataset format
-description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, classification label tables, the manifest v3 JSON schema and the split files written by mapcv.
+description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, classification label tables, change detection pairs, the manifest v3 JSON schema and the split files written by mapcv.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -432,6 +432,24 @@ index = {name: i for i, name in enumerate(data["classes"])}
 target = {image: np.isin(np.arange(len(index)), [index[name] for name in names]).astype("float32")
           for image, names in data["images"].items()}
 ```
+
+## Change detection datasets
+
+With `task: change` each patch is a pair of images, before and after, with a change mask, in the folder layout of LEVIR-CD that change-detection loaders read:
+
+```text
+dataset/
+├── A/            the before image (the first imagery source): patch_0000000.png …
+├── B/            the after image (the second source), same file names
+├── label/        the change mask, same file names
+├── splits/       train.txt, val.txt, test.txt: the file names in each split
+├── patches.geojson
+└── manifest.json
+```
+
+The three files of a patch share their name and grid: `A/patch_0000042.png`, `B/patch_0000042.png` and `label/patch_0000042.png`. Each image keeps its source's band count and data type (`writer.image_format` applies to both). A mask holds `0` (no change), [`change.change_value`](/mapcv/reference/configuration/#change) (`1` by default) for changed pixels and the ignore value (`255` by default) where either image has no imagery or a change raster has no label; `writer.mask_format` sets its format as for segmentation. Splits stay lists of names, so `mapcv split` rewrites `splits/` without moving any file; a loader that wants `train/A/…` folders can follow the lists.
+
+In the manifest, `task` is `change`, `writer.layout` is `change`, `sources` holds the two images (`files` keys are their names, plus `mask`) and `target.class_map` is `{"change": <change_value>}`. `target.labels` holds the settings and hash of the change labels or, for two label sets, `{"before": …, "after": …}`; `target.options.change_value` the change value. Each entry's `summary.class_pixels` counts the mask's values, as for segmentation, and stratified splits use it.
 
 ## Split files
 

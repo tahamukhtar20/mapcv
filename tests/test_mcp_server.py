@@ -664,7 +664,9 @@ def test_schema_tool_has_every_config_field(project: Path) -> None:
     actual = set(_schema_paths(found["schema"], found["schema"]))
     assert expected - actual == set()
     rules = found["rules"]
-    assert rules["tasks"] == ["segmentation", "detection", "instance", "classification"]
+    assert rules["tasks"] == ["segmentation", "detection", "instance", "classification", "change"]
+    assert rules["multi_source_tasks"] == ["segmentation", "change"]
+    assert rules["labels_allowed_per_task"]["change"] == ["vector", "raster"]
     assert rules["imagery_types"] == ["xyz", "eopf_zarr", "geotiff"]
     assert rules["labels_allowed_per_task"]["segmentation"] == ["none", "vector", "raster"]
     assert rules["labels_allowed_per_task"]["detection"] == ["vector"]

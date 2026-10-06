@@ -5,16 +5,17 @@ description: How to cite the mapcv software and the data sources of a dataset yo
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-If mapcv helped you build a dataset for published work, please cite the software and the version you used (`mapcv --version`). A DOI will be added for each release; until a release has one, cite the repository URL and version.
+If mapcv helped you build a dataset for published work, please cite the software and the version you used (`mapcv --version`). Each release is archived on Zenodo with its own DOI; [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) always resolves to the latest one, and the Zenodo page lists the DOI of every version. The repository's [`CITATION.cff`](https://github.com/tahamukhtar20/mapcv/blob/main/CITATION.cff) is what GitHub's "Cite this repository" button uses.
 
 <Tabs>
   <TabItem label="BibTeX">
     ```bibtex
     @software{mukhtar_mapcv,
       author  = {Mukhtar, Muhammad Taha},
-      title   = {mapcv: segmentation datasets from map imagery and polygon labels},
+      title   = {mapcv: computer-vision datasets from map imagery and geospatial labels},
       version = {0.2.0},
       year    = {2026},
+      doi     = {10.5281/zenodo.23149439},
       url     = {https://github.com/tahamukhtar20/mapcv},
       license = {MIT}
     }
@@ -23,24 +24,44 @@ If mapcv helped you build a dataset for published work, please cite the software
   <TabItem label="CFF">
     ```yaml
     cff-version: 1.2.0
-    message: "If you use this software, please cite it as below."
-    title: "mapcv: segmentation datasets from map imagery and polygon labels"
+    message: "If you use mapcv to build a dataset for published work, please cite the version you used (mapcv --version)."
+    title: "mapcv: computer-vision datasets from map imagery and geospatial labels"
     type: software
     authors:
       - family-names: Mukhtar
         given-names: Muhammad Taha
     version: 0.2.0
+    date-released: "2026-10-05"
+    doi: 10.5281/zenodo.23149438
+    identifiers:
+      - type: doi
+        value: 10.5281/zenodo.23149438
+        description: Every version of mapcv (resolves to the latest release)
+      - type: doi
+        value: 10.5281/zenodo.23149439
+        description: mapcv 0.2.0
     license: MIT
     repository-code: "https://github.com/tahamukhtar20/mapcv"
     url: "https://tahamukhtar20.github.io/mapcv/"
+    abstract: >-
+      mapcv turns map imagery (XYZ tiles, GeoTIFF/COG and Sentinel-2 EOPF Zarr) and
+      geospatial labels into training datasets for semantic and instance segmentation,
+      object detection, classification, change detection and regression, with
+      georeferenced patches, a manifest and leakage-safe spatial splits.
+    keywords:
+      - remote sensing
+      - earth observation
+      - computer vision
+      - dataset generation
+      - geospatial
     ```
   </TabItem>
   <TabItem label="Text">
-    Mukhtar, M. T. (2026). *mapcv: segmentation datasets from map imagery and polygon labels* (Version 0.2.0) [Computer software]. https://github.com/tahamukhtar20/mapcv
+    Mukhtar, M. T. (2026). *mapcv: computer-vision datasets from map imagery and geospatial labels* (Version 0.2.0) [Computer software]. https://doi.org/10.5281/zenodo.23149439
   </TabItem>
 </Tabs>
 
-Adjust `version` and `year` to the release you used.
+Adjust `version`, `year` and the DOI to the release you used.
 
 ## Cite your data, too
 

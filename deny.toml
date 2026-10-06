@@ -1,0 +1,44 @@
+# cargo-deny: licence, advisory, ban and source policy for the Rust crates
+# compiled into the wheels. CI runs `cargo deny check` in the lint job.
+# Notices for these licences ship with the wheels (see THIRD_PARTY_NOTICES.md).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Known advisories that do not apply to mapcv go here, each with a reason:
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences only; anything else (e.g. GPL, LGPL-only, MPL) fails CI.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0", # webpki-root-certs (CA certificate data)
+    "IJG",                 # jpeg-encoder (Independent JPEG Group; acknowledged in THIRD_PARTY_NOTICES.md)
+]
+
+[bans]
+# Duplicate versions are reported, not fatal: they come from upstream crates.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

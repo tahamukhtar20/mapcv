@@ -385,6 +385,21 @@ def main() -> None:
     out = run(["info", "pairs"], root)
     check("change" in out and "Source after" in out, "info does not describe the pairs", out)
 
+    # Two dates stacked into one GeoTIFF per patch (writer.stack_sources).
+    stack_data = yaml.safe_load(text)
+    xyz = dict(stack_data["imagery"])
+    stack_data["imagery"] = [{**xyz, "name": "t0"}, {**xyz, "name": "t1"}]
+    stack_data["writer"].update(staging_dir="./stacks", image_format="tif", stack_sources=True)
+    (root / "stacks.yaml").write_text(yaml.safe_dump(stack_data, sort_keys=False), encoding="utf-8")
+    out = run(["generate", "stacks.yaml", "--yes"], root)
+    stacks = root / "stacks"
+    manifest = json.loads((stacks / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["writer"].get("stack_sources") is True, "writer.stack_sources not recorded", out)
+    patches = manifest["patches"]
+    check(all(set(p["files"]) == {"image", "mask"} for p in patches), "stacked files keys", out)
+    names = sorted(f"Images/{p.name}" for p in (stacks / "Images").iterdir())
+    check(names == sorted(p["files"]["image"] for p in patches), "stacked Images/ != manifest", out)
+
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)
 

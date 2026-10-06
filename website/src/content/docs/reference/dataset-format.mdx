@@ -35,7 +35,7 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
 
 **Naming.** Patches are numbered `patch_0000000` … in the order they were written (seven digits, zero-padded). The image and its mask share the stem; the extension follows `writer.image_format` and `writer.mask_format`, so they can differ: `Images/patch_0000042.npy` ↔ `Masks/patch_0000042.png`. Read the paths from each manifest entry's `files` rather than building them.
 
-**Several imagery sources.** With [`imagery` as a list](/mapcv/reference/configuration/#several-imagery-sources), each source's patches go to `Images/<name>/` under the same stem (`Images/before/patch_0000042.tif`, `Images/after/patch_0000042.tif`), every one on the first source's pixel grid, and the masks stay in `Masks/`. Each source keeps its own band count and data type.
+**Several imagery sources.** With [`imagery` as a list](/mapcv/reference/configuration/#several-imagery-sources), each source's patches go to `Images/<name>/` under the same stem (`Images/before/patch_0000042.tif`, `Images/after/patch_0000042.tif`), every one on the first source's pixel grid, and the masks stay in `Masks/`. Each source keeps its own band count and data type. With `writer.stack_sources: true` the sources share one file per patch instead, `Images/patch_0000042.npy` of shape `(T, C, H, W)` (T sources in config order) or a GeoTIFF of `T × C` bands named `<source>_<band>`; its `files` key is `image`, and the manifest's `writer.stack_sources` is `true`.
 
 | | `png` / `jpg` (XYZ) | `npy` (Sentinel-2) | `tif` (either source) |
 | --- | --- | --- | --- |

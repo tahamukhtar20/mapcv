@@ -164,6 +164,19 @@ def _process_anchor_chunk(
     return images, window.collate(annotations, patch_size), metadata, other_patches
 
 
+def _check_stackable(records: List[SourceRecord]) -> None:
+    """Refuse sources that cannot share one (T, C, H, W) array (``writer.stack_sources``)."""
+    first = records[0]
+    for record in records[1:]:
+        if record.dtype != first.dtype or len(record.bands) != len(first.bands):
+            raise ValueError(
+                f"writer.stack_sources needs every source to have the same bands and data type "
+                f"to stack them: '{first.name}' has {len(first.bands)} band(s) of {first.dtype}, "
+                f"'{record.name}' {len(record.bands)} of {record.dtype}; select matching bands "
+                "or write the sources as separate files"
+            )
+
+
 def _open_sources(config: MapcvConfig) -> List[WindowedRasterSource]:
     """Open every imagery source in order, closing the opened ones if one fails."""
     opened: List[WindowedRasterSource] = []
@@ -246,6 +259,8 @@ def run_generate(
                     **grid,
                 )
             )
+        if config.writer.stack_sources:
+            _check_stackable(records)
         expected = Manifest(
             mapcv_version=mapcv_version(),
             task=config.task,

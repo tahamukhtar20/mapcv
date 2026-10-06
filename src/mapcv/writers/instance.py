@@ -136,7 +136,7 @@ class InstanceWriter:
 
     def fingerprint(self) -> Dict[str, Any]:
         # As the files layout records it; mask_format only matters with instance-ID masks.
-        exclude = {"staging_dir", "world_files", "footprints"}
+        exclude = {"staging_dir", "world_files", "footprints", "stack_sources"}
         if not self._options.id_mask:
             exclude.add("mask_format")
         block = {"layout": self.layout, **self._config.model_dump(mode="json", exclude=exclude)}

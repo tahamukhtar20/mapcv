@@ -1,7 +1,7 @@
 {
   "name": "mapcv",
   "displayName": "mapcv",
-  "description": "Build remote-sensing training datasets (segmentation, detection, instance segmentation) from a region, imagery and labels. Adds the mapcv skill and its MCP server.",
+  "description": "Build remote-sensing training datasets (segmentation, detection, instance segmentation, classification) from a region, imagery and labels. Adds the mapcv skill and its MCP server.",
   "author": {
     "name": "Muhammad Taha Mukhtar",
     "url": "https://github.com/tahamukhtar20"

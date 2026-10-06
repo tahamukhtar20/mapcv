@@ -7,8 +7,8 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
-│                                        f|detection|instance>  example instead of     │
-│                                                               asking.                │
+│                                        f|detection|instance|  example instead of     │
+│                                        classification>        asking.                │
 │ --interactive      --no-interactive                           Ask questions          │
 │                                                               (default: when run in  │
 │                                                               a terminal without     │
@@ -32,5 +32,7 @@
  mapcv init boxes.yaml --template detection   boxes for COCO and YOLO
 
  mapcv init masks.yaml --template instance   a mask per object (COCO RLE)
+
+ mapcv init tiles.yaml --template classification   a label per patch (CSV)
 
 

@@ -2,7 +2,7 @@
 
 Runs the real ``mapcv`` command (not the test runner's in-process CLI) through
 init (answering the wizard on stdin), validate, plan, generate, resume, info and
-split, in a folder whose name has a space and a non-ASCII character, against a
+split (segmentation, detection, instance segmentation and classification datasets), in a folder whose name has a space and a non-ASCII character, against a
 local tile server. Exits non-zero with the failing step's output on any problem.
 
     python tests/e2e/journey.py --version 0.2.0
@@ -11,6 +11,7 @@ local tile server. Exits non-zero with the failing step's output on any problem.
 from __future__ import annotations
 
 import argparse
+import csv
 import io
 import json
 import math
@@ -262,6 +263,57 @@ def main() -> None:
     check("objects" in out and "building" in out, "info shows no instance counts", out)
     out = run(["generate", "masks.yaml", "--yes"], root)
     check("Nothing left to do" in out, "a finished instance run did not resume", out)
+
+    # The same area as a classification dataset: a label per patch from the label coverage.
+    scenes_config = root / "scenes.yaml"
+    scenes_config.write_text(
+        "task: classification\n"
+        + text.replace("staging_dir: './dataset'", "staging_dir: './scenes'")
+        + "\nclassification:\n  mode: multi\n  empty: background\n",
+        encoding="utf-8",
+    )
+    out = run(["generate", "scenes.yaml", "--yes"], root)
+    scenes = root / "scenes"
+    manifest = json.loads((scenes / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["task"] == "classification", "not a classification manifest", out)
+    patches = manifest["patches"]
+    check(len(patches) == NX * NY, f"{len(patches)} classification patches", out)
+    images = sorted(f"images/{p.name}" for p in (scenes / "images").iterdir())
+    check(images == sorted(p["files"]["image"] for p in patches), "images/ != manifest", out)
+    classes = (scenes / "classes.txt").read_text(encoding="utf-8").split("\n")
+    check(classes == ["background", "building", "water", ""], f"classes.txt: {classes}", out)
+    with (scenes / "labels.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    check(len(rows) == len(patches), f"{len(rows)} rows in labels.csv", out)
+    seen = {label for row in rows for label in row["labels"].split()}
+    check(seen == {"background", "building", "water"}, f"labels {seen}", out)
+    check(
+        json.loads((scenes / "labels.json").read_text(encoding="utf-8"))["images"]
+        == {row["image"]: row["labels"].split() for row in rows},
+        "labels.json != labels.csv",
+        out,
+    )
+    for name in ("train", "val", "test"):
+        listed = (scenes / "splits" / f"{name}.txt").read_text(encoding="utf-8").split()
+        with (scenes / f"labels_{name}.csv").open(newline="", encoding="utf-8") as handle:
+            per_split = [row["image"] for row in csv.DictReader(handle)]
+        check(sorted(per_split) == sorted(listed), f"labels_{name}.csv != {name}.txt", out)
+        check(
+            sorted(row["image"] for row in rows if row["split"] == name) == sorted(listed),
+            f"labels.csv split column != {name}.txt",
+            out,
+        )
+    out = run(["info", "scenes"], root)
+    check("patches" in out and "building" in out and "background" in out, "info", out)
+    out = run(["split", "scenes", "--test-ratio", "0.4"], root)
+    with (scenes / "labels_test.csv").open(newline="", encoding="utf-8") as handle:
+        retested = sorted(row["image"] for row in csv.DictReader(handle))
+    listed = (scenes / "splits" / "test.txt").read_text(encoding="utf-8").split()
+    check(
+        retested == sorted(listed) and len(listed) > 0, "split did not rewrite labels_test.csv", out
+    )
+    out = run(["generate", "scenes.yaml", "--yes"], root)
+    check("Nothing left to do" in out, "a finished classification run did not resume", out)
 
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)

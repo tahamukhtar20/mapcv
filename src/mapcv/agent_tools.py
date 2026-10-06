@@ -1154,6 +1154,8 @@ def _generate_result(
         for name in ("annotations/", "labels/", "dataset.yaml")
         if manifest.task in ("detection", "instance") and (result.staging_dir / name).exists()
     )
+    if manifest.task == "classification":
+        files.extend(("labels.csv", "labels.json", "classes.txt"))
     dataset = sandbox.rel(result.staging_dir)
     data: Dict[str, Any] = {
         "dataset": dataset,
@@ -1180,8 +1182,25 @@ def _generate_result(
 
 
 def _class_rows(manifest: Manifest) -> List[Dict[str, Any]]:
-    """Class balance: pixels per class (segmentation) or objects per class (the others)."""
+    """Class balance: pixels per class (segmentation), objects per class (detection and
+    instance) or patches per label (classification)."""
     rows: List[Dict[str, Any]] = []
+    if manifest.task == "classification":
+        patches_per_label: Counter[str] = Counter()
+        for entry in manifest.patches:
+            patches_per_label.update(str(cid) for cid in entry["summary"].get("labels") or [])
+        label_names = {str(cid): name for cid, name in categories(manifest.class_map).items()}
+        label_names["0"] = "background"
+        for cid in sorted(patches_per_label, key=int):
+            rows.append(
+                {
+                    "id": int(cid),
+                    "name": label_names.get(cid, f"class {cid}"),
+                    "patches": patches_per_label[cid],
+                    "share": round(patches_per_label[cid] / len(manifest.patches), 4),
+                }
+            )
+        return rows
     if manifest.task in ("detection", "instance"):
         objects: Counter[str] = Counter()
         patches: Counter[str] = Counter()

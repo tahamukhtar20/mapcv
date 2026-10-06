@@ -46,9 +46,15 @@ from rasterio.transform import Affine  # noqa: E402
 from mapcv.cli import app  # noqa: E402
 from mapcv.config import ClassificationOptions, MapcvConfig  # noqa: E402
 from mapcv.imagery import RasterMetadata  # noqa: E402
-from mapcv.manifest import Manifest, ManifestMismatchError  # noqa: E402
+from mapcv.manifest import (  # noqa: E402
+    Manifest,
+    ManifestEntry,
+    ManifestMismatchError,
+    PatchSummary,
+)
 from mapcv.pipeline import run_generate, run_split  # noqa: E402
 from mapcv.planning import _CLASSIFICATION_BYTES, plan  # noqa: E402
+from mapcv.sampler import PatchMeta  # noqa: E402
 from mapcv.splitter import SplitterConfig, _stratum  # noqa: E402
 from mapcv.targets import ClassificationTarget, PatchLabels, create_target  # noqa: E402
 from mapcv.targets.classification import ClassificationWindow  # noqa: E402
@@ -1026,6 +1032,7 @@ def test_info_shows_the_patches_per_label(
     result = runner.invoke(app, ["info", str(config.writer.staging_dir)])
     assert result.exit_code == 0, result.output
     assert "classification" in result.output and "version 3" in result.output
+    assert "do not count towards coverage" in result.output
     assert "label" in result.output and "patches" in result.output
     flat = {}
     for line in result.output.splitlines():
@@ -1717,3 +1724,76 @@ def test_a_label_file_without_polygons_labels_every_patch_background_or_nothing(
         )
     assert {tuple(e["summary"]["labels"]) for e in kept.patches} == {(0,)}
     assert kept.patches and all(e["summary"]["class_coverage"] == {} for e in kept.patches)
+    # Nothing labeled anywhere: `info` still works, without a table of labels.
+    result = runner.invoke(app, ["info", str(tmp_path / "dataset")])
+    assert result.exit_code == 0, result.output
+    assert "classification" in result.output and "background" not in result.output
+
+
+# ── the writer and the factories on their own ───────────────────────────────
+
+
+def test_the_writer_refuses_annotations_that_are_not_patch_labels(tmp_path: Path) -> None:
+    config = config_for(tmp_path)
+    writer = ClassificationWriter(config.writer, ClassificationOptions())
+    manifest = Manifest(task="classification")
+    images = np.zeros((1, 8, 8, 3), dtype=np.uint8)
+    meta = [PatchMeta(row=0, col=0, padded=False, empty_ratio=0.0)]
+    with pytest.raises(TypeError, match="one PatchLabels per patch"):
+        writer.write(images, [], meta, manifest, 0)
+    with pytest.raises(TypeError, match="PatchLabels expected"):
+        writer.write(images, [None], meta, manifest, 0)  # type: ignore[list-item]
+    writer.write(images[:0], [], [], manifest, 0)  # nothing to write is fine
+    assert manifest.patches == [] and not (tmp_path / "dataset" / "images").exists()
+
+
+def test_the_label_tables_need_the_labels_in_the_manifest(tmp_path: Path) -> None:
+    config = config_for(tmp_path)
+    writer = ClassificationWriter(config.writer, ClassificationOptions())
+    entry = ManifestEntry(
+        row=0,
+        col=0,
+        padded=False,
+        chunk=0,
+        files={"image": "images/patch_0000000.png"},
+        summary=PatchSummary(empty_ratio=0.0),
+    )
+    manifest = Manifest(task="classification", patches=[entry])
+    with pytest.raises(ValueError, match="patch_0000000.png has no labels in the manifest"):
+        writer.write_annotations(manifest, None)
+
+
+def test_the_target_factory_checks_the_labels_it_gets(tmp_path: Path) -> None:
+    config = MapcvConfig.model_validate(_raw(tmp_path))
+    with pytest.raises(ValueError, match="task: classification needs labels"):
+        create_target(config.model_copy(update={"labels": None}))
+    target = create_target(config)
+    with pytest.raises(RuntimeError, match="prepare"):
+        target.record()
+
+
+def test_writer_options_footprints_and_world_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_labels(tmp_path / "labels.geojson", random_features(seed=8, count=30))
+    source = FakeSource(make_valid_mask("full"))
+    plain = config_for(tmp_path, writer={"footprints": False}, staging="plain")
+    generate(plain, source)
+    assert not (plain.writer.staging_dir / "patches.geojson").exists()
+    assert (plain.writer.staging_dir / "labels.csv").exists()
+
+    worlds = config_for(tmp_path, writer={"world_files": True}, staging="worlds")
+    manifest = generate(worlds, source)
+    assert manifest.writer is not None and manifest.writer["world_files"] is True
+    assert "mask_format" not in manifest.writer
+    assert (worlds.writer.staging_dir / "images" / "patch_0000000.pgw").is_file()
+    assert (worlds.writer.staging_dir / "patches.geojson").is_file()
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("no pyproj")
+
+    monkeypatch.setattr("mapcv.writers.classification.write_footprints", refuse)
+    with pytest.warns(UserWarning, match="patches.geojson was not written: no pyproj"):
+        generate(config_for(tmp_path, staging="nofootprints"), source)
+    # The label tables do not depend on it.
+    assert (tmp_path / "nofootprints" / "labels.json").is_file()

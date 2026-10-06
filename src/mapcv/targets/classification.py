@@ -108,8 +108,7 @@ class ClassificationWindow:
         valid = np.zeros((patch_size, patch_size), dtype=np.bool_)
         top, left = max(0, -row), max(0, -col)
         bottom, right = min(patch_size, height - row), min(patch_size, width - col)
-        if bottom > top and right > left:
-            valid[top:bottom, left:right] = True
+        valid[top:bottom, left:right] = True
         if valid_patch is not None:
             valid &= valid_patch
         if self._ignore_index is not None:
@@ -187,7 +186,7 @@ class ClassificationTarget:
         """The segmentation target's record (class map, ignore value, label settings and a
         hash or fingerprint of the label file) as a classification record with its options."""
         inner = self._inner.record()
-        if inner is None:  # a segmentation target with labels always has a record
+        if inner is None:  # pragma: no cover - a segmentation target with labels has a record
             raise RuntimeError("ClassificationTarget.prepare() must run first")
         return inner.model_copy(
             update={

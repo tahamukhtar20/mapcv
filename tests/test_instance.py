@@ -1174,7 +1174,7 @@ def test_a_patch_without_labels_has_no_instances_and_a_zero_id_mask(tmp_path: Pa
 
 def snapshot(staging: Path) -> Dict[str, bytes]:
     return {
-        str(path.relative_to(staging)): path.read_bytes()
+        path.relative_to(staging).as_posix(): path.read_bytes()
         for path in sorted(staging.rglob("*"))
         if path.is_file()
     }

@@ -55,13 +55,16 @@ class PatchSummary(TypedDict, total=False):
     valid pixels each class covers (class IDs as strings, ascending; classes without
     pixels are left out), and ``labels``: the class IDs the patch is labeled with
     (ascending; ``0`` is the ``background`` label of ``classification.empty: background``).
-    Other tasks add their own keys.
+    Regression adds ``values``: the number of target pixels with a value (``valid``)
+    and, when there are any, their ``min``, ``max`` and ``mean``. Other tasks add their
+    own keys.
     """
 
     class_pixels: Dict[str, int]
     class_objects: Dict[str, int]
     class_coverage: Dict[str, float]
     labels: List[int]
+    values: Dict[str, Any]
     empty_ratio: float
 
 

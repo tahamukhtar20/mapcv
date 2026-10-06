@@ -1,6 +1,6 @@
 ---
 title: Dataset format
-description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, classification label tables, change detection pairs, the manifest v3 JSON schema and the split files written by mapcv.
+description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, classification label tables, change detection pairs, regression targets, the manifest v3 JSON schema and the split files written by mapcv.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -450,6 +450,12 @@ dataset/
 The three files of a patch share their name and grid: `A/patch_0000042.png`, `B/patch_0000042.png` and `label/patch_0000042.png`. Each image keeps its source's band count and data type (`writer.image_format` applies to both). A mask holds `0` (no change), [`change.change_value`](/mapcv/reference/configuration/#change) (`1` by default) for changed pixels and the ignore value (`255` by default) where either image has no imagery or a change raster has no label; `writer.mask_format` sets its format as for segmentation. Splits stay lists of names, so `mapcv split` rewrites `splits/` without moving any file; a loader that wants `train/A/…` folders can follow the lists.
 
 In the manifest, `task` is `change`, `writer.layout` is `change`, `sources` holds the two images (`files` keys are their names, plus `mask`) and `target.class_map` is `{"change": <change_value>}`. `target.labels` holds the settings and hash of the change labels or, for two label sets, `{"before": …, "after": …}`; `target.options.change_value` the change value. Each entry's `summary.class_pixels` counts the mask's values, as for segmentation, and stratified splits use it.
+
+## Regression datasets
+
+With `task: regression` the layout is the segmentation one, `Images/` and `Masks/`, but each "mask" is a **float32 target**: a single-band GeoTIFF (`writer.mask_format: tif`, the default for regression, which declares `NaN` as its no-data value) or an `(H, W)` NPY array. A pixel holds `value × labels.scale + labels.offset` of the [continuous raster](/mapcv/reference/configuration/#continuous-values-type-continuous) at its centre, and `NaN` where there is no value (outside the raster, NoData, out-of-range values, no imagery). Mask the `NaN` pixels out of your loss, for example `loss = mse(pred[valid], target[valid])` with `valid = ~torch.isnan(target)`.
+
+In the manifest, `task` is `regression`, `target.dtype` is `float32`, `target.class_map` is empty and `target.ignore_index` is `null` (`NaN` plays its part). `target.labels` holds the raster settings, scaling included, and the raster's fingerprint. Each entry's `summary.values` is `{valid, min, max, mean}`: the number of pixels with a value and, when there are any, their statistics (computed in float64). Several imagery sources and `writer.stack_sources` work as for segmentation.
 
 ## Split files
 

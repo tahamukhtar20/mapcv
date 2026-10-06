@@ -16,7 +16,7 @@ def extract_array_patch(
     col: int,
     patch_size: int,
     pad_mode: PadMode,
-    fill: int = 0,
+    fill: float = 0,
 ) -> Tuple[npt.NDArray[Any], bool]:
     """Cut a ``patch_size`` square at ``(row, col)``, padding where it leaves ``array``.
 

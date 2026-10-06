@@ -31,7 +31,7 @@ class FilesWriter:
     and each entry's ``files`` has one key per source name.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({None, "segmentation"})
+    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({None, "segmentation", "regression"})
 
     def __init__(self, config: WriterConfig, sources: Optional[List[str]] = None) -> None:
         self._config = config

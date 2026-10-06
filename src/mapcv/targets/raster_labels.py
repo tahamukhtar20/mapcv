@@ -41,7 +41,7 @@ import numpy as np
 import numpy.typing as npt
 
 from mapcv._patching import MaskWindow
-from mapcv.config import RasterLabelsConfig
+from mapcv.config import ContinuousLabelsConfig, RasterLabelsConfig
 from mapcv.geotiff import GeoTiff
 from mapcv.imagery import (
     RasterMetadata,
@@ -146,15 +146,20 @@ class _Classifier:
         return out
 
 
-class LabelRasterSampler:
-    """Reads a label raster at the pixel centres of imagery windows (nearest neighbour).
+class _GridSampler:
+    """Reads a raster at the pixel centres of imagery windows (nearest neighbour).
 
-    ``imagery_crs`` is the CRS the window transforms are expressed in.
+    ``imagery_crs`` is the CRS the window transforms are expressed in. Subclasses set
+    how raw values become output values (``_decode``), the output type and the value of
+    pixels outside the raster (``_fill``).
     """
 
-    def __init__(self, labels: RasterLabelsConfig, imagery_crs: str) -> None:
-        name = _safe_product_id(labels.path)
-        self.location = geotiff_location(labels.path)
+    _out_dtype: "np.dtype[Any]"
+    _fill: Any
+
+    def __init__(self, path: str, band: int, imagery_crs: str) -> None:
+        name = _safe_product_id(path)
+        self.location = geotiff_location(path)
         self._tif = GeoTiff(self.location)
         info = self._tif.info
         if info.epsg is None:
@@ -167,13 +172,8 @@ class LabelRasterSampler:
             raise ValueError(
                 f"label raster '{name}' has no georeferencing (no pixel size/origin tags)"
             )
-        if labels.band > info.count:
-            raise ValueError(f"labels.band is {labels.band}, but '{name}' has {info.count} band(s)")
-        if info.dtype.kind not in "iu":
-            raise ValueError(
-                f"label raster '{name}' holds {info.dtype} values; label rasters must hold "
-                "integer class values (uint8, uint16, int16, ...)"
-            )
+        if band > info.count:
+            raise ValueError(f"labels.band is {band}, but '{name}' has {info.count} band(s)")
         a, b, _, d, e, _ = info.transform
         if a * e - b * d == 0:
             raise ValueError(f"label raster '{name}' has a degenerate pixel transform")
@@ -182,34 +182,24 @@ class LabelRasterSampler:
         self.info = info
         self.crs = f"EPSG:{info.epsg}"
         self.transform: Transform = info.transform
-        self._band = labels.band - 1
+        self._band = band - 1
         self._same_crs = self.crs == imagery_crs.upper()
         self._to_label: Any = None
         if not self._same_crs:
             from pyproj import Transformer
 
             self._to_label = Transformer.from_crs(imagery_crs, self.crs, always_xy=True)
-        self.nodata = (
-            labels.nodata if labels.nodata is not None else integer_nodata(info.nodata, info.dtype)
-        )
-        ignore = labels.ignore_index if labels.ignore_index is not None else 0
-        self.ignore = ignore
-        ignored = tuple(labels.ignore_values) + (() if self.nodata is None else (self.nodata,))
-        self._classify = _Classifier(
-            info.dtype,
-            {value: target.id for value, target in labels.classes.items()},
-            ignored,
-            ignore if labels.unmapped == "ignore" else 0,
-            ignore,
-        )
+
+    def _decode(self, values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        raise NotImplementedError  # pragma: no cover - every sampler defines it
 
     # ── reading ──────────────────────────────────────────────────────────────
 
-    def _read_codes(self, row0: int, row1: int, col0: int, col1: int) -> npt.NDArray[np.uint8]:
-        """Mask values of label pixels ``[row0, row1) x [col0, col1)``; ignore outside."""
+    def _read_codes(self, row0: int, row1: int, col0: int, col1: int) -> npt.NDArray[Any]:
+        """Output values of label pixels ``[row0, row1) x [col0, col1)``; the fill outside."""
         data, inside = self._tif.read_window(row0, row1, col0, col1, bands=[self._band])
-        codes = self._classify(np.ascontiguousarray(data[..., 0]))
-        codes[~inside] = self.ignore
+        codes = self._decode(np.ascontiguousarray(data[..., 0]))
+        codes[~inside] = self._fill
         return codes
 
     def _indices(self, fractional: npt.NDArray[np.float64], size: int) -> npt.NDArray[np.int64]:
@@ -305,8 +295,8 @@ class LabelRasterSampler:
 
     def sample(
         self, transform: Transform, height: int, width: int, *, fast: bool = True
-    ) -> npt.NDArray[np.uint8]:
-        """Mask values of a ``height`` x ``width`` imagery window (nearest neighbour).
+    ) -> npt.NDArray[Any]:
+        """Output values of a ``height`` x ``width`` imagery window (nearest neighbour).
 
         ``fast=False`` skips the direct copy for identical grids (for tests).
         """
@@ -320,13 +310,13 @@ class LabelRasterSampler:
                 return self._separable(transform, height, width)
         return self._general(transform, height, width)
 
-    def _copy(self, row: int, col: int, height: int, width: int) -> npt.NDArray[np.uint8]:
+    def _copy(self, row: int, col: int, height: int, width: int) -> npt.NDArray[Any]:
         info = self.info
         if row >= info.height or col >= info.width or row + height <= 0 or col + width <= 0:
-            return np.full((height, width), self.ignore, dtype=np.uint8)
+            return np.full((height, width), self._fill, dtype=self._out_dtype)
         return self._read_codes(row, row + height, col, col + width)
 
-    def _separable(self, transform: Transform, height: int, width: int) -> npt.NDArray[np.uint8]:
+    def _separable(self, transform: Transform, height: int, width: int) -> npt.NDArray[Any]:
         """Axis-aligned grids in one CRS: label rows depend on imagery rows only, and
         columns on columns, so two 1-D lookups index the label window."""
         u = np.arange(width, dtype=np.float64) + 0.5
@@ -334,7 +324,7 @@ class LabelRasterSampler:
         pu, _, p0, _, qv, q0 = self._composed(transform)
         cols = self._indices(pu * u + p0, self.info.width)
         rows = self._indices(qv * v + q0, self.info.height)
-        out = np.full((height, width), self.ignore, dtype=np.uint8)
+        out = np.full((height, width), self._fill, dtype=self._out_dtype)
         row_hit, col_hit = rows >= 0, cols >= 0
         if not row_hit.any() or not col_hit.any():
             return out
@@ -344,11 +334,15 @@ class LabelRasterSampler:
         out[np.ix_(row_hit, col_hit)] = codes[np.ix_(rows_in - r0, cols_in - c0)]
         return out
 
-    def _general(self, transform: Transform, height: int, width: int) -> npt.NDArray[np.uint8]:
+    def _general(self, transform: Transform, height: int, width: int) -> npt.NDArray[Any]:
         """Any grids: every pixel centre is mapped on its own, a block of rows at a time."""
-        out = np.full((height, width), self.ignore, dtype=np.uint8)
+        out = np.full((height, width), self._fill, dtype=self._out_dtype)
         cache = self._perimeter_window(transform, height, width)
-        codes = self._read_codes(*cache) if cache is not None else np.empty((0, 0), dtype=np.uint8)
+        codes = (
+            self._read_codes(*cache)
+            if cache is not None
+            else np.empty((0, 0), dtype=self._out_dtype)
+        )
         u = np.arange(width, dtype=np.float64)[None, :] + 0.5
         block = max(1, _BLOCK_PIXELS // max(width, 1))
         for start in range(0, height, block):
@@ -439,6 +433,68 @@ class LabelRasterSampler:
         col = (e * (x - c) - b * (y - f)) / det
         row = (a * (y - f) - d * (x - c)) / det
         return bool(0 <= col <= source.width and 0 <= row <= source.height)
+
+
+class LabelRasterSampler(_GridSampler):
+    """Reads a classified label raster at imagery pixel centres as mask values."""
+
+    def __init__(self, labels: RasterLabelsConfig, imagery_crs: str) -> None:
+        super().__init__(labels.path, labels.band, imagery_crs)
+        info = self.info
+        if info.dtype.kind not in "iu":
+            raise ValueError(
+                f"label raster '{self.name}' holds {info.dtype} values; label rasters must hold "
+                "integer class values (uint8, uint16, int16, ...)"
+            )
+        self.nodata = (
+            labels.nodata if labels.nodata is not None else integer_nodata(info.nodata, info.dtype)
+        )
+        ignore = labels.ignore_index if labels.ignore_index is not None else 0
+        self.ignore = ignore
+        ignored = tuple(labels.ignore_values) + (() if self.nodata is None else (self.nodata,))
+        self._classify = _Classifier(
+            info.dtype,
+            {value: target.id for value, target in labels.classes.items()},
+            ignored,
+            ignore if labels.unmapped == "ignore" else 0,
+            ignore,
+        )
+        self._out_dtype = np.dtype(np.uint8)
+        self._fill = ignore
+
+    def _decode(self, values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        return self._classify(values)
+
+
+class ValueRasterSampler(_GridSampler):
+    """Reads a continuous raster at imagery pixel centres as float32 targets.
+
+    The target is ``value * labels.scale + labels.offset``, computed in float64. Pixels
+    outside the raster, on its NoData, ``NaN`` or outside ``valid_min``..``valid_max``
+    (raw values) are ``NaN``.
+    """
+
+    def __init__(self, labels: ContinuousLabelsConfig, imagery_crs: str) -> None:
+        super().__init__(labels.path, labels.band, imagery_crs)
+        nodata = labels.nodata if labels.nodata is not None else self.info.nodata
+        self.nodata: Optional[float] = None if nodata is None else float(nodata)
+        self._labels = labels
+        self._out_dtype = np.dtype(np.float32)
+        self._fill = np.float32(np.nan)
+
+    def _decode(self, values: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        labels = self._labels
+        raw = values.astype(np.float64)
+        invalid = ~np.isfinite(raw)
+        if self.nodata is not None:
+            invalid |= np.isnan(raw) if math.isnan(self.nodata) else raw == self.nodata
+        if labels.valid_min is not None:
+            invalid |= raw < labels.valid_min
+        if labels.valid_max is not None:
+            invalid |= raw > labels.valid_max
+        target = (raw * labels.scale + labels.offset).astype(np.float32)
+        target[invalid] = np.nan
+        return target
 
 
 class RasterSegmentationTarget:

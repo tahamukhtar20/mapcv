@@ -5,13 +5,14 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    ContinuousLabelsConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
@@ -189,20 +190,25 @@ def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
     )
 
 
-def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> LabelSummary:
+def _summarize_label_raster(
+    config: MapcvConfig, labels: Union[RasterLabelsConfig, ContinuousLabelsConfig]
+) -> LabelSummary:
     """Open the label raster's header (no pixels are read) and check it covers the region."""
     from pyproj import Transformer
 
-    from mapcv.targets.raster_labels import LabelRasterSampler
+    from mapcv.targets.raster_labels import LabelRasterSampler, ValueRasterSampler
 
+    classes = labels.class_map() if isinstance(labels, RasterLabelsConfig) else {}
     local = eopf_local_path(labels.path)
     if local is not None and not local.exists():
-        return LabelSummary(
-            labels.path, 0, labels.class_map(), [f"label raster not found: {local}"]
-        )
-    # The same checks generate makes (CRS, band, integer values); the CRS argument only
-    # matters for sampling, which planning does not do.
-    sampler = LabelRasterSampler(labels, "EPSG:4326")
+        return LabelSummary(labels.path, 0, classes, [f"label raster not found: {local}"])
+    # The same checks generate makes (CRS, band, integer values for classes); the CRS
+    # argument only matters for sampling, which planning does not do.
+    sampler: Union[LabelRasterSampler, ValueRasterSampler] = (
+        LabelRasterSampler(labels, "EPSG:4326")
+        if isinstance(labels, RasterLabelsConfig)
+        else ValueRasterSampler(labels, "EPSG:4326")
+    )
     info = sampler.info
     a, b, c, d, e, f = sampler.transform
     xs = [c + a * col + b * row for col in (0, info.width) for row in (0, info.height)]
@@ -216,11 +222,12 @@ def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> 
     if not box(west, south, east, north).intersects(
         box(region.west, region.south, region.east, region.north)
     ):
-        outcome = (
-            "no patch would get a label"
-            if config.task == "classification"
-            else "every mask pixel would be ignored"
-        )
+        if config.task == "classification":
+            outcome = "no patch would get a label"
+        elif config.task == "regression":
+            outcome = "every target pixel would be NaN"
+        else:
+            outcome = "every mask pixel would be ignored"
         messages.append(
             f"the label raster does not overlap the region, so {outcome}. "
             "Check labels.path and the region."
@@ -229,7 +236,7 @@ def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> 
         f"raster {sampler.name} · {sampler.crs} · {info.width:,} × {info.height:,} px · "
         f"{info.dtype} · ≈ {_pixel_size_m(sampler.crs, sampler.transform):.2f} m/px"
     )
-    return LabelSummary(labels.path, 0, labels.class_map(), messages, raster=description)
+    return LabelSummary(labels.path, 0, classes, messages, raster=description)
 
 
 def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
@@ -254,7 +261,7 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
         )
     if labels is None:
         return None
-    if isinstance(labels, RasterLabelsConfig):
+    if isinstance(labels, (RasterLabelsConfig, ContinuousLabelsConfig)):
         return _summarize_label_raster(config, labels)
     return _summarize_vector(config, labels)
 
@@ -392,8 +399,13 @@ def plan(config: MapcvConfig) -> Plan:
     has_masks = (config.task == "segmentation" and config.labels is not None) or (
         config.task == "change"
     )
+    if config.task == "regression":
+        # One float32 target per patch: raw as NPY, compressed (about half) as GeoTIFF.
+        mask_bytes_per_pixel = 4.0 if config.writer.mask_format == "npy" else 2.0
     mask_ratio = 1.0 if config.writer.mask_format == "npy" else _MASK_COMPRESSION
     mask_bytes = int(pixels_per_patch * mask_ratio) if has_masks else 0
+    if config.task == "regression":
+        mask_bytes = int(pixels_per_patch * mask_bytes_per_pixel)
     if config.task == "instance" and config.instance_options.id_mask:
         # One 16-bit instance-ID mask per patch (compressed PNG or GeoTIFF, raw as NPY).
         mask_bytes = int(2 * pixels_per_patch * mask_ratio)

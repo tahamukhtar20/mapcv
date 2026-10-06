@@ -95,7 +95,7 @@ What the dataset is for. It decides what each patch is annotated with and is rec
 | `instance` | supported | A binary mask per object (instance segmentation), written as COCO JSON with RLE masks and optionally an instance-ID PNG per patch; needs vector `labels`. Settings in the [`instance`](#instance) block |
 | `classification` | supported | One label, or a set of labels, per patch, written as `labels.csv` and `labels.json`; needs `labels` (vector or raster). Settings in the [`classification`](#classification) block |
 | `change` | supported | A before/after image pair and a binary change mask per patch, in LEVIR-CD's `A/`, `B/`, `label/` layout; needs two [imagery sources](#several-imagery-sources) and labels that mark the change, or two label sets to compare. Settings in the [`change`](#change) block |
-| `regression` | planned | Rejected for now with an error that lists the supported and planned tasks |
+| `regression` | supported | A float32 target per pixel (canopy height, biomass, elevation …) read from a raster of values; needs [`labels.type: continuous`](#continuous-values-type-continuous). Targets are written as `tif` (default) or `npy` masks, `NaN` where there is no value |
 
 ```yaml
 task: segmentation
@@ -237,7 +237,7 @@ writer: {staging_dir: ./dataset, image_format: tif}
 | Other sources | Same CRS as the first, and pixels the same size or a whole number of them across (2×, 3×…) on a grid that shares pixel corners with the first. Coarser pixels are repeated onto the grid (nearest neighbour, exact); nothing is interpolated. A source with finer pixels must come first |
 | Coverage | A pixel has imagery only where **every** source has it. Pixels outside a source count as empty and are `ignore_index` in masks |
 | Output | `Images/<name>/patch_*.<ext>` per source, one shared `Masks/` folder, and one `files` key per source name in the manifest. With [`writer.stack_sources`](#writer), one file per patch holds every source instead |
-| Tasks | `segmentation` (with or without labels) and [`change`](#change) (exactly two). Tasks that write one image per patch (detection, instance, classification) take a single source |
+| Tasks | `segmentation` (with or without labels), `regression` and [`change`](#change) (exactly two). Tasks that write one image per patch (detection, instance, classification) take a single source |
 
 A source on a grid that does not line up (another CRS, a half-pixel shift, a non-integer pixel ratio) fails before anything is written, and the error says how it differs. Resample it onto the first source's grid first (for example with `gdalwarp -tap -tr`).
 
@@ -374,6 +374,33 @@ labels:
 
 **Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation` and, for one label per patch, `task: classification`; `task: detection` and `task: instance` need polygon labels (one feature per object) and refuse `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
 
+### Continuous values (`type: continuous`)
+
+The targets of `task: regression`: a GeoTIFF or COG of values to predict, such as canopy height, biomass or elevation, in any CRS and resolution. Each imagery pixel takes the value at its **centre**, with the same exact nearest-neighbour lookup as [raster labels](#raster-labels-type-raster) (values are never interpolated), and the target is `value × scale + offset` as `float32`.
+
+```yaml
+task: regression
+labels:
+  type: continuous
+  path: canopy_height_cm.tif
+  scale: 0.01          # centimetres to metres
+  valid_min: 0
+writer: {staging_dir: ./dataset, image_format: tif, mask_format: tif}
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `"continuous"` | required | Selects a raster of values |
+| `path` | string | required | Local path, `file://` URL, or `https://` / anonymous `s3://` URL, as for raster labels |
+| `band` | int ≥ 1 | `1` | Band holding the values |
+| `nodata` | number \| `.nan` | the file's NoData | Value meaning "no value" |
+| `scale`, `offset` | number | `1`, `0` | The target is `value × scale + offset`, computed in float64 and stored as float32 |
+| `valid_min`, `valid_max` | number | — | Raw values outside this range have no target |
+
+Target pixels are `NaN` where there is no value: outside the raster, on its NoData, `NaN` or out-of-range values, and where the imagery has no data (padding included). `sampler.min_label_ratio` keeps a patch only when at least that fraction of its pixels has a value. Each manifest entry's `summary.values` holds the number of pixels with a value and their `min`, `max` and `mean`; `mapcv info` sums them up.
+
+**Validation:** `task: regression` needs `type: continuous` labels, and `type: continuous` needs `task: regression`. `scale` must be finite and non-zero, `valid_min` at most `valid_max`. Float targets do not fit a PNG, so `writer.mask_format` defaults to `tif` for regression and `png` is refused. A resumed run must use the same raster (its fingerprint is recorded) and the same scaling.
+
 ## `sampler`
 
 | Field | Type | Default | Description |
@@ -413,13 +440,13 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | `mask_format` | `png` \| `npy` \| `tif` | `png` | How masks are stored (with `labels`). `png` is a single-channel PNG (8-bit; 16-bit for 16-bit masks); `npy` a NumPy array; `tif` a GeoTIFF that opens aligned with the image. The mask values, including `labels.ignore_index`, are identical in every format |
 | `world_files` | bool | `false` | Write a world file next to every PNG (`.pgw`) and JPG (`.jgw`) patch, images and masks, so QGIS and GDAL place them on the map. World files hold no CRS (it is `crs` in the manifest). Not needed for `tif`, which carries its georeferencing inside; an error when neither images nor masks are PNG or JPG |
 | `footprints` | bool | `true` | Write `patches.geojson` after the split: one WGS-84 footprint polygon per patch with its file name, split, row and column, and class pixel counts. Open it in QGIS to see where each patch is. Needs `pyproj` (`pip install "mapcv[zarr]"`) unless the imagery is XYZ or EPSG:4326; without it mapcv warns and skips the file |
-| `stack_sources` | bool | `false` | With [several imagery sources](#several-imagery-sources) (a segmentation dataset), write them into **one** file per patch instead of one per source: `npy` stores a `(T, C, H, W)` array (T sources in config order, C bands each), `tif` a GeoTIFF of `T × C` bands named `<source>_<band>`. For time series and temporal models (several dates of one product). Every source needs the same band count and data type |
+| `stack_sources` | bool | `false` | With [several imagery sources](#several-imagery-sources) (a segmentation or regression dataset), write them into **one** file per patch instead of one per source: `npy` stores a `(T, C, H, W)` array (T sources in config order, C bands each), `tif` a GeoTIFF of `T × C` bands named `<source>_<band>`. For time series and temporal models (several dates of one product). Every source needs the same band count and data type |
 
 The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` and `stack_sources: true` when they are on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection and classification datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY.
 
 **GeoTIFF output.** `tif` patches (and masks) are written by mapcv itself, without GDAL: striped, Deflate-compressed with the horizontal predictor (the floating-point predictor for `float32`), one band per channel. They carry the source's EPSG code and each patch's own affine transform, so QGIS, rasterio and TerraTorch open them in place. Images declare `NaN` as no-data when they are floating point (and nothing for integer data, where 0 is a real value); masks declare `labels.ignore_index` as no-data, so GIS tools show the pixels without imagery as transparent. See [Dataset format](/mapcv/reference/dataset-format/#geotiff-patches).
 
-**Validation:** XYZ needs `png`, `jpg` or `tif`; EOPF needs `npy` or `tif`; GeoTIFF imagery needs `npy` or `tif` unless it is `uint8` in 1 or 3 bands (see [GeoTIFF](#geotiff-and-cloud-optimized-geotiff-type-geotiff)). `world_files` needs PNG or JPG files to write next to. `stack_sources` needs `imagery` as a list of two or more sources, `task: segmentation` and `image_format` `npy` or `tif`; sources with different band counts or data types are refused when they are opened, before anything is written.
+**Validation:** XYZ needs `png`, `jpg` or `tif`; EOPF needs `npy` or `tif`; GeoTIFF imagery needs `npy` or `tif` unless it is `uint8` in 1 or 3 bands (see [GeoTIFF](#geotiff-and-cloud-optimized-geotiff-type-geotiff)). `world_files` needs PNG or JPG files to write next to. `stack_sources` needs `imagery` as a list of two or more sources, `task: segmentation` or `regression`, and `image_format` `npy` or `tif`; sources with different band counts or data types are refused when they are opened, before anything is written.
 
 ## `split`
 

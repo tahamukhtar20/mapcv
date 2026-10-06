@@ -33,7 +33,9 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
+    RASTER_LABEL_TYPES,
     UNION_TAGS,
+    ContinuousLabelsConfig,
     RasterLabelsConfig,
     eopf_local_path,
 )
@@ -267,6 +269,15 @@ def _settings_table(config: MapcvConfig) -> Table:
             "Labels",
             f"{where} · raster band {raster.band} · {len(raster.class_map())} class(es)",
         )
+    elif isinstance(config.labels, ContinuousLabelsConfig):
+        values = config.labels
+        where = _redact_url(values.path) if "://" in values.path else values.path
+        scaling = (
+            f" · × {values.scale:g} + {values.offset:g}"
+            if (values.scale, values.offset) != (1.0, 0.0)
+            else ""
+        )
+        table.add_row("Labels", f"{where} · values of band {values.band}{scaling}")
     else:
         field = config.labels.label_field or "none — every polygon is class 1"
         layer = f" · layer: {config.labels.layer}" if config.labels.layer else ""
@@ -466,11 +477,41 @@ def _label_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
+def _value_table(manifest: Manifest) -> Optional[Table]:
+    """Target values over all patches, for regression datasets."""
+    valid = 0
+    total = 0.0
+    low, high = float("inf"), float("-inf")
+    for entry in manifest.patches:
+        values = entry["summary"].get("values") or {}
+        count = int(values.get("valid", 0))
+        if not count:
+            continue
+        valid += count
+        total += float(values["mean"]) * count
+        low, high = min(low, float(values["min"])), max(high, float(values["max"]))
+    if not valid:
+        return None
+    pixels = len(manifest.patches) * int((manifest.sampler or {}).get("patch_size", 0)) ** 2
+    table = Table(box=None, padding=(0, 2), show_edge=False)
+    table.add_column("target")
+    table.add_column("value", justify="right")
+    table.add_row(
+        "pixels with a value", f"{valid:,}" + (f" ({valid / pixels:.1%})" if pixels else "")
+    )
+    table.add_row("min", f"{low:.6g}")
+    table.add_row("mean", f"{total / valid:.6g}")
+    table.add_row("max", f"{high:.6g}")
+    return table
+
+
 def _class_table(manifest: Manifest) -> Optional[Table]:
     if manifest.task in ("detection", "instance"):
         return _object_table(manifest)
     if manifest.task == "classification":
         return _label_table(manifest)
+    if manifest.task == "regression":
+        return _value_table(manifest)
     totals: Counter[str] = Counter()
     for entry in manifest.patches:
         totals.update(entry["summary"].get("class_pixels") or {})
@@ -570,6 +611,7 @@ class Template(str, Enum):
     instance = "instance"
     classification = "classification"
     change = "change"
+    regression = "regression"
 
 
 _HEADER = f"""\
@@ -901,6 +943,49 @@ split:
 """
 )
 
+_REGRESSION_TEMPLATE = (
+    _HEADER
+    + """
+task: regression             # a float value per pixel (canopy height, biomass, ...) instead of classes
+
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: geotiff
+  path: ortho.tif            # local, https:// or anonymous s3://
+
+labels:
+  type: continuous
+  path: canopy_height.tif    # any CRS and resolution: read at each image pixel's centre
+  # band: 1
+  # nodata: -9999            # default: the file's NoData
+  # scale: 0.01              # target = value * scale + offset (e.g. centimetres to metres)
+  # offset: 0.0
+  # valid_min: 0             # raw values outside this range have no target (NaN)
+
+sampler:
+  patch_size: 256
+  stride: 0                  # 0 = patch_size (no overlap)
+  mode: grid
+  edge_strategy: drop        # pad | drop | shift
+
+writer:
+  staging_dir: ./dataset     # Images/ and Masks/ (float32 targets, NaN = no value)
+  image_format: tif          # tif | npy (png/jpg for 8-bit RGB imagery)
+  mask_format: tif           # tif | npy: float32 targets
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42
+"""
+)
+
 _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
@@ -909,6 +994,7 @@ _TEMPLATES = {
     Template.instance: _INSTANCE_TEMPLATE,
     Template.classification: _CLASSIFICATION_TEMPLATE,
     Template.change: _CHANGE_TEMPLATE,
+    Template.regression: _REGRESSION_TEMPLATE,
 }
 
 
@@ -1504,7 +1590,8 @@ def _wizard() -> str:
         "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
         "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)\n\n"
         "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)\n\n"
-        "  [cyan]mapcv init pairs.yaml --template change[/cyan]   before/after pairs and change masks"
+        "  [cyan]mapcv init pairs.yaml --template change[/cyan]   before/after pairs and change masks\n\n"
+        "  [cyan]mapcv init heights.yaml --template regression[/cyan]   float targets from a raster"
     ),
 )
 def init(
@@ -1788,7 +1875,7 @@ def validate(
     _console.print(f"[green]✓[/green] {config_path} is a valid config.")
     _console.print(_settings_table(config))
     labels = config.labels
-    if isinstance(labels, RasterLabelsConfig):
+    if isinstance(labels, RASTER_LABEL_TYPES):
         label_file = eopf_local_path(labels.path)
         if label_file is not None and not label_file.exists():
             _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")

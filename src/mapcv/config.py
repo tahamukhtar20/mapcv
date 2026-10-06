@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import unicodedata
@@ -609,10 +610,58 @@ class RasterLabelsConfig(BaseModel):
         }
 
 
+class ContinuousLabelsConfig(BaseModel):
+    """A raster of continuous values for ``task: regression``: canopy height, biomass,
+    elevation, a previous model's scores ...
+
+    Each imagery pixel takes the value at its centre (nearest neighbour, never
+    interpolated), whatever the raster's CRS, resolution and origin, the same lookup
+    as classified label rasters. The target is ``value * scale + offset`` as float32.
+    Pixels outside the raster, on its NoData value (``nodata``, default the file's),
+    ``NaN`` or outside ``valid_min``..``valid_max`` (raw values), and pixels without
+    imagery, are ``NaN``.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["continuous"]
+    path: str
+    band: int = Field(default=1, ge=1)
+    nodata: Optional[float] = None
+    scale: float = 1.0
+    offset: float = 0.0
+    valid_min: Optional[float] = None
+    valid_max: Optional[float] = None
+
+    _check_path = field_validator("path")(_validate_label_raster_path)
+
+    @model_validator(mode="after")
+    def _validate_values(self) -> "ContinuousLabelsConfig":
+        if not math.isfinite(self.scale) or self.scale == 0.0:
+            raise ValueError("labels.scale must be a finite number other than 0")
+        if not math.isfinite(self.offset):
+            raise ValueError("labels.offset must be a finite number")
+        for name in ("valid_min", "valid_max"):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"labels.{name} must be a finite number")
+        if (
+            self.valid_min is not None
+            and self.valid_max is not None
+            and self.valid_min > self.valid_max
+        ):
+            raise ValueError("labels.valid_min must not be above labels.valid_max")
+        return self
+
+
 AnyLabelsConfig = Annotated[
-    Union[LabelsConfig, RasterLabelsConfig],
+    Union[LabelsConfig, RasterLabelsConfig, ContinuousLabelsConfig],
     Field(discriminator="type"),
 ]
+
+#: Label settings read from a raster (a path or URL string, not a vector file).
+RASTER_LABEL_TYPES = (RasterLabelsConfig, ContinuousLabelsConfig)
 
 
 SUPPORTED_TASKS: Tuple[str, ...] = (
@@ -621,11 +670,12 @@ SUPPORTED_TASKS: Tuple[str, ...] = (
     "instance",
     "classification",
     "change",
+    "regression",
 )
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ("regression",)
+PLANNED_TASKS: Tuple[str, ...] = ()
 # Tasks whose datasets can hold several imagery sources (``imagery`` as a list).
-MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation", "change")
+MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation", "change", "regression")
 
 DetectionFormat = Literal["coco", "yolo"]
 DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
@@ -790,12 +840,10 @@ def _validate_task(task: Any) -> Any:
     if not isinstance(task, str) or task in SUPPORTED_TASKS:
         return task
     supported = ", ".join(SUPPORTED_TASKS)
-    planned = ", ".join(PLANNED_TASKS)
+    planned = f" (planned: {', '.join(PLANNED_TASKS)})" if PLANNED_TASKS else ""
     if task in PLANNED_TASKS:
-        raise ValueError(
-            f"task '{task}' is not supported yet; supported: {supported} (planned: {planned})"
-        )
-    raise ValueError(f"unknown task '{task}'; supported: {supported} (planned: {planned})")
+        raise ValueError(f"task '{task}' is not supported yet; supported: {supported}{planned}")
+    raise ValueError(f"unknown task '{task}'; supported: {supported}{planned}")
 
 
 class MapcvConfig(BaseModel):
@@ -805,9 +853,9 @@ class MapcvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # What the dataset is for; decides the target each patch is annotated with.
-    task: Literal["segmentation", "detection", "instance", "classification", "change"] = (
-        "segmentation"
-    )
+    task: Literal[
+        "segmentation", "detection", "instance", "classification", "change", "regression"
+    ] = "segmentation"
     region: RegionConfig
     # One source, or a list of named sources sampled on the first one's grid.
     imagery: AnyImageryConfig
@@ -880,9 +928,10 @@ class MapcvConfig(BaseModel):
                 "writer.stack_sources puts several imagery sources in one file per patch; "
                 "write imagery as a list of two or more named sources"
             )
-        if self.task != "segmentation":
+        if self.task not in ("segmentation", "regression"):
             raise ValueError(
-                f"writer.stack_sources applies to segmentation datasets (task is '{self.task}')"
+                "writer.stack_sources applies to segmentation and regression datasets "
+                f"(task is '{self.task}')"
             )
         if self.writer.image_format not in ("npy", "tif"):
             raise ValueError(
@@ -953,6 +1002,11 @@ class MapcvConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_task_settings(self) -> "MapcvConfig":
+        if isinstance(self.labels, ContinuousLabelsConfig) and self.task != "regression":
+            raise ValueError(
+                "labels.type: continuous holds values to predict, a regression target; set "
+                f"task: regression (task is '{self.task}'), or use type: raster with classes"
+            )
         if self.detection is not None and self.task != "detection":
             raise ValueError(
                 f"the detection block only applies to task: detection (task is '{self.task}'); "
@@ -981,7 +1035,24 @@ class MapcvConfig(BaseModel):
             )
         if self.task == "change":
             self._check_change()
+        if self.task == "regression":
+            self._check_regression()
         return self
+
+    def _check_regression(self) -> None:
+        if not isinstance(self.labels, ContinuousLabelsConfig):
+            raise ValueError(
+                "task: regression needs labels.type: continuous, a raster of the values to "
+                "predict (labels: {type: continuous, path: canopy_height.tif})"
+            )
+        if "mask_format" not in self.writer.model_fields_set:
+            # Float targets do not fit a PNG: default to a georeferenced GeoTIFF.
+            self.writer.mask_format = "tif"
+        elif self.writer.mask_format == "png":
+            raise ValueError(
+                "regression targets are float32, which PNG cannot hold; set "
+                "writer.mask_format: tif or npy"
+            )
 
     def _check_change(self) -> None:
         if not self.multi_source or len(self.sources) != 2:
@@ -1022,6 +1093,8 @@ class MapcvConfig(BaseModel):
                 "task: change needs labels that mark what changed, or change.before and "
                 "change.after (two label sets whose difference is the change)"
             )
+        elif isinstance(self.labels, ContinuousLabelsConfig):  # pragma: no cover - refused first
+            raise ValueError("task: change needs vector labels or a classified label raster")
         else:
             ignore = self.labels.ignore_index
         if ignore is not None and options.change_value == ignore:
@@ -1035,7 +1108,7 @@ class MapcvConfig(BaseModel):
         labels = self.labels
         if labels is None:
             raise ValueError("task: detection needs labels: the boxes come from the label features")
-        if isinstance(labels, RasterLabelsConfig):
+        if not isinstance(labels, LabelsConfig):  # a raster (continuous ones fail earlier)
             raise ValueError(
                 "task: detection needs vector labels (one feature per object), not a label "
                 "raster; use task: segmentation for labels.type: raster, or polygonize the "
@@ -1079,7 +1152,7 @@ class MapcvConfig(BaseModel):
         labels = self.labels
         if labels is None:
             raise ValueError("task: instance needs labels: the masks come from the label features")
-        if isinstance(labels, RasterLabelsConfig):
+        if not isinstance(labels, LabelsConfig):  # a raster (continuous ones fail earlier)
             raise ValueError(
                 "task: instance needs vector labels (one feature per instance), not a label "
                 "raster; use task: segmentation for labels.type: raster, or polygonize the "

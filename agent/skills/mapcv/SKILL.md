@@ -130,6 +130,20 @@ writer: {staging_dir: dataset, image_format: png}
 
 Output: `A/` (before), `B/` (after) and `label/` (0 = no change, `change_value` = change, 255 = no imagery) with the same file names, plus `splits/`.
 
+### Regression (a float target per pixel from a raster of values)
+
+```yaml
+task: regression
+imagery: {type: geotiff, path: ortho.tif}
+labels:
+  type: continuous
+  path: canopy_height.tif        # any CRS/resolution; nearest value at each pixel centre
+  # scale: 0.01, offset: 0, valid_min: 0, nodata: -9999
+writer: {staging_dir: dataset, image_format: tif, mask_format: tif}   # targets: float32, NaN = no value
+```
+
+`Masks/` then hold float32 targets (`NaN` where there is no value); `summary.values` in the manifest has their count, min, max and mean per patch.
+
 ### Sentinel-2 L2A (EOPF Zarr)
 
 Needs `pip install "mapcv[zarr]"` and Python 3.10 to 3.13.

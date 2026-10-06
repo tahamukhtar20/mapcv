@@ -9,7 +9,7 @@
 │ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
 │                                        f|detection|instance|  example instead of     │
 │                                        classification|change  asking.                │
-│                                        >                                             │
+│                                        |regression>                                  │
 │ --interactive      --no-interactive                           Ask questions          │
 │                                                               (default: when run in  │
 │                                                               a terminal without     │
@@ -37,5 +37,7 @@
  mapcv init tiles.yaml --template classification   a label per patch (CSV)
 
  mapcv init pairs.yaml --template change   before/after pairs and change masks
+
+ mapcv init heights.yaml --template regression   float targets from a raster
 
 

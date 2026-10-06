@@ -103,6 +103,7 @@ def _entry(
     images_dir: str = IMAGES_DIR,
     masks_dir: str = MASKS_DIR,
     image_key: str = "image",
+    values: Optional[Dict[str, Any]] = None,
 ) -> ManifestEntry:
     files = {image_key: f"{images_dir}/{image_name}"}
     summary = PatchSummary(empty_ratio=empty_ratio)
@@ -112,6 +113,8 @@ def _entry(
         files.update(extra_files)
     if counts is not None:
         summary = PatchSummary(class_pixels=counts, empty_ratio=empty_ratio)
+    if values is not None:
+        summary = PatchSummary(values=values, empty_ratio=empty_ratio)
     return ManifestEntry(row=row, col=col, padded=padded, chunk=chunk, files=files, summary=summary)
 
 
@@ -127,6 +130,20 @@ def _class_counts(mask: npt.NDArray[Any]) -> Optional[Dict[str, int]]:
         return {str(int(value)): int(histogram[value]) for value in present}
     values, counts = np.unique(mask, return_counts=True)
     return {str(int(value)): int(count) for value, count in zip(values, counts)}
+
+
+def _value_stats(target: npt.NDArray[Any]) -> Dict[str, Any]:
+    """Statistics of a float target patch (regression): pixels with a value and their
+    minimum, maximum and mean (computed in float64)."""
+    values = target[np.isfinite(target)].astype(np.float64)
+    if not values.size:
+        return {"valid": 0}
+    return {
+        "valid": int(values.size),
+        "min": float(values.min()),
+        "max": float(values.max()),
+        "mean": float(values.mean()),
+    }
 
 
 def _empty_ratio(image: npt.NDArray[Any]) -> float:
@@ -153,10 +170,13 @@ def _check_masks(masks: Any, count: int, mask_format: str) -> None:
         raise ValueError(f"an NPY mask must be numeric, got {name}")
 
 
-def _mask_nodata(ignore_index: Optional[int], dtype: "np.dtype[Any]") -> Optional[float]:
-    """The ``GDAL_NODATA`` of a GeoTIFF mask: its ``ignore_index`` (pixels without imagery)."""
+def _mask_nodata(
+    ignore_index: Optional[int], dtype: "np.dtype[Any]", nan_marks_missing: bool = False
+) -> Optional[float]:
+    """The ``GDAL_NODATA`` of a GeoTIFF mask: its ``ignore_index`` (pixels without imagery),
+    or, with ``nan_marks_missing`` (regression targets), ``NaN`` for a float mask."""
     if ignore_index is None:
-        return None
+        return float("nan") if nan_marks_missing and dtype.kind == "f" else None
     if dtype.kind in "iu":
         info = np.iinfo(dtype)
         if not info.min <= ignore_index <= info.max:
@@ -247,7 +267,7 @@ def _write_python_masks(
             directory,
             meta,
             manifest,
-            _mask_nodata(manifest.ignore_index, masks.dtype),
+            _mask_nodata(manifest.ignore_index, masks.dtype, manifest.task == "regression"),
             None,
         )
     elif config.mask_format == "npy":
@@ -381,9 +401,12 @@ def write_patches(
             for item, image in zip(meta, image_patches)
         ]
 
+    stats: List[Optional[Dict[str, Any]]] = [None] * len(meta)
     if mask_patches is not None and not rust_masks:
         _write_python_masks(mask_patches, stems, masks_path, config, meta, manifest)
         counts = [_class_counts(mask) for mask in mask_patches]
+        if mask_patches.dtype.kind == "f":
+            stats = [_value_stats(mask) for mask in mask_patches]
 
     world: List[Dict[str, str]] = [{} for _ in meta]
     if config.world_files:
@@ -415,6 +438,7 @@ def write_patches(
                 images_dir,
                 masks_dir,
                 image_key,
+                stats[index],
             )
         )
 

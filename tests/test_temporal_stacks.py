@@ -207,7 +207,7 @@ BASE: Dict[str, Any] = {
                 "imagery": [{**XYZ, "name": "a"}, {**XYZ, "name": "b"}],
                 "writer": {"staging_dir": "o", "image_format": "tif"},
             },
-            "applies to segmentation datasets",
+            "applies to segmentation and regression datasets",
         ),
     ],
 )

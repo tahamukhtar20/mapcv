@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from mapcv.config import (
     DEFAULT_SENTINEL2_L2A_BANDS,
     EOPFZarrImageryConfig,
+    LabelsConfig,
     MapcvConfig,
     RegionConfig,
     XYZImageryConfig,
@@ -325,7 +326,7 @@ def test_ignore_index_defaults_to_255_and_can_be_disabled(tmp_path: Path) -> Non
     labels = "labels:\n  path: labels.geojson\n"
     assert MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels)).labels.ignore_index == 255  # type: ignore[union-attr]
     off = MapcvConfig.from_yaml(_write(tmp_path, _MINIMAL + labels + "  ignore_index: null\n"))
-    assert off.labels is not None and off.labels.ignore_index is None
+    assert isinstance(off.labels, LabelsConfig) and off.labels.ignore_index is None
 
 
 def test_classes_cannot_use_the_ignore_index(tmp_path: Path) -> None:
@@ -340,14 +341,11 @@ def test_task_defaults_to_segmentation(tmp_path: Path) -> None:
     assert explicit.task == "segmentation"
 
 
-@pytest.mark.parametrize("task", ["regression"])
-def test_planned_tasks_are_not_supported_yet(tmp_path: Path, task: str) -> None:
-    with pytest.raises(ValidationError) as caught:
-        MapcvConfig.from_yaml(_write(tmp_path, f"task: {task}\n" + _MINIMAL))
-    message = str(caught.value)
-    assert f"task '{task}' is not supported yet" in message
-    assert "supported: segmentation, detection, instance, classification, change" in message
-    assert "planned: regression" in message
+def test_every_planned_task_is_supported(tmp_path: Path) -> None:
+    from mapcv.config import PLANNED_TASKS, SUPPORTED_TASKS
+
+    assert PLANNED_TASKS == ()
+    assert "change" in SUPPORTED_TASKS and "regression" in SUPPORTED_TASKS
 
 
 @pytest.mark.parametrize("task", ["segmentaton", "Segmentation", 3])

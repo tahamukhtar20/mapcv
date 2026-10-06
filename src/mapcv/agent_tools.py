@@ -57,6 +57,8 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
+    RASTER_LABEL_TYPES,
+    ContinuousLabelsConfig,
     RasterLabelsConfig,
     XYZImageryConfig,
     _resolve_relative_paths,
@@ -314,7 +316,7 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
     """The local paths a config reads or writes, named by their config key."""
     found: List[Tuple[str, Path]] = []
     labels = config.labels
-    if isinstance(labels, RasterLabelsConfig):
+    if isinstance(labels, RASTER_LABEL_TYPES):
         local = eopf_local_path(labels.path)
         if local is not None:
             found.append(("labels.path", local))
@@ -530,6 +532,7 @@ _PROBE_LABELS: Dict[str, Optional[Dict[str, Any]]] = {
     "none": None,
     "vector": {"type": "vector", "path": "labels.geojson"},
     "raster": {"type": "raster", "path": "landcover.tif", "classes": {1: 1}},
+    "continuous": {"type": "continuous", "path": "canopy_height.tif"},
 }
 
 
@@ -626,6 +629,15 @@ def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str,
     if isinstance(labels, RasterLabelsConfig):
         where = _redact_url(labels.path) if "://" in labels.path else labels.path
         return {"type": "raster", "path": where, "band": labels.band, "classes": labels.class_map()}
+    if isinstance(labels, ContinuousLabelsConfig):
+        where = _redact_url(labels.path) if "://" in labels.path else labels.path
+        return {
+            "type": "continuous",
+            "path": where,
+            "band": labels.band,
+            "scale": labels.scale,
+            "offset": labels.offset,
+        }
     return {
         "type": "vector",
         "path": state.sandbox.rel(labels.path),
@@ -668,7 +680,7 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
     """The same missing-file warnings ``mapcv validate`` prints."""
     messages: List[str] = []
     labels = config.labels
-    if isinstance(labels, RasterLabelsConfig):
+    if isinstance(labels, RASTER_LABEL_TYPES):
         label_file = eopf_local_path(labels.path)
         if label_file is not None and not label_file.exists():
             messages.append(f"labels.path not found: {state.sandbox.rel(label_file)}")

@@ -2,6 +2,10 @@
 name = "mapcv_rs"
 version = "0.2.0"
 edition = "2021"
+description = "Rust core of mapcv: tile fetching and decoding, rasterization, GeoTIFF I/O and patch writing"
+license = "MIT"
+repository = "https://github.com/tahamukhtar20/mapcv"
+publish = false
 
 [lib]
 name = "_mapcv_rs"

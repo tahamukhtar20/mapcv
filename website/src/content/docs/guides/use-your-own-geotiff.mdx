@@ -133,9 +133,23 @@ Rules for remote files:
 Check the licence and attribution requirements of imagery you did not make yourself before you share a dataset built from it.
 </Aside>
 
+## Several co-registered files
+
+Files that cover the same place on the same pixel grid (two dates, optical and a DEM, a stack of indices) can be sampled together: list them under `imagery`, each with a `name`. Every patch then has one file per source, `Images/<name>/patch_*.tif`, all at the same position and with one shared mask.
+
+```yaml
+imagery:
+  - {type: geotiff, name: before, path: city_2023.tif}
+  - {type: geotiff, name: after, path: city_2025.tif}
+  - {type: geotiff, name: dem, path: dem_2m.tif, bands: [1]}
+writer: {staging_dir: ./dataset, image_format: tif}
+```
+
+The first file's grid is the dataset's grid. The others must be in the same CRS with pixels that are the same size or a whole number of them across (the 2 m DEM above, under 1 m imagery), sharing pixel corners with the first; coarser pixels are repeated, never interpolated. A pixel has imagery only where every file has it. See [Several imagery sources](/mapcv/reference/configuration/#several-imagery-sources) for the rules.
+
 ## Limits
 
-- One file per run. Mosaics of several files are not supported; merge them first, for example into a virtual or real COG.
+- Several files are sampled together only on one grid (above). Mosaics of tiles that each cover part of the region are not supported; merge them first, for example into a virtual or real COG.
 - The file's CRS must be an EPSG code (UTM, Web Mercator, WGS-84 and national grids all are); files with a custom CRS or no CRS are reported with the reason, and need re-tagging first.
 - Supported compression: none, Deflate, LZW, PackBits, ZSTD, JPEG and WebP. A file that uses another one (LERC, JPEG 2000, ...) fails when opened, naming it; convert it with `gdal_translate -co COMPRESS=DEFLATE`.
 - External `.ovr` overviews, internal mask bands and GCP-only georeferencing are not read.

@@ -98,6 +98,156 @@ def offset_transform(transform: Transform, row: int, col: int) -> Transform:
     return (a, b, c + col * a + row * b, d, e, f + col * d + row * e)
 
 
+# Tolerances of grid alignment: relative, for pixel sizes; in pixels, for grid origins.
+_SCALE_TOLERANCE = 1e-9
+_ORIGIN_TOLERANCE_PX = 1e-6
+
+
+@dataclass(frozen=True)
+class GridAlignment:
+    """Where another source's pixels sit on a reference source's pixel grid.
+
+    The other source's pixel ``(0, 0)`` starts at reference pixel
+    ``(row_offset, col_offset)`` and each of its pixels covers ``factor`` x ``factor``
+    reference pixels: reference pixel ``(r, c)`` lies in its pixel
+    ``((r - row_offset) // factor, (c - col_offset) // factor)``.
+    """
+
+    factor: int
+    row_offset: int
+    col_offset: int
+
+    @property
+    def identity(self) -> bool:
+        """Whether both grids are the same (same pixel size and origin)."""
+        return self.factor == 1 and self.row_offset == 0 and self.col_offset == 0
+
+
+def _same_crs(first: str, second: str) -> bool:
+    if first == second:
+        return True
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    try:
+        return bool(CRS.from_user_input(first).equals(CRS.from_user_input(second)))
+    except CRSError:
+        return False
+
+
+def grid_alignment(reference: RasterMetadata, other: RasterMetadata, name: str) -> GridAlignment:
+    """How source ``name`` (``other``) lines up with the ``reference`` source's grid.
+
+    Both must share a CRS, and ``other``'s pixels must be the reference pixels or a
+    whole number of them across, on a grid whose origin falls on a reference pixel
+    corner. Then every reference pixel lies in exactly one pixel of ``other``, and
+    reading ``other`` on the reference grid (nearest neighbour) is exact.
+
+    Raises:
+        ValueError: The grids do not line up that way; the message says how.
+    """
+    if not _same_crs(reference.crs, other.crs):
+        raise ValueError(
+            f"imagery '{name}' is in {other.crs}, but the first source is in {reference.crs}; "
+            "every source must be in the first source's CRS (mapcv does not reproject imagery)"
+        )
+    a, b, c, d, e, f = reference.transform
+    oa, ob, oc, od, oe, of = other.transform
+    size = math.hypot(a, d)
+    ratio = math.hypot(oa, od) / size
+    factor = round(ratio)
+    linear = (a, b, d, e)
+    scaled = (oa, ob, od, oe)
+    tolerance = _SCALE_TOLERANCE * factor * max(abs(value) for value in linear)
+    if factor < 1 or any(abs(o - factor * r) > tolerance for o, r in zip(scaled, linear)):
+        if ratio < 1 - _SCALE_TOLERANCE:
+            hint = (
+                "; list the source with the finest pixels first (the first source's grid is "
+                "the dataset's grid, and coarser sources are repeated onto it)"
+            )
+        else:
+            hint = " or a whole number of them, on axes parallel to the first source's"
+        raise ValueError(
+            f"imagery '{name}' has pixels of {math.hypot(oa, od):g} x {math.hypot(ob, oe):g} "
+            f"CRS units, which are not the first source's ({size:g} x {math.hypot(b, e):g}){hint}"
+        )
+    det = a * e - b * d
+    dx, dy = oc - c, of - f
+    col = (e * dx - b * dy) / det
+    row = (a * dy - d * dx) / det
+    col_offset, row_offset = round(col), round(row)
+    if abs(col - col_offset) > _ORIGIN_TOLERANCE_PX or abs(row - row_offset) > _ORIGIN_TOLERANCE_PX:
+        # Adding 0.0 turns a negative zero into a plain one for the message.
+        raise ValueError(
+            f"imagery '{name}' is on a grid shifted by ({row - math.floor(row) + 0.0:.4f}, "
+            f"{col - math.floor(col) + 0.0:.4f}) pixels from the first source's grid; sources must "
+            "share pixel corners (resample one onto the other's grid first)"
+        )
+    return GridAlignment(factor, row_offset, col_offset)
+
+
+class AlignedSource:
+    """A source read on a reference source's pixel grid (see :class:`GridAlignment`).
+
+    A coarser source's pixels are repeated (nearest neighbour, exact: every reference
+    pixel lies inside one of them). Reference pixels outside the source's raster read as
+    zero and invalid.
+    """
+
+    def __init__(self, source: WindowedRasterSource, alignment: GridAlignment) -> None:
+        self.source = source
+        self.alignment = alignment
+        self.metadata = source.metadata
+        self._empty: Optional[Tuple[Tuple[int, ...], "np.dtype[Any]"]] = None
+
+    def read_window(
+        self, row_start: int, row_stop: int, col_start: int, col_stop: int
+    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+        """Read reference pixels ``[row_start, row_stop) x [col_start, col_stop)``."""
+        meta = self.metadata
+        k, row_offset, col_offset = (
+            self.alignment.factor,
+            self.alignment.row_offset,
+            self.alignment.col_offset,
+        )
+        if self.alignment.identity and row_stop <= meta.height and col_stop <= meta.width:
+            return self.source.read_window(row_start, row_stop, col_start, col_stop)
+        rows = (np.arange(row_start, row_stop) - row_offset) // k
+        cols = (np.arange(col_start, col_stop) - col_offset) // k
+        row_in = (rows >= 0) & (rows < meta.height)
+        col_in = (cols >= 0) & (cols < meta.width)
+        height, width = len(rows), len(cols)
+        if not row_in.any() or not col_in.any():
+            channels, dtype = self._empty_like()
+            return (
+                np.zeros((height, width, *channels), dtype=dtype),
+                np.zeros((height, width), dtype=np.bool_),
+            )
+        # Rows and columns ascend, so the first and last inside ones bound the read.
+        first_row, last_row = int(rows[row_in][0]), int(rows[row_in][-1])
+        first_col, last_col = int(cols[col_in][0]), int(cols[col_in][-1])
+        data, valid = self.source.read_window(first_row, last_row + 1, first_col, last_col + 1)
+        row_index = np.clip(rows - first_row, 0, last_row - first_row)
+        col_index = np.clip(cols - first_col, 0, last_col - first_col)
+        image = data[row_index][:, col_index]
+        inside = row_in[:, np.newaxis] & col_in[np.newaxis, :]
+        mask = valid[row_index][:, col_index] & inside
+        if not inside.all():
+            image[~inside] = 0
+        return image, mask
+
+    def _empty_like(self) -> Tuple[Tuple[int, ...], "np.dtype[Any]"]:
+        """Trailing shape and dtype of this source's windows (read once, from one pixel)."""
+        if self._empty is None:
+            sample, _ = self.source.read_window(0, 1, 0, 1)
+            self._empty = (tuple(sample.shape[2:]), sample.dtype)
+        return self._empty
+
+    def close(self) -> None:
+        """Close the underlying source."""
+        self.source.close()
+
+
 @lru_cache(maxsize=8)
 def _wgs84_transformer(destination_crs: str) -> Any:
     from pyproj import Transformer

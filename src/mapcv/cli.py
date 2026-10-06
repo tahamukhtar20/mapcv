@@ -33,6 +33,7 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
+    UNION_TAGS,
     RasterLabelsConfig,
     eopf_local_path,
 )
@@ -44,7 +45,7 @@ from mapcv.labels import (
     vector_attributes,
     vector_layers,
 )
-from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
+from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
 from mapcv.planning import plan as make_plan
@@ -133,7 +134,7 @@ def _format_validation_error(exc: ValidationError) -> List[str]:
         location = ".".join(
             str(part)
             for part in error["loc"]
-            if not str(part).startswith("function-") and part not in ("xyz", "eopf_zarr", "geotiff")
+            if not str(part).startswith("function-") and part not in UNION_TAGS
         )
         message = str(error["msg"]).removeprefix("Value error, ")
         lines.append(f"  • [bold]{location or 'config'}[/bold]: {message}")
@@ -185,7 +186,15 @@ def _redact_url(url: str) -> str:
 
 
 def _imagery_label(config: MapcvConfig) -> str:
-    imagery = config.imagery
+    if config.multi_source:
+        return "; ".join(
+            f"{name}: {_source_label(imagery)}"
+            for name, imagery in zip(config.source_names, config.sources)
+        )
+    return _source_label(config.primary_imagery)
+
+
+def _source_label(imagery: Any) -> str:
     if isinstance(imagery, EOPFZarrImageryConfig):
         return (
             f"Sentinel-2 EOPF {_redact_url(imagery.path)} · {imagery.resolution} m · "
@@ -345,13 +354,32 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
     )
     for message in estimate.warnings:
         _console.print(f"[yellow]⚠[/yellow]  {message}")
-    if isinstance(config.imagery, GeoTiffImageryConfig):
+    if config.multi_source:
+        _console.print(
+            "[dim]Several sources: each is read on the first source's grid (coarser ones are "
+            "repeated, never interpolated). Check each provider's terms for XYZ imagery "
+            f"({_PROVIDERS_URL}).[/dim]"
+        )
+    elif isinstance(config.imagery, GeoTiffImageryConfig):
         _console.print("[dim]Your own imagery: mapcv reads it as it is, without resampling.[/dim]")
     elif not isinstance(config.imagery, EOPFZarrImageryConfig):
         _console.print(
             "[dim]Imagery terms are your responsibility: check the provider's license, "
             f"attribution and rate limits ({_PROVIDERS_URL}).[/dim]"
         )
+
+
+def _source_line(record: SourceRecord) -> str:
+    """One source of a multi-source dataset: type, product, patch shape and its grid."""
+    shape = "×".join(str(dim) for dim in record.patch_shape) or "?"
+    line = (
+        f"{record.source_type} · {record.product_id or 'unknown product'} · "
+        f"{shape} {record.dtype or ''}".strip()
+    )
+    factor = (record.model_extra or {}).get("factor")
+    if factor:
+        line += f" · {factor}× coarser, repeated onto the grid"
+    return line
 
 
 def _raster_labels(manifest: Manifest) -> bool:
@@ -471,10 +499,14 @@ def _print_result(result: GenerateResult) -> None:
     if result.new_patches != total:
         patches += f" [dim]({result.new_patches:,} new this run)[/dim]"
     table.add_row("Patches", patches)
-    source = manifest.source
-    table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
-    shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
-    table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
+    if len(manifest.sources) > 1:
+        for record in manifest.sources:
+            table.add_row(f"Source {record.name}", _source_line(record))
+    else:
+        source = manifest.source
+        table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
+        shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
+        table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
     if result.tiles_requested:
         table.add_row(
             "Tiles", f"{result.tiles_requested:,} fetched · {result.tiles_failed:,} failed"
@@ -1576,11 +1608,19 @@ def info(
     task = manifest.task if target is not None else f"{manifest.task} · image only (no labels)"
     table.add_row("Task", task)
     source = manifest.source
-    table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
-    if source.bands:
-        table.add_row("Bands", ", ".join(source.bands))
-    shape = "×".join(str(dim) for dim in source.patch_shape) or "?"
-    table.add_row("Patches", f"{len(manifest.patches):,} · {shape} {source.dtype or ''}".strip())
+    if len(manifest.sources) > 1:
+        for record in manifest.sources:
+            bands = f" · bands {', '.join(record.bands)}" if record.bands else ""
+            table.add_row(f"Source {record.name}", _source_line(record) + bands)
+        table.add_row("Patches", f"{len(manifest.patches):,} per source")
+    else:
+        table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
+        if source.bands:
+            table.add_row("Bands", ", ".join(source.bands))
+        shape = "×".join(str(dim) for dim in source.patch_shape) or "?"
+        table.add_row(
+            "Patches", f"{len(manifest.patches):,} · {shape} {source.dtype or ''}".strip()
+        )
     if source.crs:
         table.add_row("CRS", source.crs)
     if target is not None and target.ignore_index is not None:
@@ -1693,10 +1733,12 @@ def validate(
             _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")
     elif labels is not None and not labels.path.exists():
         _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {labels.path}")
-    if isinstance(config.imagery, GeoTiffImageryConfig):
-        local = eopf_local_path(config.imagery.path)
-        if local is not None and not local.exists():
-            _console.print(f"[yellow]Warning:[/yellow] imagery.path not found: {local}")
+    for name, imagery in zip(config.source_names, config.sources):
+        if isinstance(imagery, GeoTiffImageryConfig):
+            local = eopf_local_path(imagery.path)
+            if local is not None and not local.exists():
+                where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
+                _console.print(f"[yellow]Warning:[/yellow] {where} not found: {local}")
 
 
 @app.command(

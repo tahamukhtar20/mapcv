@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
+import yaml
 from PIL import Image
 
 ZOOM = 18
@@ -314,6 +315,52 @@ def main() -> None:
     )
     out = run(["generate", "scenes.yaml", "--yes"], root)
     check("Nothing left to do" in out, "a finished classification run did not resume", out)
+
+    # Two sources on one grid: the same area at zoom 18 and at zoom 17 (2x coarser pixels).
+    two_data = yaml.safe_load(text)
+    xyz = {key: value for key, value in two_data["imagery"].items() if key != "zoom"}
+    two_data["imagery"] = [
+        {**xyz, "name": "z18", "zoom": ZOOM},
+        {**xyz, "name": "z17", "zoom": ZOOM - 1},
+    ]
+    two_data["writer"]["staging_dir"] = "./two"
+    # Patches that do not line up with the tiles, so they cross zoom-17 tile edges.
+    two_data["sampler"]["patch_size"] = 192
+    two_data["sampler"].pop("stride", None)
+    (root / "two.yaml").write_text(yaml.safe_dump(two_data, sort_keys=False), encoding="utf-8")
+    out = run(["generate", "two.yaml", "--yes"], root)
+    two = root / "two"
+    manifest = json.loads((two / "manifest.json").read_text(encoding="utf-8"))
+    check([s["name"] for s in manifest["sources"]] == ["z18", "z17"], "two sources", out)
+    check(manifest["sources"][1].get("factor") == 2, "z17 is not 2x coarser", out)
+    patches = manifest["patches"]
+    check(len(patches) > NX * NY, f"{len(patches)} two-source patches", out)
+    for name in ("z18", "z17"):
+        names = sorted(f"Images/{name}/{p.name}" for p in (two / "Images" / name).iterdir())
+        check(names == sorted(p["files"][name] for p in patches), f"Images/{name} != manifest", out)
+    # Every tile is one colour (see Tiles), so each pixel of a z17 patch must show the
+    # colour of the zoom-17 tile containing it: z18 pixel p lies in z17 pixel p // 2.
+    a, _, c, _, _, f = manifest["sources"][0]["transform"]
+    half_world = 20037508.342789244
+    col0, row0 = round((c + half_world) / a), round((half_world - f) / a)
+    size = manifest["sampler"]["patch_size"]
+    edges = 0
+    for entry in patches:
+        pixels = np.asarray(Image.open(two / entry["files"]["z17"]).convert("RGB"))
+        cols = (col0 + entry["col"] + np.arange(size)) // 2 // 256
+        rows = (row0 + entry["row"] + np.arange(size)) // 2 // 256
+        want = np.zeros((size, size, 3), dtype=np.uint8)
+        want[..., 0] = ((cols * 37) % 256)[np.newaxis, :]
+        want[..., 1] = ((rows * 53) % 256)[:, np.newaxis]
+        want[..., 2] = (ZOOM - 1) * 9
+        # Beyond the raster (NY x NX tiles of 256 px) the patch is padded with zeros.
+        want[NY * 256 - entry["row"] :, :] = 0
+        want[:, NX * 256 - entry["col"] :] = 0
+        check(np.array_equal(pixels, want), f"z17 pixels at {entry['row']},{entry['col']}", out)
+        edges += int(len(set(cols)) > 1) + int(len(set(rows)) > 1)
+    check(edges > 0, "no z17 patch crosses a zoom-17 tile edge: the check proves nothing", out)
+    out = run(["info", "two"], root)
+    check("Source z17" in out and "coarser" in out, "info does not list both sources", out)
 
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)

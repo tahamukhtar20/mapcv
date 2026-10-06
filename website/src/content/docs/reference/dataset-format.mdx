@@ -35,6 +35,8 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
 
 **Naming.** Patches are numbered `patch_0000000` … in the order they were written (seven digits, zero-padded). The image and its mask share the stem; the extension follows `writer.image_format` and `writer.mask_format`, so they can differ: `Images/patch_0000042.npy` ↔ `Masks/patch_0000042.png`. Read the paths from each manifest entry's `files` rather than building them.
 
+**Several imagery sources.** With [`imagery` as a list](/mapcv/reference/configuration/#several-imagery-sources), each source's patches go to `Images/<name>/` under the same stem (`Images/before/patch_0000042.tif`, `Images/after/patch_0000042.tif`), every one on the first source's pixel grid, and the masks stay in `Masks/`. Each source keeps its own band count and data type.
+
 | | `png` / `jpg` (XYZ) | `npy` (Sentinel-2) | `tif` (either source) |
 | --- | --- | --- | --- |
 | Image | RGB, `uint8`, shape `(H, W, 3)` when decoded | NumPy array, `float32`, shape `(bands, H, W)` (bands-first) | GeoTIFF with one band per channel, the source's data type (`uint8` for XYZ, `float32` for Sentinel-2); reads as `(bands, H, W)` |
@@ -77,7 +79,7 @@ with rasterio.open("dataset/Masks/patch_0000000.tif") as src:
 
 ### World files
 
-With `writer.world_files: true`, every PNG gets a `.pgw` and every JPG a `.jgw` file with the same stem, in `Images/` and `Masks/`. A world file has six lines (x pixel size, y rotation, x rotation, y pixel size, then the x and y of the **centre** of the top-left pixel) and no CRS. GDAL and QGIS find it next to the image and place it; set the CRS from `sources[0].crs` in the manifest. The files are listed in each entry's `files` as `image_world` and `mask_world`. They are not written for `npy` or `tif`.
+With `writer.world_files: true`, every PNG gets a `.pgw` and every JPG a `.jgw` file with the same stem, in `Images/` and `Masks/`. A world file has six lines (x pixel size, y rotation, x rotation, y pixel size, then the x and y of the **centre** of the top-left pixel) and no CRS. GDAL and QGIS find it next to the image and place it; set the CRS from `sources[0].crs` in the manifest. The files are listed in each entry's `files` as `image_world` (`<name>_world` for each of several sources) and `mask_world`. They are not written for `npy` or `tif`.
 
 ### `patches.geojson`
 
@@ -151,7 +153,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
 | `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"`, `"instance"` or `"classification"` |
-| `sources` | list | The imagery, one object per source (today always one, named `"image"`). See [Sources](#sources) |
+| `sources` | list | The imagery, one object per source: one named `"image"`, or the [configured sources](/mapcv/reference/configuration/#several-imagery-sources) in order. See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
 | `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`), plus `world_files: true` when world files are written. A resume notices a format change |
 | `sampler` | object | The resolved `sampler` config (with `stride` filled in). Used for resume checks, spatial splits and patch bounds |
@@ -161,7 +163,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `name` | string | The source's name, and the key of its patch in each entry's `files`: `"image"` |
+| `name` | string | The source's name, and the key of its patch in each entry's `files`: `"image"` for one `imagery` block, else the configured `name` |
 | `source_type` | string | `"xyz"`, `"eopf_zarr"` or `"geotiff"` |
 | `product_id` | string \| null | XYZ: the built-in source name, or `custom-xyz:<hostname>` for a `url_template` (the template itself is never stored). Sentinel-2: the product's file name. GeoTIFF: the file name (from a URL, its last path segment) |
 | `bands` | list of strings | Channel names in storage order: `red, green, blue` or the configured Sentinel-2 bands |
@@ -169,6 +171,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `crs` | string | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2 |
 | `transform` | 6 floats | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
 | `patch_shape` | list of int | Shape of one stored image patch: `[H, W, 3]` for PNG/JPG, `[bands, H, W]` for NPY and TIF |
+| `factor`, `offset` | int, `[row, col]` | Only for a further source whose own grid differs from the first source's: each of its pixels is `factor` × `factor` first-source pixels (repeated onto the grid), and its pixel `(0, 0)` starts at first-source pixel `offset`. `transform` stays the source's own. Every patch, whichever source, is georeferenced by the **first** source's `transform` |
 | `fingerprint` | object | GeoTIFF only (absent for other sources): identifies the input file so a resumed run refuses a different one, plus the read settings. For a local file: `size` and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path and modification time are not recorded, so a copied or moved file still resumes). For a URL: the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB. Both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file |
 
 ### Target
@@ -189,7 +192,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `row`, `col` | int | Top-left pixel of the patch in the **whole raster**. Can point past the edge for `edge_strategy: pad` |
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `chunk` | int | Index of the processing chunk that wrote the patch (used to resume) |
-| `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: `image` (the source's name) and, with labels, `mask` (instance datasets: only with `instance.id_mask`); with `world_files`, `image_world` and `mask_world` |
+| `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: each source's name (`image` for one `imagery` block) and, with labels, `mask` (instance datasets: only with `instance.id_mask`); with `world_files`, `image_world` (`<name>_world` per source) and `mask_world` |
 | `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects). Classification datasets have `class_coverage`, each class's share of the patch's valid pixels (class IDs as strings, ascending; classes without pixels are left out: `{"1": 0.375, "3": 0.0625}`), and `labels`, the class IDs the patch was given, ascending (`[1]`; `[0]` is the `background` label) |
 
 Readers should ignore keys they do not know: later 0.3 releases may add keys (new tasks add `files` roles and `summary` keys) without changing `version`. Renaming or removing a key changes `version`.

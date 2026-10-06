@@ -70,9 +70,11 @@ class ManifestEntry(TypedDict):
     """One patch (a plain ``dict`` at runtime).
 
     ``files`` maps a role to a path relative to the dataset folder, with ``/``
-    separators: ``image`` (the source's name) and, for segmentation and for instance
-    datasets with ``instance.id_mask``, ``mask``. Classification datasets have no
-    masks: their labels are in the summary and in ``labels.csv``.
+    separators: each imagery source's name (``image`` for a single ``imagery`` block;
+    a multi-source dataset has one key per source, in ``Images/<name>/``) and, for
+    segmentation and for instance datasets with ``instance.id_mask``, ``mask``.
+    Classification datasets have no masks: their labels are in the summary and in
+    ``labels.csv``.
     """
 
     row: int
@@ -86,7 +88,11 @@ class ManifestEntry(TypedDict):
 class SourceRecord(BaseModel):
     """One imagery source: its raster grid and how its patches are stored.
 
-    ``name`` is also the key of the source's patch in each entry's ``files``.
+    ``name`` is also the key of the source's patch in each entry's ``files``. Every
+    patch is on the first source's grid. A further source whose own grid differs
+    from it records ``factor`` (its pixels are that many first-source pixels across,
+    repeated onto the grid) and ``offset`` (``[row, col]``: where its pixel ``(0, 0)``
+    starts on the first source's grid); ``transform`` stays its own grid's.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -156,7 +162,7 @@ class Manifest(BaseModel):
 
     @property
     def source(self) -> SourceRecord:
-        """The first (today: the only) imagery source."""
+        """The first imagery source: its grid is every patch's grid."""
         if not self.sources:
             return SourceRecord()
         return self.sources[0]

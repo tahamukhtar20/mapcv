@@ -20,6 +20,7 @@ from mapcv.manifest import (
     ManifestEntry,
     ManifestMismatchError,
     PatchSummary,
+    SourceRecord,
     Transform,
     load_or_create_manifest,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "WriterConfig",
     "load_or_create_manifest",
     "write_patches",
+    "write_source_images",
 ]
 
 # Sample types the GeoTIFF writer stores; NPY takes any numeric type, PNG only the first two.
@@ -98,8 +100,9 @@ def _entry(
     extra_files: Optional[Dict[str, str]] = None,
     images_dir: str = IMAGES_DIR,
     masks_dir: str = MASKS_DIR,
+    image_key: str = "image",
 ) -> ManifestEntry:
-    files = {"image": f"{images_dir}/{image_name}"}
+    files = {image_key: f"{images_dir}/{image_name}"}
     summary = PatchSummary(empty_ratio=empty_ratio)
     if mask_name is not None:
         files["mask"] = f"{masks_dir}/{mask_name}"
@@ -159,14 +162,14 @@ def _mask_nodata(ignore_index: Optional[int], dtype: "np.dtype[Any]") -> Optiona
     return float(ignore_index)
 
 
-def _image_nodata(dtype: "np.dtype[Any]", manifest: Manifest) -> Optional[float]:
-    """The ``GDAL_NODATA`` of a GeoTIFF image.
+def _image_nodata(dtype: "np.dtype[Any]", source: SourceRecord) -> Optional[float]:
+    """The ``GDAL_NODATA`` of a GeoTIFF image of ``source``.
 
     A GeoTIFF source's own no-data value (``fingerprint.nodata``) when it has one the
     output type can hold. Otherwise NaN for floats (what no-data pixels hold) and none for
     integers: 0 is also a legitimate value there, and a no-data value applies per band.
     """
-    fingerprint = manifest.source.fingerprint or {}
+    fingerprint = source.fingerprint or {}
     declared = fingerprint.get("nodata")
     if declared is not None:
         value = float("nan") if declared == "nan" else float(declared)
@@ -271,12 +274,16 @@ def write_patches(
     *,
     images_dir: str = IMAGES_DIR,
     masks_dir: str = MASKS_DIR,
+    image_key: str = "image",
+    source: Optional[SourceRecord] = None,
 ) -> None:
     """Write patches to ``Images/`` and ``Masks/`` and append their entries to ``manifest``.
 
     ``images_dir`` names the image folder (detection datasets use ``images``, the
     folder name Ultralytics expects next to ``labels``) and ``masks_dir`` the mask folder
-    (instance datasets use ``masks``, next to ``images``).
+    (instance datasets use ``masks``, next to ``images``). ``image_key`` is the key of
+    the image in each entry's ``files`` (the source's name) and ``source`` the imagery
+    source the images come from (default: the manifest's first).
 
     Images: PNG/JPG (uint8 RGB) are encoded by the Rust writer; NPY keeps any
     channel count and dtype, stored bands-first; TIF is a GeoTIFF (also any
@@ -355,8 +362,8 @@ def write_patches(
                 images_path,
                 meta,
                 manifest,
-                _image_nodata(image_patches.dtype, manifest),
-                manifest.source.bands or None,
+                _image_nodata(image_patches.dtype, source or manifest.source),
+                (source or manifest.source).bands or None,
             )
         empty_ratios = [
             item["empty_ratio"] if "empty_ratio" in item else _empty_ratio(image)
@@ -374,7 +381,7 @@ def write_patches(
                 images_path, stems, "pgw" if image_suffix == "png" else "jgw", meta, manifest
             )
             for entry_files, stem in zip(world, stems):
-                entry_files["image_world"] = (
+                entry_files[f"{image_key}_world"] = (
                     f"{images_dir}/{stem}.{'pgw' if image_suffix == 'png' else 'jgw'}"
                 )
         if mask_patches is not None and mask_suffix == "png":
@@ -396,5 +403,74 @@ def write_patches(
                 world[index],
                 images_dir,
                 masks_dir,
+                image_key,
             )
         )
+
+
+def write_source_images(
+    image_patches: npt.NDArray[Any],
+    meta: List[PatchMeta],
+    config: WriterConfig,
+    manifest: Manifest,
+    start: int,
+    chunk_index: int,
+    *,
+    source: SourceRecord,
+    images_dir: str,
+) -> List[Dict[str, str]]:
+    """Write a further imagery source's patches, numbered like the first source's.
+
+    ``image_patches`` are the source's patches at the positions in ``meta`` (read on
+    the first source's grid), written to ``images_dir`` as ``writer.image_format``
+    files named from ``start``, as :func:`write_patches` names the first source's.
+    Returns each patch's ``files`` entries for this source: the image under the
+    source's name and, with ``writer.world_files`` and PNG/JPG, its world file.
+    """
+    if len(meta) == 0:
+        return []
+    images_path = config.staging_dir / images_dir
+    images_path.mkdir(parents=True, exist_ok=True)
+    stems = [f"patch_{start + index:07d}" for index in range(len(meta))]
+    suffix = config.image_format
+    if suffix in ("png", "jpg"):
+        if (
+            image_patches.dtype != np.uint8
+            or image_patches.ndim != 4
+            or image_patches.shape[-1] != 3
+        ):
+            raise ValueError(
+                f"PNG/JPG output requires uint8 image patches shaped (N, H, W, 3); imagery "
+                f"'{source.name}' gives {image_patches.dtype.name} {image_patches.shape[1:]}"
+            )
+        write_patches_rs(
+            np.ascontiguousarray(image_patches),
+            None,
+            [(item["row"], item["col"], item["padded"]) for item in meta],
+            start,
+            chunk_index,
+            str(images_path),
+            str(images_path),
+            suffix,
+            config.jpg_quality,
+            config.jpg_subsampling,
+        )
+    elif suffix == "npy":
+        _write_npy_images(image_patches, stems, images_path)
+    else:
+        _write_geotiffs(
+            image_patches,
+            [f"{stem}.tif" for stem in stems],
+            images_path,
+            meta,
+            manifest,
+            _image_nodata(image_patches.dtype, source),
+            source.bands or None,
+        )
+    files = [{source.name: f"{images_dir}/{stem}.{suffix}"} for stem in stems]
+    if config.world_files and suffix in ("png", "jpg"):
+        world = "pgw" if suffix == "png" else "jgw"
+        _write_world_files(images_path, stems, world, meta, manifest)
+        for entry_files, stem in zip(files, stems):
+            entry_files[f"{source.name}_world"] = f"{images_dir}/{stem}.{world}"
+    return files

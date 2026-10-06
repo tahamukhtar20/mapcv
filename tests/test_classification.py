@@ -1349,7 +1349,7 @@ def _source_size(config: MapcvConfig) -> Tuple[int, int]:
     """Height and width of the raster mapcv reads (the region's window of the file)."""
     from mapcv.imagery import open_raster_source
 
-    source = open_raster_source(config.region, config.imagery)
+    source = open_raster_source(config.region, config.primary_imagery)
     try:
         return source.metadata.height, source.metadata.width
     finally:

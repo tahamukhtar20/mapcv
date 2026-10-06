@@ -1594,3 +1594,46 @@ def validate(
         local = eopf_local_path(config.imagery.path)
         if local is not None and not local.exists():
             _console.print(f"[yellow]Warning:[/yellow] imagery.path not found: {local}")
+
+
+@app.command(
+    "mcp",
+    rich_help_panel="3. Utilities",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv mcp[/cyan]                         read-only, in this folder\n\n"
+        "  [cyan]mapcv mcp --root ~/work --allow-write[/cyan]   may write datasets under ~/work"
+    ),
+)
+def mcp_server(
+    root: Path = typer.Option(
+        Path("."),
+        "--root",
+        help="The only folder the server may read or write (default: the current folder).",
+    ),
+    allow_write: bool = typer.Option(
+        False,
+        "--allow-write",
+        envvar="MAPCV_MCP_ALLOW_WRITE",
+        help="Also offer the tools that write: write_config, generate and split.",
+    ),
+) -> None:
+    """Run an MCP server over stdio so AI agents can build datasets with mapcv.
+
+    Needs [bold]pip install "mapcv\\[mcp]"[/bold]. Without [bold]--allow-write[/bold] the
+    server can only read, validate and plan.
+    """
+    try:
+        from mapcv.mcp_server import serve
+    except ImportError as exc:
+        err = Console(stderr=True)
+        err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
+        err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
+        if (exc.name or "").split(".")[0] == "mcp" and "mcpserver" in str(exc):
+            err.print("[dim]An older mcp release is installed: mapcv needs mcp 2.x.[/dim]")
+        raise typer.Exit(code=1)
+    try:
+        serve(root, allow_write)
+    except ValueError as exc:
+        _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)

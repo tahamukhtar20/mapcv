@@ -26,5 +26,6 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ 3. Utilities ───────────────────────────────────────────────────────────────────────╮
 │ validate  Check a config without reading labels or imagery (use plan for estimates). │
+│ mcp       Run an MCP server over stdio so AI agents can build datasets with mapcv.   │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 

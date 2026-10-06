@@ -45,6 +45,7 @@ The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML
 | --- | --- | --- | --- |
 | `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
 | `parquet` | `pip install "mapcv[parquet]"` | GeoParquet label files (`.parquet`, `.geoparquet`): pyarrow | 3.10 – 3.14 |
+| `mcp` | `pip install "mapcv[mcp]"` | The MCP server for AI agents (`mapcv mcp`): the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) and its dependencies. See [Use mapcv with AI agents](/mapcv/guides/use-with-ai-agents/) | 3.10 – 3.14 |
 
 <Aside type="caution" title="Sentinel-2 and Python 3.14">
 The `zarr` extra depends on zarr 2, whose `numcodecs` dependency has no Python 3.14 wheels. On Python 3.14, `pip install "mapcv[zarr]"` succeeds but installs **none** of the extra packages; a Sentinel-2 run then stops with a message explaining that Sentinel-2 support needs Python 3.10–3.13. Use a Python 3.13 environment for Sentinel-2.

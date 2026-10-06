@@ -50,6 +50,8 @@ env PATH=$PWD/.venv/bin:$PATH UV_NO_SYNC=1 PYO3_PYTHON=$PWD/.venv/bin/python git
 |---|---|
 | CLI (`init`, `validate`, `plan`, `generate`, `info`, `split`) | `src/mapcv/cli.py` |
 | Config (pydantic, `extra="forbid"`) | `src/mapcv/config.py` |
+| MCP server for AI agents (`mapcv mcp`): tools, then protocol wiring | `src/mapcv/agent_tools.py`, `src/mapcv/mcp_server.py` |
+| Agent skill and Claude Code plugin (repo only) | `agent/`, `.claude-plugin/` |
 | Imagery sources (`WindowedRasterSource`) | `src/mapcv/imagery.py`, `src/mapcv/geotiff.py` |
 | Pipeline: anchors, then per-chunk window, annotate, write | `src/mapcv/pipeline.py` |
 | Targets: what each task attaches to a patch | `src/mapcv/targets/` |

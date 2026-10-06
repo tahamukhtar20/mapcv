@@ -1,6 +1,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 export default defineConfig({
   site: 'https://tahamukhtar20.github.io',
@@ -44,7 +45,38 @@ export default defineConfig({
       ],
       lastUpdated: false,
       disable404Route: true,
-      plugins: [starlightLinksValidator({ errorOnLocalLinks: true })],
+      plugins: [
+        starlightLinksValidator({ errorOnLocalLinks: true }),
+        // /llms.txt (index), /llms-full.txt (every page) and /llms-small.txt, built from the pages.
+        starlightLlmsTxt({
+          projectName: 'mapcv',
+          description:
+            'mapcv turns a region, imagery and labels into ready-to-train remote-sensing datasets: ' +
+            'semantic segmentation, object detection (COCO, YOLO) and instance segmentation (COCO RLE). ' +
+            'It is a GDAL-free Python and Rust library and CLI.',
+          details: [
+            '- Install with `pip install mapcv`; the CLI journey is `mapcv init`, `plan`, `generate`, `info`.',
+            '- Imagery: XYZ tiles, Sentinel-2 L2A (EOPF Zarr) and GeoTIFF/COG. Labels: GeoJSON or KML polygons, or a label raster.',
+            '- Always run `mapcv plan` before `mapcv generate`; it downloads nothing.',
+            '- Imagery providers have terms the user is responsible for.',
+            '- AI agents can drive mapcv through its MCP server (`mapcv mcp`); see the page "Use mapcv with AI agents".',
+          ].join('\n'),
+          optionalLinks: [
+            {
+              label: 'Source code and issues',
+              url: 'https://github.com/tahamukhtar20/mapcv',
+              description: 'Repository, issue tracker and releases',
+            },
+            {
+              label: 'Imagery providers and licensing',
+              url: 'https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md',
+              description: 'What to check before downloading tiles',
+            },
+          ],
+          demote: ['project/changelog'],
+          exclude: ['project/changelog', 'project/migration'],
+        }),
+      ],
       sidebar: [
         {
           label: 'Get started',
@@ -71,6 +103,7 @@ export default defineConfig({
             { label: 'Prepare labels', slug: 'guides/prepare-labels' },
             { label: 'Choose imagery and zoom', slug: 'guides/choose-imagery-and-zoom' },
             { label: 'Use your own GeoTIFF', slug: 'guides/use-your-own-geotiff' },
+            { label: 'Use mapcv with AI agents', slug: 'guides/use-with-ai-agents' },
             { label: 'Large regions and resuming', slug: 'guides/large-regions-and-resuming' },
             { label: 'Splits without leakage', slug: 'guides/splits-without-leakage' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },

@@ -11,9 +11,10 @@ import generateHelp from '../../../cli-help/generate.txt?raw';
 import infoHelp from '../../../cli-help/info.txt?raw';
 import splitHelp from '../../../cli-help/split.txt?raw';
 import validateHelp from '../../../cli-help/validate.txt?raw';
+import mcpHelp from '../../../cli-help/mcp.txt?raw';
 import version from '../../../cli-help/version.txt?raw';
 
-The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits and `validate` to check a config. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
+The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits, `validate` to check a config and `mcp` to let an AI agent do all of this. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
 
 | Command | What it does | Touches the network |
 | --- | --- | --- |
@@ -23,6 +24,7 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | [`mapcv info`](#mapcv-info) | Summarize a dataset folder | no |
 | [`mapcv split`](#mapcv-split) | Rewrite train/val/test lists from the manifest | no |
 | [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
+| [`mapcv mcp`](#mapcv-mcp) | Serve mapcv to AI agents over MCP | only when an agent generates |
 
 ## Global options
 
@@ -163,6 +165,18 @@ Config error in unknown.yaml:
   • sampler.stide: Extra inputs are not permitted
 Fix the fields above, or start from a working config with mapcv init.
 ```
+
+## `mapcv mcp`
+
+<Code code={mcpHelp} lang="text" title="mapcv mcp --help" />
+
+Runs an [MCP](https://modelcontextprotocol.io/) server over stdio so an AI agent can inspect labels, validate a config, plan, generate and inspect a dataset. It needs the `mcp` extra (`pip install "mapcv[mcp]"`); without it the command prints the install command and exits with code 1.
+
+- **Read-only by default.** `--allow-write` also offers `write_config`, `generate` and `split`. The environment variable `MAPCV_MCP_ALLOW_WRITE=true` does the same, for clients that configure servers through the environment.
+- **`--root`** is the only folder the server reads or writes (default: the current folder). Paths outside it, including the ones a config resolves to, are refused.
+- Progress bars are silenced, because stdout carries the protocol; logs go to stderr.
+
+Install snippets for Claude Code, Claude Desktop, Cursor and VS Code, the tool list and the safety model are in [Use mapcv with AI agents](/mapcv/guides/use-with-ai-agents/).
 
 ## Exit codes
 

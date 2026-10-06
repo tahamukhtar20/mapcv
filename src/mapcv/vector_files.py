@@ -652,8 +652,9 @@ def read_geoparquet(path: Path, fields: Optional[Sequence[str]] = None) -> Vecto
         ValueError: pyarrow is not installed, the file is not GeoParquet or not WKB, its
             CRS is stated as null (unknown), or it is corrupt.
     """
-    pa, pq = _pyarrow()
+    # A missing file is reported as missing, with or without pyarrow.
     _check_file(path)
+    pa, pq = _pyarrow()
     try:
         parquet = pq.ParquetFile(str(path))
         schema = parquet.schema_arrow

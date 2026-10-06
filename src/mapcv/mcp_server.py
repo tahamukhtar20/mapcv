@@ -338,22 +338,11 @@ def _guard_job(state: ToolState, func: Callable[..., _T], *args: Any) -> _T:
 
 
 def serve(root: Union[str, Path] = ".", allow_write: bool = False) -> None:
-    """Run the server over stdio until the client disconnects."""
-    from mapcv import pipeline
+    """Run the server over stdio until the client disconnects.
 
+    stdout carries the protocol: the library never prints, and its log messages
+    (resuming, nothing left to do) go to stderr with this server's own.
+    """
     server = build_server(root, allow_write)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="mapcv mcp: %(message)s")
-    console = pipeline._console
-    # The file the console was given, not ``console.file``: a console made without one
-    # writes to whatever ``sys.stdout`` is at the time, and restoring the stream that
-    # ``console.file`` returns now would pin it to a stdout that may be replaced later
-    # (a test runner's capture, a redirect).
-    saved = (console.quiet, getattr(console, "_file", None))
-    # Progress bars belong to a terminal; here stdout carries the protocol.
-    console.quiet = True
-    console.file = sys.stderr
-    try:
-        server.run("stdio")
-    finally:
-        console.quiet = saved[0]
-        console.file = saved[1]  # type: ignore[assignment]
+    server.run("stdio")

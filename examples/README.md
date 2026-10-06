@@ -9,7 +9,7 @@ runs in minutes on a laptop and uses openly licensed labels from OpenStreetMap.
 | [`sentinel2-landcover/`](sentinel2-landcover/) | A public Sentinel-2 L2A EOPF Zarr product + land-use polygons → 4-band `float32` NPY patches with 4 land-cover classes | `pip install "mapcv[zarr]"` (Python 3.10–3.13) | a few minutes, ~32 MB read; the free EOPF sample service often times out (see its README) |
 | [`notebooks/01-explore-a-dataset.ipynb`](notebooks/01-explore-a-dataset.ipynb) | Read `manifest.json` and the split lists; plot the spatial split, class balance and image/mask overlays | `matplotlib` | seconds |
 | [`notebooks/02-train-a-segmentation-model.ipynb`](notebooks/02-train-a-segmentation-model.ipynb) | Train a tiny U-Net in PyTorch for two epochs and report test mIoU | `torch` (optional, not a mapcv dependency) | ~1 min on CPU |
-| [`scripts/python_api.py`](scripts/python_api.py) | The quickstart from Python: `MapcvConfig.model_validate`, `mapcv.plan`, `mapcv.run_generate` and the `GenerateResult` | `pip install mapcv` | < 1 min |
+| [`scripts/python_api.py`](scripts/python_api.py) | The quickstart from Python: `MapcvConfig.model_validate`, `mapcv.plan`, `mapcv.generate` and the `GenerateResult` | `pip install mapcv` | < 1 min |
 | [`scripts/torch_dataset.py`](scripts/torch_dataset.py) | A copy-paste `MapcvDataset(root, split, transform)` that reads PNG/JPG/NPY patches, masks, `splits/*.txt` and `manifest.json` | numpy, Pillow; PyTorch optional | — |
 | [`scripts/fetch_osm_labels.py`](scripts/fetch_osm_labels.py) | How the label files were made: one Overpass query each, converted to compact GeoJSON | network | seconds |
 

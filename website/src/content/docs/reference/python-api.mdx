@@ -110,15 +110,33 @@ A dataclass:
 | `warnings` | `list[str]` | Messages to show the user |
 | `is_large` | `bool` (property) | More than 20,000 tiles or 5 GB; the CLI asks before starting such jobs |
 
-### `run_generate`
+### `generate`
 
 ```python
-def run_generate(
-    config: MapcvConfig, on_chunk: Callable[[int, int], None] | None = None
+def generate(
+    config: MapcvConfig | str | os.PathLike,
+    *,
+    progress: Callable[[int, int], None] | None = None,
 ) -> GenerateResult
 ```
 
-Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich progress bar on stdout. `on_chunk(done, total)` is called before the first chunk and after every chunk is saved; an exception it raises stops the run there, and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels). Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+The library form of `mapcv generate`: builds the dataset into `config.writer.staging_dir`, or resumes it. `config` is a `MapcvConfig` or the path of a YAML file (read with `MapcvConfig.from_yaml`). `progress(done, total)` is called with the chunks written so far and the chunks of this run, before the first chunk and after every chunk is saved; an exception it raises stops the run there, and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels).
+
+```python
+import mapcv
+
+
+def show(done: int, total: int) -> None:
+    print(f"{done}/{total} chunks", end="\r")
+
+
+result = mapcv.generate("mapcv.yaml", progress=show)
+print(result.new_patches, "new patches in", result.staging_dir)
+```
+
+`run_generate(config, on_chunk)` is the same function with a `MapcvConfig` only.
+
+**Output.** The library prints nothing. Messages such as "Resuming: 120 patch(es) already written, 80 to go" go to the `mapcv` logger at `INFO`; show them with `logging.basicConfig(level=logging.INFO)`, or `logging.getLogger("mapcv").setLevel(logging.INFO)` with a handler of your own. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 
@@ -131,8 +149,42 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 | `tiles_requested` | `int` | XYZ tiles requested in this call (0 for Sentinel-2) |
 | `tiles_failed` | `int` | Of those, how many failed |
 | `seconds` | `float` | Wall-clock time |
+| `tiles_cached` | `int` | XYZ tiles read from the [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz) instead of downloaded |
+
+### `iter_patches`
+
+```python
+def iter_patches(config: MapcvConfig | str | os.PathLike) -> Iterator[Patch]
+```
+
+Yields every patch the config describes, in order, without writing anything: the same patches, filters (`max_empty_ratio`, `min_label_ratio`, an area of interest) and order as `generate`, read chunk by chunk so memory stays bounded. The `writer` block is not used. Use it to feed a model straight from the imagery, or to look at what a config produces before generating.
+
+```python
+for patch in mapcv.iter_patches("mapcv.yaml"):
+    print(patch.row, patch.col, patch.image.shape, patch.target.max())
+```
+
+### `Patch`
+
+| Attribute | Type | Meaning |
+| --- | --- | --- |
+| `row`, `col` | `int` | Top-left pixel of the patch on the (first) source's grid; the manifest entry's `row`/`col` |
+| `image` | `ndarray` | `(H, W, C)`: `uint8` RGB for XYZ, the source's bands and dtype otherwise |
+| `target` | depends on the task | Segmentation and change: the mask `(H, W)`; regression: `float32` values (`NaN` without a target); detection, instance and classification: the task's object or label record; `None` without labels |
+| `transform` | 6-tuple | The patch's affine transform `(a, b, c, d, e, f)` in `crs` |
+| `crs` | `str` | The source CRS, e.g. `"EPSG:32631"` |
+| `padded` | `bool` | Whether the patch reaches past the raster edge (`edge_strategy: pad`) |
+| `others` | `dict[str, ndarray]` | The patches of further imagery sources, by name |
 
 ## Splitting
+
+### `split`
+
+```python
+def split(dataset: str | os.PathLike, config: SplitterConfig | None = None, **settings) -> dict[str, int]
+```
+
+The library form of `mapcv split`. Pass a `SplitterConfig`, or its fields as keyword arguments: `mapcv.split("dataset", strategy="random", test_ratio=0.25)`. Returns the counts like `run_split`.
 
 ### `run_split`
 
@@ -297,16 +349,18 @@ def download_region(west: float, south: float, east: float, north: float, zoom: 
                     url_template: str | None = None, source: str | None = None,
                     max_connections: int = 16, policy: str = "lenient",
                     snap_to_tiles: bool = True, max_failed_ratio: float = 0.05,
+                    progress: Callable[[int, int], None] | None = None,
                     ) -> list[tuple[TileIndex, bytes]]
 
 def stitch_region(west: float, south: float, east: float, north: float, zoom: int,
                   url_template: str | None = None, source: str | None = None,
                   max_connections: int = 16, policy: str = "lenient",
                   max_failed_ratio: float = 0.05,
+                  progress: Callable[[int, int], None] | None = None,
                   ) -> tuple[np.ndarray, tuple[float, float, float, float, float, float]]
 ```
 
-`download_region` fetches the encoded tiles for a box (expanded to whole tiles by default) and returns `(tile, bytes)` pairs; tile objects have `x`, `y` and `z`. `stitch_region` also decodes and stitches them into one `(H, W, 3)` `uint8` image and returns its Web Mercator affine transform. `policy` and `max_failed_ratio` behave as in the [config](/mapcv/reference/configuration/#xyz-tiles-type-xyz); `RuntimeError` if too many tiles fail. Both print a progress bar (a one-line message in Jupyter).
+`download_region` fetches the encoded tiles for a box (expanded to whole tiles by default) and returns `(tile, bytes)` pairs; tile objects have `x`, `y` and `z`. `stitch_region` also decodes and stitches them into one `(H, W, 3)` `uint8` image and returns its Web Mercator affine transform. `policy` and `max_failed_ratio` behave as in the [config](/mapcv/reference/configuration/#xyz-tiles-type-xyz); `RuntimeError` if too many tiles fail. `progress(done, total)` is called with the tiles finished so far; neither prints anything, and the outcome ("120/120 tiles fetched, 0 failed") goes to the `mapcv` logger at `INFO`.
 
 ### `URL_TEMPLATES`
 

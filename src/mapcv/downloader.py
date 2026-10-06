@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+import logging
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 
 from mapcv._mapcv_rs import (
     TileIndex,
@@ -35,16 +27,7 @@ URL_TEMPLATES: Dict[str, str] = {
     "cartodb_dark_matter": "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
 }
 
-_console = Console()
-
-
-def _in_jupyter() -> bool:
-    try:
-        import IPython.core.getipython as _gip
-
-        return cast(Any, _gip.get_ipython)() is not None
-    except (ImportError, AttributeError):
-        return False
+_log = logging.getLogger(__name__)
 
 
 def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> str:
@@ -56,19 +39,6 @@ def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> 
             raise ValueError(f"Unknown tile source: {source}")
         return URL_TEMPLATES[source]
     raise ValueError("Provide url_template or source")
-
-
-def _make_progress() -> Progress:
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        "•",
-        MofNCompleteColumn(),
-        "•",
-        TimeElapsedColumn(),
-    )
 
 
 def download_region(
@@ -83,12 +53,15 @@ def download_region(
     policy: str = "lenient",
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[Tuple[TileIndex, bytes]]:
     """Fetch all tiles for a bbox at the given zoom and return (tile, bytes) pairs.
 
     policy controls failure handling: "strict" raises on any failure, "lenient"
     skips failed tiles, "ignore" fills them with black NoData pixels.
     snap_to_tiles expands the bbox outward to tile boundaries before fetching.
+    ``progress(done, total)`` is called with the tiles finished so far. Prints
+    nothing; the outcome is logged to the ``mapcv`` logger.
     Raises RuntimeError if the failed-tile fraction exceeds max_failed_ratio.
     """
     template = resolve_url_template(url_template, source)
@@ -99,42 +72,27 @@ def download_region(
     target_tiles = tiles(west, south, east, north, [zoom])
     total = len(target_tiles)
 
-    if _in_jupyter():
-        print(f"Fetching {total} tiles...", end=" ", flush=True)
-        results, failed_count, _ = fetch_tiles_rs(
-            target_tiles,
-            template,
-            callback=lambda _: None,
-            max_connections=max_connections,
-            policy=policy,
-            max_failed_ratio=max_failed_ratio,
-        )
-        print("done.")
-    else:
-        with _make_progress() as progress:
-            task_id = progress.add_task(f"Fetching {total} tiles...", total=total)
-
-            def progress_callback(completed: int) -> None:
-                progress.update(task_id, completed=completed)
-
-            results, failed_count, _ = fetch_tiles_rs(
-                target_tiles,
-                template,
-                callback=progress_callback,
-                max_connections=max_connections,
-                policy=policy,
-                max_failed_ratio=max_failed_ratio,
-            )
-            progress.update(task_id, completed=total)
+    if progress is not None:
+        progress(0, total)
+    results, failed_count, _ = fetch_tiles_rs(
+        target_tiles,
+        template,
+        callback=(lambda done: progress(done, total)) if progress is not None else None,
+        max_connections=max_connections,
+        policy=policy,
+        max_failed_ratio=max_failed_ratio,
+    )
 
     fetched = len(results)
     if policy == "ignore":
-        _console.print(
-            f"[dim]{fetched}/{total} tiles returned"
-            f" ({failed_count} failures filled with NoData under 'ignore' policy)[/dim]"
+        _log.info(
+            "%d/%d tiles returned (%d failures filled with NoData under 'ignore' policy)",
+            fetched,
+            total,
+            failed_count,
         )
     else:
-        _console.print(f"[dim]{fetched}/{total} tiles fetched, {failed_count} failed[/dim]")
+        _log.info("%d/%d tiles fetched, %d failed", fetched, total, failed_count)
 
     return results
 
@@ -150,6 +108,7 @@ def stitch_region(
     max_connections: int = 16,
     policy: str = "lenient",
     max_failed_ratio: float = 0.05,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[npt.NDArray[np.uint8], Tuple[float, float, float, float, float, float]]:
     """Fetch tiles, decode in parallel, and return a stitched (H, W, 3) image with its transform.
 
@@ -169,6 +128,7 @@ def stitch_region(
         policy=policy,
         snap_to_tiles=True,
         max_failed_ratio=max_failed_ratio,
+        progress=progress,
     )
     image_array, min_x, min_y = stitch_tiles_rs(tile_data)
     transform = tile_transform_rs(min_x, min_y, zoom)

@@ -1,26 +1,24 @@
-"""Source-neutral dataset generation pipeline."""
+"""Source-neutral dataset generation pipeline.
+
+The library never prints: messages go to the ``mapcv`` logger (``logging``), problems
+are ``warnings``, and progress is reported through callbacks. The CLI turns these into
+its spinner, progress bar and styled output.
+"""
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 import warnings
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
+from typing import Any, Callable, DefaultDict, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv._patching import extract_array_patch
@@ -42,10 +40,11 @@ from mapcv.sampler import (
     sample_annotated_patches,
 )
 from mapcv.splitter import SplitLists, SplitterConfig, split_manifest
-from mapcv.targets import AnnotationBatch, Target, create_target
+from mapcv.targets import Target, create_target
+from mapcv.targets.base import Annotation, WindowTarget
 from mapcv.writers import FilesWriter, check_compatible, create_writer, refresh_split_outputs
 
-_console = Console()
+_log = logging.getLogger(__name__)
 
 _MANIFEST_FILENAME = "manifest.json"
 _SPLITS_SUBDIR = "splits"
@@ -64,21 +63,6 @@ class GenerateResult:
     seconds: float
     # XYZ tiles read from the on-disk cache instead of downloaded.
     tiles_cached: int = 0
-
-
-def _chunk_progress(disable: bool = False) -> Progress:
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("chunks •"),
-        TimeElapsedColumn(),
-        TextColumn("• eta"),
-        TimeRemainingColumn(),
-        console=_console,
-        disable=disable,
-    )
 
 
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
@@ -112,12 +96,15 @@ def _process_anchor_chunk(
     sampler: SamplerConfig,
     target: Target,
     others: Optional[Dict[str, AlignedSource]] = None,
-) -> Tuple[npt.NDArray[Any], AnnotationBatch, List[PatchMeta], Dict[str, npt.NDArray[Any]]]:
+) -> Tuple[
+    npt.NDArray[Any], List[Annotation], List[PatchMeta], Dict[str, npt.NDArray[Any]], WindowTarget
+]:
     """Read one chunk's window and sample its patches.
 
     ``others`` are further sources read on ``source``'s grid. A pixel has imagery
     only where every source has it; the kept patches of every other source are
-    returned by name, in the same order as ``source``'s.
+    returned by name, in the same order as ``source``'s. The annotations are per
+    patch; the returned window collates them for a writer.
     """
     patch_size = sampler.patch_size
     row_start = min(row for row, _ in anchors)
@@ -164,7 +151,7 @@ def _process_anchor_chunk(
             if kept
             else np.empty((0, patch_size, patch_size, *other_image.shape[2:]), other_image.dtype)
         )
-    return images, window.collate(annotations, patch_size), metadata, other_patches
+    return images, annotations, metadata, other_patches, window
 
 
 def _check_stackable(records: List[SourceRecord]) -> None:
@@ -201,6 +188,141 @@ def _open_sources(config: MapcvConfig) -> List[WindowedRasterSource]:
     return opened
 
 
+@contextmanager
+def _sources(
+    config: MapcvConfig,
+) -> Iterator[Tuple[List[WindowedRasterSource], Dict[str, AlignedSource]]]:
+    """The opened sources and, by name, every further one aligned to the first's grid;
+    all are closed on exit."""
+    _log.debug("Opening imagery")
+    opened = _open_sources(config)
+    try:
+        # Every further source is read on the first one's grid.
+        others = {
+            name: AlignedSource(other, grid_alignment(opened[0].metadata, other.metadata, name))
+            for name, other in zip(config.source_names[1:], opened[1:])
+        }
+        yield opened, others
+    finally:
+        for each in opened:
+            each.close()
+
+
+def _area_of_interest(
+    config: MapcvConfig, source: WindowedRasterSource
+) -> Optional[AreaOfInterest]:
+    if config.region.path is None:
+        return None
+    return AreaOfInterest(config.region, source.metadata.crs, source.metadata.transform)
+
+
+def _anchor_groups(
+    config: MapcvConfig, source: WindowedRasterSource, aoi: Optional[AreaOfInterest]
+) -> List[List[Tuple[int, int]]]:
+    """Every patch anchor of the raster, grouped into the chunks they are read in."""
+    anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
+    groups = _group_anchors(anchors, source.metadata.chunk_rows)
+    if aoi is not None:
+        # Only patches over the polygons, read in windows around them.
+        anchors = aoi.keep(anchors, config.sampler.patch_size)
+        groups = [
+            cluster
+            for group in _group_anchors(anchors, source.metadata.chunk_rows)
+            for cluster in column_clusters(group, config.sampler.patch_size)
+        ]
+    return groups
+
+
+@dataclass
+class Patch:
+    """One patch of :func:`iter_patches`: its pixels, target and place on the raster.
+
+    ``image`` is ``(H, W, C)`` (as read; ``(H, W, 3)`` uint8 for XYZ), ``target`` the
+    task's annotation of the patch (a class mask for segmentation, boxes for detection,
+    and so on; ``None`` without labels), ``row``/``col`` the patch's top-left pixel
+    on the first source's grid, ``transform`` its affine transform in ``crs``, and
+    ``others`` the patches of further imagery sources by name.
+    """
+
+    row: int
+    col: int
+    image: npt.NDArray[Any]
+    target: Any
+    transform: Tuple[float, float, float, float, float, float]
+    crs: str
+    padded: bool
+    others: Dict[str, npt.NDArray[Any]]
+
+
+ConfigLike = Union[MapcvConfig, str, "os.PathLike[str]"]
+
+
+def _config(config: ConfigLike) -> MapcvConfig:
+    return config if isinstance(config, MapcvConfig) else MapcvConfig.from_yaml(config)
+
+
+def generate(
+    config: ConfigLike, *, progress: Optional[Callable[[int, int], None]] = None
+) -> GenerateResult:
+    """Build (or resume) the dataset a config describes; the library form of
+    ``mapcv generate``.
+
+    ``config`` is a :class:`~mapcv.MapcvConfig` or the path of a YAML file.
+    ``progress(done, total)`` is called with the chunks written so far and the chunks
+    of this run, before the first chunk and after each one; raising from it stops
+    the run (finished chunks are kept, and calling again resumes). Nothing is
+    printed: messages go to the ``mapcv`` logger and problems are warnings.
+    """
+    return run_generate(_config(config), progress)
+
+
+def split(
+    dataset: Union[str, "os.PathLike[str]"],
+    config: Optional[SplitterConfig] = None,
+    **settings: Any,
+) -> Dict[str, int]:
+    """Rewrite a dataset's split lists from its manifest; the library form of
+    ``mapcv split``. Returns the patch count of each split and ``dropped``.
+
+    Pass a :class:`~mapcv.SplitterConfig`, or its fields as keyword arguments
+    (``split("dataset", strategy="random", test_ratio=0.25)``).
+    """
+    if config is not None and settings:
+        raise TypeError("pass a SplitterConfig or keyword settings, not both")
+    return run_split(Path(dataset), config or SplitterConfig(**settings))
+
+
+def iter_patches(config: ConfigLike) -> Iterator[Patch]:
+    """Yield every patch the config describes, in order, without writing anything.
+
+    The same patches (and filters, such as ``sampler.max_empty_ratio`` and
+    ``min_label_ratio``) as :func:`run_generate`, read chunk by chunk, so memory stays
+    bounded; ``writer`` settings are not used. Useful to feed a model directly or to
+    look at a config's output before generating it.
+    """
+    config = _config(config)
+    target = create_target(config)
+    with _sources(config) as (opened, others):
+        source = opened[0]
+        target.prepare(source.metadata)
+        crs = source.metadata.crs
+        for group in _anchor_groups(config, source, _area_of_interest(config, source)):
+            images, annotations, metadata, other_patches, _ = _process_anchor_chunk(
+                source, group, config.sampler, target, others
+            )
+            for index, item in enumerate(metadata):
+                yield Patch(
+                    row=item["row"],
+                    col=item["col"],
+                    image=images[index],
+                    target=annotations[index],
+                    transform=offset_transform(source.metadata.transform, item["row"], item["col"]),
+                    crs=crs,
+                    padded=item["padded"],
+                    others={name: patches[index] for name, patches in other_patches.items()},
+                )
+
+
 def run_generate(
     config: MapcvConfig, on_chunk: Optional[Callable[[int, int], None]] = None
 ) -> GenerateResult:
@@ -226,15 +348,8 @@ def run_generate(
     else:
         writer = create_writer(config.writer, target)
     check_compatible(target, writer)
-    with _console.status("Opening imagery…"):
-        opened = _open_sources(config)
-    source = opened[0]
-    try:
-        # Every further source is read on the first one's grid.
-        others = {
-            name: AlignedSource(other, grid_alignment(source.metadata, other.metadata, name))
-            for name, other in zip(names[1:], opened[1:])
-        }
+    with _sources(config) as (opened, others):
+        source = opened[0]
         target.prepare(source.metadata)
         records: List[SourceRecord] = []
         for name, opened_source in zip(names, opened):
@@ -264,11 +379,7 @@ def run_generate(
             )
         if config.writer.stack_sources:
             _check_stackable(records)
-        aoi = (
-            AreaOfInterest(config.region, source.metadata.crs, source.metadata.transform)
-            if config.region.path is not None
-            else None
-        )
+        aoi = _area_of_interest(config, source)
         # An area of interest is recorded so a resumed run notices other polygons.
         region_record: Dict[str, Any] = {"region": aoi.record()} if aoi is not None else {}
         expected = Manifest(
@@ -284,16 +395,7 @@ def run_generate(
 
         resumed_patches = len(manifest.patches)
         patch_size = config.sampler.patch_size
-        anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
-        groups = _group_anchors(anchors, source.metadata.chunk_rows)
-        if aoi is not None:
-            # Only patches over the polygons, read in windows around them.
-            anchors = aoi.keep(anchors, patch_size)
-            groups = [
-                cluster
-                for group in _group_anchors(anchors, source.metadata.chunk_rows)
-                for cluster in column_clusters(group, patch_size)
-            ]
+        groups = _anchor_groups(config, source, aoi)
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
         # Number chunks over the whole raster so a resumed run records the same
         # chunk index for each patch as an uninterrupted one.
@@ -304,40 +406,33 @@ def run_generate(
                 chunks.append((chunk_index, remaining))
         to_go = sum(len(group) for _, group in chunks)
         if resumed_patches and not chunks:
-            _console.print(
-                f"[dim]Nothing left to do: all {resumed_patches} patch(es) are already "
-                "written.[/dim]"
-            )
+            _log.info("Nothing left to do: all %d patch(es) are already written.", resumed_patches)
         elif resumed_patches:
-            _console.print(
-                f"[dim]Resuming: {resumed_patches} patch(es) already written, {to_go} to go[/dim]"
+            _log.info("Resuming: %d patch(es) already written, %d to go", resumed_patches, to_go)
+        if on_chunk is not None:
+            on_chunk(0, len(chunks))
+        for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
+            images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
+                source, chunk_anchors, config.sampler, target, others
             )
-        with _chunk_progress(disable=not chunks) as progress:
-            task = progress.add_task("Reading imagery and writing patches", total=len(chunks))
-            if on_chunk is not None:
-                on_chunk(0, len(chunks))
-            for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
-                images, annotations, metadata, other_patches = _process_anchor_chunk(
-                    source, chunk_anchors, config.sampler, target, others
+            annotations = window.collate(per_patch, patch_size)
+            if other_patches:
+                if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
+                    raise RuntimeError("several imagery sources need the files layout")
+                writer.write(
+                    images, annotations, metadata, manifest, chunk_index, others=other_patches
                 )
-                if other_patches:
-                    if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
-                        raise RuntimeError("several imagery sources need the files layout")
-                    writer.write(
-                        images, annotations, metadata, manifest, chunk_index, others=other_patches
+            else:
+                writer.write(images, annotations, metadata, manifest, chunk_index)
+            if aoi is not None:
+                for entry in manifest.patches[len(manifest.patches) - len(metadata) :]:
+                    entry["summary"]["region"] = aoi.region_of(
+                        entry["row"], entry["col"], patch_size
                     )
-                else:
-                    writer.write(images, annotations, metadata, manifest, chunk_index)
-                if aoi is not None:
-                    for entry in manifest.patches[len(manifest.patches) - len(metadata) :]:
-                        entry["summary"]["region"] = aoi.region_of(
-                            entry["row"], entry["col"], patch_size
-                        )
-                # Persist after every chunk so an interrupted run resumes from here.
-                manifest.save(manifest_path)
-                progress.advance(task)
-                if on_chunk is not None:
-                    on_chunk(done, len(chunks))
+            # Persist after every chunk so an interrupted run resumes from here.
+            manifest.save(manifest_path)
+            if on_chunk is not None:
+                on_chunk(done, len(chunks))
 
         # A finished dataset is left untouched (a 0.2 manifest stays version 2).
         if chunks or not manifest_path.exists():
@@ -364,9 +459,6 @@ def run_generate(
                 UserWarning,
                 stacklevel=2,
             )
-    finally:
-        for each in opened:
-            each.close()
 
     split_counts: Optional[Dict[str, int]] = None
     split_lists: Optional[SplitLists] = None

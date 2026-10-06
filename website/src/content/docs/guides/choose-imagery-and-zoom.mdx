@@ -95,7 +95,7 @@ Many commercial tile services put a key in the URL. mapcv never writes `url_temp
     from pathlib import Path
 
     import yaml
-    from mapcv import MapcvConfig, plan, run_generate
+    from mapcv import MapcvConfig, generate, plan
 
     raw = yaml.safe_load(Path("mapcv.yaml").read_text())
     raw["imagery"]["url_template"] = (
@@ -103,7 +103,7 @@ Many commercial tile services put a key in the URL. mapcv never writes `url_temp
     )
     config = MapcvConfig.model_validate(raw)
     print(plan(config).tiles)
-    run_generate(config)
+    generate(config)
     ```
   </TabItem>
 </Tabs>

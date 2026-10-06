@@ -45,7 +45,15 @@ from mapcv.manifest import (
     TargetRecord,
     load_or_create_manifest,
 )
-from mapcv.pipeline import GenerateResult, run_generate, run_split
+from mapcv.pipeline import (
+    GenerateResult,
+    Patch,
+    generate,
+    iter_patches,
+    run_generate,
+    run_split,
+    split,
+)
 from mapcv.planning import Plan, plan
 from mapcv.rasterizer import rasterize
 from mapcv.sampler import SamplerConfig, sample_patches, sample_patches_at_anchors
@@ -60,8 +68,12 @@ except PackageNotFoundError:  # running from a source tree without installing
 __all__ = [
     "__version__",
     "GenerateResult",
+    "Patch",
     "Plan",
+    "generate",
+    "iter_patches",
     "plan",
+    "split",
     "run_generate",
     "run_split",
     "URL_TEMPLATES",

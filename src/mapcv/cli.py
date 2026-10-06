@@ -8,6 +8,7 @@ what it will cost), ``mapcv generate`` (build the dataset) and ``mapcv info``
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 import warnings
@@ -21,13 +22,22 @@ import numpy as np
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from rich.status import Status
 from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
 import mapcv
-from mapcv import pipeline
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
     EOPFZarrImageryConfig,
@@ -94,6 +104,68 @@ def _make_output_encodable() -> None:
 
 _make_output_encodable()
 _console = Console()
+# --quiet: hide the spinner, progress bars and progress messages.
+_quiet = False
+
+
+class _GenerateFeedback(logging.Handler):
+    """The terminal side of a generation: a spinner while the imagery opens, a progress
+    bar over the chunks (it is the ``on_chunk`` callback), and the library's log
+    messages, dimmed. All of it is hidden under ``--quiet``."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self._status: Optional[Status] = None
+        self._progress: Optional[Progress] = None
+        self._task: Optional[Any] = None
+        self._level = logging.NOTSET
+
+    def __enter__(self) -> "_GenerateFeedback":
+        logger = logging.getLogger("mapcv")
+        self._level = logger.level
+        logger.setLevel(logging.INFO)
+        logger.addHandler(self)
+        if not _quiet:
+            self._status = _console.status("Opening imagery…")
+            self._status.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._stop_status()
+        if self._progress is not None:
+            self._progress.stop()
+        logger = logging.getLogger("mapcv")
+        logger.removeHandler(self)
+        logger.setLevel(self._level)
+
+    def _stop_status(self) -> None:
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not _quiet:
+            _console.print(f"[dim]{escape(record.getMessage())}[/dim]")
+
+    def __call__(self, done: int, total: int) -> None:
+        self._stop_status()
+        if self._progress is None and total and not _quiet:
+            self._progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("chunks •"),
+                TimeElapsedColumn(),
+                TextColumn("• eta"),
+                TimeRemainingColumn(),
+                console=_console,
+            )
+            self._progress.start()
+            self._task = self._progress.add_task("Reading imagery and writing patches", total=total)
+        if self._progress is not None and self._task is not None:
+            self._progress.update(self._task, completed=done)
+
 
 _DOCS_URL = "https://tahamukhtar20.github.io/mapcv"
 _PROVIDERS_URL = "https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md"
@@ -128,7 +200,8 @@ def _main(
 ) -> None:
     """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
     classification dataset."""
-    pipeline._console.quiet = quiet
+    global _quiet
+    _quiet = quiet
 
 
 def _format_validation_error(exc: ValidationError) -> List[str]:
@@ -1720,7 +1793,8 @@ def generate(
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
-            result = run_generate(config)
+            with _GenerateFeedback() as feedback:
+                result = run_generate(config, feedback)
         except ManifestMismatchError as exc:
             _show_warnings(caught, shown)
             _console.print(f"[red]Cannot resume:[/red] {exc}")

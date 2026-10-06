@@ -53,6 +53,10 @@ def _fake_fetch(calls: List[Tuple[int, str]]) -> Any:
         requested: List[TileIndex], template: str, **kwargs: Any
     ) -> Tuple[List[Tuple[TileIndex, bytes]], int, Any]:
         calls.append((len(requested), template))
+        callback = kwargs.get("callback")
+        for done in range(1, len(requested) + 1):
+            if callback is not None:
+                callback(done)
         return [(tile, _png(tile.x % 200)) for tile in requested], 0, ([], None)
 
     return fetch
@@ -101,3 +105,31 @@ def test_stitch_region_returns_image_and_transform(monkeypatch: pytest.MonkeyPat
     assert image.ndim == 3 and image.shape[2] == 3
     assert image.shape[0] % 256 == 0 and image.shape[1] % 256 == 0
     assert transform[0] > 0 and transform[4] < 0
+
+
+def test_download_region_reports_progress_and_logs_instead_of_printing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch([]))
+    seen: List[Tuple[int, int]] = []
+    with caplog.at_level(logging.INFO, logger="mapcv"):
+        results = download_region(
+            4.88,
+            52.37,
+            4.89,
+            52.375,
+            15,
+            source="esri_satellite",
+            progress=lambda d, t: seen.append((d, t)),
+        )
+        stitch_region(4.88, 52.37, 4.89, 52.375, 15, source="esri_satellite", policy="ignore")
+    total = len(results)
+    assert seen == [(done, total) for done in range(total + 1)]
+    messages = [record.getMessage() for record in caplog.records]
+    assert f"{total}/{total} tiles fetched, 0 failed" in messages
+    assert any("filled with NoData under 'ignore' policy" in m for m in messages)
+    assert capsys.readouterr().out == ""

@@ -511,7 +511,7 @@ def test_a_symlink_inside_an_existing_output_folder_is_refused(
 
 def test_large_jobs_are_refused_until_confirmed(project: Path, tile_server: str) -> None:
     west, south, east, north = _bbox()
-    # About 70 000 tiles at zoom 18 (the limit is 20 000): planned, never fetched here.
+    # About 44 700 tiles at zoom 18 (the limit is 20 000): planned, never fetched here.
     wide = (west, south, west + 0.3, south + 0.17)
     template = f"{tile_server}/{{z}}/{{x}}/{{y}}.png"
     (project / "large.yaml").write_text(config_text(template, "big", region=wide))

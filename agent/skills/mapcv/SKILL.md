@@ -33,6 +33,7 @@ mapcv is a GDAL-free Python and Rust library and CLI. It turns a **region**, **i
 | 6. Build it | `generate(config, confirm_large=false)` | `mapcv generate mapcv.yaml` |
 | 7. Check the result | `info(dataset)` | `mapcv info dataset/` |
 | 8. Re-split if needed | `split(dataset, ...)` | `mapcv split dataset/ --strategy spatial` |
+| 9. Prepare to train or share | (CLI only) | `mapcv stats dataset/` (band mean/std, class weights), `mapcv card dataset/`, `mapcv verify dataset/ --write-checksums` |
 
 Tips:
 

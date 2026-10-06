@@ -84,6 +84,14 @@ mapcv split ./output --test-ratio 0.15 --val-ratio 0.10
 
 Re-runs the train/val/test split from the existing `manifest.json` without re-downloading anything.
 
+### 4. Prepare it for training and sharing (optional)
+
+```bash
+mapcv stats ./output     # per-band mean/std and class weights over train → stats.json
+mapcv card ./output      # README.md dataset card with Hugging Face metadata
+mapcv verify ./output --write-checksums
+```
+
 ## EOPF Sentinel-2 Zarr
 
 Version 0.2.0 can read one local or anonymous public EOPF Sentinel-2 L2A product per run. It preserves the product's projected CRS, harmonizes selected bands with the EOPF backend, and writes bands-first `float32` NPY patches.

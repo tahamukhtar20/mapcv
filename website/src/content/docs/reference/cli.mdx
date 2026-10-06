@@ -10,11 +10,14 @@ import planHelp from '../../../cli-help/plan.txt?raw';
 import generateHelp from '../../../cli-help/generate.txt?raw';
 import infoHelp from '../../../cli-help/info.txt?raw';
 import splitHelp from '../../../cli-help/split.txt?raw';
+import statsHelp from '../../../cli-help/stats.txt?raw';
+import cardHelp from '../../../cli-help/card.txt?raw';
+import verifyHelp from '../../../cli-help/verify.txt?raw';
 import validateHelp from '../../../cli-help/validate.txt?raw';
 import mcpHelp from '../../../cli-help/mcp.txt?raw';
 import version from '../../../cli-help/version.txt?raw';
 
-The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits, `validate` to check a config and `mcp` to let an AI agent do all of this. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
+The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits, `stats`, `card` and `verify` to prepare a dataset for training and sharing, `validate` to check a config and `mcp` to let an AI agent do all of this. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
 
 | Command | What it does | Touches the network |
 | --- | --- | --- |
@@ -23,6 +26,9 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | [`mapcv generate`](#mapcv-generate) | Build or resume the dataset | yes |
 | [`mapcv info`](#mapcv-info) | Summarize a dataset folder | no |
 | [`mapcv split`](#mapcv-split) | Rewrite train/val/test lists from the manifest | no |
+| [`mapcv stats`](#mapcv-stats) | Per-band mean/std and class weights into `stats.json` | no |
+| [`mapcv card`](#mapcv-card) | Write a dataset card (`README.md`) | no |
+| [`mapcv verify`](#mapcv-verify) | Check every file is there and unchanged | no |
 | [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
 | [`mapcv mcp`](#mapcv-mcp) | Serve mapcv to AI agents over MCP | only when an agent generates |
 
@@ -143,6 +149,57 @@ use strategy 'spatial'.
 
 Old `splits/<percent>/` folders for ratios you no longer request are left in place.
 
+## `mapcv stats`
+
+<Code code={statsHelp} lang="text" title="mapcv stats --help" />
+
+Reads every patch of a split and writes `STAGING_DIR/stats.json`:
+
+- **Per source and band:** `mean`, `std` (population), `min`, `max` and `pixels` (how many were counted). Feed `mean` and `std` to your normalisation, as TerraTorch's `means`/`stds` or `torchvision.transforms.Normalize`.
+- **Class balance:** pixel counts, frequencies and median-frequency class weights (Eigen & Fergus: the median of the class frequencies divided by each class's frequency, where a class's frequency is its pixels over the pixels of the patches it appears in) for `segmentation` and `change`; object counts per class for `detection` and `instance`; patch counts per label for `classification`.
+- **Targets** (`regression`): mean, std, min and max of the target values.
+
+Only the `train` split is counted by default, so validation and test pixels don't leak into the normalisation; `--split all` counts every patch, and a dataset without split lists is always counted whole. A pixel counts when the mask doesn't mark it as ignored (`ignore_index`: no imagery or no label); without a mask (image-only datasets), when it is finite and not the source's NoData value on every band (all zero for XYZ tiles, where failed tiles are black). The statistics are accumulated per band in float64 with Welford/Chan merging, so they stay exact over billions of pixels.
+
+```console
+$ mapcv stats dataset
+  source    band       mean        std    min    max
+  image     b1      124.991    71.8234      1    249
+  image     b2      124.604    71.8503      1    249
+  image     b3      125.002    71.7828      1    249
+Class weights (median frequency): background 0.769, a 1.43
+✓ 36 patch(es) of the train split → dataset/stats.json
+```
+
+`stats.json` is written on request, not by `generate`: reading every patch back costs about as long as writing it, and `generate`'s output stays the same as before. Run it again after `mapcv split`.
+
+## `mapcv card`
+
+<Code code={cardHelp} lang="text" title="mapcv card --help" />
+
+Writes `STAGING_DIR/README.md`, a dataset card with [Hugging Face dataset-card](https://huggingface.co/docs/hub/datasets-cards) YAML metadata (`license`, `task_categories`, `tags`, `size_categories`), so the folder can be pushed to the Hub or archived as is. The card describes the imagery (type, product, CRS, ground sampling distance, bands and data type), the classes, the split sizes, the normalisation values (when `stats.json` exists, so run `mapcv stats` first), the files, the provenance (mapcv and manifest version, label file SHA-256, imagery fingerprints) and the provider's credit line for built-in sources.
+
+The licence is `other` until you change it: mapcv can't know what the imagery provider's terms allow (see [Providers & licensing](/mapcv/project/providers/)). An existing `README.md` is kept unless you pass `--force`.
+
+## `mapcv verify`
+
+<Code code={verifyHelp} lang="text" title="mapcv verify --help" />
+
+Checks a dataset against its manifest: every listed file exists and is not empty, and the split lists name only patches of the manifest. `--deep` also decodes every image and compares its shape with the source's `patch_shape`. Files in the patch folders that the manifest doesn't list (left by an interrupted run, or added by hand) are reported as a note, not a failure.
+
+`--write-checksums` writes `SHA256SUMS` (the `sha256sum` format) over the patch files, `manifest.json` and `splits/`, after a successful check. When `SHA256SUMS` exists, `verify` checks every hash, so a copied, uploaded or downloaded dataset can be proven complete and unchanged; `sha256sum -c SHA256SUMS` in the folder checks the same thing without mapcv.
+
+```console
+$ mapcv verify dataset --write-checksums
+✓ 48 patch(es), 96 file(s) present.
+✓ SHA256SUMS written to dataset/SHA256SUMS
+
+$ mapcv verify copy-of-dataset
+✗ Masks/patch_0000012.png does not match its SHA256SUMS hash
+```
+
+Exit code `1` when anything is missing, empty, unreadable (`--deep`) or changed.
+
 ## `mapcv validate`
 
 <Code code={validateHelp} lang="text" title="mapcv validate --help" />
@@ -183,5 +240,5 @@ Install snippets for Claude Code, Claude Desktop, Cursor and VS Code, the tool l
 | Code | When |
 | --- | --- |
 | `0` | Success (also `generate --dry-run`, and `init` when the written file still needs edits) |
-| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, or a declined large-job prompt |
+| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, `mapcv verify` found a problem, or a declined large-job prompt |
 | `2` | Large job without a terminal and without `--yes`; also invalid command-line usage |

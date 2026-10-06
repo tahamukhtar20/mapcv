@@ -603,6 +603,7 @@ def _print_result(result: GenerateResult) -> None:
         "\n[bold]Next[/bold]\n"
         f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
         f"  • Re-split it:     [cyan]mapcv split {result.staging_dir} --strategy spatial[/cyan]\n"
+        f"  • Band stats:      [cyan]mapcv stats {result.staging_dir}[/cyan]\n"
         f"  • Train on it:     {_DOCS_URL}/{guide}"
     )
 
@@ -1852,7 +1853,7 @@ def split(
             val_ratio=val_ratio,
             labeled_ratios=ratios,
             seed=seed,
-            strategy=cast(Literal["spatial", "stratified", "random"], strategy),
+            strategy=cast(Literal["spatial", "stratified", "random", "region"], strategy),
             block_size=block_size,
             sample_limit=sample_limit,
         )
@@ -1873,6 +1874,120 @@ def split(
         f"[green]✓[/green] Splits written to [bold]{staging_dir / 'splits'}[/bold]: "
         f"{_split_line(counts)}"
     )
+
+
+@app.command(
+    rich_help_panel="2. Use a dataset",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv stats dataset/[/cyan]              train split (all patches without splits)\n\n"
+        "  [cyan]mapcv stats dataset/ --split all[/cyan]"
+    ),
+)
+def stats(
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
+    split_name: str = typer.Option(
+        "train", "--split", help="train, val, test or all: the patches to count."
+    ),
+) -> None:
+    """Per-band mean and std, class balance and class weights, written to stats.json."""
+    from mapcv.stats import write_stats
+
+    if split_name not in ("train", "val", "test", "all"):
+        _console.print("[red]--split must be train, val, test or all[/red]")
+        raise typer.Exit(code=1)
+    try:
+        path, values = write_stats(staging_dir, split_name)
+    except (FileNotFoundError, ManifestMismatchError) as exc:
+        _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    table = Table(box=None, padding=(0, 2), show_edge=False)
+    for column in ("source", "band", "mean", "std", "min", "max"):
+        table.add_column(column, justify="left" if column in ("source", "band") else "right")
+    for source, summary in values["sources"].items():
+        for band, mean, std, low, high in zip(
+            summary["bands"], summary["mean"], summary["std"], summary["min"], summary["max"]
+        ):
+            cells = [f"{v:.6g}" if v is not None else "-" for v in (mean, std, low, high)]
+            table.add_row(source, band, *cells)
+    _console.print(table)
+    weights = (values.get("classes") or {}).get("median_frequency_weights")
+    if weights:
+        _console.print(
+            "Class weights (median frequency): "
+            + ", ".join(f"{name} {weight:.3g}" for name, weight in weights.items())
+        )
+    _console.print(
+        f"[green]✓[/green] {values['patches']:,} patch(es) of the [bold]{values['split']}[/bold] "
+        f"split → [bold]{path}[/bold]"
+    )
+
+
+@app.command(
+    rich_help_panel="2. Use a dataset",
+    epilog="Example: [cyan]mapcv card dataset/[/cyan]",
+)
+def card(
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace an existing README.md."),
+) -> None:
+    """Write a dataset card (README.md with Hugging Face metadata) for sharing."""
+    from mapcv.card import write_card
+
+    if not (staging_dir / "manifest.json").exists():
+        _console.print(f"[red]No manifest found at[/red] {staging_dir / 'manifest.json'}")
+        raise typer.Exit(code=1)
+    try:
+        path = write_card(staging_dir, overwrite=force)
+    except FileExistsError as exc:
+        _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    _console.print(
+        f"[green]✓[/green] Dataset card written to [bold]{path}[/bold]. Set its licence to "
+        "what the imagery provider's terms allow before sharing."
+    )
+
+
+@app.command(
+    rich_help_panel="2. Use a dataset",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv verify dataset/[/cyan]\n\n"
+        "  [cyan]mapcv verify dataset/ --deep --write-checksums[/cyan]"
+    ),
+)
+def verify(
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
+    deep: bool = typer.Option(False, "--deep", help="Also decode every image and check its shape."),
+    write_checksums_: bool = typer.Option(
+        False, "--write-checksums", help="Write SHA256SUMS after a successful check."
+    ),
+) -> None:
+    """Check that every file is present and intact (and SHA256SUMS, when there is one)."""
+    from mapcv.verify import CHECKSUMS_FILENAME, verify_dataset, write_checksums
+
+    report = verify_dataset(staging_dir, deep=deep)
+    for note in report.notes:
+        _console.print(f"[yellow]Note:[/yellow] {note}")
+    if not report.ok:
+        for problem in report.problems[:20]:
+            _console.print(f"[red]✗[/red] {problem}")
+        if len(report.problems) > 20:
+            _console.print(f"[red]… and {len(report.problems) - 20} more[/red]")
+        raise typer.Exit(code=1)
+    hashes = f", {report.checked_hashes:,} hash(es) match" if report.checked_hashes else ""
+    _console.print(
+        f"[green]✓[/green] {report.patches:,} patch(es), {report.files:,} file(s) present{hashes}."
+    )
+    if write_checksums_:
+        path = write_checksums(staging_dir)
+        _console.print(f"[green]✓[/green] {CHECKSUMS_FILENAME} written to [bold]{path}[/bold]")
 
 
 @app.command(

@@ -106,7 +106,7 @@ def test_yaml_errors_do_not_echo_the_source(tmp_path: Path) -> None:
 
 def test_inspect_labels_refuses_what_it_cannot_read(tmp_path: Path) -> None:
     state = _state(tmp_path)
-    (tmp_path / "x.shp").write_bytes(b"")
+    (tmp_path / "x.zip").write_bytes(b"")
     (tmp_path / "x.tif").write_bytes(b"")
     (tmp_path / "bad.geojson").write_text("{")
     (tmp_path / "crs.geojson").write_text(
@@ -114,7 +114,7 @@ def test_inspect_labels_refuses_what_it_cannot_read(tmp_path: Path) -> None:
         '"features":[]}'
     )
     for name, message in (
-        ("x.shp", "GeoJSON"),
+        ("x.zip", "GeoJSON"),
         ("x.tif", "raster"),
         ("bad.geojson", "not valid"),
         ("crs.geojson", "WGS-84"),
@@ -162,3 +162,29 @@ def test_inspect_labels_shortens_values_from_the_file(tmp_path: Path) -> None:
     shown = result.data["fields"][0]["values"][0]["value"]
     assert len(shown) <= 64 and shown.endswith("…")
     assert any("no polygons" in note.lower() for note in result.data["notes"])
+
+
+_VECTOR = Path(__file__).parent / "data" / "vector"
+
+
+@pytest.mark.parametrize(
+    "name", ["labels.geojson", "labels.gpkg", "polygons.shp", "labels_32633.gpkg"]
+)
+def test_inspect_labels_reads_every_vector_format(name: str) -> None:
+    result = inspect_labels(_state(_VECTOR), name)
+    fields = {field["name"]: field for field in result.data["fields"]}
+    assert set(fields) == {"class", "rank", "score"}
+    assert fields["class"]["values"][0]["count"] >= 1
+    extent = result.data["extent"]  # lon/lat, also for the file stored in UTM
+    assert 16.3 < extent["west"] < extent["east"] < 16.4 and 48.1 < extent["south"] < 48.3
+
+
+def test_inspect_labels_geoparquet_and_layers() -> None:
+    pytest.importorskip("pyarrow")
+    assert inspect_labels(_state(_VECTOR), "labels.parquet").data["features"] == 7
+    state = _state(_VECTOR)
+    with pytest.raises(ToolFailure, match="buildings, landuse"):
+        inspect_labels(state, "labels_2layers.gpkg")
+    assert inspect_labels(state, "labels_2layers.gpkg", layer="landuse").data["features"] == 3
+    with pytest.raises(ToolFailure, match="GeoPackage"):
+        inspect_labels(state, "labels.geojson", layer="x")

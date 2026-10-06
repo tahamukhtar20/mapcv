@@ -123,7 +123,7 @@ What the server does **not** do: it does not limit which hosts a config's `url_t
 | --- | --- | --- |
 | `describe_config_schema` | no | The JSON schema of the config, generated from the pydantic models, plus the rules between fields (which tasks need labels, which image formats each imagery type accepts, the exact message of each invalid combination). Found by validating real configs, so it cannot go stale. |
 | `validate_config` | no | The checks and messages of `mapcv validate`, for a file or for text. A config with mistakes returns `valid: false` and each error with its field. |
-| `inspect_labels` | no | Fields of a GeoJSON or KML file with distinct values and counts, feature and geometry counts, the extent (usable as `region`) and which fields can be `labels.label_field`. |
+| `inspect_labels` | no | Fields of a vector label file (GeoJSON, KML, GeoPackage, Shapefile or GeoParquet) with distinct values and counts, feature and geometry counts, the extent in lon/lat (usable as `region`) and which fields can be `labels.label_field`. |
 | `plan` | no | Tiles, patches, sizes, memory and warnings, like `mapcv plan`, plus `large` and the reason. Downloads nothing. |
 | `info` | no | A dataset's task, source, class balance and split sizes, like `mapcv info`. |
 | `write_config` | yes | Validates, then saves a config inside the root. Refuses to overwrite unless asked. |

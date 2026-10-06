@@ -1,6 +1,6 @@
 ---
 name: mapcv
-description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO) or per-object masks (instance, COCO RLE). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Sentinel-2, GeoTIFF/COG) and GeoJSON/KML polygon labels or a label raster, or asks about a mapcv config, plan, dataset or error.
+description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO) or per-object masks (instance, COCO RLE). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Sentinel-2, GeoTIFF/COG) and polygon labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet) or a label raster, or asks about a mapcv config, plan, dataset or error.
 ---
 
 # mapcv: datasets from imagery and labels
@@ -56,7 +56,8 @@ imagery:
   source: esri_satellite        # or url_template: "https://.../{z}/{x}/{y}.png" (needs {x} {y} {z})
   max_connections: 4            # modest; respect the provider's limits
 labels:
-  path: buildings.geojson       # .geojson, .json or .kml in lon/lat
+  path: buildings.geojson       # .geojson .json .kml .gpkg .shp .parquet; other CRSs are reprojected
+  # layer: buildings            # only for a GeoPackage with several tables
   label_field: class            # omit: every polygon is class 1
   # classes: {building: 1, road: 2}   # optional fixed ids (1..255); needs label_field
 sampler: {patch_size: 256, edge_strategy: pad}
@@ -165,6 +166,9 @@ labels:
 | `skipped N without polygon geometry` / `without a label value` | Some features were not used; check `label_field` spelling; with `classes`, unlisted values are skipped |
 | `labels.label_field '...' has N distinct values; masks support at most 255 classes` | Pick a category field, not an id, or map values with `labels.classes` |
 | `GeoJSON 'crs' ... is not supported` | Re-export the labels as EPSG:4326 |
+| `... has no .prj file, so its CRS is unknown` (Shapefile) | Put the `.prj` next to the `.shp`; mapcv never guesses a CRS |
+| `... has N layers: a, b. Set labels.layer ...` (GeoPackage) | Set `labels.layer` to the table with the labels (`inspect_labels(path, layer=...)` shows each) |
+| `pip install 'mapcv[parquet]'` in the message (GeoParquet) | Install the extra |
 | `This is a large job` / `confirmation_required` | Show the plan; call `generate` with `confirm_large=true` only if the user agrees |
 | `Too many failed tiles` | The tile URL, zoom, key or quota is wrong; open one tile URL. Many servers have no tiles above zoom 19. Lower `max_connections` if rate limited, then call `generate` again |
 | `Response for ... is not an image` | The server returned an error page: rate limit, expired key, or a URL that is not a tile endpoint |

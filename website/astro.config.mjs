@@ -56,7 +56,7 @@ export default defineConfig({
             'It is a GDAL-free Python and Rust library and CLI.',
           details: [
             '- Install with `pip install mapcv`; the CLI journey is `mapcv init`, `plan`, `generate`, `info`.',
-            '- Imagery: XYZ tiles, Sentinel-2 L2A (EOPF Zarr) and GeoTIFF/COG. Labels: GeoJSON or KML polygons, or a label raster.',
+            '- Imagery: XYZ tiles, Sentinel-2 L2A (EOPF Zarr) and GeoTIFF/COG. Labels: GeoJSON, KML, GeoPackage, Shapefile or GeoParquet polygons, or a label raster.',
             '- Always run `mapcv plan` before `mapcv generate`; it downloads nothing.',
             '- Imagery providers have terms the user is responsible for.',
             '- AI agents can drive mapcv through its MCP server (`mapcv mcp`); see the page "Use mapcv with AI agents".',

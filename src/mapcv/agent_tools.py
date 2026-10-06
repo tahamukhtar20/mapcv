@@ -61,12 +61,19 @@ from mapcv.config import (
     eopf_local_path,
 )
 from mapcv.downloader import URL_TEMPLATES
-from mapcv.labels import MAX_CLASS_ID, _check_geojson_crs, _normalize_label, parse_kml
+from mapcv.labels import (
+    MAX_CLASS_ID,
+    VECTOR_LABEL_SUFFIXES,
+    _check_geojson_crs,
+    _normalize_label,
+    parse_kml,
+)
 from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
+from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
 from mapcv.writer import WriterConfig
 from mapcv.writers.detection import categories
 
@@ -302,6 +309,10 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
             found.append(("labels.path", local))
     elif labels is not None:
         found.append(("labels.path", labels.path))
+        if labels.path.suffix.lower() == ".shp" and labels.path.is_file():
+            found.extend(
+                ("labels.path (sidecar)", file) for file in shapefile_files(labels.path)[1:]
+            )
     imagery = config.imagery
     if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
         local = eopf_local_path(imagery.path)
@@ -596,6 +607,7 @@ def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str,
         "path": state.sandbox.rel(labels.path),
         "label_field": labels.label_field,
         "classes": labels.classes,
+        "layer": labels.layer,
     }
 
 
@@ -672,7 +684,7 @@ def validate_config(
 
 # ── inspect_labels ───────────────────────────────────────────────────────────
 
-_INSPECT_SUFFIXES = (".geojson", ".json", ".kml")
+_INSPECT_SUFFIXES = tuple(sorted(VECTOR_LABEL_SUFFIXES))
 
 
 @dataclass
@@ -772,7 +784,42 @@ def _scan_kml(data: bytes) -> _Scan:
     return scan
 
 
-def inspect_labels(state: ToolState, path: str, max_values: int = 20) -> ToolResult:
+def _scan_table(file: Path, layer: Optional[str]) -> _Scan:
+    """GeoPackage, Shapefile and GeoParquet: features in lon/lat and their attributes."""
+    suffix = file.suffix.lower()
+    if suffix == ".gpkg":
+        table = read_gpkg(file, layer)
+    elif suffix == ".shp":
+        table = read_shapefile(file)
+    else:
+        table = read_geoparquet(file)
+    scan = _Scan()
+    scan.features = len(table.geometries)
+    for index, geometry in enumerate(table.geometries):
+        if geometry is None or geometry.is_empty:
+            scan.geometry["none"] += 1
+        elif index in table.unreadable:
+            scan.geometry["unreadable"] += 1
+        else:
+            scan.geometry[geometry.geom_type] += 1
+            scan.extend(cast(Tuple[float, float, float, float], geometry.bounds))
+    for name, column in table.columns.items():
+        counter: Counter[str] = Counter()
+        for value in column:
+            if value is None or isinstance(value, (bytes, dict, list)):
+                continue
+            label = _normalize_label(value)
+            if label is not None:
+                counter[label] += 1
+        if counter:
+            scan.fields[name] = counter
+            scan.with_field[name] = sum(counter.values())
+    return scan
+
+
+def inspect_labels(
+    state: ToolState, path: str, max_values: int = 20, layer: Optional[str] = None
+) -> ToolResult:
     """Fields, the values of each field, feature and geometry counts, and the extent."""
     sandbox = state.sandbox
     file = sandbox.resolve(path, "path")
@@ -789,18 +836,29 @@ def inspect_labels(state: ToolState, path: str, max_values: int = 20) -> ToolRes
             f"inspect_labels reads {', '.join(_INSPECT_SUFFIXES)} files, not '{file.name}'. "
             "Convert the labels to GeoJSON (EPSG:4326) first."
         )
+    if layer is not None and suffix != ".gpkg":
+        raise ToolFailure(
+            f"`layer` picks a table of a GeoPackage (.gpkg); {file.name} has just one."
+        )
+    if suffix == ".shp":  # the files next to it are read too
+        for sidecar in shapefile_files(file):
+            sandbox.inside(sidecar.resolve(), "path", str(sidecar))
     if file.stat().st_size > MAX_LABEL_BYTES:
         raise ToolFailure(
             f"{sandbox.rel(file)} is larger than {MAX_LABEL_BYTES // 1024**2} MiB; "
             "use `plan` to check it instead."
         )
     max_values = max(1, min(int(max_values), 200))
-    data = file.read_bytes()
     try:
-        scan = _scan_kml(data) if suffix == ".kml" else _scan_geojson(data)
+        if suffix == ".kml":
+            scan = _scan_kml(file.read_bytes())
+        elif suffix in (".geojson", ".json"):
+            scan = _scan_geojson(file.read_bytes())
+        else:
+            scan = _scan_table(file, layer)
     except ToolFailure:
         raise
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         raise ToolFailure(f"Cannot read {sandbox.rel(file)}: {exc}") from None
 
     fields: List[Dict[str, Any]] = []

@@ -11,7 +11,7 @@ ready-to-train remote-sensing datasets.
 
 - **Imagery:** XYZ tiles, Sentinel-2 EOPF Zarr, GeoTIFF/COG (local, https, s3).
 - **Labels:** GeoJSON/KML polygons, or label rasters.
-- **Tasks:** segmentation, or detection with COCO/YOLO output.
+- **Tasks:** segmentation; detection with COCO/YOLO output; instance segmentation with COCO RLE masks.
 - **Output:** image/mask patches, `manifest.json` (v3) and leakage-safe `splits/`.
 
 ## Setup

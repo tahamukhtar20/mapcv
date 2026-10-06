@@ -23,9 +23,9 @@ Not directly: mapcv reads XYZ tiles and Sentinel-2 EOPF Zarr products. If you ca
 
 Yes. Leave out the `labels` block. You get `Images/`, a manifest and splits, but no `Masks/`.
 
-### Can I make an object-detection dataset?
+### Can I make an object-detection or instance-segmentation dataset?
 
-No, mapcv writes segmentation masks. Bounding boxes can be derived from the masks (connected components) or from your polygons, using the manifest's transform to convert coordinates. Detection, instance segmentation, classification, change detection and regression datasets are planned (`task` in the config).
+Yes. Set `task: detection` for a box per object (COCO JSON and YOLO labels), or `task: instance` for a mask per object (COCO JSON with RLE masks and, optionally, an instance-ID PNG per patch). Each label feature is one object. See [Object detection datasets](/mapcv/tutorials/object-detection/) and [Instance segmentation datasets](/mapcv/tutorials/instance-segmentation/). Classification, change detection and regression datasets are planned.
 
 ### How do I get several classes?
 

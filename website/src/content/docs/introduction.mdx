@@ -35,7 +35,7 @@ Building a segmentation dataset from map imagery usually means stitching tiles b
 | `splits/train.txt`, `val.txt`, `test.txt` | One image filename per line |
 | `splits/<percent>/labeled.txt` | Optional labeled/unlabeled subsets of `train` for semi-supervised learning |
 
-With `task: detection`, each label feature becomes a box instead: COCO JSON per split, YOLO label files and an Ultralytics `dataset.yaml` replace the masks (see [Object detection datasets](/mapcv/tutorials/object-detection/)).
+With `task: detection`, each label feature becomes a box instead: COCO JSON per split, YOLO label files and an Ultralytics `dataset.yaml` replace the masks (see [Object detection datasets](/mapcv/tutorials/object-detection/)). With `task: instance`, each feature becomes its own binary mask instead: COCO JSON per split with RLE masks, and optionally a 16-bit instance-ID PNG per patch (see [Instance segmentation datasets](/mapcv/tutorials/instance-segmentation/)).
 
 Details: [Dataset format](/mapcv/reference/dataset-format/).
 

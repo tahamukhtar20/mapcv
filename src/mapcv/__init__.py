@@ -1,5 +1,5 @@
 """
-mapcv - A satellite imagery dataset creation tool for segmentation and detection.
+mapcv - A satellite imagery dataset creation tool for segmentation, detection and instance segmentation.
 """
 
 from importlib.metadata import PackageNotFoundError
@@ -12,6 +12,7 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     ImageryConfig,
+    InstanceOptions,
     LabelsConfig,
     MapcvConfig,
     RasterClass,
@@ -64,6 +65,7 @@ __all__ = [
     "URL_TEMPLATES",
     "LabelsConfig",
     "DetectionOptions",
+    "InstanceOptions",
     "RasterClass",
     "RasterLabelsConfig",
     "ImageryConfig",

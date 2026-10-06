@@ -60,6 +60,7 @@ export default defineConfig({
             { label: 'Buildings from aerial imagery', slug: 'tutorials/buildings-from-aerial-imagery' },
             { label: 'Land cover from Sentinel-2', slug: 'tutorials/land-cover-from-sentinel-2' },
             { label: 'Object detection datasets', slug: 'tutorials/object-detection' },
+            { label: 'Instance segmentation datasets', slug: 'tutorials/instance-segmentation' },
             { label: 'Train a model on your dataset', slug: 'tutorials/train-a-model' },
           ],
         },

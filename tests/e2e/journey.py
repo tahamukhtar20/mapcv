@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 from PIL import Image
 
 ZOOM = 18
@@ -215,6 +216,52 @@ def main() -> None:
     check("objects" in out and "building" in out, "info shows no object counts", out)
     out = run(["generate", "boxes.yaml", "--yes"], root)
     check("Nothing left to do" in out, "a finished detection run did not resume", out)
+
+    # The same area as an instance segmentation dataset: COCO RLE masks and instance-ID PNGs.
+    masks_config = root / "masks.yaml"
+    masks_config.write_text(
+        "task: instance\n"
+        + text.replace("staging_dir: './dataset'", "staging_dir: './masks'")
+        + "\ninstance:\n  id_mask: true\n",
+        encoding="utf-8",
+    )
+    out = run(["generate", "masks.yaml", "--yes"], root)
+    inst = root / "masks"
+    manifest = json.loads((inst / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["task"] == "instance", "not an instance manifest", out)
+    patches = manifest["patches"]
+    check(len(patches) == NX * NY, f"{len(patches)} instance patches", out)
+    check(
+        sorted(f"masks/{p.name}" for p in (inst / "masks").iterdir())
+        == sorted(p["files"]["mask"] for p in patches),
+        "masks/ != manifest",
+        out,
+    )
+    instances = 0
+    for name in ("train", "val", "test"):
+        coco = json.loads(
+            (inst / "annotations" / f"instances_{name}.json").read_text(encoding="utf-8")
+        )
+        for image in coco["images"]:
+            entry = patches[image["id"] - 1]
+            ids = np.array(Image.open(inst / entry["files"]["mask"]))
+            check(
+                ids.dtype == np.uint16 and ids.shape == (256, 256), f"{ids.dtype} {ids.shape}", out
+            )
+            found = [ann for ann in coco["annotations"] if ann["image_id"] == image["id"]]
+            # The labels do not overlap, so annotation k owns exactly the pixels numbered k.
+            check(int(ids.max()) == len(found), f"{ids.max()} ids, {len(found)} annotations", out)
+            for number, ann in enumerate(found, start=1):
+                rle = ann["segmentation"]
+                check(rle["size"] == [256, 256] and isinstance(rle["counts"], str), str(rle), out)
+                check(ann["area"] == int((ids == number).sum()), f"area of {ann['id']}", out)
+                instances += 1
+    counted = sum(sum(p["summary"]["class_objects"].values()) for p in patches)
+    check(instances == counted > 0, f"{instances} COCO instances, {counted} in the manifest", out)
+    out = run(["info", "masks"], root)
+    check("objects" in out and "building" in out, "info shows no instance counts", out)
+    out = run(["generate", "masks.yaml", "--yes"], root)
+    check("Nothing left to do" in out, "a finished instance run did not resume", out)
 
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)

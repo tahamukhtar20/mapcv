@@ -527,9 +527,9 @@ AnyLabelsConfig = Annotated[
 ]
 
 
-SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection")
+SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection", "instance")
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ("instance", "classification", "change", "regression")
+PLANNED_TASKS: Tuple[str, ...] = ("classification", "change", "regression")
 
 DetectionFormat = Literal["coco", "yolo"]
 DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
@@ -572,6 +572,27 @@ class DetectionOptions(BaseModel):
         return [name for name in DETECTION_FORMATS if name in formats]
 
 
+class InstanceOptions(BaseModel):
+    """Settings of ``task: instance`` (the ``instance:`` block).
+
+    One instance is one label feature (a MultiPolygon is one instance, and so is a
+    feature that a patch edge cuts into several pieces). Its mask is the part of the
+    feature that is visible in the patch: inside the patch, inside the raster and
+    over pixels that have imagery.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    # Keep an instance only if at least this fraction of its area is visible in the patch
+    # (0 keeps every instance with a visible mask).
+    min_visible: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Drop instances whose mask has fewer pixels than this (slivers at patch edges).
+    min_area: int = Field(default=4, ge=1)
+    # Also write one 16-bit instance-ID PNG per patch (masks/), next to the COCO RLE masks.
+    id_mask: bool = False
+
+
 def _validate_task(task: Any) -> Any:
     if not isinstance(task, str) or task in SUPPORTED_TASKS:
         return task
@@ -591,7 +612,7 @@ class MapcvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # What the dataset is for; decides the target each patch is annotated with.
-    task: Literal["segmentation", "detection"] = "segmentation"
+    task: Literal["segmentation", "detection", "instance"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig
     labels: Optional[AnyLabelsConfig] = None
@@ -600,6 +621,8 @@ class MapcvConfig(BaseModel):
     split: Optional[SplitterConfig] = None
     # Options of task: detection; defaults apply when the block is omitted.
     detection: Optional[DetectionOptions] = None
+    # Options of task: instance; defaults apply when the block is omitted.
+    instance: Optional[InstanceOptions] = None
 
     _check_task = field_validator("task", mode="before")(_validate_task)
 
@@ -654,8 +677,15 @@ class MapcvConfig(BaseModel):
                 f"the detection block only applies to task: detection (task is '{self.task}'); "
                 "remove it or set task: detection"
             )
+        if self.instance is not None and self.task != "instance":
+            raise ValueError(
+                f"the instance block only applies to task: instance (task is '{self.task}'); "
+                "remove it or set task: instance"
+            )
         if self.task == "detection":
             self._check_detection()
+        if self.task == "instance":
+            self._check_instance()
         return self
 
     def _check_detection(self) -> None:
@@ -702,10 +732,55 @@ class MapcvConfig(BaseModel):
                 "or drop"
             )
 
+    def _check_instance(self) -> None:
+        labels = self.labels
+        if labels is None:
+            raise ValueError("task: instance needs labels: the masks come from the label features")
+        if isinstance(labels, RasterLabelsConfig):
+            raise ValueError(
+                "task: instance needs vector labels (one feature per instance), not a label "
+                "raster; use task: segmentation for labels.type: raster, or polygonize the "
+                "raster's objects into a GeoJSON first"
+            )
+        if "ignore_index" in labels.model_fields_set:
+            raise ValueError(
+                "labels.ignore_index marks mask pixels without imagery and instance masks have "
+                "no such value (an instance keeps only its pixels over imagery); remove it"
+            )
+        id_mask = self.instance_options.id_mask
+        if "mask_format" in self.writer.model_fields_set and not id_mask:
+            raise ValueError(
+                "writer.mask_format sets the format of the instance-ID masks, which are only "
+                "written with instance.id_mask: true (the COCO masks are RLE inside the "
+                "annotation files); set instance.id_mask: true or remove writer.mask_format"
+            )
+        if (
+            self.writer.world_files
+            and not id_mask
+            and self.writer.image_format not in ("png", "jpg")
+        ):
+            raise ValueError(
+                "writer.world_files adds .pgw/.jgw files to PNG and JPG patches and, without "
+                "instance.id_mask, instance datasets write no masks, so with image_format "
+                f"'{self.writer.image_format}' it would write none; remove it (GeoTIFF patches "
+                "carry their georeferencing)"
+            )
+        if self.sampler.edge_strategy == "pad" and self.sampler.pad_mode == "reflect":
+            raise ValueError(
+                "sampler.pad_mode: reflect mirrors instances into the padding of edge patches, "
+                "where they would have no mask; use pad_mode: zero, or edge_strategy: shift "
+                "or drop"
+            )
+
     @property
     def detection_options(self) -> DetectionOptions:
         """The ``detection`` block, or its defaults when it is omitted."""
         return self.detection if self.detection is not None else DetectionOptions()
+
+    @property
+    def instance_options(self) -> InstanceOptions:
+        """The ``instance`` block, or its defaults when it is omitted."""
+        return self.instance if self.instance is not None else InstanceOptions()
 
     @classmethod
     def from_yaml(cls, path: Union[str, "os.PathLike[str]"]) -> "MapcvConfig":

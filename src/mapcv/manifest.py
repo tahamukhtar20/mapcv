@@ -49,8 +49,9 @@ class PatchSummary(TypedDict, total=False):
 
     ``empty_ratio`` is always present. Segmentation adds ``class_pixels``: the
     mask's pixel count per class ID (as strings, ascending), ignore value
-    included. Detection adds ``class_objects``: the number of objects (boxes)
-    per class ID (as strings, ascending; empty for a patch without objects).
+    included. Detection and instance segmentation add ``class_objects``: the number
+    of objects (boxes, masks) per class ID (as strings, ascending; empty for a patch
+    without objects).
     Other tasks add their own keys.
     """
 
@@ -64,7 +65,8 @@ class ManifestEntry(TypedDict):
     """One patch (a plain ``dict`` at runtime).
 
     ``files`` maps a role to a path relative to the dataset folder, with ``/``
-    separators: ``image`` (the source's name) and, for segmentation, ``mask``.
+    separators: ``image`` (the source's name) and, for segmentation and for instance
+    datasets with ``instance.id_mask``, ``mask``.
     """
 
     row: int

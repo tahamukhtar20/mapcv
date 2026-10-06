@@ -97,11 +97,12 @@ def _entry(
     empty_ratio: float,
     extra_files: Optional[Dict[str, str]] = None,
     images_dir: str = IMAGES_DIR,
+    masks_dir: str = MASKS_DIR,
 ) -> ManifestEntry:
     files = {"image": f"{images_dir}/{image_name}"}
     summary = PatchSummary(empty_ratio=empty_ratio)
     if mask_name is not None:
-        files["mask"] = f"{MASKS_DIR}/{mask_name}"
+        files["mask"] = f"{masks_dir}/{mask_name}"
     if extra_files:
         files.update(extra_files)
     if counts is not None:
@@ -269,11 +270,13 @@ def write_patches(
     chunk_index: int = 0,
     *,
     images_dir: str = IMAGES_DIR,
+    masks_dir: str = MASKS_DIR,
 ) -> None:
     """Write patches to ``Images/`` and ``Masks/`` and append their entries to ``manifest``.
 
     ``images_dir`` names the image folder (detection datasets use ``images``, the
-    folder name Ultralytics expects next to ``labels``).
+    folder name Ultralytics expects next to ``labels``) and ``masks_dir`` the mask folder
+    (instance datasets use ``masks``, next to ``images``).
 
     Images: PNG/JPG (uint8 RGB) are encoded by the Rust writer; NPY keeps any
     channel count and dtype, stored bands-first; TIF is a GeoTIFF (also any
@@ -292,7 +295,7 @@ def write_patches(
         _check_masks(mask_patches, len(meta), config.mask_format)
 
     images_path = config.staging_dir / images_dir
-    masks_dir = config.staging_dir / MASKS_DIR
+    masks_path = config.staging_dir / masks_dir
     start = len(manifest.patches)
     stems = [f"patch_{start + index:07d}" for index in range(len(meta))]
     image_suffix = config.image_format
@@ -315,7 +318,7 @@ def write_patches(
 
     images_path.mkdir(parents=True, exist_ok=True)
     if mask_patches is not None:
-        masks_dir.mkdir(parents=True, exist_ok=True)
+        masks_path.mkdir(parents=True, exist_ok=True)
 
     counts: List[Optional[Dict[str, int]]] = [None] * len(meta)
     if rust_images:
@@ -326,7 +329,7 @@ def write_patches(
             start,
             chunk_index,
             str(images_path),
-            str(masks_dir),
+            str(masks_path),
             config.image_format,
             config.jpg_quality,
             config.jpg_subsampling,
@@ -361,7 +364,7 @@ def write_patches(
         ]
 
     if mask_patches is not None and not rust_masks:
-        _write_python_masks(mask_patches, stems, masks_dir, config, meta, manifest)
+        _write_python_masks(mask_patches, stems, masks_path, config, meta, manifest)
         counts = [_class_counts(mask) for mask in mask_patches]
 
     world: List[Dict[str, str]] = [{} for _ in meta]
@@ -375,9 +378,9 @@ def write_patches(
                     f"{images_dir}/{stem}.{'pgw' if image_suffix == 'png' else 'jgw'}"
                 )
         if mask_patches is not None and mask_suffix == "png":
-            _write_world_files(masks_dir, stems, "pgw", meta, manifest)
+            _write_world_files(masks_path, stems, "pgw", meta, manifest)
             for entry_files, stem in zip(world, stems):
-                entry_files["mask_world"] = f"{MASKS_DIR}/{stem}.pgw"
+                entry_files["mask_world"] = f"{masks_dir}/{stem}.pgw"
 
     for index, item in enumerate(meta):
         manifest.patches.append(
@@ -392,5 +395,6 @@ def write_patches(
                 empty_ratios[index],
                 world[index],
                 images_dir,
+                masks_dir,
             )
         )

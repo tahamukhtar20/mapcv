@@ -1,11 +1,11 @@
 ---
 title: Dataset format
-description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, the manifest v3 JSON schema and the split files written by mapcv.
+description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, the manifest v3 JSON schema and the split files written by mapcv.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks.
+Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks and [instance segmentation datasets](#instance-segmentation-datasets) a mask per object.
 
 <FileTree>
 - dataset/
@@ -150,7 +150,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
-| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"` or `"detection"` |
+| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"` or `"instance"` |
 | `sources` | list | The imagery, one object per source (today always one, named `"image"`). See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
 | `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`), plus `world_files: true` when world files are written. A resume notices a format change |
@@ -175,12 +175,12 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch) or `"detection"` (boxes) |
+| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch), `"detection"` (boxes) or `"instance"` (a mask per object) |
 | `class_map` | object | Label value → class ID (mask value, COCO `category_id`). Empty when every polygon is class 1 |
-| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection |
-| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `null` for detection (no masks) |
+| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection and instance |
+| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `"uint16"` for instance datasets with `instance.id_mask`; `null` for detection and for instance datasets without ID masks |
 | `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file, so a resume notices edited labels. For raster labels (`"type": "raster"`) the settings are `band`, `classes` (each value as `{"id", "name"}`), `nodata`, `ignore_values`, `unmapped` and `resampling`, plus a `fingerprint` that identifies the label raster as a GeoTIFF source's does (`size` and `sha256_head_tail` for a local file; `url`, `etag`, `size` and `sha256_head` for a URL) instead of a `sha256`, since nothing reads the whole file |
-| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection |
+| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection, the resolved [`instance`](/mapcv/reference/configuration/#instance) block for instance |
 
 ### Patch entries
 
@@ -189,8 +189,8 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `row`, `col` | int | Top-left pixel of the patch in the **whole raster**. Can point past the edge for `edge_strategy: pad` |
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `chunk` | int | Index of the processing chunk that wrote the patch (used to resume) |
-| `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: `image` (the source's name) and, with labels, `mask`; with `world_files`, `image_world` and `mask_world` |
-| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection has `class_objects` instead: the number of boxes per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects) |
+| `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: `image` (the source's name) and, with labels, `mask` (instance datasets: only with `instance.id_mask`); with `world_files`, `image_world` and `mask_world` |
+| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects) |
 
 Readers should ignore keys they do not know: later 0.3 releases may add keys (new tasks add `files` roles and `summary` keys) without changing `version`. Renaming or removing a key changes `version`.
 
@@ -310,6 +310,75 @@ names:
 ### `annotations/objects/`
 
 One JSON file per processing chunk (`chunk_000012.json`, the manifest entries' `chunk`), mapping each patch's image file name to its objects as `[category_id, x, y, width, height, area, truncated]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without recomputing any box. Read the COCO or YOLO files instead; this folder is mapcv's own.
+
+## Instance segmentation datasets
+
+With `task: instance` the images go to `images/` and each patch's objects become one binary mask each, stored as run-length encoded (RLE) segmentations in COCO JSON. There are no class masks and no YOLO files; with [`instance.id_mask`](/mapcv/reference/configuration/#instance) each patch also gets a 16-bit instance-ID PNG in `masks/`.
+
+<FileTree>
+- dataset/
+  - images/
+    - patch_0000000.png same naming and encoding as above
+    - …
+  - masks/ only with instance.id_mask: true
+    - patch_0000000.png 16-bit: 0 = background, k = the k-th annotation of the image (`writer.mask_format` may also be `npy` or `tif`)
+    - …
+  - annotations/ COCO
+    - instances_train.json
+    - instances_val.json
+    - instances_test.json `instances_all.json` instead when there is no split
+    - objects/ the instances per processing chunk, which the files above are built from
+  - patches.geojson footprints, as for segmentation (`writer.footprints`)
+  - manifest.json
+  - splits/
+</FileTree>
+
+Instance datasets use the same `writer` settings as segmentation, except that `mask_format` is an error to set without `id_mask`. `world_files` adds a world file next to PNG/JPG images and, with `id_mask`, next to PNG masks.
+
+**What an instance is.** One label feature is one instance: a MultiPolygon is one instance, and a feature cut into pieces by a patch edge is one instance whose mask covers every visible piece. Its mask holds the pixels of the feature that are inside the patch, inside the raster (not in padding) and over pixels with imagery (failed tiles and NoData are cut out). Holes are holes. An instance is kept when at least `min_visible` of its area is visible and its mask has at least `min_area` pixels.
+
+**Exact masks.** Each instance is rasterized on its own, on the patch's pixel grid, with the rasterizer that writes segmentation masks (a port of GDAL's: a pixel is burned when its centre is inside the polygon, with `labels.all_touched` when an edge passes through it). The instances of a patch may overlap, and every mask is exact: nothing overwrites anything. With `min_visible: 0` and `min_area: 1` (every instance kept), painting them in feature order gives the segmentation mask of the same labels over the pixels that have imagery.
+
+### COCO
+
+One file per split, each a standard COCO instance segmentation document (`pycocotools.coco.COCO(path)` loads it, and `coco.annToMask(ann)` decodes an annotation; so do torchvision's `CocoDetection`, Detectron2 and MMDetection). The image root is `images/`.
+
+```json title="dataset/annotations/instances_train.json (shortened)"
+{
+  "info": {"description": "mapcv instance segmentation dataset, train patches", "mapcv_version": "0.3.0"},
+  "licenses": [],
+  "categories": [
+    {"id": 1, "name": "building", "supercategory": "object"}
+  ],
+  "images": [
+    {"id": 18, "file_name": "patch_0000017.png", "width": 256, "height": 256}
+  ],
+  "annotations": [
+    {"id": 33, "image_id": 18, "category_id": 1, "segmentation": {"size": [256, 256], "counts": "baV13m78H00000^Vh0"}, "bbox": [154, 50, 5, 11], "area": 47, "iscrowd": 0, "truncated": false}
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `images[].id`, `file_name` | As for detection: the patch number + 1, stable in every split file and after `mapcv split`; the image's file name in `images/` |
+| `annotations[].id` | Instances numbered from 1 over all patches in manifest order (feature order within a patch), so an instance keeps its ID whichever split it lands in |
+| `category_id` | The class ID from `target.class_map`; `1` (named `object`) without `labels.label_field` |
+| `segmentation` | The mask as a **compressed RLE**: `size` is `[height, width]` of the patch and `counts` the run lengths as the string `pycocotools.mask.encode` writes. Runs go down each column in turn (column-major order), alternate between background and the instance, and start with background (a zero-length run when the first pixel is in the instance). The mask equals the one the instance's `bbox` and `area` describe |
+| `bbox` | `[x, y, width, height]`, the tight box around the mask's pixels, as integers in patch pixels (the same as `pycocotools.mask.toBbox`) |
+| `area` | The number of pixels in the mask (the same as `pycocotools.mask.area`) |
+| `iscrowd` | Always `0`: every instance is one object, stored as RLE |
+| `truncated` | `true` when part of the feature is not visible in this patch: cut by the patch or raster edge, or over pixels without imagery. Not part of the COCO standard; tools ignore it |
+
+Images without instances are listed with no annotations. `categories` lists every class of the class map, ascending by ID.
+
+### Instance-ID masks
+
+With `instance.id_mask: true`, `masks/<image stem>.png` is a 16-bit grayscale PNG (or an `.npy` or GeoTIFF of `uint16`, per `writer.mask_format`) the size of the patch: `0` is background and `k` marks the pixels of the `k`-th annotation of that image, numbered from 1 in the order of the annotations (ascending `id`, which is feature order). **Where instances overlap, the later one wins**, as later polygons overwrite earlier ones in segmentation masks; an instance that is fully covered by later ones has no pixel in the PNG but keeps its exact COCO mask. A patch with more than 65,535 instances stops the run with an error that names the fixes (a smaller patch size, a larger `min_area`, or no ID masks). The manifest lists the file as `files.mask`.
+
+### `annotations/objects/`
+
+As for detection, one JSON file per processing chunk maps each patch's image file name to its instances, as `[category_id, x, y, width, height, area, truncated, counts]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without rasterizing again. Read the COCO files instead; this folder is mapcv's own.
 
 ## Split files
 

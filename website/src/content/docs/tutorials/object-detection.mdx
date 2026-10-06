@@ -238,7 +238,7 @@ This tutorial builds an **object detection** dataset from the [quickstart](/mapc
 7. ### Variations
 
    - **Several classes.** Set `label_field: building` (the OSM tag: `house`, `apartments`, …) and a new `staging_dir`. COCO `category_id` is the class ID that `mapcv plan` prints; YOLO indices are the same classes counted from 0 in ID order.
-   - **Points.** For point labels (trees, cars, wells), set `detection.point_box_size` to a box side in pixels: each GeoJSON point becomes a square box centred on it.
+   - **Points.** For point labels (trees, cars, wells), set `detection.point_box_size` to a box side in pixels: each point (GeoJSON, GeoPackage, Shapefile or GeoParquet) becomes a square box centred on it.
    - **Only one format.** `formats: [yolo]` or `formats: [coco]`.
    - **Large objects.** A field or lake larger than a patch can never show 30% of itself in one patch; mapcv warns about such features. Lower `min_visible`, or use larger patches.
 

@@ -67,7 +67,7 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
 
    How a building becomes a mask:
 
-   - **One feature, one instance.** Each GeoJSON feature is one instance, including a MultiPolygon. A building cut by a patch edge is still one instance; its mask is the part inside the patch.
+   - **One feature, one instance.** Each label feature (GeoJSON, KML, GeoPackage, Shapefile or GeoParquet) is one instance, including a MultiPolygon. A building cut by a patch edge is still one instance; its mask is the part inside the patch.
    - **Exact masks.** Every building is burned on its own, with the rasterizer and the pixel rule that write [segmentation masks](/mapcv/concepts/coordinates-and-grids/): a pixel belongs to a building when its centre is inside the footprint (`labels.all_touched: true` also takes every pixel an edge passes through). Because buildings are not burned into one shared mask, two overlapping footprints each keep their exact mask. Courtyards (holes) stay empty.
    - **Only what is visible.** The mask holds the pixels of the building that are inside the patch, inside the raster, and over pixels that have imagery (failed tiles and NoData are cut out).
    - **`min_visible`** decides whether a building that the patch shows only in part gets a mask there. With `0.3`, a building split 50/50 between two patches gets a mask in both, and one with 20% in a patch gets none in that patch. Masks of cut buildings are flagged `truncated` in COCO.

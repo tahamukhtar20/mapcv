@@ -1,0 +1,26 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "class": "road",
+    "rank": 4,
+    "score": 5.0
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      16.36,
+      48.21
+     ],
+     [
+      16.37,
+      48.211
+     ]
+    ]
+   }
+  }
+ ]
+}

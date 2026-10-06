@@ -21,7 +21,7 @@ from mapcv.config import (
 from mapcv.imagery import GeoTiffRasterSource
 from shapely.geometry import box
 
-from mapcv.labels import parse_geojson, parse_kml
+from mapcv.labels import load_vector_labels
 from mapcv.sampler import random_patch_capacity
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
@@ -232,16 +232,12 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
         return _summarize_label_raster(config, labels)
     if not labels.path.exists():
         return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
-    data = labels.path.read_bytes()
     points = config.task == "detection" and config.detection_options.point_box_size is not None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
-        if labels.path.suffix.lower() == ".kml":
-            geometries, class_map = parse_kml(data, labels.label_field, labels.classes)
-        else:
-            geometries, class_map = parse_geojson(
-                data, labels.label_field, labels.classes, points=points
-            )
+        geometries, class_map = load_vector_labels(
+            labels.path, labels.label_field, labels.classes, points=points, layer=labels.layer
+        )
     messages = [str(warning.message) for warning in caught]
     region = config.region
     area = box(region.west, region.south, region.east, region.north)

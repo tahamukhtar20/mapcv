@@ -21,6 +21,7 @@ import numpy as np
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
@@ -35,7 +36,14 @@ from mapcv.config import (
     RasterLabelsConfig,
     eopf_local_path,
 )
-from mapcv.labels import MAX_CLASS_ID, parse_geojson, parse_kml
+from mapcv.labels import (
+    MAX_CLASS_ID,
+    _normalize_label,
+    VECTOR_LABEL_SUFFIXES,
+    load_vector_labels,
+    vector_attributes,
+    vector_layers,
+)
 from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
@@ -236,7 +244,8 @@ def _settings_table(config: MapcvConfig) -> Table:
         )
     else:
         field = config.labels.label_field or "none — every polygon is class 1"
-        table.add_row("Labels", f"{config.labels.path} · field: {field}")
+        layer = f" · layer: {config.labels.layer}" if config.labels.layer else ""
+        table.add_row("Labels", f"{config.labels.path}{layer} · field: {field}")
     sampler = config.sampler
     table.add_row(
         "Patches",
@@ -508,7 +517,8 @@ imagery:
   max_failed_ratio: 0.05
 
 # labels:                    # omit for an image-only dataset
-#   path: buildings.geojson  # .geojson or .kml, in lon/lat
+#   path: buildings.geojson  # .geojson, .kml, .gpkg, .shp or .parquet; any CRS but GeoJSON/KML's lon/lat
+#   layer: null              # the table of a .gpkg with several
 #   label_field: null        # property holding the class; null = every polygon is class 1
 #   classes: null            # optional fixed ids, e.g. {building: 1, road: 2}
 
@@ -599,7 +609,8 @@ imagery:
   # nodata: 0                # overrides the file's NoData value (patches over it are "empty")
 
 # labels:                    # omit for an image-only dataset
-#   path: buildings.geojson  # .geojson or .kml, in lon/lat: mapcv reprojects it into the file's CRS
+#   path: buildings.geojson  # .geojson, .kml, .gpkg, .shp or .parquet: mapcv reprojects it into the imagery's CRS
+#   layer: null              # the table of a .gpkg with several
 #   label_field: null        # property holding the class; null = every polygon is class 1
 #
 # labels:                    # or a classified label raster (land cover, a model's output, ...)
@@ -647,7 +658,7 @@ imagery:
   max_connections: 4         # keep requests modest; respect the provider's limits
 
 labels:
-  path: buildings.geojson    # .geojson or .kml, in lon/lat; one object per feature
+  path: buildings.geojson    # .geojson, .kml, .gpkg, .shp or .parquet; one object per feature
   label_field: null          # property holding the class; null = every feature is class 1
 
 detection:
@@ -732,12 +743,27 @@ def _yaml_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _ask_layer(path: Path) -> Optional[str]:
+    """For a GeoPackage with several layers, ask which one holds the features."""
+    try:
+        names = vector_layers(path)
+    except ValueError:
+        return None  # the caller reads the file next and shows why it cannot
+    if len(names) < 2:
+        return None
+    _console.print(f"[dim]{path.name} has {len(names)} layers: {', '.join(names)}[/dim]")
+    return Prompt.ask("Layer", choices=names, default=names[0], console=_console)
+
+
 def _ask_bbox_or_file(
     default_bbox: Optional[Tuple[float, float, float, float]] = None,
-) -> Tuple[Tuple[float, float, float, float], Optional[Path]]:
+) -> Tuple[Tuple[float, float, float, float], Optional[Path], Optional[str]]:
     default = ",".join(f"{value:.6f}" for value in default_bbox) if default_bbox else None
     while True:
-        prompt = "Area: a bounding box [dim]west,south,east,north[/dim] or a .geojson/.kml file"
+        prompt = (
+            "Area: a bounding box [dim]west,south,east,north[/dim] or a vector file "
+            "[dim](.geojson, .kml, .gpkg, .shp, .parquet)[/dim]"
+        )
         if default is not None:
             answer = Prompt.ask(
                 prompt + " [dim](Enter = the whole file)[/dim]",
@@ -748,16 +774,18 @@ def _ask_bbox_or_file(
         else:
             answer = Prompt.ask(prompt, console=_console).strip()
         path = Path(answer).expanduser()
-        if path.suffix.lower() in (".geojson", ".json", ".kml"):
+        if path.suffix.lower() in VECTOR_LABEL_SUFFIXES:
             if not path.exists():
                 _console.print(f"[red]File not found:[/red] {path}")
                 continue
-            data = path.read_bytes()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                geometries, _ = (
-                    parse_kml(data) if path.suffix.lower() == ".kml" else parse_geojson(data)
-                )
+            layer = _ask_layer(path)
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    geometries, _ = load_vector_labels(path, layer=layer)
+            except (ValueError, OSError) as exc:
+                _console.print(f"[red]Cannot read that file:[/red] {escape(str(exc))}")
+                continue
             if not geometries:
                 _console.print("[red]No polygons in that file.[/red]")
                 continue
@@ -769,7 +797,7 @@ def _ask_bbox_or_file(
                 f"[dim]Using the extent of {len(geometries):,} polygon(s): "
                 f"{west:.5f}, {south:.5f} → {east:.5f}, {north:.5f}[/dim]"
             )
-            return (west, south, east, north), path
+            return (west, south, east, north), path, layer
         try:
             west, south, east, north = (float(part) for part in answer.split(","))
         except ValueError:
@@ -778,26 +806,41 @@ def _ask_bbox_or_file(
         if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
             _console.print("[red]Expected west < east and south < north, in lon/lat degrees.[/red]")
             continue
-        return (west, south, east, north), None
+        return (west, south, east, north), None, None
 
 
-def label_fields(path: Path, max_values: int = 5) -> Dict[str, List[str]]:
-    """Return candidate label fields of a GeoJSON/KML file with example values."""
-    data = path.read_bytes()
+def label_fields(
+    path: Path, max_values: int = 5, layer: Optional[str] = None
+) -> Dict[str, List[str]]:
+    """Return candidate label fields of a vector label file with example values."""
     values: Dict[str, Counter[str]] = {}
-    if path.suffix.lower() == ".kml":
+    suffix = path.suffix.lower()
+    if suffix == ".kml":
+        data = path.read_bytes()
         text = data.decode("utf-8", errors="replace")
         names = set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text))
         for name in sorted(names):
             polygons, _ = parse_kml_rs(data, name)
             values[name] = Counter(label for _, label in polygons if label)
-    else:
-        obj: Any = json.loads(data.decode("utf-8"))
+    elif suffix in (".geojson", ".json"):
+        obj: Any = json.loads(path.read_bytes().decode("utf-8"))
         features = obj.get("features", [obj]) if isinstance(obj, dict) else []
         for feature in features:
             for key, value in (feature.get("properties") or {}).items():
                 if value is not None and not isinstance(value, (dict, list)):
                     values.setdefault(key, Counter())[str(value)] += 1
+    else:
+        for name, column in vector_attributes(path, layer).items():
+            counter = Counter(
+                label
+                for label in (
+                    _normalize_label(value)
+                    for value in column
+                    if not isinstance(value, (bytes, dict, list))
+                )
+                if label is not None
+            )
+            values[name] = counter
     # Fields with more distinct values than a mask can hold (ids, names) can't be classes.
     return {
         name: [value for value, _ in counter.most_common(max_values)]
@@ -806,8 +849,12 @@ def label_fields(path: Path, max_values: int = 5) -> Dict[str, List[str]]:
     }
 
 
-def _ask_label_field(path: Path) -> Optional[str]:
-    fields = label_fields(path)
+def _ask_label_field(path: Path, layer: Optional[str] = None) -> Optional[str]:
+    try:
+        fields = label_fields(path, layer=layer)
+    except (ValueError, OSError) as exc:
+        _console.print(f"[yellow]Cannot read its attributes:[/yellow] {escape(str(exc))}")
+        return None
     if not fields:
         _console.print("[dim]No attribute fields found: every polygon will be class 1.[/dim]")
         return None
@@ -1095,7 +1142,7 @@ def _wizard() -> str:
     geotiff: Optional[_GeoTiffAnswer] = _ask_geotiff() if kind == "geotiff" else None
 
     _console.print("\n[bold cyan]2/4 Area[/bold cyan]")
-    (west, south, east, north), area_file = _ask_bbox_or_file(
+    (west, south, east, north), area_file, area_layer = _ask_bbox_or_file(
         geotiff.extent if geotiff is not None else None
     )
     latitude = (south + north) / 2
@@ -1146,15 +1193,17 @@ def _wizard() -> str:
 
     _console.print("\n[bold cyan]3/4 Labels[/bold cyan]")
     labels_path: Optional[Path] = None
+    labels_layer: Optional[str] = None
     raster_lines: List[str] = []
     if area_file is not None and Confirm.ask(
         f"Use {area_file.name} as the labels too?", default=True, console=_console
     ):
         labels_path = area_file
+        labels_layer = area_layer
     elif area_file is None:
         answer = Prompt.ask(
-            "Label file [dim](.geojson/.kml, or a .tif label raster; blank for an image-only "
-            "dataset)[/dim]",
+            "Label file [dim](.geojson, .kml, .gpkg, .shp, .parquet, or a .tif label raster; "
+            "blank for an image-only dataset)[/dim]",
             default="",
             show_default=False,
             console=_console,
@@ -1164,13 +1213,17 @@ def _wizard() -> str:
             raster_lines = _ask_label_raster(path_text, (west, south, east, north))
         elif answer:
             labels_path = Path(answer).expanduser()
+            if labels_path.exists():
+                labels_layer = _ask_layer(labels_path)
     # A label raster makes masks, so the task question is only asked for vector labels.
     label_lines: List[str] = raster_lines
     task_lines: List[str] = []
     detection_lines: List[str] = []
     if labels_path is not None:
-        field = _ask_label_field(labels_path) if labels_path.exists() else None
+        field = _ask_label_field(labels_path, labels_layer) if labels_path.exists() else None
         label_lines = ["labels:", f"  path: {_yaml_str(str(labels_path))}"]
+        if labels_layer is not None:
+            label_lines.append(f"  layer: {_yaml_str(labels_layer)}")
         label_lines.append(f"  label_field: {field}" if field else "  label_field: null")
         _console.print(
             "  [bold]segmentation[/bold]  a class mask per patch\n"
@@ -1331,7 +1384,7 @@ def plan(
     try:
         estimate = make_plan(config)
     except (ValueError, RuntimeError, OSError) as exc:
-        _console.print(f"[red]Cannot plan this config:[/red] {exc}")
+        _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _print_plan(config_path, config, estimate)
     _console.print(f"\nLooks right? Build it with [cyan]mapcv generate {config_path}[/cyan]")
@@ -1360,7 +1413,7 @@ def generate(
     try:
         estimate = make_plan(config)
     except (ValueError, RuntimeError, OSError) as exc:
-        _console.print(f"[red]Cannot plan this config:[/red] {exc}")
+        _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _print_plan(config_path, config, estimate)
     if dry_run:
@@ -1390,7 +1443,7 @@ def generate(
             raise typer.Exit(code=130)
         except Exception as exc:  # noqa: BLE001 - any failure gets the same resume advice
             _show_warnings(caught, shown)
-            detail = str(exc) or type(exc).__name__
+            detail = escape(str(exc) or type(exc).__name__)
             _console.print(f"[red]Generation failed:[/red] {detail}")
             _console.print(
                 "[dim]Fix the cause and run the same command again: finished chunks are "

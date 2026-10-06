@@ -29,6 +29,7 @@ from mapcv.downloader import (
 from mapcv.labels import (
     ClassMap,
     GeomWithClass,
+    load_vector_labels,
     parse_geojson,
     parse_kml,
     transform_to_mercator,
@@ -89,6 +90,7 @@ __all__ = [
     "bounds",
     "load_or_create_manifest",
     "snap_bbox",
+    "load_vector_labels",
     "parse_geojson",
     "parse_kml",
     "rasterize",

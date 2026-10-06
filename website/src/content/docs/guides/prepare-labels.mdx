@@ -1,6 +1,6 @@
 ---
 title: Prepare labels
-description: Get polygon labels into a GeoJSON or KML file mapcv can read — from QGIS, ogr2ogr, Python or OpenStreetMap — choose class IDs, or use a classified raster such as ESA WorldCover as labels.
+description: Get polygon labels into a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file mapcv can read — from QGIS, ogr2ogr, Python or OpenStreetMap — choose class IDs, or use a classified raster such as ESA WorldCover as labels.
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -11,20 +11,33 @@ mapcv burns **polygons** from one label file into the masks, or reads the classe
 
 | | Requirement |
 | --- | --- |
-| File type | `.geojson`, `.json` or `.kml`. Not `.kmz`, Shapefile or GeoPackage (convert them, below) |
-| Coordinates | WGS-84 **longitude, latitude** (EPSG:4326), in that order, as RFC 7946 GeoJSON requires |
-| Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection`. Points and lines are skipped with a warning |
+| File type | `.geojson`, `.json`, `.kml`, `.gpkg` (GeoPackage), `.shp` (Shapefile) or `.parquet`/`.geoparquet` (GeoParquet). Not `.kmz` (unzip it, below). The suffix picks the reader |
+| Coordinates | GeoJSON and KML are WGS-84 **longitude, latitude** (EPSG:4326), in that order, as RFC 7946 requires. GeoPackage, Shapefile and GeoParquet may be in **any CRS** they state; mapcv reprojects them to lon/lat |
+| Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection`. Points and lines are skipped with a warning (points are kept for [detection](/mapcv/tutorials/object-detection/) with `point_box_size`) |
 | GeoJSON shape | A `FeatureCollection` or a single `Feature`. A `crs` member is allowed only if it names WGS-84 (`CRS84`, `EPSG:4326`); projected CRSs are rejected |
 | KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write) |
+| GeoPackage | One feature table (a *layer*). With several, set `labels.layer`. The layer's CRS comes from `gpkg_spatial_ref_sys`; a layer without one (`srs_id` 0 or -1) is an error |
+| Shapefile | The `.shp` with its `.dbf` (attributes) next to it. The CRS comes from the `.prj`: **without one mapcv stops** rather than guess. Text attributes are read as UTF-8 unless a `.cpg` file names another encoding. The reader is pure Python: a Shapefile with hundreds of thousands of features loads in tens of seconds, so for very large layers a GeoPackage or GeoParquet is faster |
+| GeoParquet | WKB geometry (the default of geopandas and GDAL), with the standard `geo` metadata. Needs `pip install "mapcv[parquet]"`. A missing `crs` means WGS-84 (`OGC:CRS84`, as the specification says); `crs: null` is an error. Native (GeoArrow) encodings are not read |
 
 mapcv reprojects the polygons into the imagery's CRS itself (Web Mercator for XYZ, the product's UTM zone for Sentinel-2, the file's own CRS for a GeoTIFF), so never reproject labels to match the imagery.
+
+### Labels in another CRS
+
+For a GeoPackage, Shapefile or GeoParquet file, mapcv reads the CRS the file declares and reprojects the coordinates to WGS-84 with pyproj, always taking `x` as easting/longitude and `y` as northing/latitude, whatever order the CRS authority lists (EPSG:4326 and EPSG:4269 are lat/lon on paper but stored lon/lat in these formats). A file with **no stated CRS** is an error, not a guess: wrongly assuming WGS-84 would shift every label by hundreds of kilometres without any warning. Fix it by putting the real CRS in the file:
+
+- **Shapefile without `.prj`:** in QGIS, *Layer → Set Layer CRS*, then export again; or `ogr2ogr -a_srs EPSG:32633 fixed.shp broken.shp` (use the CRS the coordinates are really in).
+- **GeoPackage without a CRS** (`srs_id` 0 or -1) and **GeoParquet with `crs: null`:** the same, or re-write the file with the right CRS (`gdf.set_crs(32633).to_parquet(...)`).
+
+Coordinates that cannot be reprojected (outside the CRS's area of use) are an error too.
 
 ## Configure labels
 
 ```yaml
 labels:
-  path: landuse.geojson     # relative to this config file's folder
-  label_field: class        # property holding the class; omit for "every polygon is 1"
+  path: landuse.geojson     # relative to this config file's folder; .gpkg, .shp and .parquet work too
+  label_field: class        # property or column holding the class; omit for "every polygon is 1"
+  layer: null               # GeoPackage only: the layer (table) to read when the file has several
   classes:                  # optional: pin IDs (needs label_field)
     built_up: 1
     farmland: 2
@@ -40,7 +53,7 @@ labels:
 3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`. The result does not depend on feature order, so two files with the same classes get the same IDs.
 4. **`classes` given:** exactly those IDs (1–255); features whose label is not listed are skipped. Use it to merge classes (`{house: 1, apartments: 1}`), to keep IDs stable across datasets, or to match an existing model.
 
-Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
+The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
 
 <Aside type="caution" title="A label of 0 changes the numbering">
 Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`. Remove such features or set `classes` explicitly.
@@ -61,6 +74,25 @@ Features are skipped, and counted in a warning, when they have no polygon geomet
 ⚠  GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.
 ```
 
+The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`, `GeoParquet`). A feature with no geometry at all (a null geometry) is ignored without being counted. A `label_field` that is not a column of a GeoPackage, Shapefile or GeoParquet file is an error that lists the columns, since for a table it can only be a typo (in GeoJSON and KML a missing property just means "no label").
+
+### GeoPackages with several layers
+
+A GeoPackage may hold several feature tables. With one, mapcv reads it; with more, name the one with the labels, or `plan` stops and lists them:
+
+```yaml
+labels:
+  path: city.gpkg
+  layer: buildings
+  label_field: kind
+```
+
+```text
+Cannot plan this config: city.gpkg has 3 layers: buildings, landuse, roads. Set labels.layer to the one with the labels.
+```
+
+`labels.layer` is only for `.gpkg` files. `mapcv init` asks which layer to use.
+
 Where polygons overlap, the feature that comes **later** in the file wins. Put fine classes after coarse ones (for example buildings after land use) if they overlap.
 
 ## Export from common tools
@@ -68,32 +100,37 @@ Where polygons overlap, the feature that comes **later** in the file wins. Put f
 <Tabs>
   <TabItem label="QGIS">
     1. Right-click the layer → **Export → Save Features As…**
-    2. Format **GeoJSON** (or **Keyhole Markup Language [KML]**).
-    3. CRS **EPSG:4326 - WGS 84**.
+    2. Format **GeoJSON** (or **GeoPackage**, **ESRI Shapefile**, **Keyhole Markup Language [KML]**).
+    3. CRS **EPSG:4326 - WGS 84** for GeoJSON and KML. GeoPackage and Shapefile can keep the layer's own CRS: mapcv reads it from the file.
     4. Keep the attribute you want as `label_field` among the exported fields.
 
-    QGIS writes KML attributes as `<SimpleData>`, which mapcv reads.
+    QGIS writes KML attributes as `<SimpleData>`, which mapcv reads. A Shapefile export writes the `.prj` and `.cpg` mapcv needs next to the `.shp`: keep the files together.
   </TabItem>
   <TabItem label="ogr2ogr (GDAL)">
     ```bash
-    # Shapefile / GeoPackage / anything GDAL reads -> WGS-84 GeoJSON
-    ogr2ogr -f GeoJSON -t_srs EPSG:4326 labels.geojson input.shp
-    ogr2ogr -f GeoJSON -t_srs EPSG:4326 labels.geojson input.gpkg layer_name
+    # Shapefiles, GeoPackages and GeoParquet are read directly. For anything else GDAL
+    # reads (FlatGeobuf, File Geodatabase, ...), convert once:
+    ogr2ogr -f GPKG labels.gpkg input.fgb
+    ogr2ogr -f GeoJSON -t_srs EPSG:4326 labels.geojson input.gdb layer_name
+
+    # Give a Shapefile with a missing .prj the CRS its coordinates are really in
+    ogr2ogr -a_srs EPSG:32633 labels_fixed.shp labels.shp
 
     # KMZ is a zip with a KML inside
     unzip -p labels.kmz doc.kml > labels.kml
     ```
-    You only need GDAL for this one-off conversion; mapcv itself doesn't use it.
+    You only need GDAL for these one-off conversions; mapcv itself doesn't use it.
   </TabItem>
   <TabItem label="GeoPandas">
     ```python
     import geopandas as gpd
 
     gdf = gpd.read_file("input.gpkg")
-    gdf = gdf.to_crs(4326)
     gdf = gdf[gdf.geom_type.isin(["Polygon", "MultiPolygon"])]
-    gdf[["landuse", "geometry"]].to_file("labels.geojson", driver="GeoJSON")
+    gdf[["landuse", "geometry"]].to_file("labels.gpkg", layer="labels", driver="GPKG")
+    gdf[["landuse", "geometry"]].to_parquet("labels.parquet")  # GeoParquet: needs mapcv[parquet]
     ```
+    The CRS is kept and read by mapcv. Make sure the frame has one (`gdf.crs`); `gdf.set_crs(...)` sets it when it is missing.
   </TabItem>
   <TabItem label="Google Earth / My Maps">
     Draw polygons, then export the folder as KML (not KMZ). Put the class into a data field, or leave `label_field` unset for a single class. mapcv handles the non-standard KML that Google Earth writes.
@@ -175,8 +212,12 @@ Land-cover products have their own terms: ESA WorldCover is CC BY 4.0 (credit "�
 ## Common problems
 
 - **All masks are background** and `generate` warns *"no label polygon intersects the imagery extent"*: the polygons are outside the region, or longitude and latitude are swapped (coordinates like `[52.37, 4.94]` instead of `[4.94, 52.37]`). Check in QGIS or [geojson.io](https://geojson.io/).
-- **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326.
-- **`labels.path must be a .kml, .geojson, or .json file`**: convert KMZ, Shapefile or GeoPackage as shown above.
+- **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326, or save it as a GeoPackage, Shapefile or GeoParquet, which carry their CRS.
+- **`labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file`**: unzip a KMZ to its KML, or convert other formats as shown above.
+- **`… has no .prj file, so its CRS is unknown`**: the Shapefile lacks its projection file; see [Labels in another CRS](#labels-in-another-crs).
+- **`… has 3 layers: …`**: set `labels.layer`.
+- **`GeoParquet labels need the pyarrow package`**: `pip install "mapcv[parquet]"`.
+- **`… attributes are not valid utf-8`**: a Shapefile written in a legacy encoding without a `.cpg`; add a `<name>.cpg` containing the encoding, for example `ISO-8859-1` or `windows-1252`.
 - **Masks look shifted on tall buildings:** footprints are traced at ground level while aerial imagery shows roofs displaced by perspective. That is a property of the data, not a reprojection error.
 
 More in [Troubleshooting](/mapcv/guides/troubleshooting/).

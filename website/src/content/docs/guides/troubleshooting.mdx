@@ -20,8 +20,8 @@ Config error in bad1.yaml:
   • region: region.west must be less than region.east
   • imagery.source: the built-in 'google_satellite' source was removed in mapcv 0.2.0: Google does not
 permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
-  • labels.path: labels.path must be a .kml, .geojson, or .json file, got 'buildings.shp' (convert KMZ or
-Shapefiles to GeoJSON first)
+  • labels.path: labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file,
+got 'buildings.kmz' (convert KMZ to KML first)
 Fix the fields above, or start from a working config with mapcv init.
 ```
 

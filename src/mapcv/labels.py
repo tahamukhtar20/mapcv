@@ -1,11 +1,14 @@
-"""Label parsing: KML and GeoJSON -> shapely geometries with class IDs."""
+"""Label parsing: vector files (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet) ->
+shapely geometries with class IDs."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import warnings
 from math import pi
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -15,6 +18,7 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
+from mapcv import vector_files
 from mapcv._mapcv_rs import parse_kml_rs
 
 _RE: float = 6_378_137.0
@@ -239,21 +243,194 @@ def parse_geojson(
         raise ValueError(f"Expected FeatureCollection or Feature, got: {top_type!r}")
     _check_geojson_crs(obj)
 
-    geometries: List[BaseGeometry] = []
-    labels: List[Optional[str]] = []
-    non_polygon = 0
+    geometries: List[Optional[BaseGeometry]] = []
+    raw_labels: List[Any] = []
     for feat in features:
         geom_dict: Any = feat.get("geometry")
-        if geom_dict is None:
+        geometries.append(shape(geom_dict) if geom_dict is not None else None)
+        props: Dict[str, Any] = feat.get("properties") or {}
+        raw_labels.append(props.get(label_field) if label_field else None)
+    return _polygon_features("GeoJSON", geometries, raw_labels, label_field, classes, points)
+
+
+def _polygon_features(
+    source: str,
+    geometries: Sequence[Optional[BaseGeometry]],
+    raw_labels: Sequence[Any],
+    label_field: Optional[str],
+    classes: Optional[ClassMap],
+    points: bool,
+    unreadable: Optional[Set[int]] = None,
+) -> Tuple[List[GeomWithClass], ClassMap]:
+    """Keep the polygon (and, with ``points``, point) features and give them class IDs.
+
+    The one place where every vector format gets the same rules: a feature without a
+    geometry is ignored; polygons inside a GeometryCollection are kept; other geometries
+    are skipped and counted. ``unreadable`` lists features (by index) that are counted as
+    having no polygon geometry because the format stored a kind mapcv cannot read.
+    """
+    kept: List[BaseGeometry] = []
+    labels: List[Optional[str]] = []
+    non_polygon = 0
+    for index, parsed in enumerate(geometries):
+        if parsed is None:
+            if unreadable is not None and index in unreadable:
+                non_polygon += 1
             continue
-        parsed = shape(geom_dict)
         geom = _polygon_parts(parsed)
         if geom is None and points and parsed.geom_type in _POINT_TYPES and not parsed.is_empty:
             geom = parsed
         if geom is None:
             non_polygon += 1
             continue
-        geometries.append(geom)
-        props: Dict[str, Any] = feat.get("properties") or {}
-        labels.append(_normalize_label(props.get(label_field)) if label_field else None)
-    return _with_class_ids("GeoJSON", geometries, labels, label_field, classes, non_polygon, points)
+        kept.append(geom)
+        labels.append(_normalize_label(raw_labels[index]) if label_field else None)
+    return _with_class_ids(source, kept, labels, label_field, classes, non_polygon, points)
+
+
+#: File suffixes (lower case) of the vector label formats, by format.
+VECTOR_LABEL_SUFFIXES = frozenset(
+    {".geojson", ".json", ".kml", ".gpkg", ".shp", ".parquet", ".geoparquet"}
+)
+_GEOJSON_SUFFIXES = frozenset({".geojson", ".json"})
+_PARQUET_SUFFIXES = frozenset({".parquet", ".geoparquet"})
+
+
+def _format_name(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix not in VECTOR_LABEL_SUFFIXES:
+        raise ValueError(
+            f"Cannot read '{path.name}' as vector labels: the file type must be one of "
+            f"{', '.join(sorted(VECTOR_LABEL_SUFFIXES))} (convert KMZ to KML first)."
+        )
+    if suffix in _GEOJSON_SUFFIXES:
+        return "GeoJSON"
+    if suffix in _PARQUET_SUFFIXES:
+        return "GeoParquet"
+    return {".kml": "KML", ".gpkg": "GeoPackage", ".shp": "Shapefile"}[suffix]
+
+
+def _read_table(
+    path: Path, kind: str, layer: Optional[str], fields: Optional[Sequence[str]]
+) -> vector_files.VectorTable:
+    if kind == "GeoPackage":
+        return vector_files.read_gpkg(path, layer, fields)
+    if kind == "Shapefile":
+        return vector_files.read_shapefile(path, fields)
+    return vector_files.read_geoparquet(path, fields)
+
+
+def _check_layer(path: Path, kind: str, layer: Optional[str]) -> None:
+    if layer is not None and kind != "GeoPackage":
+        raise ValueError(
+            f"labels.layer applies to GeoPackage files only, not '{path.name}'; remove it."
+        )
+
+
+def load_vector_labels(
+    path: Path,
+    label_field: Optional[str] = None,
+    classes: Optional[ClassMap] = None,
+    points: bool = False,
+    layer: Optional[str] = None,
+) -> Tuple[List[GeomWithClass], ClassMap]:
+    """Read a vector label file of any supported format into ``(geometry, class_id)`` pairs.
+
+    The format follows the file suffix: ``.geojson``/``.json``, ``.kml``, ``.gpkg``
+    (GeoPackage), ``.shp`` (Shapefile) or ``.parquet``/``.geoparquet`` (GeoParquet, needs
+    the ``mapcv[parquet]`` extra). Geometries are returned in WGS-84 longitude/latitude;
+    GeoPackage, Shapefile and GeoParquet files in another CRS are reprojected with pyproj,
+    and a file whose CRS is not stated is an error. Every format follows the same rules:
+
+    * ``label_field`` names the attribute that holds the class (``None``: every feature
+      is class 1); ``classes`` pins IDs; see :func:`assign_class_ids`.
+    * Polygons and multipolygons are kept, including the polygons of a
+      GeometryCollection. With ``points=True`` points and multipoints are kept too
+      (detection draws a box around them); everything else is skipped, and counted in a
+      ``UserWarning`` together with features that have no label or an unmapped one.
+    * ``layer`` picks the table of a GeoPackage with more than one; it is an error for the
+      other formats.
+
+    Args:
+        path: The label file. Shapefiles are found with their ``.dbf``, ``.prj`` and
+            ``.cpg`` next to them.
+        label_field: Attribute holding the class, or ``None``.
+        classes: Optional label-to-ID map.
+        points: Keep point features (KML points are never read).
+        layer: GeoPackage table name.
+
+    Returns:
+        ``(geometries, class_map)``.
+
+    Raises:
+        ValueError: An unsupported or corrupt file, an unknown ``layer`` or
+            ``label_field``, an unknown CRS, or a missing optional dependency.
+        FileNotFoundError: The file does not exist.
+    """
+    kind = _format_name(path)
+    _check_layer(path, kind, layer)
+    if kind in ("GeoJSON", "KML"):
+        data = path.read_bytes()
+        try:
+            if kind == "KML":
+                return parse_kml(data, label_field, classes)
+            return parse_geojson(data, label_field, classes, points=points)
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{path.name} is not valid UTF-8 text ({exc}).") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{path.name} is not valid GeoJSON ({exc}). Check that the file is complete."
+            ) from exc
+    fields = [label_field] if label_field else []
+    table = _read_table(path, kind, layer, fields)
+    raw_labels: List[Any] = table.columns[label_field] if label_field else []
+    if not label_field:
+        raw_labels = [None] * len(table.geometries)
+    return _polygon_features(
+        kind, table.geometries, raw_labels, label_field, classes, points, table.unreadable
+    )
+
+
+def vector_layers(path: Path) -> List[str]:
+    """Layer names of a GeoPackage; an empty list for every other format.
+
+    Raises:
+        ValueError: A ``.gpkg`` that cannot be read.
+    """
+    if path.suffix.lower() == ".gpkg":
+        return vector_files.gpkg_layer_names(path)
+    return []
+
+
+def vector_attributes(path: Path, layer: Optional[str] = None) -> Dict[str, List[Any]]:
+    """Every attribute column of a GeoPackage, Shapefile or GeoParquet file, by name.
+
+    For the wizard's field listing: the raw values of each column, in feature order.
+
+    Raises:
+        ValueError: As :func:`load_vector_labels`; also for GeoJSON and KML, which the
+            caller reads itself.
+    """
+    kind = _format_name(path)
+    _check_layer(path, kind, layer)
+    if kind in ("GeoJSON", "KML"):
+        raise ValueError(f"{kind} attributes are listed by the caller.")
+    return _read_table(path, kind, layer, None).columns
+
+
+def label_file_sha256(path: Path) -> str:
+    """SHA-256 of a label file, to tell a resumed run that the labels changed.
+
+    For a Shapefile the hash also covers the ``.dbf``, ``.prj`` and ``.cpg`` next to it
+    (each prefixed by its suffix), since editing any of them changes the labels. For the
+    other formats it is the hash of the file's bytes.
+    """
+    digest = hashlib.sha256()
+    files = vector_files.shapefile_files(path) if path.suffix.lower() == ".shp" else [path]
+    for index, file in enumerate(files):
+        if index:
+            digest.update(file.suffix.lower().encode("ascii", errors="replace"))
+        with file.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()

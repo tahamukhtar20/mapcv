@@ -145,6 +145,18 @@ writer: {staging_dir: dataset, image_format: png}   # png/jpg need 1 or 3 uint8 
 
 The file is read as it is, in its own CRS and pixel grid; labels in lon/lat are reprojected into it. The user is responsible for the file's license.
 
+### Several sources at the same patches (segmentation only)
+
+```yaml
+imagery:                         # a list: every source needs a unique lowercase name
+  - {type: geotiff, name: before, path: 2023.tif}
+  - {type: geotiff, name: after, path: 2025.tif}
+  - {type: geotiff, name: dem, path: dem_2m.tif}   # 2x coarser pixels: repeated onto the grid
+writer: {staging_dir: dataset, image_format: tif}
+```
+
+The first source's grid is the dataset's. The others must be in the same CRS, with pixels of the same size or a whole number of them across, sharing pixel corners; otherwise `generate` stops with an error saying how the grid differs, and the file must be resampled first. Patches land in `Images/<name>/`, masks in one `Masks/`. XYZ sources at zoom z and z-1 of one provider line up (2x).
+
 ### A classified label raster (segmentation only)
 
 ```yaml

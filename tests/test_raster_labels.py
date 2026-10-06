@@ -735,7 +735,7 @@ def test_vector_labels_record_no_type(tmp_path: Path) -> None:
     assert isinstance(config.labels, LabelsConfig)
     (tmp_path / "x.geojson").write_text('{"type": "FeatureCollection", "features": []}')
     target = create_target(config)
-    source_meta = open_raster_source(config.region, config.imagery).metadata
+    source_meta = open_raster_source(config.region, config.primary_imagery).metadata
     target.prepare(source_meta)
     record = target.record()
     assert record is not None and record.labels is not None

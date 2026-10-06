@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
 
+import numpy as np
 import numpy.typing as npt
 from rich.console import Console
 from rich.progress import (
@@ -22,9 +23,16 @@ from rich.progress import (
 )
 
 from mapcv._mapcv_rs import grid_sample_anchors
+from mapcv._patching import extract_array_patch
 from mapcv.config import GeoTiffImageryConfig, MapcvConfig
 from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
-from mapcv.imagery import WindowedRasterSource, offset_transform, open_raster_source
+from mapcv.imagery import (
+    AlignedSource,
+    WindowedRasterSource,
+    grid_alignment,
+    offset_transform,
+    open_raster_source,
+)
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
     PatchMeta,
@@ -34,7 +42,7 @@ from mapcv.sampler import (
 )
 from mapcv.splitter import SplitLists, SplitterConfig, split_manifest
 from mapcv.targets import AnnotationBatch, Target, create_target
-from mapcv.writers import check_compatible, create_writer, refresh_split_outputs
+from mapcv.writers import FilesWriter, check_compatible, create_writer, refresh_split_outputs
 
 _console = Console()
 
@@ -100,7 +108,14 @@ def _process_anchor_chunk(
     anchors: List[Tuple[int, int]],
     sampler: SamplerConfig,
     target: Target,
-) -> Tuple[npt.NDArray[Any], AnnotationBatch, List[PatchMeta]]:
+    others: Optional[Dict[str, AlignedSource]] = None,
+) -> Tuple[npt.NDArray[Any], AnnotationBatch, List[PatchMeta], Dict[str, npt.NDArray[Any]]]:
+    """Read one chunk's window and sample its patches.
+
+    ``others`` are further sources read on ``source``'s grid. A pixel has imagery
+    only where every source has it; the kept patches of every other source are
+    returned by name, in the same order as ``source``'s.
+    """
     patch_size = sampler.patch_size
     row_start = min(row for row, _ in anchors)
     row_stop = min(source.metadata.height, max(row + patch_size for row, _ in anchors))
@@ -108,6 +123,11 @@ def _process_anchor_chunk(
     col_stop = min(source.metadata.width, max(col + patch_size for _, col in anchors))
 
     image, valid_mask = source.read_window(row_start, row_stop, col_start, col_stop)
+    other_images: Dict[str, npt.NDArray[Any]] = {}
+    for name, other in (others or {}).items():
+        other_image, other_valid = other.read_window(row_start, row_stop, col_start, col_stop)
+        other_images[name] = other_image
+        valid_mask = valid_mask & other_valid
     local_anchors = [(row - row_start, col - col_start) for row, col in anchors]
     window = target.window(
         offset_transform(source.metadata.transform, row_start, col_start),
@@ -124,7 +144,45 @@ def _process_anchor_chunk(
         col_offset=col_start,
         valid_mask=valid_mask,
     )
-    return images, window.collate(annotations, patch_size), metadata
+    other_patches: Dict[str, npt.NDArray[Any]] = {}
+    for name, other_image in other_images.items():
+        kept = [
+            extract_array_patch(
+                other_image,
+                item["row"] - row_start,
+                item["col"] - col_start,
+                patch_size,
+                sampler.pad_mode,
+            )[0]
+            for item in metadata
+        ]
+        other_patches[name] = (
+            np.stack(kept, axis=0)
+            if kept
+            else np.empty((0, patch_size, patch_size, *other_image.shape[2:]), other_image.dtype)
+        )
+    return images, window.collate(annotations, patch_size), metadata, other_patches
+
+
+def _open_sources(config: MapcvConfig) -> List[WindowedRasterSource]:
+    """Open every imagery source in order, closing the opened ones if one fails."""
+    opened: List[WindowedRasterSource] = []
+    try:
+        for imagery in config.sources:
+            if isinstance(imagery, GeoTiffImageryConfig):
+                # A GeoTIFF's bands and dtype must fit the output format; checked at open.
+                opened.append(
+                    open_raster_source(
+                        config.region, imagery, image_format=config.writer.image_format
+                    )
+                )
+            else:
+                opened.append(open_raster_source(config.region, imagery))
+    except BaseException:
+        for source in opened:
+            source.close()
+        raise
+    return opened
 
 
 def run_generate(
@@ -146,25 +204,37 @@ def run_generate(
     manifest_path = staging / _MANIFEST_FILENAME
 
     target = create_target(config)
-    writer = create_writer(config.writer, target)
+    names = config.source_names
+    if config.multi_source:
+        writer = create_writer(config.writer, target, names)
+    else:
+        writer = create_writer(config.writer, target)
     check_compatible(target, writer)
     with _console.status("Opening imagery…"):
-        if isinstance(config.imagery, GeoTiffImageryConfig):
-            # A GeoTIFF's bands and dtype must fit the output format; checked at open.
-            source = open_raster_source(
-                config.region, config.imagery, image_format=config.writer.image_format
-            )
-        else:
-            source = open_raster_source(config.region, config.imagery)
+        opened = _open_sources(config)
+    source = opened[0]
     try:
+        # Every further source is read on the first one's grid.
+        others = {
+            name: AlignedSource(other, grid_alignment(source.metadata, other.metadata, name))
+            for name, other in zip(names[1:], opened[1:])
+        }
         target.prepare(source.metadata)
-        meta = source.metadata
-        expected = Manifest(
-            mapcv_version=mapcv_version(),
-            task=config.task,
-            sources=[
+        records: List[SourceRecord] = []
+        for name, opened_source in zip(names, opened):
+            meta = opened_source.metadata
+            grid: Dict[str, Any] = {}
+            aligned = others.get(name)
+            if aligned is not None and not aligned.alignment.identity:
+                # How the source's own grid maps onto the dataset's (the first source's).
+                alignment = aligned.alignment
+                grid = {
+                    "factor": alignment.factor,
+                    "offset": [alignment.row_offset, alignment.col_offset],
+                }
+            records.append(
                 SourceRecord(
-                    name="image",
+                    name=name,
                     source_type=meta.source_type,
                     product_id=meta.product_id,
                     bands=list(meta.bands),
@@ -173,8 +243,13 @@ def run_generate(
                     transform=meta.transform,
                     patch_shape=writer.patch_shape(meta, config.sampler.patch_size),
                     fingerprint=meta.fingerprint,
+                    **grid,
                 )
-            ],
+            )
+        expected = Manifest(
+            mapcv_version=mapcv_version(),
+            task=config.task,
+            sources=records,
             target=target.record(),
             writer=writer.fingerprint(),
             sampler=config.sampler.model_dump(mode="json"),
@@ -206,10 +281,17 @@ def run_generate(
             if on_chunk is not None:
                 on_chunk(0, len(chunks))
             for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
-                images, annotations, metadata = _process_anchor_chunk(
-                    source, chunk_anchors, config.sampler, target
+                images, annotations, metadata, other_patches = _process_anchor_chunk(
+                    source, chunk_anchors, config.sampler, target, others
                 )
-                writer.write(images, annotations, metadata, manifest, chunk_index)
+                if other_patches:
+                    if not isinstance(writer, FilesWriter):  # create_writer makes one for these
+                        raise RuntimeError("several imagery sources need the files layout")
+                    writer.write(
+                        images, annotations, metadata, manifest, chunk_index, others=other_patches
+                    )
+                else:
+                    writer.write(images, annotations, metadata, manifest, chunk_index)
                 # Persist after every chunk so an interrupted run resumes from here.
                 manifest.save(manifest_path)
                 progress.advance(task)
@@ -219,9 +301,11 @@ def run_generate(
         # A finished dataset is left untouched (a 0.2 manifest stays version 2).
         if chunks or not manifest_path.exists():
             manifest.save(manifest_path)
-        requested = int(getattr(source, "tiles_requested", 0))
-        failed = int(getattr(source, "tiles_failed", 0))
-        reasons = str(getattr(source, "failure_reasons", "") or "")
+        requested = sum(int(getattr(each, "tiles_requested", 0)) for each in opened)
+        failed = sum(int(getattr(each, "tiles_failed", 0)) for each in opened)
+        reasons = "; ".join(
+            text for each in opened if (text := str(getattr(each, "failure_reasons", "") or ""))
+        )
         why = f" Causes: {reasons}." if reasons else ""
         if requested and failed / requested > _FAILED_TILES_WARNING:
             warnings.warn(
@@ -239,7 +323,8 @@ def run_generate(
                 stacklevel=2,
             )
     finally:
-        source.close()
+        for each in opened:
+            each.close()
 
     split_counts: Optional[Dict[str, int]] = None
     split_lists: Optional[SplitLists] = None

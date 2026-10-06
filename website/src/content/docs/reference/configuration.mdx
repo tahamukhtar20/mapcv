@@ -187,7 +187,30 @@ For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. F
 
 ## `imagery`
 
-Selects exactly one imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`.
+Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`. For segmentation datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
+
+### Several imagery sources
+
+Write `imagery` as a list to sample several sources at the same patches: a before/after pair, optical plus a DEM, or two dates of the same product. Every source in the list needs a `name`. Each source keeps its own settings.
+
+```yaml
+imagery:
+  - {type: geotiff, name: before, path: 2023.tif}
+  - {type: geotiff, name: after, path: 2025.tif}
+  - {type: geotiff, name: dem, path: dem_2m.tif}    # pixels twice as large: repeated
+writer: {staging_dir: ./dataset, image_format: tif}
+```
+
+| Rule | Detail |
+| --- | --- |
+| Names | 1–32 lowercase letters, digits, `_` or `-`, unique. `mask` and names ending in `_world` are reserved |
+| Grid | The **first** source's pixel grid is the dataset's grid; region, patches, masks and georeferencing all follow it |
+| Other sources | Same CRS as the first, and pixels the same size or a whole number of them across (2×, 3×…) on a grid that shares pixel corners with the first. Coarser pixels are repeated onto the grid (nearest neighbour, exact); nothing is interpolated. A source with finer pixels must come first |
+| Coverage | A pixel has imagery only where **every** source has it. Pixels outside a source count as empty and are `ignore_index` in masks |
+| Output | `Images/<name>/patch_*.<ext>` per source, one shared `Masks/` folder, and one `files` key per source name in the manifest |
+| Tasks | `segmentation` (with or without labels). Tasks that write one image per patch (detection, instance, classification) take a single source |
+
+A source on a grid that does not line up (another CRS, a half-pixel shift, a non-integer pixel ratio) fails before anything is written, and the error says how it differs. Resample it onto the first source's grid first (for example with `gdalwarp -tap -tr`).
 
 ### XYZ tiles (`type: xyz`)
 

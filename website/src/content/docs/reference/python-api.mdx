@@ -26,7 +26,7 @@ print(result.new_patches, result.split_counts)
 class MapcvConfig(BaseModel):
     task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"   # more tasks are planned
     region: RegionConfig
-    imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
+    imagery: ImageryConfig | list[ImageryConfig]   # one source (by imagery.type), or a list of named ones
     labels: LabelsConfig | RasterLabelsConfig | None = None  # by labels.type: vector | raster
     sampler: SamplerConfig
     writer: WriterConfig
@@ -34,6 +34,18 @@ class MapcvConfig(BaseModel):
     detection: DetectionOptions | None = None   # task: detection only
     instance: InstanceOptions | None = None     # task: instance only
     classification: ClassificationOptions | None = None   # task: classification only
+
+    @property
+    def sources(self) -> list[ImageryConfig]: ...   # every source; a list of one for a single block
+
+    @property
+    def primary_imagery(self) -> ImageryConfig: ...   # the first source: its grid is the dataset's
+
+    @property
+    def multi_source(self) -> bool: ...   # imagery given as a list
+
+    @property
+    def source_names(self) -> list[str]: ...   # ["image"] for a single block, else the names
 
     @property
     def detection_options(self) -> DetectionOptions: ...   # the block, or its defaults
@@ -61,7 +73,9 @@ class InstanceOptions(BaseModel):
     id_mask: bool = False
 ```
 
-Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and local `imagery.path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
+Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and every local imagery `path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
+
+`imagery` is a list when the config names [several sources](/mapcv/reference/configuration/#several-imagery-sources), so code that reads one source's settings should use `config.primary_imagery` (or loop over `config.sources`) rather than `config.imagery`.
 
 Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `GeoTiffImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig` (polygon labels), `RasterLabelsConfig` and `RasterClass` (raster labels), `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
 

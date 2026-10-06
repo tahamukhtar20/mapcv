@@ -52,6 +52,7 @@ from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url,
 from mapcv.config import (
     PLANNED_TASKS,
     SUPPORTED_TASKS,
+    UNION_TAGS,
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     MapcvConfig,
@@ -175,11 +176,12 @@ class Redactor:
             self.learn_url(match.group(0).rstrip(",;"))
 
     def learn_data(self, data: Any) -> None:
-        """Remember the template of a parsed (maybe invalid) config mapping."""
+        """Remember the templates of a parsed (maybe invalid) config mapping."""
         imagery = data.get("imagery") if isinstance(data, dict) else None
-        template = imagery.get("url_template") if isinstance(imagery, dict) else None
-        if isinstance(template, str):
-            self.learn_url(template)
+        for source in imagery if isinstance(imagery, list) else [imagery]:
+            template = source.get("url_template") if isinstance(source, dict) else None
+            if isinstance(template, str):
+                self.learn_url(template)
 
     def scrub(self, text: str) -> str:
         """``text`` without known templates, their secrets, or credentials in URLs."""
@@ -313,11 +315,12 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
             found.extend(
                 ("labels.path (sidecar)", file) for file in shapefile_files(labels.path)[1:]
             )
-    imagery = config.imagery
-    if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
-        local = eopf_local_path(imagery.path)
-        if local is not None:
-            found.append(("imagery.path", local))
+    for name, imagery in zip(config.source_names, config.sources):
+        if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
+            local = eopf_local_path(imagery.path)
+            if local is not None:
+                where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
+                found.append((where, local))
     found.append(("writer.staging_dir", config.writer.staging_dir))
     return found
 
@@ -396,7 +399,7 @@ def format_validation_errors(exc: ValidationError) -> List[Dict[str, str]]:
         location = ".".join(
             str(part)
             for part in error["loc"]
-            if not str(part).startswith("function-") and part not in ("xyz", "eopf_zarr", "geotiff")
+            if not str(part).startswith("function-") and part not in UNION_TAGS
         )
         message = str(error["msg"]).removeprefix("Value error, ")
         errors.append({"field": location or "config", "message": message})
@@ -440,9 +443,10 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
     except ValidationError as exc:
         errors = format_validation_errors(exc)
         raise ConfigInvalid("the config has errors", errors) from None
-    imagery = config.imagery
-    if isinstance(imagery, XYZImageryConfig) and imagery.url_template:
-        state.redactor.learn_url(imagery.url_template)
+    # Every source's template: a second source's credentials must be redacted too.
+    for imagery in config.sources:
+        if isinstance(imagery, XYZImageryConfig) and imagery.url_template:
+            state.redactor.learn_url(imagery.url_template)
     state.sandbox.check_config_paths(config)
     return config
 
@@ -650,10 +654,12 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
             messages.append(f"labels.path not found: {state.sandbox.rel(label_file)}")
     elif labels is not None and not labels.path.exists():
         messages.append(f"labels.path not found: {state.sandbox.rel(labels.path)}")
-    if isinstance(config.imagery, GeoTiffImageryConfig):
-        local = eopf_local_path(config.imagery.path)
-        if local is not None and not local.exists():
-            messages.append(f"imagery.path not found: {state.sandbox.rel(local)}")
+    for name, imagery in zip(config.source_names, config.sources):
+        if isinstance(imagery, GeoTiffImageryConfig):
+            local = eopf_local_path(imagery.path)
+            if local is not None and not local.exists():
+                where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
+                messages.append(f"{where} not found: {state.sandbox.rel(local)}")
     return messages
 
 

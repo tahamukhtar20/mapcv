@@ -13,8 +13,10 @@ import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     SerializerFunctionWrapHandler,
+    Tag,
     field_validator,
     model_serializer,
     model_validator,
@@ -174,10 +176,30 @@ def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
     if isinstance(writer, dict) and "staging_dir" in writer:
         writer["staging_dir"] = _join(base, writer["staging_dir"])
     imagery = data.get("imagery")
-    if isinstance(imagery, dict) and isinstance(imagery.get("path"), str):
-        path = imagery["path"]
-        if urlsplit(path).scheme == "" and eopf_local_path(path) is not None:
-            imagery["path"] = _join(base, path)
+    for source in imagery if isinstance(imagery, list) else [imagery]:
+        if isinstance(source, dict) and isinstance(source.get("path"), str):
+            path = source["path"]
+            if urlsplit(path).scheme == "" and eopf_local_path(path) is not None:
+                source["path"] = _join(base, path)
+
+
+# A source name is a folder name (``Images/<name>/``) and a key of each patch's ``files``.
+_SOURCE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+# Keys of a patch's ``files`` that are not source names.
+_RESERVED_SOURCE_NAMES = frozenset({"mask"})
+
+
+def _validate_source_name(name: Optional[str]) -> Optional[str]:
+    if name is None:
+        return name
+    if not _SOURCE_NAME.fullmatch(name):
+        raise ValueError(
+            f"imagery name '{name}' must be 1-32 lowercase letters, digits, '_' or '-', "
+            "starting with a letter or digit (it names the folder Images/<name>/)"
+        )
+    if name in _RESERVED_SOURCE_NAMES or name.endswith("_world"):
+        raise ValueError(f"imagery name '{name}' is reserved; choose another name")
+    return name
 
 
 _REGION_ZOOM_REMOVED = (
@@ -242,6 +264,8 @@ class XYZImageryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["xyz"] = "xyz"
+    # Required when imagery is a list of sources: the folder Images/<name>/.
+    name: Optional[str] = None
     zoom: int = Field(ge=1, le=22)
     source: Optional[str] = None
     url_template: Optional[str] = None
@@ -251,6 +275,7 @@ class XYZImageryConfig(BaseModel):
     strip_rows: int = Field(default=4, ge=1)
 
     _check_source = field_validator("source")(_validate_tile_source)
+    _check_name = field_validator("name")(_validate_source_name)
     _check_template = field_validator("url_template")(_validate_url_template)
 
     @model_validator(mode="after")
@@ -269,12 +294,15 @@ class EOPFZarrImageryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["eopf_zarr"] = "eopf_zarr"
+    # Required when imagery is a list of sources: the folder Images/<name>/.
+    name: Optional[str] = None
     path: str
     resolution: Literal[10, 20, 60] = 10
     bands: List[str] = Field(default_factory=lambda: list(DEFAULT_SENTINEL2_L2A_BANDS))
     chunk_rows: int = Field(default=1024, ge=1)
 
     _check_path = field_validator("path")(_validate_eopf_path)
+    _check_name = field_validator("name")(_validate_source_name)
 
     @model_validator(mode="after")
     def _validate_bands(self) -> "EOPFZarrImageryConfig":
@@ -300,6 +328,8 @@ class GeoTiffImageryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["geotiff"] = "geotiff"
+    # Required when imagery is a list of sources: the folder Images/<name>/.
+    name: Optional[str] = None
     path: str
     bands: Optional[List[int]] = None
     overview: int = Field(default=0, ge=0)
@@ -307,6 +337,7 @@ class GeoTiffImageryConfig(BaseModel):
     chunk_rows: int = Field(default=1024, ge=1)
 
     _check_path = field_validator("path")(_validate_geotiff_path)
+    _check_name = field_validator("name")(_validate_source_name)
 
     @field_validator("nodata")
     @classmethod
@@ -332,6 +363,25 @@ ImageryConfig = Annotated[
     Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig],
     Field(discriminator="type"),
 ]
+
+
+def _imagery_form(value: Any) -> str:
+    return "source-list" if isinstance(value, list) else "single-source"
+
+
+# One source, or a list of named sources. The form is chosen from the input, so a
+# mistake is reported for that form only. Error locations carry the tag
+# ("single-source", "source-list"); messages leave it out, as they leave out "xyz".
+AnyImageryConfig = Annotated[
+    Union[
+        Annotated[ImageryConfig, Tag("single-source")],
+        Annotated[List[ImageryConfig], Tag("source-list")],
+    ],
+    Discriminator(_imagery_form),
+]
+
+#: Parts of a validation error's location that are union tags, not config keys.
+UNION_TAGS = frozenset({"xyz", "eopf_zarr", "geotiff", "single-source", "source-list"})
 
 
 class LabelsConfig(BaseModel):
@@ -562,6 +612,8 @@ AnyLabelsConfig = Annotated[
 SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection", "instance", "classification")
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
 PLANNED_TASKS: Tuple[str, ...] = ("change", "regression")
+# Tasks whose datasets can hold several imagery sources (``imagery`` as a list).
+MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation",)
 
 DetectionFormat = Literal["coco", "yolo"]
 DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
@@ -705,7 +757,8 @@ class MapcvConfig(BaseModel):
     # What the dataset is for; decides the target each patch is annotated with.
     task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"
     region: RegionConfig
-    imagery: ImageryConfig
+    # One source, or a list of named sources sampled on the first one's grid.
+    imagery: AnyImageryConfig
     labels: Optional[AnyLabelsConfig] = None
     sampler: SamplerConfig
     writer: WriterConfig
@@ -727,8 +780,9 @@ class MapcvConfig(BaseModel):
         if "tiles" in raw:
             raise ValueError(_TILES_REMOVED)
         imagery = raw.get("imagery")
-        if isinstance(imagery, dict) and "type" not in imagery:
-            raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
+        for source in imagery if isinstance(imagery, list) else [imagery]:
+            if isinstance(source, dict) and "type" not in source:
+                raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
         labels = raw.get("labels")
         if isinstance(labels, dict) and "type" not in labels:
             # Polygon labels predate labels.type; configs without it keep working.
@@ -736,32 +790,92 @@ class MapcvConfig(BaseModel):
         return raw
 
     @model_validator(mode="after")
+    def _validate_sources(self) -> "MapcvConfig":
+        if not isinstance(self.imagery, list):
+            if self.imagery.name is not None:
+                raise ValueError(
+                    "imagery.name only applies when imagery is a list of sources; remove it, "
+                    "or write imagery as a list"
+                )
+            return self
+        if not self.imagery:
+            raise ValueError("imagery is an empty list; give at least one source")
+        names: List[str] = []
+        for index, source in enumerate(self.imagery):
+            if source.name is None:
+                raise ValueError(
+                    f"imagery source {index + 1} has no name; every source of a list needs "
+                    "one (it names the folder Images/<name>/)"
+                )
+            if source.name in names:
+                raise ValueError(f"imagery name '{source.name}' is used twice; names must differ")
+            names.append(source.name)
+        if self.task not in MULTI_SOURCE_TASKS:
+            raise ValueError(
+                f"task: {self.task} reads one imagery source; several sources are supported "
+                f"for task: {', '.join(MULTI_SOURCE_TASKS)}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_source_writer_pair(self) -> "MapcvConfig":
-        if isinstance(self.imagery, EOPFZarrImageryConfig):
+        for source in self.sources:
+            # Messages name the source when there are several.
+            where = f"imagery '{source.name}'" if self.multi_source else "imagery"
+            self._check_source_writer_pair(source, where)
+        return self
+
+    def _check_source_writer_pair(self, imagery: Any, where: str) -> None:
+        if isinstance(imagery, EOPFZarrImageryConfig):
             if self.writer.image_format not in ("npy", "tif"):
-                raise ValueError("EOPF Zarr imagery requires writer.image_format='npy' (or 'tif')")
-        elif isinstance(self.imagery, GeoTiffImageryConfig):
-            bands = self.imagery.bands
+                kind = "EOPF Zarr imagery" if where == "imagery" else f"{where} (EOPF Zarr)"
+                raise ValueError(f"{kind} requires writer.image_format='npy' (or 'tif')")
+        elif isinstance(imagery, GeoTiffImageryConfig):
+            bands = imagery.bands
             if (
                 self.writer.image_format not in ("npy", "tif")
                 and bands is not None
                 and len(bands) not in (1, 3)
             ):
                 raise ValueError(
-                    f"imagery.bands selects {len(bands)} bands, but writer.image_format "
+                    f"{where}.bands selects {len(bands)} bands, but writer.image_format "
                     f"'{self.writer.image_format}' writes 1 or 3 bands of uint8; select 1 or 3 "
                     "bands or set writer.image_format: npy (or tif)"
                 )
         elif self.writer.image_format == "npy":
-            raise ValueError("XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'")
-        if isinstance(self.imagery, XYZImageryConfig):
+            kind = "XYZ imagery" if where == "imagery" else f"{where} (XYZ)"
+            raise ValueError(f"{kind} supports writer.image_format 'png', 'jpg' or 'tif'")
+        if isinstance(imagery, XYZImageryConfig):
             limit = WEB_MERCATOR_MAX_LATITUDE
             if self.region.north > limit or self.region.south < -limit:
                 raise ValueError(
                     f"XYZ tiles cover latitudes -{limit:.4f}..{limit:.4f} (Web Mercator); "
                     "shrink the region or use imagery that covers the poles"
                 )
-        return self
+
+    @property
+    def multi_source(self) -> bool:
+        """Whether ``imagery`` is a list of named sources (patches go to ``Images/<name>/``)."""
+        return isinstance(self.imagery, list)
+
+    @property
+    def sources(self) -> List[Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig]]:
+        """The imagery sources in order: a list of one for a single ``imagery`` block."""
+        return list(self.imagery) if isinstance(self.imagery, list) else [self.imagery]
+
+    @property
+    def primary_imagery(
+        self,
+    ) -> Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig]:
+        """The first imagery source: its grid is the dataset's grid."""
+        return self.sources[0]
+
+    @property
+    def source_names(self) -> List[str]:
+        """Names of the sources: ``["image"]`` for a single ``imagery`` block."""
+        if not isinstance(self.imagery, list):
+            return ["image"]
+        return [source.name or "" for source in self.imagery]
 
     @model_validator(mode="after")
     def _validate_task_settings(self) -> "MapcvConfig":

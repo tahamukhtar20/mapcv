@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -266,48 +266,103 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
     return LabelSummary(str(labels.path), len(geometries), class_map, messages, in_region)
 
 
+@dataclass
+class _SourceSize:
+    """One imagery source's raster for the region, as :func:`plan` estimates it."""
+
+    height: int
+    width: int
+    tiles: Optional[int]
+    resolution: float
+    channels: int
+    bytes_per_value: int
+    description: str
+    chunk_rows: int
+
+
+def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: List[str]) -> _SourceSize:
+    region = config.region
+    if isinstance(imagery, XYZImageryConfig):
+        height, width, tiles = _xyz_raster(config, imagery)
+        name = imagery.source or "custom XYZ template"
+        return _SourceSize(
+            height,
+            width,
+            tiles,
+            ground_resolution_m(imagery.zoom, (region.south + region.north) / 2),
+            3,
+            1,
+            f"{name} · zoom {imagery.zoom}",
+            imagery.strip_rows * _TILE_PX,
+        )
+    if isinstance(imagery, GeoTiffImageryConfig):
+        height, width, resolution, channels, bytes_per_value, description = _geotiff_raster(
+            config, imagery, plan_warnings
+        )
+        return _SourceSize(
+            height,
+            width,
+            None,
+            resolution,
+            channels,
+            bytes_per_value,
+            description,
+            imagery.chunk_rows,
+        )
+    height, width = _eopf_raster(config, imagery)
+    return _SourceSize(
+        height,
+        width,
+        None,
+        float(imagery.resolution),
+        len(imagery.bands),
+        4,
+        f"Sentinel-2 L2A (EOPF) · {len(imagery.bands)} bands",
+        imagery.chunk_rows,
+    )
+
+
+def _image_bytes(config: MapcvConfig, size: _SourceSize) -> int:
+    """Estimated bytes of one image patch of a source in ``writer.image_format``."""
+    pixels_per_patch = config.sampler.patch_size**2
+    image_format = config.writer.image_format
+    if image_format == "npy":
+        return size.channels * pixels_per_patch * size.bytes_per_value
+    if image_format == "tif":
+        ratio = _PNG_COMPRESSION if size.bytes_per_value == 1 else _TIF_FLOAT_COMPRESSION
+        return int(size.channels * pixels_per_patch * size.bytes_per_value * ratio)
+    if image_format == "jpg":
+        return int(3 * pixels_per_patch * _JPG_COMPRESSION)
+    return int(3 * pixels_per_patch * _PNG_COMPRESSION)
+
+
 def plan(config: MapcvConfig) -> Plan:
-    """Estimate a generation run without downloading any imagery."""
-    imagery = config.imagery
+    """Estimate a generation run without downloading any imagery.
+
+    With several imagery sources the raster and patches are the first source's (its
+    grid is the dataset's); tiles, download, output and memory add up over the sources.
+    """
     region = config.region
     region_km = region_size_km(region.west, region.south, region.east, region.north)
     plan_warnings: List[str] = []
     patch_size = config.sampler.patch_size
 
-    tiles: Optional[int] = None
-    download: Optional[int] = None
-    if isinstance(imagery, XYZImageryConfig):
-        height, width, tiles = _xyz_raster(config, imagery)
-        download = tiles * _XYZ_TILE_BYTES
-        resolution = ground_resolution_m(imagery.zoom, (region.south + region.north) / 2)
-        name = imagery.source or "custom XYZ template"
-        description = f"{name} · zoom {imagery.zoom}"
-        channels, bytes_per_value = 3, 1
-        chunk_rows = imagery.strip_rows * _TILE_PX
-    elif isinstance(imagery, GeoTiffImageryConfig):
-        height, width, resolution, channels, bytes_per_value, description = _geotiff_raster(
-            config, imagery, plan_warnings
+    sizes = [_source_size(config, imagery, plan_warnings) for imagery in config.sources]
+    primary = sizes[0]
+    height, width, resolution = primary.height, primary.width, primary.resolution
+    tile_counts = [size.tiles for size in sizes if size.tiles is not None]
+    tiles: Optional[int] = sum(tile_counts) if tile_counts else None
+    download = tiles * _XYZ_TILE_BYTES if tiles is not None else None
+    if config.multi_source:
+        description = "; ".join(
+            f"{name}: {size.description}" for name, size in zip(config.source_names, sizes)
         )
-        chunk_rows = imagery.chunk_rows
     else:
-        height, width = _eopf_raster(config, imagery)
-        resolution = float(imagery.resolution)
-        description = f"Sentinel-2 L2A (EOPF) · {len(imagery.bands)} bands"
-        channels, bytes_per_value = len(imagery.bands), 4
-        chunk_rows = imagery.chunk_rows
+        description = primary.description
 
     patches = _patch_count(height, width, config)
     pixels_per_patch = patch_size * patch_size
-    image_format = config.writer.image_format
-    if image_format == "npy":
-        image_bytes = channels * pixels_per_patch * bytes_per_value
-    elif image_format == "tif":
-        ratio = _PNG_COMPRESSION if bytes_per_value == 1 else _TIF_FLOAT_COMPRESSION
-        image_bytes = int(channels * pixels_per_patch * bytes_per_value * ratio)
-    elif image_format == "jpg":
-        image_bytes = int(3 * pixels_per_patch * _JPG_COMPRESSION)
-    else:
-        image_bytes = int(3 * pixels_per_patch * _PNG_COMPRESSION)
+    image_bytes = sum(_image_bytes(config, size) for size in sizes)
     # Segmentation writes one uint8 mask per patch when there are labels: compressed as
     # PNG or GeoTIFF, raw as NPY.
     has_masks = config.task == "segmentation" and config.labels is not None
@@ -319,9 +374,12 @@ def plan(config: MapcvConfig) -> Plan:
     output = patches * (image_bytes + mask_bytes)
     if config.task == "classification":
         output += patches * _CLASSIFICATION_BYTES
-    window_rows = min(height, chunk_rows + patch_size)
-    # Window, validity mask, label mask and extracted patches each hold a copy.
-    chunk_memory = window_rows * width * (channels * bytes_per_value * 2 + 2)
+    window_rows = min(height, primary.chunk_rows + patch_size)
+    # Window, validity mask, label mask and extracted patches each hold a copy; further
+    # sources are read on the first one's grid, so their windows are as large.
+    chunk_memory = (
+        window_rows * width * (sum(size.channels * size.bytes_per_value for size in sizes) * 2 + 2)
+    )
 
     labels = summarize_labels(config)
     if labels is not None:

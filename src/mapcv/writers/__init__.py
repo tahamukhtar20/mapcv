@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from mapcv.manifest import Manifest
 from mapcv.splitter import SplitLists
@@ -30,12 +30,29 @@ __all__ = [
 ]
 
 
-def create_writer(config: WriterConfig, target: Optional[Target] = None) -> Writer:
+def create_writer(
+    config: WriterConfig,
+    target: Optional[Target] = None,
+    sources: Optional[List[str]] = None,
+) -> Writer:
     """The writer a ``writer:`` block asks for, for ``target``'s annotations.
 
     One file per patch; detection targets also get COCO/YOLO annotation files,
     instance targets COCO files with RLE masks and classification targets label tables.
+    ``sources`` names the imagery sources of a multi-source dataset (``imagery`` as a
+    list), whose patches go to ``Images/<name>/``; ``None`` for one ``imagery`` block.
+
+    Raises:
+        ValueError: Several sources for a task whose layout holds one image per patch.
     """
+    target_type = target.type if target is not None else None
+    if sources is not None and target_type not in FilesWriter.TARGET_TYPES:
+        raise ValueError(
+            f"task: {target_type} writes one image per patch; several imagery sources are "
+            "supported for segmentation datasets"
+        )
+    if sources is not None:
+        return FilesWriter(config, sources)
     if isinstance(target, DetectionTarget):
         return DetectionWriter(config, target.options)
     if isinstance(target, InstanceTarget):

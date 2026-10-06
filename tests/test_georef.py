@@ -137,7 +137,7 @@ def test_a_source_nodata_is_declared_only_when_the_dtype_can_hold_it(tmp_path: P
 
     def nodata(dtype: str, declared: Any) -> Any:
         manifest = _manifest(fingerprint={"nodata": declared})
-        return _image_nodata(np.dtype(dtype), manifest)
+        return _image_nodata(np.dtype(dtype), manifest.source)
 
     assert nodata("uint16", 0) == 0
     assert nodata("uint8", -9999) is None  # out of range

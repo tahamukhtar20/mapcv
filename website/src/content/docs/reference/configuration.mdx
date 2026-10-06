@@ -266,6 +266,7 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 | `policy` | `strict` \| `lenient` \| `ignore` | `lenient` | What happens to a tile that still fails after retries (see below) |
 | `max_failed_ratio` | float, 0–1 | `0.05` | Under `lenient`, the run stops if more than this fraction of a chunk's tiles fail |
 | `strip_rows` | int ≥ 1 | `4` | Tile rows per processing chunk (4 rows = 1,024 px). Lower it to reduce memory on very wide regions |
+| `cache` | bool | `true` | Keep downloaded tiles on disk for as long as the server allows, so re-runs don't download them again (see below) |
 
 **Validation:**
 
@@ -284,6 +285,13 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 | `ignore` | Filled with a black tile | never enforced |
 
 Requests identify themselves with the user agent `mapcv/<version> (+https://github.com/tahamukhtar20/mapcv)`.
+
+**Tile cache.** Downloaded tiles are kept on disk, so a second run over the same area (another patch size, a new `staging_dir`, a sweep of settings) reads them from the cache instead of the server. A tile is reused for as long as the server's caching headers allow: `Cache-Control: max-age` (less `Age`), else `Expires`. A response marked `no-store` or `no-cache` is not kept, and one without caching headers is kept for 7 days (the minimum the OpenStreetMap tile usage policy asks clients to cache for). Expired tiles are downloaded again. Failed tiles are never cached.
+
+- The cache lives in `~/.cache/mapcv/tiles` on Linux (`$XDG_CACHE_HOME/mapcv` when set), `~/Library/Caches/mapcv/tiles` on macOS and `%LOCALAPPDATA%\mapcv\Cache\tiles` on Windows. Set the environment variable `MAPCV_CACHE_DIR` to put it elsewhere.
+- Tiles are filed under a hash of `url_template`: the template, and any key in it, is never written to disk.
+- `cache: false` downloads every tile and keeps none. [`mapcv cache`](/mapcv/reference/cli/#mapcv-cache) shows the cache's size and clears it.
+- The MCP server never uses the cache, because it writes only inside its `--root`.
 
 <Aside type="caution">
 Built-in names are conveniences, not licences. Check the provider's terms before downloading; see [Providers & licensing](/mapcv/project/providers/). Keep API keys out of committed YAML: mapcv never writes `url_template` into the manifest, but your config file is your responsibility.

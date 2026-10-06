@@ -274,6 +274,7 @@ imagery:
   strip_rows: {scenario.strip_rows}
   policy: {scenario.policy}
   max_failed_ratio: {scenario.max_failed_ratio}
+  cache: false
 labels:
   path: labels.geojson
   label_field: class

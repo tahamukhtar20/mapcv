@@ -35,6 +35,8 @@ X0, Y0, NX, NY = 134_700, 86_100, 6, 5  # 30 tiles near Amsterdam
 # which is exactly what a user piping `mapcv plan > plan.txt` gets.
 ENV = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
 ENV.update(COLUMNS="120", NO_COLOR="1")
+# A tile cache of its own, so the journey downloads every tile and never fills the user's.
+ENV["MAPCV_CACHE_DIR"] = tempfile.mkdtemp(prefix="mapcv-e2e-cache-")
 
 
 def lon(x: float) -> float:

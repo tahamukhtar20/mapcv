@@ -50,7 +50,11 @@ def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
     monkeypatch.setattr(
         "mapcv.imagery.fetch_tiles",
-        lambda requested, *args, **kwargs: ([(t, _png_tile(7)) for t in requested], 0, ([], None)),
+        lambda requested, *args, **kwargs: (
+            [(t, _png_tile(7), None) for t in requested],
+            0,
+            ([], None),
+        ),
     )
     monkeypatch.setattr("mapcv.imagery.tile_transform", lambda *args: transform)
     source = XYZRasterSource(
@@ -76,7 +80,11 @@ def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) 
     # The fetcher black-fills failed tiles under the lenient/ignore policies.
     monkeypatch.setattr(
         "mapcv.imagery.fetch_tiles",
-        lambda requested, *args, **kwargs: ([(t, _png_tile(0)) for t in requested], 0, ([], None)),
+        lambda requested, *args, **kwargs: (
+            [(t, _png_tile(0), None) for t in requested],
+            0,
+            ([], None),
+        ),
     )
     source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, source="esri_satellite"))
 
@@ -96,7 +104,11 @@ def test_xyz_custom_template_product_id_keeps_only_hostname(
     monkeypatch.setattr("mapcv.imagery.tiles", lambda *args, **kwargs: [tile])
     monkeypatch.setattr(
         "mapcv.imagery.fetch_tiles",
-        lambda requested, *args, **kwargs: ([(t, _png_tile(7)) for t in requested], 0, ([], None)),
+        lambda requested, *args, **kwargs: (
+            [(t, _png_tile(7), None) for t in requested],
+            0,
+            ([], None),
+        ),
     )
     template = "https://tiles.example.com/wmts/SECRET-INSTANCE/{z}/{x}/{y}.png?key=SECRET"
     source = XYZRasterSource(_region(), XYZImageryConfig(zoom=12, url_template=template))
@@ -123,7 +135,7 @@ def test_xyz_source_fetches_lazily_per_window_and_evicts(monkeypatch: pytest.Mon
     def fake_fetch(requested: List[Any], *args: Any, **kwargs: Any) -> Tuple[List[Any], int, Any]:
         calls.append([(t.x, t.y) for t in requested])
         return (
-            [(t, _png_tile(9)) for t in requested if (t.x, t.y) != (6, 11)],
+            [(t, _png_tile(9), None) for t in requested if (t.x, t.y) != (6, 11)],
             1,
             ([("HTTP 503", 1)], "HTTP 503 for URL: x"),
         )

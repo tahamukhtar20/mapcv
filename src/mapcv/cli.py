@@ -567,9 +567,11 @@ def _print_result(result: GenerateResult) -> None:
         table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
         shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
         table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
-    if result.tiles_requested:
+    if result.tiles_requested or result.tiles_cached:
+        cached = f" · {result.tiles_cached:,} from the cache" if result.tiles_cached else ""
         table.add_row(
-            "Tiles", f"{result.tiles_requested:,} fetched · {result.tiles_failed:,} failed"
+            "Tiles",
+            f"{result.tiles_requested:,} fetched{cached} · {result.tiles_failed:,} failed",
         )
     if result.split_counts is not None:
         table.add_row("Splits", _split_line(result.split_counts))
@@ -2029,6 +2031,43 @@ def validate(
             if local is not None and not local.exists():
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 _console.print(f"[yellow]Warning:[/yellow] {where} not found: {local}")
+
+
+@app.command(
+    "cache",
+    rich_help_panel="3. Utilities",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv cache[/cyan]                       where it is and how big\n\n"
+        "  [cyan]mapcv cache --clear --expired[/cyan]     delete only expired tiles"
+    ),
+)
+def cache_command(
+    clear: bool = typer.Option(False, "--clear", help="Delete the cached tiles."),
+    expired: bool = typer.Option(
+        False, "--expired", help="With --clear: delete only the tiles that have expired."
+    ),
+) -> None:
+    """Show or clear the on-disk cache of downloaded XYZ tiles."""
+    from mapcv import tile_cache
+
+    if expired and not clear:
+        _console.print("[red]--expired only applies with --clear[/red]")
+        raise typer.Exit(code=1)
+    if clear:
+        removed = tile_cache.clear(expired_only=expired)
+        what = "expired cached tile(s)" if expired else "cached tile(s)"
+        _console.print(f"[green]✓[/green] Deleted {removed:,} {what} from {tile_cache.tiles_dir()}")
+        return
+    found = tile_cache.usage()
+    _console.print(f"Tile cache: [bold]{found.path}[/bold]")
+    _console.print(
+        f"  {found.tiles:,} tile(s), {found.bytes / 1e6:,.1f} MB"
+        + (f", {found.expired:,} expired" if found.expired else "")
+    )
+    _console.print(
+        f"[dim]Set {tile_cache.CACHE_ENV} to move it, or imagery.cache: false to skip it.[/dim]"
+    )
 
 
 @app.command(

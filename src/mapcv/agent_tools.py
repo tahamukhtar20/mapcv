@@ -1180,7 +1180,20 @@ def prepare_generate(state: ToolState, config: str, confirm_large: bool = False)
             "to the user and, if they agree, call generate again with confirm_large=true.",
             {"confirmation_required": True, "plan": data},
         )
-    return GenerateJob(loaded, file, data, [])
+    return GenerateJob(_without_tile_cache(loaded), file, data, [])
+
+
+def _without_tile_cache(config: MapcvConfig) -> MapcvConfig:
+    """The config with the on-disk tile cache off: it lives outside the sandbox root."""
+
+    def off(source: Any) -> Any:
+        if isinstance(source, XYZImageryConfig):
+            return source.model_copy(update={"cache": False})
+        return source
+
+    imagery = config.imagery
+    update = [off(each) for each in imagery] if isinstance(imagery, list) else off(imagery)
+    return config.model_copy(update={"imagery": update})
 
 
 def execute_generate(

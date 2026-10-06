@@ -21,8 +21,16 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use tile_math::{BBox, TileIndex};
 
-/// A fetched tile and its encoded image bytes, as returned to Python.
-type FetchedTile = (PyTileIndex, Py<PyAny>);
+/// A fetched tile and its encoded image bytes, as returned to Python; with
+/// `cache_headers`, also its `(cache_control, expires, date, age)` header values.
+type FetchedTile = Py<PyAny>;
+/// `Cache-Control`, `Expires`, `Date` and `Age` of a tile response.
+type CacheHeaderValues = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 /// Failed-tile counts per cause and one example message.
 type FailureCauses = (Vec<(String, usize)>, Option<String>);
 
@@ -211,11 +219,18 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyResult
 /// Returns `(tiles, failed, (causes, example))`: `(PyTileIndex, bytes)` pairs for
 /// successfully fetched tiles (and, with the `ignore` policy, black `NoData`-filled
 /// tiles), the number of failed tiles, `(cause, count)` pairs and one example message.
+/// With `cache_headers`, each tile is `(PyTileIndex, bytes, headers)`, where `headers`
+/// is `(cache_control, expires, date, age)` (each `None` when absent) for a tile the
+/// server sent and `None` for a black fill.
 /// Under the `lenient` policy, raises `RuntimeError` if the fraction of
 /// failed tiles exceeds `max_failed_ratio`; `ignore` never enforces it.
-#[allow(clippy::needless_pass_by_value, clippy::cast_precision_loss)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments
+)]
 #[pyfunction]
-#[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05))]
+#[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05, cache_headers=false))]
 fn fetch_tiles(
     py: Python,
     tiles: Vec<PyTileIndex>,
@@ -224,6 +239,7 @@ fn fetch_tiles(
     max_connections: usize,
     policy: &str,
     max_failed_ratio: f64,
+    cache_headers: bool,
 ) -> PyResult<(Vec<FetchedTile>, usize, FailureCauses)> {
     // NaN would make the threshold comparison below always false.
     if !(0.0..=1.0).contains(&max_failed_ratio) {
@@ -265,13 +281,21 @@ fn fetch_tiles(
 
     let results_py = results
         .into_iter()
-        .map(|(t, bytes)| {
-            (
-                PyTileIndex::from(t),
-                pyo3::types::PyBytes::new(py, &bytes).into_any().unbind(),
-            )
+        .map(|(t, bytes, headers)| -> PyResult<FetchedTile> {
+            let tile = PyTileIndex::from(t);
+            let payload = pyo3::types::PyBytes::new(py, &bytes);
+            Ok(if cache_headers {
+                let values: Option<CacheHeaderValues> =
+                    headers.map(|h| (h.cache_control, h.expires, h.date, h.age));
+                (tile, payload, values)
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind()
+            } else {
+                (tile, payload).into_pyobject(py)?.into_any().unbind()
+            })
         })
-        .collect();
+        .collect::<PyResult<Vec<_>>>()?;
 
     Ok((results_py, failed, (failures.counts(), failures.example())))
 }

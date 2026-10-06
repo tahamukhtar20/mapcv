@@ -41,6 +41,7 @@ from mapcv.config import (
 )
 from mapcv.downloader import resolve_url_template
 from mapcv.geotiff import GeoTiff
+from mapcv.tile_cache import TileCache
 
 
 Transform = Tuple[float, float, float, float, float, float]
@@ -334,7 +335,9 @@ class XYZRasterSource:
         # a resumed run only downloads the chunks it still needs.
         self._tiles: Dict[Tuple[int, int], bytes] = {}
         self._attempted: Set[Tuple[int, int]] = set()
+        self._cache = TileCache(self._template) if config.cache else None
         self.tiles_requested = 0
+        self.tiles_cached = 0
         self.tiles_failed = 0
         self.failure_causes: Counter[str] = Counter()
         self.failure_example: Optional[str] = None
@@ -456,6 +459,16 @@ class XYZRasterSource:
         if not missing:
             return
         self._attempted.update(missing)
+        cache = self._cache
+        if cache is not None:
+            for x, y in missing:
+                cached = cache.get(x, y, self._zoom)
+                if cached is not None:
+                    self._tiles[(x, y)] = cached
+            self.tiles_cached += sum(1 for key in missing if key in self._tiles)
+            missing = [key for key in missing if key not in self._tiles]
+            if not missing:
+                return
         config = self._config
         results, failed, (causes, example) = fetch_tiles(
             [PyTileIndex(x, y, self._zoom) for x, y in missing],
@@ -463,14 +476,18 @@ class XYZRasterSource:
             max_connections=config.max_connections,
             policy=config.policy,
             max_failed_ratio=config.max_failed_ratio,
+            cache_headers=True,
         )
         self.tiles_requested += len(missing)
         self.tiles_failed += failed
         self.failure_causes.update(dict(causes))
         if example and self.failure_example is None:
             self.failure_example = example
-        for tile, payload in results:
+        for tile, payload, headers in results:
             self._tiles[(tile.x, tile.y)] = payload
+            # Black fills of failed tiles have no headers and are never cached.
+            if cache is not None and headers is not None:
+                cache.put(tile.x, tile.y, tile.z, payload, headers)
 
     @property
     def failure_reasons(self) -> str:

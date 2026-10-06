@@ -831,3 +831,8 @@ def test_serve_keeps_progress_bars_off_the_protocol_stream(
     mcp_server.serve(project, allow_write=True)
     assert seen == ["stdio", True, True]
     assert pipeline._console.quiet is before  # restored for whatever runs next in this process
+    # The console still follows sys.stdout, not the stream that was current during serve().
+    replaced = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", replaced)
+    pipeline._console.print("after serve")
+    assert "after serve" in replaced.getvalue()

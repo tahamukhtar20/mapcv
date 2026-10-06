@@ -362,6 +362,29 @@ def main() -> None:
     out = run(["info", "two"], root)
     check("Source z17" in out and "coarser" in out, "info does not list both sources", out)
 
+    # Change detection: the same area at zoom 18 twice (before, after), the labels as change.
+    pair_data = yaml.safe_load(text)
+    xyz = dict(pair_data["imagery"])
+    pair_data["task"] = "change"
+    pair_data["imagery"] = [{**xyz, "name": "before"}, {**xyz, "name": "after"}]
+    pair_data["writer"]["staging_dir"] = "./pairs"
+    (root / "pairs.yaml").write_text(yaml.safe_dump(pair_data, sort_keys=False), encoding="utf-8")
+    out = run(["generate", "pairs.yaml", "--yes"], root)
+    pairs = root / "pairs"
+    manifest = json.loads((pairs / "manifest.json").read_text(encoding="utf-8"))
+    check(manifest["task"] == "change" and manifest["writer"]["layout"] == "change", "change", out)
+    patches = manifest["patches"]
+    check(len(patches) == NX * NY, f"{len(patches)} change patches", out)
+    for folder, key in (("A", "before"), ("B", "after"), ("label", "mask")):
+        names = sorted(f"{folder}/{p.name}" for p in (pairs / folder).iterdir())
+        check(names == sorted(p["files"][key] for p in patches), f"{folder}/ != manifest", out)
+    values = set()
+    for entry in patches:
+        values |= set(np.unique(np.asarray(Image.open(pairs / entry["files"]["mask"]))).tolist())
+    check(1 in values and values <= {0, 1, 255}, f"change mask values {sorted(values)}", out)
+    out = run(["info", "pairs"], root)
+    check("change" in out and "Source after" in out, "info does not describe the pairs", out)
+
     out = run(["generate", "missing.yaml"], root, expect=1)
     check("Traceback" not in out, "a user error printed a traceback", out)
 

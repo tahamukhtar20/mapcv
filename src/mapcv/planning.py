@@ -13,6 +13,7 @@ from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
+    LabelsConfig,
     MapcvConfig,
     RasterLabelsConfig,
     XYZImageryConfig,
@@ -232,12 +233,33 @@ def _summarize_label_raster(config: MapcvConfig, labels: RasterLabelsConfig) -> 
 
 
 def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
-    """Parse the configured label file and summarize it, or ``None`` without labels."""
+    """Parse the configured label file and summarize it, or ``None`` without labels.
+
+    For ``task: change`` with ``change.before`` and ``change.after``, both sets are
+    parsed: the summary counts the before set's features and carries both sets'
+    warnings.
+    """
     labels = config.labels
+    options = config.change_options
+    if labels is None and options.before is not None and options.after is not None:
+        before = _summarize_vector(config, options.before)
+        after = _summarize_vector(config, options.after)
+        return LabelSummary(
+            f"{before.path} → {after.path}",
+            before.polygons,
+            before.classes,
+            [f"before: {message}" for message in before.warnings]
+            + [f"after: {message}" for message in after.warnings],
+            before.in_region,
+        )
     if labels is None:
         return None
     if isinstance(labels, RasterLabelsConfig):
         return _summarize_label_raster(config, labels)
+    return _summarize_vector(config, labels)
+
+
+def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary:
     if not labels.path.exists():
         return LabelSummary(str(labels.path), 0, {}, [f"label file not found: {labels.path}"])
     points = config.task == "detection" and config.detection_options.point_box_size is not None
@@ -257,6 +279,8 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
             what, outcome = "feature", "no patch would have instances"
         elif config.task == "classification":
             what, outcome = "polygon", "no patch would get a label"
+        elif config.task == "change":
+            what, outcome = "polygon", "no patch would show a change"
         else:
             what, outcome = "polygon", "every mask would be background"
         messages.append(
@@ -365,7 +389,9 @@ def plan(config: MapcvConfig) -> Plan:
     image_bytes = sum(_image_bytes(config, size) for size in sizes)
     # Segmentation writes one uint8 mask per patch when there are labels: compressed as
     # PNG or GeoTIFF, raw as NPY.
-    has_masks = config.task == "segmentation" and config.labels is not None
+    has_masks = (config.task == "segmentation" and config.labels is not None) or (
+        config.task == "change"
+    )
     mask_ratio = 1.0 if config.writer.mask_format == "npy" else _MASK_COMPRESSION
     mask_bytes = int(pixels_per_patch * mask_ratio) if has_masks else 0
     if config.task == "instance" and config.instance_options.id_mask:

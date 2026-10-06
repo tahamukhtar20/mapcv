@@ -12,7 +12,7 @@ from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
 from mapcv.imagery import RasterMetadata
 from mapcv.sampler import PatchMeta
 from mapcv.splitter import SplitLists
-from mapcv.manifest import IMAGES_DIR
+from mapcv.manifest import IMAGES_DIR, MASKS_DIR
 from mapcv.writer import Manifest, WriterConfig, write_patches, write_source_images
 
 
@@ -37,6 +37,14 @@ class FilesWriter:
         self._config = config
         self._sources = sources
         self._wrote = False
+
+    def _images_dir(self, name: str) -> str:
+        """The folder of source ``name``'s patches (several sources)."""
+        return f"{IMAGES_DIR}/{name}"
+
+    @property
+    def _masks_dir(self) -> str:
+        return MASKS_DIR
 
     @property
     def layout(self) -> str:
@@ -112,7 +120,8 @@ class FilesWriter:
             self._config,
             manifest,
             chunk_index=chunk_index,
-            images_dir=f"{IMAGES_DIR}/{first}",
+            images_dir=self._images_dir(first),
+            masks_dir=self._masks_dir,
             image_key=first,
             source=records[first],
         )
@@ -126,7 +135,7 @@ class FilesWriter:
                 start,
                 chunk_index,
                 source=records[name],
-                images_dir=f"{IMAGES_DIR}/{name}",
+                images_dir=self._images_dir(name),
             )
             for entry, extra in zip(entries, files):
                 entry["files"].update(extra)

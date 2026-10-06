@@ -593,3 +593,136 @@ def test_plan_and_info_name_every_source(tmp_path: Path, scene: Dict[str, Any]) 
     assert result.exit_code == 0, result.output
     assert "Source a" in result.output and "Source c" in result.output
     assert "2× coarser" in result.output
+
+
+# ── Smaller paths ────────────────────────────────────────────────────────────
+
+
+def test_an_unreadable_crs_is_not_the_same_crs() -> None:
+    with pytest.raises(ValueError, match="in not-a-crs, but the first source is in EPSG:32631"):
+        grid_alignment(_meta(REF), _meta(REF, crs="not-a-crs"), "b")
+
+
+def test_empty_reads_learn_the_shape_once() -> None:
+    source = ArraySource(np.ones((4, 4, 2), dtype=np.uint16), np.ones((4, 4), dtype=bool))
+    aligned = AlignedSource(source, GridAlignment(1, 0, 0))
+    for _ in range(2):
+        image, mask = aligned.read_window(10, 12, 0, 3)
+        assert image.shape == (2, 3, 2) and image.dtype == np.uint16 and not mask.any()
+    assert source.reads == [(0, 1, 0, 1)]
+    aligned.close()
+
+
+def test_a_source_that_fails_to_open_closes_the_ones_before_it(
+    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import pipeline
+
+    config = config_for(tmp_path, _sources(tmp_path, "a", "b"), scene["region"])
+    closed: List[str] = []
+    real_open = pipeline.open_raster_source  # type: ignore[attr-defined]
+
+    def open_source(region: Any, imagery: Any, **kwargs: Any) -> Any:
+        if imagery.name == "b":
+            raise OSError("cannot read b")
+        source = real_open(region, imagery, **kwargs)
+        source.close = lambda: closed.append(imagery.name)  # type: ignore[method-assign]
+        return source
+
+    monkeypatch.setattr(pipeline, "open_raster_source", open_source)
+    with pytest.raises(OSError, match="cannot read b"):
+        run_generate(config)
+    assert closed == ["a"]
+
+
+def test_jpg_patches_and_world_files_of_every_source(tmp_path: Path, scene: Dict[str, Any]) -> None:
+    data: Dict[str, Any] = {
+        "region": scene["region"],
+        "imagery": _sources(tmp_path, "a", "c"),
+        "sampler": {"patch_size": PATCH, "mode": "grid", "edge_strategy": "drop"},
+        "writer": {
+            "staging_dir": str(tmp_path / "jpg"),
+            "image_format": "jpg",
+            "world_files": True,
+        },
+    }
+    config = MapcvConfig.model_validate(data)
+    manifest = run_generate(config).manifest
+    entry = manifest.patches[0]
+    stem = Path(entry["files"]["a"]).stem
+    assert entry["files"] == {
+        "a": f"Images/a/{stem}.jpg",
+        "c": f"Images/c/{stem}.jpg",
+        "a_world": f"Images/a/{stem}.jgw",
+        "c_world": f"Images/c/{stem}.jgw",
+    }
+    for key in entry["files"]:
+        assert (config.writer.staging_dir / entry["files"][key]).exists()
+    # Both world files place the patch on the first source's grid.
+    assert (config.writer.staging_dir / entry["files"]["a_world"]).read_text() == (
+        config.writer.staging_dir / entry["files"]["c_world"]
+    ).read_text()
+    assert plan(config).output_bytes > 0
+
+
+def test_writers_refuse_patches_they_cannot_store(tmp_path: Path) -> None:
+    from mapcv.manifest import SourceRecord
+    from mapcv.writer import WriterConfig, write_source_images
+    from mapcv.writers import FilesWriter, create_writer
+    from mapcv.targets import DetectionTarget
+    from mapcv.config import DetectionOptions, LabelsConfig
+
+    config = WriterConfig(staging_dir=tmp_path / "out")
+    from mapcv.sampler import PatchMeta
+
+    meta: List[PatchMeta] = [{"row": 0, "col": 0, "padded": False, "empty_ratio": 0.0}]
+    manifest = Manifest()
+    floats = np.zeros((1, 4, 4, 3), dtype=np.float32)
+    assert (
+        write_source_images(
+            floats[:0], [], config, manifest, 0, 0, source=SourceRecord(name="b"), images_dir="x"
+        )
+        == []
+    )
+    with pytest.raises(ValueError, match="imagery 'b' gives float32"):
+        write_source_images(
+            floats, meta, config, manifest, 0, 0, source=SourceRecord(name="b"), images_dir="x"
+        )
+    images = np.zeros((1, 4, 4, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="made for one imagery source"):
+        FilesWriter(config).write(images, None, meta, manifest, 0, others={"b": images})
+    with pytest.raises(ValueError, match=r"expected patches of imagery \['b'\]"):
+        FilesWriter(config, ["a", "b"]).write(images, None, meta, manifest, 0, others={"c": images})
+    target = DetectionTarget(LabelsConfig(path=Path("x.geojson")), DetectionOptions(), 64)
+    with pytest.raises(ValueError, match="task: detection writes one image per patch"):
+        create_writer(config, target, ["a", "b"])
+
+
+def test_cli_plans_validates_and_summarizes_several_sources(
+    tmp_path: Path, scene: Dict[str, Any]
+) -> None:
+    import yaml
+
+    data = {
+        "region": scene["region"],
+        "imagery": _sources(tmp_path, "a", "c")
+        + [{"type": "geotiff", "name": "gone", "path": str(tmp_path / "missing.tif")}],
+        "sampler": {"patch_size": PATCH, "edge_strategy": "drop"},
+        "writer": {"staging_dir": str(tmp_path / "cli"), "image_format": "png"},
+    }
+    path = tmp_path / "multi.yaml"
+    path.write_text(yaml.safe_dump(data))
+    env = {"COLUMNS": "200"}
+    result = runner.invoke(app, ["validate", str(path)], env=env)
+    assert result.exit_code == 0, result.output
+    assert "a: GeoTIFF" in result.output and "c: GeoTIFF" in result.output
+    assert "imagery 'gone' path not found" in result.output
+
+    data["imagery"] = data["imagery"][:2]
+    path.write_text(yaml.safe_dump(data))
+    result = runner.invoke(app, ["plan", str(path)], env=env)
+    assert result.exit_code == 0, result.output
+    assert "Several sources" in result.output
+    result = runner.invoke(app, ["generate", str(path), "--yes"], env=env)
+    assert result.exit_code == 0, result.output
+    assert "Source a" in result.output and "Source c" in result.output

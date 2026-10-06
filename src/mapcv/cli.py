@@ -225,6 +225,13 @@ def _task_label(config: MapcvConfig) -> str:
             f"classification · {classification.mode}-label · "
             f"min_fraction {classification.min_fraction:g} · empty: {classification.empty}"
         )
+    if config.task == "change":
+        change = config.change_options
+        before, after = config.source_names[:2]
+        source = (
+            "before/after label sets" if change.before is not None else "labels mark the change"
+        )
+        return f"change · {before} → {after} · {source} · changed pixels = {change.change_value}"
     if config.task != "detection":
         return config.task
     options = config.detection_options
@@ -248,7 +255,10 @@ def _settings_table(config: MapcvConfig) -> Table:
         "Region", f"{region.west}, {region.south} → {region.east}, {region.north} (W, S → E, N)"
     )
     table.add_row("Imagery", _imagery_label(config))
-    if config.labels is None:
+    change = config.change_options
+    if config.task == "change" and change.before is not None and change.after is not None:
+        table.add_row("Labels", f"before: {change.before.path} · after: {change.after.path}")
+    elif config.labels is None:
         table.add_row("Labels", "none (image-only dataset)")
     elif isinstance(config.labels, RasterLabelsConfig):
         raster = config.labels
@@ -559,6 +569,7 @@ class Template(str, Enum):
     detection = "detection"
     instance = "instance"
     classification = "classification"
+    change = "change"
 
 
 _HEADER = f"""\
@@ -842,6 +853,54 @@ split:
 """
 )
 
+_CHANGE_TEMPLATE = (
+    _HEADER
+    + """
+task: change                 # before/after image pairs and a change mask (A/, B/, label/)
+
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:                     # two sources on one grid: the image before, then after
+  - type: geotiff
+    name: before
+    path: city_2023.tif      # same CRS and pixel grid as the after image
+  - type: geotiff
+    name: after
+    path: city_2025.tif
+
+# Either labels that mark what changed ...
+labels:
+  path: changes.geojson      # every polygon is change
+# ... or remove labels and compare two label sets (a pixel changed where they differ):
+# change:
+#   before: {path: buildings_2023.geojson}
+#   after: {path: buildings_2025.geojson}
+
+change:
+  change_value: 1            # mask value of changed pixels (255 for loaders that expect 0/255)
+
+sampler:
+  patch_size: 256
+  stride: 0                  # 0 = patch_size (no overlap)
+  mode: grid
+  edge_strategy: drop        # pad | drop | shift
+
+writer:
+  staging_dir: ./dataset     # A/ (before), B/ (after), label/ (change masks)
+  image_format: png          # png | jpg need 1 or 3 uint8 bands; tif or npy keep any
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+  seed: 42
+"""
+)
+
 _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
@@ -849,6 +908,7 @@ _TEMPLATES = {
     Template.detection: _DETECTION_TEMPLATE,
     Template.instance: _INSTANCE_TEMPLATE,
     Template.classification: _CLASSIFICATION_TEMPLATE,
+    Template.change: _CHANGE_TEMPLATE,
 }
 
 
@@ -1443,7 +1503,8 @@ def _wizard() -> str:
         "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
         "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
         "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)\n\n"
-        "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)"
+        "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)\n\n"
+        "  [cyan]mapcv init pairs.yaml --template change[/cyan]   before/after pairs and change masks"
     ),
 )
 def init(
@@ -1733,6 +1794,14 @@ def validate(
             _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")
     elif labels is not None and not labels.path.exists():
         _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {labels.path}")
+    change = config.change
+    if change is not None:
+        for key, label_set in (
+            ("change.before.path", change.before),
+            ("change.after.path", change.after),
+        ):
+            if label_set is not None and not label_set.path.exists():
+                _console.print(f"[yellow]Warning:[/yellow] {key} not found: {label_set.path}")
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

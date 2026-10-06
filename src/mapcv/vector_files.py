@@ -162,7 +162,7 @@ def _open_gpkg(path: Path) -> sqlite3.Connection:
     _check_file(path)
     try:
         return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
-    except sqlite3.Error as exc:
+    except sqlite3.Error as exc:  # pragma: no cover - connect() is lazy and rarely fails
         raise ValueError(f"{path.name}: cannot open the GeoPackage ({exc}).") from exc
 
 
@@ -299,7 +299,7 @@ def read_gpkg(
         crs = _gpkg_crs(connection, srs_id, what)
         try:
             info = connection.execute(f"PRAGMA table_info({_quote(table)})").fetchall()
-        except sqlite3.Error as exc:
+        except sqlite3.Error as exc:  # pragma: no cover - PRAGMA table_info does not fail
             raise ValueError(f"{what}: cannot read the table ({exc}).") from exc
         attributes = [str(row[1]) for row in info if str(row[1]) != geometry_column and not row[5]]
         columns = _require_columns(fields, attributes, f"layer '{table}'", "layer")
@@ -337,7 +337,7 @@ def _sidecar(path: Path, suffix: str) -> Optional[Path]:
         for sibling in sorted(path.parent.iterdir()):
             if sibling.stem == path.stem and sibling.suffix.lower() == suffix and sibling.is_file():
                 return sibling
-    except OSError:
+    except OSError:  # pragma: no cover - an unreadable folder
         return None
     return None
 
@@ -390,13 +390,7 @@ def _organize_rings(rings: List[npt.NDArray[np.float64]]) -> Optional[BaseGeomet
     winding: a ring inside an even number of other rings is an exterior, one inside an odd
     number is a hole of the smallest ring around it (so an island in a hole works).
     """
-    shells: List[Polygon] = []
-    for ring in rings:
-        if len(ring) >= 3:
-            try:
-                shells.append(Polygon(ring))
-            except ValueError:
-                continue  # a ring with no area (repeated points)
+    shells = [Polygon(ring) for ring in rings if len(ring) >= 3]
     if not shells:
         return None
     if len(shells) == 1:
@@ -467,20 +461,9 @@ def _build_single_rings(table: VectorTable, pending: List[Tuple[int, _SingleRing
         return
     coordinates = np.concatenate([item.ring for _, item in pending])
     indices = np.repeat(np.arange(len(pending)), [len(item.ring) for _, item in pending])
-    try:
-        polygons = shapely.polygons(shapely.linearrings(coordinates, indices=indices))
-    except Exception:  # noqa: BLE001 - a degenerate ring: build one by one to find and skip it
-        polygons = np.empty(len(pending), dtype=object)
-        for position, (_, item) in enumerate(pending):
-            try:
-                polygons[position] = Polygon(item.ring)
-            except ValueError:
-                polygons[position] = None
-    for (index, item), polygon in zip(pending, polygons):
-        if polygon is None:
-            table.unreadable.add(index)
-        else:
-            table.geometries[index] = polygon
+    polygons = shapely.polygons(shapely.linearrings(coordinates, indices=indices))
+    for (index, _), polygon in zip(pending, polygons):
+        table.geometries[index] = polygon
 
 
 def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> VectorTable:

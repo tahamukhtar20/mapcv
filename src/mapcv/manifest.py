@@ -51,12 +51,17 @@ class PatchSummary(TypedDict, total=False):
     mask's pixel count per class ID (as strings, ascending), ignore value
     included. Detection and instance segmentation add ``class_objects``: the number
     of objects (boxes, masks) per class ID (as strings, ascending; empty for a patch
-    without objects).
+    without objects). Classification adds ``class_coverage``: the share of the patch's
+    valid pixels each class covers (class IDs as strings, ascending; classes without
+    pixels are left out), and ``labels``: the class IDs the patch is labeled with
+    (ascending; ``0`` is the ``background`` label of ``classification.empty: background``).
     Other tasks add their own keys.
     """
 
     class_pixels: Dict[str, int]
     class_objects: Dict[str, int]
+    class_coverage: Dict[str, float]
+    labels: List[int]
     empty_ratio: float
 
 
@@ -66,7 +71,8 @@ class ManifestEntry(TypedDict):
 
     ``files`` maps a role to a path relative to the dataset folder, with ``/``
     separators: ``image`` (the source's name) and, for segmentation and for instance
-    datasets with ``instance.id_mask``, ``mask``.
+    datasets with ``instance.id_mask``, ``mask``. Classification datasets have no
+    masks: their labels are in the summary and in ``labels.csv``.
     """
 
     row: int

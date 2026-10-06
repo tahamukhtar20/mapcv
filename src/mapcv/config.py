@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Annotated, Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -558,9 +559,9 @@ AnyLabelsConfig = Annotated[
 ]
 
 
-SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection", "instance")
+SUPPORTED_TASKS: Tuple[str, ...] = ("segmentation", "detection", "instance", "classification")
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ("classification", "change", "regression")
+PLANNED_TASKS: Tuple[str, ...] = ("change", "regression")
 
 DetectionFormat = Literal["coco", "yolo"]
 DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
@@ -624,6 +625,65 @@ class InstanceOptions(BaseModel):
     id_mask: bool = False
 
 
+class ClassificationOptions(BaseModel):
+    """Settings of ``task: classification`` (the ``classification:`` block).
+
+    A patch's label is decided by how much of it each class covers. Coverage is the
+    class's pixels divided by the patch's valid pixels (pixels that have imagery and
+    are not ``labels.ignore_index``), counted on the mask that segmentation would
+    write for the same labels.
+
+    ``single`` gives the patch the class with the largest coverage (ties go to the
+    lowest class ID); ``multi`` gives it every class whose coverage reaches
+    ``min_fraction``. A class qualifies when its coverage is at least ``min_fraction``
+    and above zero, so the default 0 means "any labeled pixel". A patch no class
+    qualifies for is dropped (``empty: skip``) or labeled ``background``.
+    """
+
+    # Unknown keys are errors, so typos and newer-version options are not silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["single", "multi"] = "single"
+    # A class needs at least this share of the patch's valid pixels (0: any labeled pixel).
+    min_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    empty: Literal["skip", "background"] = "skip"
+
+
+# The label of classification patches that no class qualifies for (``empty: background``).
+BACKGROUND_LABEL = "background"
+
+
+def classification_name_problem(
+    names: Iterable[str], options: ClassificationOptions
+) -> Optional[str]:
+    """Why a class name cannot be a classification label, or ``None`` when all can.
+
+    Labels go to CSV and text files one per field or line, and a multi-label patch's
+    labels are joined with a space, so names must not hold control characters (or
+    whitespace, with ``mode: multi``). With ``empty: background`` the name
+    ``background`` is taken by the label of patches without a class.
+    """
+    for name in names:
+        if any(unicodedata.category(char).startswith("C") for char in name):
+            return (
+                f"class {name!r} contains a control character (a tab or a line break), which "
+                "labels.csv and classes.txt cannot hold; rename the label value"
+            )
+        if options.mode == "multi" and len(name.split()) != 1:
+            return (
+                f"class {name!r} contains whitespace, which separates the labels of a patch in "
+                "labels.csv in classification.mode: multi; rename the label value (for example "
+                "with underscores) or use classification.mode: single"
+            )
+        if options.empty == "background" and name == BACKGROUND_LABEL:
+            return (
+                f"class {name!r} is also the label of patches without a class "
+                "(classification.empty: background); rename the label value or use "
+                "classification.empty: skip"
+            )
+    return None
+
+
 def _validate_task(task: Any) -> Any:
     if not isinstance(task, str) or task in SUPPORTED_TASKS:
         return task
@@ -643,7 +703,7 @@ class MapcvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # What the dataset is for; decides the target each patch is annotated with.
-    task: Literal["segmentation", "detection", "instance"] = "segmentation"
+    task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig
     labels: Optional[AnyLabelsConfig] = None
@@ -654,6 +714,8 @@ class MapcvConfig(BaseModel):
     detection: Optional[DetectionOptions] = None
     # Options of task: instance; defaults apply when the block is omitted.
     instance: Optional[InstanceOptions] = None
+    # Options of task: classification; defaults apply when the block is omitted.
+    classification: Optional[ClassificationOptions] = None
 
     _check_task = field_validator("task", mode="before")(_validate_task)
 
@@ -713,10 +775,17 @@ class MapcvConfig(BaseModel):
                 f"the instance block only applies to task: instance (task is '{self.task}'); "
                 "remove it or set task: instance"
             )
+        if self.classification is not None and self.task != "classification":
+            raise ValueError(
+                "the classification block only applies to task: classification "
+                f"(task is '{self.task}'); remove it or set task: classification"
+            )
         if self.task == "detection":
             self._check_detection()
         if self.task == "instance":
             self._check_instance()
+        if self.task == "classification":
+            self._check_classification()
         return self
 
     def _check_detection(self) -> None:
@@ -803,6 +872,42 @@ class MapcvConfig(BaseModel):
                 "or drop"
             )
 
+    def _check_classification(self) -> None:
+        if self.labels is None:
+            raise ValueError(
+                "task: classification needs labels: a patch's label comes from the label "
+                "coverage (vector features or a label raster)"
+            )
+        if "mask_format" in self.writer.model_fields_set:
+            raise ValueError(
+                "writer.mask_format sets the format of segmentation masks and classification "
+                "writes no masks (labels go to labels.csv and labels.json); remove it"
+            )
+        if self.writer.world_files and self.writer.image_format not in ("png", "jpg"):
+            raise ValueError(
+                "writer.world_files adds .pgw/.jgw files to PNG and JPG patches and "
+                f"classification writes no masks, so with image_format '{self.writer.image_format}' "
+                "it would write none; remove it (GeoTIFF patches carry their georeferencing)"
+            )
+        options = self.classification_options
+        if options.empty == "background" and self.sampler.min_label_ratio > 0.0:
+            raise ValueError(
+                "sampler.min_label_ratio drops patches with little labeled area before "
+                "classification.empty applies, so with empty: background it would drop the "
+                "background patches; set sampler.min_label_ratio: 0 (and use "
+                "classification.min_fraction to set how much a class needs)"
+            )
+        if isinstance(self.labels, RasterLabelsConfig):
+            problem = classification_name_problem(self.labels.class_map(), options)
+            if problem is not None:
+                raise ValueError(problem)
+        if self.sampler.edge_strategy == "pad" and self.sampler.pad_mode == "reflect":
+            raise ValueError(
+                "sampler.pad_mode: reflect mirrors imagery into the padding of edge patches, "
+                "where no label is counted, so the image would show more than the label "
+                "describes; use pad_mode: zero, or edge_strategy: shift or drop"
+            )
+
     @property
     def detection_options(self) -> DetectionOptions:
         """The ``detection`` block, or its defaults when it is omitted."""
@@ -812,6 +917,11 @@ class MapcvConfig(BaseModel):
     def instance_options(self) -> InstanceOptions:
         """The ``instance`` block, or its defaults when it is omitted."""
         return self.instance if self.instance is not None else InstanceOptions()
+
+    @property
+    def classification_options(self) -> ClassificationOptions:
+        """The ``classification`` block, or its defaults when it is omitted."""
+        return self.classification if self.classification is not None else ClassificationOptions()
 
     @classmethod
     def from_yaml(cls, path: Union[str, "os.PathLike[str]"]) -> "MapcvConfig":

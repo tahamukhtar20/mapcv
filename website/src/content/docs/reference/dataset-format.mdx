@@ -1,11 +1,11 @@
 ---
 title: Dataset format
-description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, the manifest v3 JSON schema and the split files written by mapcv.
+description: Folder layout, file naming, image and mask encoding, COCO and YOLO detection files, COCO instance segmentation files, classification label tables, the manifest v3 JSON schema and the split files written by mapcv.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks and [instance segmentation datasets](#instance-segmentation-datasets) a mask per object.
+Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks and [instance segmentation datasets](#instance-segmentation-datasets) a mask per object and [classification datasets](#classification-datasets) a label table instead of masks.
 
 <FileTree>
 - dataset/
@@ -150,7 +150,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
-| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"` or `"instance"` |
+| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"`, `"instance"` or `"classification"` |
 | `sources` | list | The imagery, one object per source (today always one, named `"image"`). See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
 | `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`), plus `world_files: true` when world files are written. A resume notices a format change |
@@ -175,12 +175,12 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch), `"detection"` (boxes) or `"instance"` (a mask per object) |
+| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch), `"detection"` (boxes), `"instance"` (a mask per object) or `"classification"` (labels per patch) |
 | `class_map` | object | Label value → class ID (mask value, COCO `category_id`). Empty when every polygon is class 1 |
-| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection and instance |
-| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `"uint16"` for instance datasets with `instance.id_mask`; `null` for detection and for instance datasets without ID masks |
+| `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection and instance. Classification keeps the setting (it decides which pixels are valid) |
+| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `"uint16"` for instance datasets with `instance.id_mask`; `null` for detection, classification and for instance datasets without ID masks |
 | `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file (for a Shapefile also covering its `.dbf`, `.prj` and `.cpg`), so a resume notices edited labels. `layer` appears when a GeoPackage layer was chosen. For raster labels (`"type": "raster"`) the settings are `band`, `classes` (each value as `{"id", "name"}`), `nodata`, `ignore_values`, `unmapped` and `resampling`, plus a `fingerprint` that identifies the label raster as a GeoTIFF source's does (`size` and `sha256_head_tail` for a local file; `url`, `etag`, `size` and `sha256_head` for a URL) instead of a `sha256`, since nothing reads the whole file |
-| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection, the resolved [`instance`](/mapcv/reference/configuration/#instance) block for instance |
+| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection, the resolved [`instance`](/mapcv/reference/configuration/#instance) block for instance, the resolved [`classification`](/mapcv/reference/configuration/#classification) block for classification |
 
 ### Patch entries
 
@@ -190,7 +190,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `chunk` | int | Index of the processing chunk that wrote the patch (used to resume) |
 | `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: `image` (the source's name) and, with labels, `mask` (instance datasets: only with `instance.id_mask`); with `world_files`, `image_world` and `mask_world` |
-| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects) |
+| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects). Classification datasets have `class_coverage`, each class's share of the patch's valid pixels (class IDs as strings, ascending; classes without pixels are left out: `{"1": 0.375, "3": 0.0625}`), and `labels`, the class IDs the patch was given, ascending (`[1]`; `[0]` is the `background` label) |
 
 Readers should ignore keys they do not know: later 0.3 releases may add keys (new tasks add `files` roles and `summary` keys) without changing `version`. Renaming or removing a key changes `version`.
 
@@ -379,6 +379,56 @@ With `instance.id_mask: true`, `masks/<image stem>.png` is a 16-bit grayscale PN
 ### `annotations/objects/`
 
 As for detection, one JSON file per processing chunk maps each patch's image file name to its instances, as `[category_id, x, y, width, height, area, truncated, counts]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without rasterizing again. Read the COCO files instead; this folder is mapcv's own.
+
+## Classification datasets
+
+With `task: classification` the images go to `images/` and the labels to flat tables next to them, as EuroSAT and BigEarthNet are laid out. There are no masks. How a label is decided: [`classification`](/mapcv/reference/configuration/#classification).
+
+<FileTree>
+- dataset/
+  - images/
+    - patch_0000000.png same naming and encoding as above
+    - …
+  - labels.csv `image,labels`, plus `split` once the dataset has a split
+  - labels_train.csv `image,labels` of one split; only with a split
+  - labels_val.csv
+  - labels_test.csv
+  - classes.txt one class name per line, in class ID order
+  - labels.json `{"classes": [...], "images": {"patch_0000000.png": ["building"]}}`
+  - patches.geojson footprints, as for segmentation (`writer.footprints`)
+  - manifest.json
+  - splits/
+</FileTree>
+
+Classification uses the same `writer` settings as segmentation, except `mask_format`, which is an error to set. `image_format: tif` writes GeoTIFF images, `world_files` adds a world file next to PNG/JPG images and `patches.geojson` is written and kept in step with `mapcv split` as for any dataset.
+
+```text title="dataset/labels.csv"
+image,labels,split
+patch_0000000.png,farmland,train
+patch_0000001.png,built_up farmland,train
+patch_0000002.png,background,val
+patch_0000003.png,forest,
+```
+
+- **`image`** is the file name inside `images/` (the name the split lists use). Rows follow the manifest's patch order, which is the order of the patch numbers.
+- **`labels`** holds the patch's class names, joined by one space for `mode: multi` (a single name for `single`; CSV quoting applies where a name has a comma, a quote or, with `single`, a space). It is never empty: a patch without a label is not written (`empty: skip`) or is `background`. Split it on spaces for a multi-label dataset.
+- **`split`** is `train`, `val` or `test`, and empty for a patch a spatial split left out. It appears once the dataset has a split, and `mapcv split` rewrites it.
+- **`labels_<split>.csv`** hold the same `image,labels` rows of the patches of one split (manifest order); they exist only while the dataset has a split.
+- **`classes.txt`** lists the class names in ascending class ID order, one per line, with `background` first when `classification.empty` is `background`. A name's line number is not its ID when the IDs have gaps; the manifest's `target.class_map` gives the IDs.
+- **`labels.json`** has the same names as `classes` and, for every image, its labels as an array (also for single-label datasets). It does not depend on the split.
+
+All files are UTF-8 with `\n` line ends on every OS, and the same config gives the same bytes. The tables are built from the manifest (`class_coverage` and `labels` of each entry's `summary`), so a resumed run or `mapcv split` rewrites them for every patch. To build a multi-hot vector, use the order of `classes.txt`:
+
+```python
+import json
+
+import numpy as np
+
+data = json.load(open("dataset/labels.json"))
+index = {name: i for i, name in enumerate(data["classes"])}
+target = {image: np.isin(np.arange(len(index)), [index[name] for name in names]).astype("float32")
+          for image, names in data["images"].items()}
+```
 
 ## Split files
 

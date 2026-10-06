@@ -24,7 +24,7 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
-    task: Literal["segmentation", "detection", "instance"] = "segmentation"   # more tasks are planned
+    task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"   # more tasks are planned
     region: RegionConfig
     imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig   # chosen by imagery.type
     labels: LabelsConfig | RasterLabelsConfig | None = None  # by labels.type: vector | raster
@@ -33,12 +33,16 @@ class MapcvConfig(BaseModel):
     split: SplitterConfig | None = None
     detection: DetectionOptions | None = None   # task: detection only
     instance: InstanceOptions | None = None     # task: instance only
+    classification: ClassificationOptions | None = None   # task: classification only
 
     @property
     def detection_options(self) -> DetectionOptions: ...   # the block, or its defaults
 
     @property
     def instance_options(self) -> InstanceOptions: ...     # the block, or its defaults
+
+    @property
+    def classification_options(self) -> ClassificationOptions: ...   # the block, or its defaults
 
     @classmethod
     def from_yaml(cls, path: Path) -> MapcvConfig: ...
@@ -122,7 +126,7 @@ Builds the dataset into `config.writer.staging_dir`, or resumes it. Shows a Rich
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files; for a classification dataset, the `split` column of `labels.csv` and the `labels_<split>.csv` files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
 
 ### `split_dataset`
 

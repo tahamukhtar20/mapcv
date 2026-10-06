@@ -265,8 +265,8 @@ def run_split(
     """Split an existing dataset (manifest version 1, 2 or 3); return split counts.
 
     The manifest is read, never rewritten. Outputs that depend on the split
-    (``patches.geojson``, and a detection dataset's COCO files, YOLO image lists
-    and ``dataset.yaml``) are rebuilt.
+    (``patches.geojson``, a detection dataset's COCO files, YOLO image lists
+    and ``dataset.yaml``, and a classification dataset's label tables) are rebuilt.
     """
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():

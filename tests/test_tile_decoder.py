@@ -307,7 +307,7 @@ def _source(
     monkeypatch.setattr(
         "mapcv.imagery.fetch_tiles",
         lambda requested, *args, **kwargs: (
-            [(t, payloads[(t.x, t.y)]) for t in requested if (t.x, t.y) in payloads],
+            [(t, payloads[(t.x, t.y)], None) for t in requested if (t.x, t.y) in payloads],
             0,
             ([], None),
         ),

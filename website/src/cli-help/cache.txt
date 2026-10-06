@@ -1,0 +1,17 @@
+ Usage: mapcv cache [OPTIONS]
+
+ Show or clear the on-disk cache of downloaded XYZ tiles.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --clear              Delete the cached tiles.                                        │
+│ --expired            With --clear: delete only the tiles that have expired.          │
+│ --help     -h        Show this message and exit.                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv cache                       where it is and how big
+
+ mapcv cache --clear --expired     delete only expired tiles
+
+

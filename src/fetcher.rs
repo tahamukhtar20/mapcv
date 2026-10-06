@@ -42,10 +42,45 @@ impl std::str::FromStr for FailurePolicy {
 const MAX_RETRIES: u32 = 3;
 const RETRY_BACKOFF_MS: u64 = 500;
 
+/// The caching headers of a tile response, as sent (`None` when absent or not
+/// valid text), for an on-disk cache to decide how long the tile stays fresh.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CacheHeaders {
+    /// `Cache-Control`.
+    pub cache_control: Option<String>,
+    /// `Expires`.
+    pub expires: Option<String>,
+    /// `Date`.
+    pub date: Option<String>,
+    /// `Age`.
+    pub age: Option<String>,
+}
+
+impl CacheHeaders {
+    fn from_headers(headers: &reqwest::header::HeaderMap) -> Self {
+        let text = |name: reqwest::header::HeaderName| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        Self {
+            cache_control: text(reqwest::header::CACHE_CONTROL),
+            expires: text(reqwest::header::EXPIRES),
+            date: text(reqwest::header::DATE),
+            age: text(reqwest::header::AGE),
+        }
+    }
+}
+
+/// A fetched tile: its index, its bytes and, for a tile the server sent (not a
+/// black fill), the response's caching headers.
+pub type Fetched = (TileIndex, Vec<u8>, Option<CacheHeaders>);
+
 /// Outcome of a single tile fetch attempt.
 enum TileOutcome {
-    /// Tile fetched successfully; contains the raw PNG bytes.
-    Success(Vec<u8>),
+    /// Tile fetched successfully; contains the raw image bytes and caching headers.
+    Success(Vec<u8>, CacheHeaders),
     /// Black-fill PNG returned under the Ignore policy; counted as failed but never
     /// subject to `max_failed_ratio`. Carries the failure.
     BlackFill(Vec<u8>, Failure),
@@ -154,7 +189,7 @@ enum Event {
     /// A fatal error aborted the fetch; contains the message.
     Error(String),
     /// All tiles processed; contains results, the count of failed tiles and why they failed.
-    Done(Vec<(TileIndex, Vec<u8>)>, usize, FailureSummary),
+    Done(Vec<Fetched>, usize, FailureSummary),
 }
 
 /// Longest server-requested `Retry-After` delay mapcv will honour.
@@ -218,25 +253,33 @@ async fn fetch_single_tile(
     let mut retries: u32 = 0;
     loop {
         let (kind, retryable_error, retry_after) = match client.get(&url).send().await {
-            Ok(r) if r.status().is_success() => match r.bytes().await {
-                Ok(bytes) if looks_like_image(&bytes) => {
-                    return Ok((tile, TileOutcome::Success(bytes.to_vec())));
-                }
-                Ok(bytes) => {
-                    let message = format!(
-                        "Response for {} is not an image ({} bytes); the server may be \
+            Ok(r) if r.status().is_success() => {
+                let headers = CacheHeaders::from_headers(r.headers());
+                match r.bytes().await {
+                    Ok(bytes) if looks_like_image(&bytes) => {
+                        return Ok((tile, TileOutcome::Success(bytes.to_vec(), headers)));
+                    }
+                    Ok(bytes) => {
+                        let message = format!(
+                            "Response for {} is not an image ({} bytes); the server may be \
                          returning an error page or rate-limiting",
-                        sanitize_url(&url),
-                        bytes.len()
-                    );
-                    return on_failure(tile, policy, "response is not an image".into(), message);
+                            sanitize_url(&url),
+                            bytes.len()
+                        );
+                        return on_failure(
+                            tile,
+                            policy,
+                            "response is not an image".into(),
+                            message,
+                        );
+                    }
+                    Err(e) => (
+                        network_error_kind(&e).to_owned(),
+                        network_error_message(&e, &url),
+                        None,
+                    ),
                 }
-                Err(e) => (
-                    network_error_kind(&e).to_owned(),
-                    network_error_message(&e, &url),
-                    None,
-                ),
-            },
+            }
             Ok(r)
                 if r.status().is_client_error()
                     && r.status() != reqwest::StatusCode::TOO_MANY_REQUESTS =>
@@ -267,7 +310,8 @@ async fn fetch_single_tile(
     }
 }
 
-/// Returns `(results, failed_count, failures)` where `failed_count` includes both
+/// Returns `(results, failed_count, failures)`: each result is a tile, its bytes and
+/// its caching headers (`None` for a black fill);  `failed_count` includes both
 /// omitted tiles (Lenient) and black-fill tiles (Ignore), and `failures` groups them
 /// by reason.
 ///
@@ -284,7 +328,7 @@ pub fn fetch_tiles(
     callback: Option<Py<PyAny>>,
     max_connections: usize,
     policy_str: &str,
-) -> PyResult<(Vec<(TileIndex, Vec<u8>)>, usize, FailureSummary)> {
+) -> PyResult<(Vec<Fetched>, usize, FailureSummary)> {
     let policy = policy_str
         .parse::<FailurePolicy>()
         .map_err(PyValueError::new_err)?;
@@ -337,11 +381,11 @@ pub fn fetch_tiles(
 
             while let Some(res) = stream.next().await {
                 match res {
-                    Ok((tile, TileOutcome::Success(bytes))) => {
-                        results.push((tile, bytes));
+                    Ok((tile, TileOutcome::Success(bytes, headers))) => {
+                        results.push((tile, bytes, Some(headers)));
                     }
                     Ok((tile, TileOutcome::BlackFill(bytes, failure))) => {
-                        results.push((tile, bytes));
+                        results.push((tile, bytes, None));
                         failed += 1;
                         failures.add(failure);
                     }

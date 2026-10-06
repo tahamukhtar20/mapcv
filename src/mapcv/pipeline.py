@@ -62,6 +62,8 @@ class GenerateResult:
     tiles_requested: int
     tiles_failed: int
     seconds: float
+    # XYZ tiles read from the on-disk cache instead of downloaded.
+    tiles_cached: int = 0
 
 
 def _chunk_progress(disable: bool = False) -> Progress:
@@ -342,6 +344,7 @@ def run_generate(
             manifest.save(manifest_path)
         requested = sum(int(getattr(each, "tiles_requested", 0)) for each in opened)
         failed = sum(int(getattr(each, "tiles_failed", 0)) for each in opened)
+        cached = sum(int(getattr(each, "tiles_cached", 0)) for each in opened)
         reasons = "; ".join(
             text for each in opened if (text := str(getattr(each, "failure_reasons", "") or ""))
         )
@@ -379,6 +382,7 @@ def run_generate(
         tiles_requested=requested,
         tiles_failed=failed,
         seconds=time.monotonic() - started,
+        tiles_cached=cached,
     )
 
 

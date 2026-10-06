@@ -355,6 +355,9 @@ class XYZImageryConfig(BaseModel):
     policy: Literal["strict", "lenient", "ignore"] = "lenient"
     max_failed_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
     strip_rows: int = Field(default=4, ge=1)
+    # Keep downloaded tiles on disk (mapcv.tile_cache) for as long as the server's
+    # caching headers allow, so re-runs and sweeps don't download them again.
+    cache: bool = True
 
     _check_source = field_validator("source")(_validate_tile_source)
     _check_name = field_validator("name")(_validate_source_name)

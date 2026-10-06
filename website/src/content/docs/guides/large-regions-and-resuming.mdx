@@ -100,6 +100,8 @@ Nothing left to do: all 77 patch(es) are already written.
 
 mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches.
 
+XYZ tiles that were already downloaded come from the on-disk [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz), also when you start over in a new `staging_dir` with other settings; the summary says how many (`Tiles  0 fetched · 96 from the cache · 0 failed`). `mapcv cache` shows how much space it takes and `mapcv cache --clear --expired` frees the expired part.
+
 ### What must stay the same
 
 A resume is refused, **before** any imagery is read or written, if the existing manifest was produced with a different:

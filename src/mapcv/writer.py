@@ -72,6 +72,8 @@ class WriterConfig(BaseModel):
     world_files: bool = False
     # patches.geojson in the dataset folder: one WGS-84 footprint per patch.
     footprints: bool = True
+    # Several imagery sources in one file per patch: NPY (T, C, H, W) or GeoTIFF (T*C bands).
+    stack_sources: bool = False
 
     @model_validator(mode="after")
     def _world_files_need_a_png_or_jpg(self) -> "WriterConfig":
@@ -258,9 +260,14 @@ def _write_python_masks(
             image.save(directory / f"{stem}.png", format="PNG")
 
 
-def _write_npy_images(images: npt.NDArray[Any], stems: List[str], directory: Path) -> None:
+def _write_npy_images(
+    images: npt.NDArray[Any], stems: List[str], directory: Path, time_steps: Optional[int] = None
+) -> None:
     for stem, image in zip(stems, images):
         channels_first = image[np.newaxis, ...] if image.ndim == 2 else np.moveaxis(image, -1, 0)
+        if time_steps is not None:
+            # Stacked sources: channel t * C + c is band c of source t.
+            channels_first = channels_first.reshape(time_steps, -1, *channels_first.shape[1:])
         np.save(directory / f"{stem}.npy", np.ascontiguousarray(channels_first), allow_pickle=False)
 
 
@@ -276,6 +283,8 @@ def write_patches(
     masks_dir: str = MASKS_DIR,
     image_key: str = "image",
     source: Optional[SourceRecord] = None,
+    band_names: Optional[List[str]] = None,
+    time_steps: Optional[int] = None,
 ) -> None:
     """Write patches to ``Images/`` and ``Masks/`` and append their entries to ``manifest``.
 
@@ -283,7 +292,9 @@ def write_patches(
     folder name Ultralytics expects next to ``labels``) and ``masks_dir`` the mask folder
     (instance datasets use ``masks``, next to ``images``). ``image_key`` is the key of
     the image in each entry's ``files`` (the source's name) and ``source`` the imagery
-    source the images come from (default: the manifest's first).
+    source the images come from (default: the manifest's first). ``band_names`` replace
+    the source's band names in GeoTIFF images, and ``time_steps`` (several sources
+    stacked along the channels) stores NPY images as ``(T, C, H, W)``.
 
     Images: PNG/JPG (uint8 RGB) are encoded by the Rust writer; NPY keeps any
     channel count and dtype, stored bands-first; TIF is a GeoTIFF (also any
@@ -354,7 +365,7 @@ def write_patches(
             ]
     else:
         if config.image_format == "npy":
-            _write_npy_images(image_patches, stems, images_path)
+            _write_npy_images(image_patches, stems, images_path, time_steps)
         else:
             _write_geotiffs(
                 image_patches,
@@ -363,7 +374,7 @@ def write_patches(
                 meta,
                 manifest,
                 _image_nodata(image_patches.dtype, source or manifest.source),
-                (source or manifest.source).bands or None,
+                band_names or (source or manifest.source).bands or None,
             )
         empty_ratios = [
             item["empty_ratio"] if "empty_ratio" in item else _empty_ratio(image)

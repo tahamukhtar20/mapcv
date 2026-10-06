@@ -59,11 +59,13 @@ class FilesWriter:
         block = {
             "layout": self.layout,
             **self._config.model_dump(
-                mode="json", exclude={"staging_dir", "world_files", "footprints"}
+                mode="json", exclude={"staging_dir", "world_files", "footprints", "stack_sources"}
             ),
         }
         if self._config.world_files:
             block["world_files"] = True
+        if self._config.stack_sources:
+            block["stack_sources"] = True
         return block
 
     def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
@@ -112,6 +114,9 @@ class FilesWriter:
         if sorted(others) != sorted(rest):
             raise ValueError(f"expected patches of imagery {rest}, got {sorted(others)}")
         records = {record.name: record for record in manifest.sources}
+        if self._config.stack_sources:
+            self._write_stack(images, annotations, metadata, manifest, chunk_index, others)
+            return
         start = len(manifest.patches)
         write_patches(
             images,
@@ -144,6 +149,35 @@ class FilesWriter:
             files_in_order = {name: entry["files"][name] for name in sources}
             files_in_order.update(entry["files"])
             entry["files"] = files_in_order
+
+    def _write_stack(
+        self,
+        images: npt.NDArray[np.generic],
+        annotations: Optional[npt.NDArray[Any]],
+        metadata: List[PatchMeta],
+        manifest: Manifest,
+        chunk_index: int,
+        others: Dict[str, npt.NDArray[np.generic]],
+    ) -> None:
+        """One file per patch holding every source (``writer.stack_sources``).
+
+        The sources' bands are concatenated in source order, so channel ``t * C + c`` is
+        band ``c`` of source ``t``: NPY files are reshaped to ``(T, C, H, W)``, GeoTIFFs
+        hold the ``T * C`` bands named ``<source>_<band>``.
+        """
+        sources = self._sources or []
+        records = {record.name: record for record in manifest.sources}
+        stacked = np.concatenate([images, *(others[name] for name in sources[1:])], axis=-1)
+        write_patches(
+            stacked,
+            annotations,
+            metadata,
+            self._config,
+            manifest,
+            chunk_index=chunk_index,
+            band_names=[f"{name}_{band}" for name in sources for band in records[name].bands],
+            time_steps=len(sources),
+        )
 
     def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
         if not self._config.footprints:

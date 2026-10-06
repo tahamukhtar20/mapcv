@@ -872,6 +872,26 @@ class MapcvConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_stacking(self) -> "MapcvConfig":
+        if not self.writer.stack_sources:
+            return self
+        if not self.multi_source or len(self.sources) < 2:
+            raise ValueError(
+                "writer.stack_sources puts several imagery sources in one file per patch; "
+                "write imagery as a list of two or more named sources"
+            )
+        if self.task != "segmentation":
+            raise ValueError(
+                f"writer.stack_sources applies to segmentation datasets (task is '{self.task}')"
+            )
+        if self.writer.image_format not in ("npy", "tif"):
+            raise ValueError(
+                "writer.stack_sources needs writer.image_format npy (T, C, H, W arrays) or tif "
+                f"(T x C bands), not '{self.writer.image_format}'"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_source_writer_pair(self) -> "MapcvConfig":
         for source in self.sources:
             # Messages name the source when there are several.

@@ -188,8 +188,10 @@ class Manifest(BaseModel):
         return self._upgraded_from or self.version
 
     def patch_name(self, entry: ManifestEntry) -> str:
-        """The name split lists use for a patch: the file name of its first source's image."""
-        return posixpath.basename(entry["files"][self.source.name])
+        """The name split lists use for a patch: the file name of its first source's image
+        (of its one ``image`` when the sources are stacked into one file)."""
+        files = entry["files"]
+        return posixpath.basename(files.get(self.source.name) or files["image"])
 
     def patch_transform(self, entry: ManifestEntry) -> Transform:
         """Affine transform of a patch's pixels, in the source CRS.

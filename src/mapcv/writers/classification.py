@@ -105,7 +105,14 @@ class ClassificationWriter:
         block = {
             "layout": self.layout,
             **self._config.model_dump(
-                mode="json", exclude={"staging_dir", "mask_format", "world_files", "footprints"}
+                mode="json",
+                exclude={
+                    "staging_dir",
+                    "mask_format",
+                    "world_files",
+                    "footprints",
+                    "stack_sources",
+                },
             ),
         }
         if self._config.world_files:

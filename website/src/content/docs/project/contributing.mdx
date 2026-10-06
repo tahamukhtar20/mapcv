@@ -40,6 +40,8 @@ uv run mypy --strict .
 cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
+The GeoTIFF, KML and tile parsers also have fuzz targets (`fuzz/`): `fuzz/run.sh geotiff_open 60` runs one for a minute (needs the nightly toolchain and `cargo install cargo-fuzz`). CI runs them on pull requests that touch a parser and every night; a crash is fixed in the parser and pinned with a regression test.
+
 The live Sentinel-2 test is opt-in: set `MAPCV_EOPF_URL` to a public product and run `uv run pytest -m eopf_live`.
 
 ## Conventions in brief

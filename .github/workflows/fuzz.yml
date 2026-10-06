@@ -1,0 +1,101 @@
+name: Fuzz
+
+# cargo-fuzz (libFuzzer) targets for the code that parses untrusted files: the
+# GeoTIFF/COG reader and its chunk codecs, the KML parser and the tile decoder
+# (see fuzz/). A short run on pull requests that touch them, a longer one every
+# night. A panic, an allocation past 2 GiB or a hang over 10 s fails the job and
+# uploads the crashing input.
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "src/geotiff.rs"
+      - "src/geotiff/**"
+      - "src/kml_parser.rs"
+      - "src/tile_decoder.rs"
+      - "src/tile_math.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds to fuzz each target"
+        default: "600"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - geotiff_open
+          - geotiff_structured
+          - chunk_decode
+          - kml_parse
+          - tile_decode
+    env:
+      TARGET: ${{ matrix.target }}
+      # 60 s on a PR, 10 minutes per target at night, or what the dispatcher asked for.
+      FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '60' || github.event.inputs.seconds || '600' }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    # The repo toolchain stays pinned in rust-toolchain.toml; libFuzzer needs
+    # nightly (-Zsanitizer), so it is installed next to it and used as `cargo +nightly`.
+    - name: Install nightly Rust
+      run: rustup toolchain install nightly --profile minimal
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: fuzz
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Install cargo-fuzz
+      run: cargo +nightly install cargo-fuzz --version 0.13.2 --locked
+
+    # Nightly runs keep the grown corpus, so each starts where the last ended.
+    - name: Restore corpus
+      id: corpus
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: fuzz/corpus/${{ matrix.target }}
+        key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+        restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+    - name: Fuzz ${{ matrix.target }}
+      run: fuzz/run.sh "$TARGET" "$FUZZ_SECONDS"
+
+    - name: Save corpus
+      if: always() && github.event_name != 'pull_request'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: fuzz/corpus/${{ matrix.target }}
+        key: ${{ steps.corpus.outputs.cache-primary-key }}
+
+    - name: Upload crashing inputs
+      if: failure()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: fuzz-crash-${{ matrix.target }}
+        path: fuzz/artifacts/${{ matrix.target }}
+        if-no-files-found: ignore

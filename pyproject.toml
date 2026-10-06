@@ -107,6 +107,7 @@ exclude = [
     { path = "website/**/*", format = "sdist" },
     { path = "examples/**/*", format = "sdist" },
     { path = "benchmarks/**/*", format = "sdist" },
+    { path = "fuzz/**/*", format = "sdist" },
     { path = ".github/**/*", format = "sdist" },
     { path = "uv.lock", format = "sdist" },
     { path = ".pre-commit-config.yaml", format = "sdist" },

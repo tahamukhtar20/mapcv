@@ -54,7 +54,7 @@ export default defineConfig({
             'mapcv turns a region, imagery and labels into ready-to-train remote-sensing datasets: ' +
             'semantic segmentation, object detection (COCO, YOLO), instance segmentation (COCO RLE), ' +
             'patch classification, change detection and regression. ' +
-            'It is a GDAL-free Python and Rust library and CLI.',
+            'It is a fast Python and Rust library and CLI.',
           details: [
             '- Install with `pip install mapcv`; the CLI journey is `mapcv init`, `plan`, `generate`, `info`.',
             '- Imagery: XYZ tiles, your own GeoTIFF/COG (one file or a mosaic), Sentinel-2 L2A (EOPF Zarr, or COGs from a STAC catalog) and Google Earth Engine. Labels: GeoJSON, KML, GeoPackage, Shapefile or GeoParquet features, OpenStreetMap, a label raster, or a raster of values for regression.',

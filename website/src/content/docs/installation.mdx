@@ -37,7 +37,7 @@ mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built w
 | Windows x86-64 | yes |
 | Other (for example Windows on ARM) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
 
-The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML, pyproj (its wheel bundles PROJ, so there is nothing else to install) and pyshp (a pure-Python Shapefile reader, so Shapefile labels work out of the box; GeoPackage needs only the standard library). There is no GDAL or rasterio dependency. XYZ tiles, GeoTIFF/COG files (local, `https://` or public `s3://`) and Sentinel-2 COGs from a STAC catalog (`type: stac_cog`) work with the base install alone. Sentinel-2 EOPF Zarr products, Google Earth Engine, GeoParquet labels and some export formats need an extra.
+The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML, pyproj (its wheel bundles PROJ, so there is nothing else to install) and pyshp (a pure-Python Shapefile reader, so Shapefile labels work out of the box; GeoPackage needs only the standard library). Nothing needs a system library. XYZ tiles, GeoTIFF/COG files (local, `https://` or public `s3://`) and Sentinel-2 COGs from a STAC catalog (`type: stac_cog`) work with the base install alone. Sentinel-2 EOPF Zarr products, Google Earth Engine, GeoParquet labels and some export formats need an extra.
 
 ## Optional extras
 

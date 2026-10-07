@@ -37,7 +37,7 @@ _T = TypeVar("_T")
 _INSTRUCTIONS = """\
 mapcv turns a region, imagery and labels into remote-sensing training datasets
 (segmentation, detection, instance segmentation, classification, change detection,
-regression) without GDAL.
+regression).
 
 Journey: inspect_labels (what is in the user's label file) -> write the config (see
 describe_config_schema; write_config saves it) -> validate_config -> plan -> show the

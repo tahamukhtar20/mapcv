@@ -6,7 +6,7 @@ strict version.
 
 ## What mapcv is
 
-A GDAL-free Python + Rust library and CLI that turns a region, imagery and labels into
+A fast Python + Rust library and CLI that turns a region, imagery and labels into
 ready-to-train remote-sensing datasets.
 
 - **Imagery:** XYZ tiles (built-in sources, a URL template or Google Earth Engine), Sentinel-2 EOPF Zarr or COGs found in a STAC catalog, GeoTIFF/COG (local, https, s3; a glob of local tiles reads as one mosaic); several sources sampled on one grid.

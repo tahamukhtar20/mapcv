@@ -131,6 +131,7 @@ export default defineConfig({
           label: 'Project',
           collapsed: true,
           items: [
+            { label: 'Performance', slug: 'project/performance' },
             { label: 'Providers & licensing', slug: 'project/providers' },
             { label: 'Migrating', slug: 'project/migration' },
             { label: 'Changelog', slug: 'project/changelog' },

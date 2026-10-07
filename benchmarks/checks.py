@@ -46,9 +46,11 @@ MASK_REFERENCE_HINT = (
 )
 ORIGIN = 20037508.342789244  # Web Mercator half-extent in metres
 IGNORE_INDEX = 255  # labels.ignore_index default: written where there is no imagery
-# JPEG output is lossy: allowed mean absolute difference per patch / over all patches.
-JPEG_PATCH_TOLERANCE = 6.0
-JPEG_MEAN_TOLERANCE = 3.0
+# JPEG output is lossy. Each patch's mean absolute error may exceed by this much what
+# libjpeg (through Pillow) makes of the same pixels at the dataset's quality and chroma
+# subsampling, the reference encoder; 4:2:0 alone costs several levels on the synthetic
+# tiles' sharp colour edges.
+JPEG_EXTRA_ERROR = 0.5
 # Rasterization may differ from rasterio on pixels that straddle a polygon edge.
 MASK_DISAGREE_LIMIT_PCT = 0.01
 SPLIT_NAMES = ("train", "val", "test")
@@ -187,6 +189,12 @@ def check_dataset(
     chosen = entries if sample <= 0 or sample >= len(entries) else rng.sample(entries, sample)
     worst_image, mean_image_sum, mask_wrong, mask_total, count_bad = 0, 0.0, 0, 0, 0
     lossy_output = scenario.image_format == "jpg"
+    writer = manifest.get("writer") or {}
+    jpeg_settings = {
+        "quality": int(writer.get("jpg_quality", 95)),
+        "subsampling": {"4:4:4": 0, "4:2:0": 2}[writer.get("jpg_subsampling", "4:2:0")],
+    }
+    reference_sum = 0.0
     for entry in chosen:
         row, col = entry["row"], entry["col"]
         name = entry["files"]["image"]
@@ -198,8 +206,12 @@ def check_dataset(
         patch_mean = float(difference.mean())
         mean_image_sum += patch_mean
         if lossy_output:
-            if patch_mean > JPEG_PATCH_TOLERANCE:
-                problems.append(f"{name}: mean JPEG error {patch_mean:.1f}")
+            allowed = _libjpeg_error(wanted, jpeg_settings)
+            reference_sum += allowed
+            if patch_mean > allowed + JPEG_EXTRA_ERROR:
+                problems.append(
+                    f"{name}: mean JPEG error {patch_mean:.2f}, libjpeg makes {allowed:.2f}"
+                )
         elif difference.max() != 0 and len(problems) < 20:
             problems.append(f"{name}: image differs from the served tiles")
         if reference is not None:
@@ -220,8 +232,14 @@ def check_dataset(
         image_mean_abs_diff=round(mean_image_sum / max(1, len(chosen)), 3),
         class_count_mismatches=count_bad,
     )
-    if lossy_output and report.stats["image_mean_abs_diff"] > JPEG_MEAN_TOLERANCE:
-        problems.append(f"mean JPEG error {report.stats['image_mean_abs_diff']} over all patches")
+    if lossy_output:
+        reference_mean = reference_sum / max(1, len(chosen))
+        report.stats["libjpeg_mean_abs_diff"] = round(reference_mean, 3)
+        if report.stats["image_mean_abs_diff"] > reference_mean + JPEG_EXTRA_ERROR / 2:
+            problems.append(
+                f"mean JPEG error {report.stats['image_mean_abs_diff']} over all patches, "
+                f"libjpeg makes {reference_mean:.3f}"
+            )
     if count_bad:
         problems.append(f"{count_bad} manifest class counts differ from the mask files")
     if reference is not None:
@@ -353,3 +371,64 @@ def _check_splits(
         problems.append(f"{len(entries) - used} patches dropped without any overlap to avoid")
     if used > len(entries):
         problems.append("splits list more patches than the manifest has")
+
+
+def compare_with_mapcv(
+    dataset: Path, baseline: Path, compare_images: bool = True
+) -> Dict[str, Any]:
+    """Compare a baseline's ``images/r<row>_c<col>.png`` and ``masks/...`` with mapcv's
+    patches at the same place. Images must match exactly (``compare_images=False`` for
+    lossy mapcv output, such as JPEG patches); masks may differ on a few edge pixels,
+    where two projections of the same polygon round differently."""
+    from PIL import Image
+
+    manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
+    ours = {(entry["row"], entry["col"]): entry["files"] for entry in manifest["patches"]}
+    theirs = {
+        tuple(int(part[1:]) for part in path.stem.split("_")): path.name
+        for path in (baseline / "images").glob("r*_c*.png")
+    }
+    common = sorted(set(ours) & set(theirs))
+    differing_images = 0
+    mask_differ = 0
+    mask_total = 0
+    for place in common:
+        name = theirs[place]
+        if compare_images:
+            a = np.asarray(Image.open(dataset / ours[place]["image"]).convert("RGB"))
+            b = np.asarray(Image.open(baseline / "images" / name).convert("RGB"))
+            differing_images += int(not np.array_equal(a, b))
+        if "mask" in ours[place]:
+            a = np.asarray(Image.open(dataset / ours[place]["mask"]))
+            b = np.asarray(Image.open(baseline / "masks" / name))
+            # mapcv marks pixels without imagery with the ignore index; a script has none.
+            valid = a != 255
+            mask_differ += int((a[valid] != b[valid]).sum())
+            mask_total += int(valid.sum())
+    disagree = 100.0 * mask_differ / mask_total if mask_total else 0.0
+    return {
+        "patches_mapcv": len(ours),
+        "patches_baseline": len(theirs),
+        "only_mapcv": len(set(ours) - set(theirs)),
+        "only_baseline": len(set(theirs) - set(ours)),
+        "images_compared": compare_images,
+        "images_differing": differing_images,
+        "mask_disagree_pct": round(disagree, 4),
+        # The same data: every patch on both sides, identical images, masks within
+        # 0.1 % of pixels (projection rounding at polygon edges).
+        "same_data": len(ours) == len(theirs) == len(common)
+        and differing_images == 0
+        and disagree <= 0.1,
+    }
+
+
+def _libjpeg_error(pixels: npt.NDArray[np.uint8], settings: Dict[str, int]) -> float:
+    """Mean absolute error of libjpeg (Pillow) encoding ``pixels`` with ``settings``."""
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.fromarray(pixels).save(buffer, "JPEG", **settings)
+    decoded = np.asarray(Image.open(buffer).convert("RGB")).astype(np.int16)
+    return float(np.abs(decoded - pixels.astype(np.int16)).mean())

@@ -40,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="show scenarios and registered baselines")
+    compare = commands.add_parser(
+        "compare", help="a table of mapcv against the baselines from a results file"
+    )
+    compare.add_argument("results", type=Path, metavar="FILE")
+    compare.add_argument(
+        "--markdown", action="store_true", help="a Markdown table (for the docs Performance page)"
+    )
 
     run = commands.add_parser("run", help="run scenarios and write a JSON results file")
     run.add_argument(
@@ -141,9 +148,56 @@ def print_report(document: Dict[str, Any], out: Path) -> None:
     print(f"Results written to {out}")
 
 
+def compare_table(document: Dict[str, Any], markdown: bool = False) -> str:
+    """mapcv and each baseline per scenario: median wall time, peak memory, and whether
+    the baseline's data matched mapcv's (a time is only comparable when it did)."""
+    rows = [("scenario", "tool", "wall time", "peak RSS", "vs mapcv", "same data")]
+    for name, entry in document.get("scenarios", {}).items():
+        summary = entry.get("summary", {})
+        if not summary.get("wall_s"):
+            continue
+        ours = summary["wall_s"]["median"]
+        rows.append(
+            (
+                name,
+                "mapcv",
+                f"{ours:.2f} s",
+                f"{summary['peak_rss_mb']['median']:.0f} MB",
+                "1.00×",
+                "—",
+            )
+        )
+        for tool, result in entry.get("baselines", {}).items():
+            theirs = result["summary"]["wall_s"]["median"]
+            comparison = result.get("comparison", {})
+            same = comparison.get("same_data")
+            ratio = f"{theirs / ours:.2f}×" if same else "not comparable"
+            rows.append(
+                (
+                    name,
+                    tool,
+                    f"{theirs:.2f} s",
+                    f"{result['summary']['peak_rss_mb']['median']:.0f} MB",
+                    ratio,
+                    "yes" if same else "no" if same is False else "unchecked",
+                )
+            )
+    if markdown:
+        lines = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * len(rows[0])]
+        lines += ["| " + " | ".join(row) + " |" for row in rows[1:]]
+        return "\n".join(lines)
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return "\n".join(
+        "  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip() for row in rows
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point; returns the process exit code (non-zero if any check failed)."""
     args = build_parser().parse_args(argv)
+    if args.command == "compare":
+        print(compare_table(json.loads(args.results.read_text(encoding="utf-8")), args.markdown))
+        return 0
     if args.command == "list":
         for group in GROUPS:
             print(f"{group}:")

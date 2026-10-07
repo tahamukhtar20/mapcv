@@ -88,7 +88,8 @@ docs = [
 zarr = [
     "xarray-eopf==0.2.5; python_version < '3.11'",
     "xarray-eopf>=0.2.9,<0.3; python_version >= '3.11' and python_version < '3.14'",
-    "xarray>=2024.10; python_version < '3.14'",
+    # xarray 2026.9 needs zarr 3, which xarray-eopf does not support yet.
+    "xarray>=2024.10,<2026.9; python_version < '3.14'",
     "dask[array]>=2024.10; python_version < '3.14'",
     "numba>=0.68; python_version < '3.14'",  # 0.68 is the first to support numpy 2.5
     "zarr>=2.18,<3; python_version < '3.14'",
@@ -145,6 +146,8 @@ module = [
     "yaml",
     "xarray",
     "xarray.*",
+    "zarr",
+    "zarr.*",
     "pyproj",
     "pyproj.*",
     "shapefile",

@@ -24,6 +24,7 @@ from mapcv.config import (
     eopf_local_path,
 )
 from mapcv.imagery import GeoTiffRasterSource
+from mapcv.pipeline import _max_window_width
 from shapely.geometry import box
 
 from mapcv.targets.segmentation import load_labels
@@ -448,11 +449,12 @@ def plan(config: MapcvConfig) -> Plan:
     if config.task == "classification":
         output += patches * _CLASSIFICATION_BYTES
     window_rows = min(height, primary.chunk_rows + patch_size)
+    pixel_bytes = sum(size.channels * size.bytes_per_value for size in sizes)
+    # A wide chunk is read in column windows that stay below the pipeline's budget.
+    window_width = min(width, _max_window_width(window_rows, width, pixel_bytes, patch_size))
     # Window, validity mask, label mask and extracted patches each hold a copy; further
     # sources are read on the first one's grid, so their windows are as large.
-    chunk_memory = (
-        window_rows * width * (sum(size.channels * size.bytes_per_value for size in sizes) * 2 + 2)
-    )
+    chunk_memory = window_rows * window_width * (pixel_bytes * 2 + 2)
 
     labels = summarize_labels(config)
     if labels is not None:

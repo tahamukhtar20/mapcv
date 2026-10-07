@@ -46,10 +46,6 @@ BOX_DECIMALS = 4
 # Relative slack for comparing areas computed by different geometry operations.
 _AREA_TOLERANCE = 1e-9
 
-LABELS_MISS_MESSAGE = (
-    "no label feature intersects the imagery extent, so no patch will have objects. "
-    "Check that labels are longitude/latitude (not swapped) and cover the configured region."
-)
 
 _POINT_TYPES = frozenset({"Point", "MultiPoint"})
 _POLYGONAL_TYPES = frozenset({"Polygon", "MultiPolygon"})
@@ -425,7 +421,7 @@ class DetectionTarget:
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
         ]
         features = [(geometry, cid) for geometry, cid in features if not geometry.is_empty]
-        _warn_if_labels_miss_raster(features, source, LABELS_MISS_MESSAGE)
+        _warn_if_labels_miss_raster(features, source, "feature", "no patch will have objects")
         geometries = np.empty(len(features), dtype=object)
         geometries[:] = [geometry for geometry, _ in features]
         self._geometries = geometries

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 import re
 import sys
 import warnings
@@ -109,6 +110,59 @@ _console = Console()
 _NO_COLOR_FROM_ENV = _console.no_color
 # --quiet: hide the spinner, progress bars and progress messages.
 _quiet = False
+# --debug: tracebacks after error messages, and mapcv's debug log on stderr.
+_debug = False
+_debug_handlers: list[logging.Handler] = []
+_DEBUG_FORMAT = "%(asctime)s %(name)s %(levelname)s: %(message)s"
+
+
+class _StderrDebugHandler(logging.Handler):
+    """Debug-level records on stderr. Looks stderr up at each record (a progress bar
+    replaces it while it runs) and leaves INFO and above to the CLI's own messages."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno >= logging.INFO and record.exc_info is None:
+            return  # shown by the CLI already
+        try:
+            sys.stderr.write(self.format(record) + "\n")
+        except (OSError, ValueError):  # pragma: no cover - a closed stderr
+            pass
+
+
+def _configure_debug(debug: bool, log_file: Path | None) -> None:
+    """Install (or remove, for a later run in the same process) the debug handlers."""
+    global _debug
+    _debug = debug or log_file is not None
+    logger = logging.getLogger("mapcv")
+    for handler in _debug_handlers:
+        logger.removeHandler(handler)
+        handler.close()
+    _debug_handlers.clear()
+    if not _debug:
+        logger.setLevel(logging.NOTSET)
+        return
+    formatter = logging.Formatter(_DEBUG_FORMAT)
+    if debug:
+        stderr = _StderrDebugHandler(logging.DEBUG)
+        stderr.setFormatter(formatter)
+        _debug_handlers.append(stderr)
+    if log_file is not None:
+        file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        _debug_handlers.append(file_handler)
+    for handler in _debug_handlers:
+        logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.debug(
+        "mapcv %s, Python %s, %s", mapcv.__version__, platform.python_version(), platform.platform()
+    )
+
+
+def _debug_traceback(exc: BaseException) -> None:
+    """With --debug (or --debug-log), the full traceback after the friendly message."""
+    if _debug:
+        logging.getLogger("mapcv.cli").error("%s: %s", type(exc).__name__, exc, exc_info=exc)
 
 
 class _GenerateFeedback(logging.Handler):
@@ -126,7 +180,7 @@ class _GenerateFeedback(logging.Handler):
     def __enter__(self) -> _GenerateFeedback:
         logger = logging.getLogger("mapcv")
         self._level = logger.level
-        logger.setLevel(logging.INFO)
+        logger.setLevel(logging.DEBUG if _debug else logging.INFO)
         logger.addHandler(self)
         if not _quiet:
             self._status = _console.status("Opening imagery…")
@@ -203,12 +257,19 @@ def _main(
     no_color: bool = typer.Option(
         False, "--no-color", help="Print without colours, as NO_COLOR=1 does."
     ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Show full tracebacks and mapcv's debug log (for bug reports)."
+    ),
+    debug_log: Path | None = typer.Option(
+        None, "--debug-log", metavar="FILE", help="Also write the debug log to FILE."
+    ),
 ) -> None:
     """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
     classification dataset."""
     global _quiet
     _quiet = quiet
     _console.no_color = no_color or _NO_COLOR_FROM_ENV
+    _configure_debug(debug, debug_log)
 
 
 def _format_validation_error(exc: ValidationError) -> list[str]:
@@ -234,6 +295,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
         try:
             config = MapcvConfig.from_yaml(config_path)
         except ValidationError as exc:
+            _debug_traceback(exc)
             _console.print(f"[red]Config error[/red] in {config_path}:")
             for line in _format_validation_error(exc):
                 _console.print(line)
@@ -243,6 +305,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
             )
             raise typer.Exit(code=1)
         except Exception as exc:  # noqa: BLE001 - any other config failure is a user error
+            _debug_traceback(exc)
             _console.print(f"[red]Config error:[/red] {exc}")
             raise typer.Exit(code=1)
     for warning in caught:
@@ -1156,6 +1219,7 @@ def _ask_bbox_or_file(
                     warnings.simplefilter("ignore")
                     geometries, _ = load_vector_labels(path, layer=layer)
             except (ValueError, OSError) as exc:
+                _debug_traceback(exc)
                 _console.print(f"[red]Cannot read that file:[/red] {escape(str(exc))}")
                 continue
             if not geometries:
@@ -1223,6 +1287,7 @@ def _ask_label_field(path: Path, layer: str | None = None) -> str | None:
     try:
         fields = label_fields(path, layer=layer)
     except (ValueError, OSError) as exc:
+        _debug_traceback(exc)
         _console.print(f"[yellow]Cannot read its attributes:[/yellow] {escape(str(exc))}")
         return None
     if not fields:
@@ -1313,6 +1378,7 @@ def _ask_geotiff() -> _GeoTiffAnswer:
                 geotiff_location(str(Path(answer).expanduser()) if "://" not in answer else answer)
             )
         except Exception as exc:  # noqa: BLE001 - any failure to open is shown and asked again
+            _debug_traceback(exc)
             _console.print(f"[red]Cannot read that file:[/red] {exc}")
             continue
         break
@@ -1418,6 +1484,7 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
     try:
         tif = GeoTiff(geotiff_location(path_text))
     except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
+        _debug_traceback(exc)
         _console.print(f"[yellow]Cannot read that file:[/yellow] {exc}. Edit labels.classes.")
         return placeholder
     info = tif.info
@@ -1442,6 +1509,7 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
     try:
         counts, sampled = _sample_label_values(tif, bbox)
     except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
+        _debug_traceback(exc)
         _console.print(f"[yellow]Cannot read its values:[/yellow] {exc}. Edit labels.classes.")
         return placeholder
     nodata = integer_nodata(info.nodata, info.dtype)
@@ -1747,6 +1815,7 @@ def init(
     try:
         MapcvConfig.from_yaml(target)
     except ValidationError as exc:
+        _debug_traceback(exc)
         _console.print(f"[yellow]Wrote {target}, but it needs edits:[/yellow]")
         for line in _format_validation_error(exc):
             _console.print(line)
@@ -1776,6 +1845,7 @@ def plan(
     try:
         estimate = make_plan(config)
     except (ValueError, RuntimeError, OSError) as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _print_plan(config_path, config, estimate)
@@ -1805,6 +1875,7 @@ def generate(
     try:
         estimate = make_plan(config)
     except (ValueError, RuntimeError, OSError) as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1)
     _print_plan(config_path, config, estimate)
@@ -1825,6 +1896,7 @@ def generate(
             with _GenerateFeedback() as feedback:
                 result = run_generate(config, feedback)
         except ManifestMismatchError as exc:
+            _debug_traceback(exc)
             _show_warnings(caught, shown)
             _console.print(f"[red]Cannot resume:[/red] {exc}")
             raise typer.Exit(code=1)
@@ -1835,6 +1907,7 @@ def generate(
             )
             raise typer.Exit(code=130)
         except Exception as exc:  # noqa: BLE001 - any failure gets the same resume advice
+            _debug_traceback(exc)
             _show_warnings(caught, shown)
             detail = escape(str(exc) or type(exc).__name__)
             _console.print(f"[red]Generation failed:[/red] {detail}")
@@ -1862,6 +1935,7 @@ def info(
     try:
         manifest = Manifest.load(manifest_path)
     except ManifestMismatchError as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
     table = Table.grid(padding=(0, 2))
@@ -1963,6 +2037,7 @@ def split(
             sample_limit=sample_limit,
         )
     except ValidationError as exc:
+        _debug_traceback(exc)
         _console.print("[red]Config error:[/red]")
         for line in _format_validation_error(exc):
             _console.print(line)
@@ -1972,6 +2047,7 @@ def split(
         try:
             counts = run_split(staging_dir, cfg)
         except (FileNotFoundError, ManifestMismatchError) as exc:
+            _debug_traceback(exc)
             _console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1)
     _show_warnings(caught, set())
@@ -2006,6 +2082,7 @@ def stats(
     try:
         path, values = write_stats(staging_dir, split_name)
     except (FileNotFoundError, ManifestMismatchError) as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
     table = Table(box=None, padding=(0, 2), show_edge=False)
@@ -2049,6 +2126,7 @@ def card(
     try:
         path = write_card(staging_dir, overwrite=force)
     except FileExistsError as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
     _console.print(
@@ -2203,6 +2281,7 @@ def export(
                 "paste it into your training config."
             )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(code=1)
 
@@ -2274,6 +2353,7 @@ def mcp_server(
     try:
         from mapcv.mcp_server import serve
     except ImportError as exc:
+        _debug_traceback(exc)
         err = Console(stderr=True, no_color=_console.no_color)
         err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
         err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
@@ -2282,5 +2362,6 @@ def mcp_server(
     try:
         serve(root, allow_write)
     except ValueError as exc:
+        _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)

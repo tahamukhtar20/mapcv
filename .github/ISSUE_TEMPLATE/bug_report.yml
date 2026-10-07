@@ -61,7 +61,7 @@ body:
     id: output
     attributes:
       label: Error output
-      description: Paste the full error message or traceback.
+      description: Run the command again with `--debug` (for example `mapcv --debug generate mapcv.yaml`) and paste the full output, or attach the file from `--debug-log run.log`. Tile URLs show only their host there, but check for other keys before pasting.
       render: text
 
   - type: textarea

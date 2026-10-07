@@ -6,14 +6,17 @@
  Start with mapcv init, check the cost with mapcv plan, then build with mapcv generate.
 
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
-│ --version             -V        Show the mapcv version and exit.                     │
-│ --quiet               -q        Hide progress output; still show errors and          │
-│                                 summaries.                                           │
-│ --no-color                      Print without colours, as NO_COLOR=1 does.           │
-│ --install-completion            Install completion for the current shell.            │
-│ --show-completion               Show completion for the current shell, to copy it or │
-│                                 customize the installation.                          │
-│ --help                -h        Show this message and exit.                          │
+│ --version             -V            Show the mapcv version and exit.                 │
+│ --quiet               -q            Hide progress output; still show errors and      │
+│                                     summaries.                                       │
+│ --no-color                          Print without colours, as NO_COLOR=1 does.       │
+│ --debug                             Show full tracebacks and mapcv's debug log (for  │
+│                                     bug reports).                                    │
+│ --debug-log                   FILE  Also write the debug log to FILE.                │
+│ --install-completion                Install completion for the current shell.        │
+│ --show-completion                   Show completion for the current shell, to copy   │
+│                                     it or customize the installation.                │
+│ --help                -h            Show this message and exit.                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ 1. Build a dataset ─────────────────────────────────────────────────────────────────╮
 │ init      Create a config: answer a few questions, or start from a template.         │

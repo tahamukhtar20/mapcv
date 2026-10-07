@@ -134,7 +134,7 @@ EOPF Sentinel-2 L2A input requires `pip install "mapcv[zarr]"` and `writer.image
 
 New datasets use manifest version 2. It records the source type, product identifier, bands, dtype, patch shape, CRS, and dataset affine transform. Patch rows and columns are global raster coordinates. Version 1 manifests remain readable by `mapcv split`, but **0.1.x datasets cannot be resumed by `mapcv generate`**: their row coordinates were per strip, while 0.2 uses global coordinates. Generate into a new `writer.staging_dir` instead.
 
-Resuming any dataset now requires the same imagery, label file, label settings, sampler and writer settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved after every chunk, so an interrupted run resumes from the last completed chunk.
+Resuming any dataset now requires the same imagery, label file, label settings, sampler and writer settings that created it. A mismatch stops generation with an error instead of mixing incompatible patches. The manifest is saved as the run goes and whenever it stops, so an interrupted run resumes from the last completed chunk.
 
 ### Sampling changes
 

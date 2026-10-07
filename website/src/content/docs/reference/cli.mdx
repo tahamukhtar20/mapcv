@@ -87,7 +87,7 @@ Estimates use typical tile and file sizes. For Sentinel-2 the raster size is com
 
 1. Prints the same plan as `mapcv plan`. With `--dry-run` it stops here.
 2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
-3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest after each chunk.
+3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest every few seconds and whenever the run stops (Ctrl-C, an error).
 4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files written, the class balance, and next steps.
 
 Warnings (skipped label features, labels outside the imagery, split leakage, more than half of the tiles failing) are printed once each, as `⚠` lines. Failures are reported as one `Generation failed: …` message without a traceback, followed by a hint to re-run; a refused resume is reported as `Cannot resume: …` instead.

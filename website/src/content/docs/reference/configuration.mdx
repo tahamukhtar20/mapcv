@@ -229,7 +229,7 @@ For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. F
 
 ## `imagery`
 
-Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
+Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr`, `stac_cog` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
 
 ### Several imagery sources
 
@@ -342,6 +342,34 @@ imagery:
 When the run starts, mapcv searches the catalog for the region's bounding box and picks, among the items whose footprint covers the **whole** region with at most `max_cloud` percent cloud, the least cloudy one; ties go to the earlier acquisition, then to the item ID, so the same catalog gives the same product every time. The manifest's `sources[0].fingerprint` records the catalog, collection and item, and `product_id` the product's name: resuming refuses to continue with another product if the search later finds a different one. `mapcv plan` estimates without contacting the catalog. When no item qualifies, the run stops and says how many items were found and how many covered the region.
 
 **`scl_mask`** reads the product's scene classification layer (20 m, nearest-neighbour onto the output grid) and treats pixels of the listed classes as pixels without imagery: their band values become `NaN`, segmentation masks mark them with `labels.ignore_index`, and they count towards `sampler.max_empty_ratio`, so `max_empty_ratio: 0.2` drops patches that are more than a fifth cloud. Values outside 0–11 (the fill at product edges) also count as no imagery.
+
+### Sentinel-2 as Cloud Optimized GeoTIFFs (`type: stac_cog`)
+
+Each band of a Sentinel-2 L2A scene as its own COG, found in a STAC catalog: by default [Earth Search](https://earth-search.aws.element84.com/v1) (Element 84), whose COGs sit in a public AWS bucket. No extra install: mapcv reads the COGs with its own reader, over HTTPS range requests.
+
+```yaml
+imagery:
+  type: stac_cog
+  search:
+    datetime: 2025-04-01/2025-06-30
+    max_cloud: 20
+  bands: [red, green, blue, nir, swir16]   # the item's asset keys, in output order
+  scl_mask: [3, 8, 9, 10]                  # cloud shadows, clouds, cirrus: no imagery
+writer:
+  image_format: npy                        # or tif
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `search` | mapping | required | As for [`eopf_zarr`](#find-the-product-imagerysearch): `datetime` (required), `max_cloud` (20), `collection` (`sentinel-2-l2a`), and `catalog`, here `https://earth-search.aws.element84.com/v1` by default. No `asset`: the bands are the assets |
+| `bands` | list of strings | `[red, green, blue, nir]` | Asset keys of the item, in output order. Earth Search names them `coastal`, `blue`, `green`, `red`, `rededge1`–`rededge3`, `nir`, `nir08`, `nir09`, `swir16`, `swir22` |
+| `scl_mask` | list of ints 0–11 | none | Scene classes whose pixels count as having no imagery, read from `scl_asset` |
+| `scl_asset` | string | `scl` | The item's scene classification asset |
+| `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+
+The item is chosen as for `eopf_zarr` search: the least cloudy one covering the whole region, ties to the earlier acquisition, then the ID. Bands come at 10, 20 or 60 m; every band is placed on the grid of the **finest** band among `bands`, a coarser band's pixels repeated (nearest neighbour, exact: Sentinel-2's grids share their origin), so 20 m bands are not interpolated. Values are the COGs' as stored (`uint16` digital numbers for Earth Search; reflectance = value / 10000, plus the offset its metadata states for processing baseline 04.00 and later). A pixel has imagery when every band has data (not the COGs' NoData, `0`) and, with `scl_mask`, its scene class is not masked; SCL's class 0 is "no data" as well. Patches are `writer.image_format: npy` or `tif`. The manifest's `sources[0]` records `source_type: stac_cog`, the item ID as `product_id`, and the catalog, collection and item in its fingerprint, so a resumed run refuses another item.
+
+A catalog may point only to `https://` or `s3://` COGs (local files only from a `localhost` catalog, for testing).
 
 ### GeoTIFF and Cloud Optimized GeoTIFF (`type: geotiff`)
 

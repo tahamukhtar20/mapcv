@@ -18,8 +18,9 @@ Conventions (shared with the COCO and YOLO writers):
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, cast
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -62,7 +63,7 @@ class DetectedObject:
     """
 
     category_id: int
-    bbox: Tuple[float, float, float, float]
+    bbox: tuple[float, float, float, float]
     area: float
     truncated: bool
 
@@ -75,14 +76,14 @@ class PatchObjects:
     ``sampler.min_label_ratio``; the writer only gets ``objects``.
     """
 
-    objects: Tuple[DetectedObject, ...]
-    visible: Tuple[BaseGeometry, ...]
+    objects: tuple[DetectedObject, ...]
+    visible: tuple[BaseGeometry, ...]
     patch_size: int
 
     @property
-    def class_counts(self) -> Dict[str, int]:
+    def class_counts(self) -> dict[str, int]:
         """Objects per class ID (string keys, ascending), as in the manifest summary."""
-        counts: Dict[int, int] = {}
+        counts: dict[int, int] = {}
         for item in self.objects:
             counts[item.category_id] = counts.get(item.category_id, 0) + 1
         return {str(cid): counts[cid] for cid in sorted(counts)}
@@ -129,7 +130,7 @@ def _point_boxes(geometries: npt.NDArray[np.object_], size: float) -> npt.NDArra
     return out
 
 
-def _runs(mask: npt.NDArray[np.bool_]) -> Tuple[npt.NDArray[np.intp], ...]:
+def _runs(mask: npt.NDArray[np.bool_]) -> tuple[npt.NDArray[np.intp], ...]:
     """``(rows, starts, ends)`` of the runs of true pixels in each row of ``mask``."""
     padded = np.zeros((mask.shape[0], mask.shape[1] + 2), dtype=np.int8)
     padded[:, 1:-1] = mask
@@ -139,17 +140,17 @@ def _runs(mask: npt.NDArray[np.bool_]) -> Tuple[npt.NDArray[np.intp], ...]:
     return starts[:, 0], starts[:, 1], ends[:, 1]
 
 
-def _rectangles(mask: npt.NDArray[np.bool_]) -> List[Tuple[int, int, int, int]]:
+def _rectangles(mask: npt.NDArray[np.bool_]) -> list[tuple[int, int, int, int]]:
     """Disjoint rectangles ``(x0, y0, x1, y1)`` covering the true pixels of ``mask``.
 
     Runs of true pixels in each row are merged with identical runs in the rows below.
     """
     rows, starts, ends = _runs(mask)
-    row_runs: Dict[int, List[Tuple[int, int]]] = {}
+    row_runs: dict[int, list[tuple[int, int]]] = {}
     for row, start, end in zip(rows.tolist(), starts.tolist(), ends.tolist()):
         row_runs.setdefault(row, []).append((start, end))
-    rectangles: List[Tuple[int, int, int, int]] = []
-    open_runs: Dict[Tuple[int, int], int] = {}
+    rectangles: list[tuple[int, int, int, int]] = []
+    open_runs: dict[tuple[int, int], int] = {}
     for row in range(mask.shape[0] + 1):
         runs = set(row_runs.get(row, ()))
         for run in [run for run in open_runs if run not in runs]:
@@ -159,9 +160,7 @@ def _rectangles(mask: npt.NDArray[np.bool_]) -> List[Tuple[int, int, int, int]]:
     return rectangles
 
 
-def mask_region(
-    mask: npt.NDArray[np.bool_], x_offset: int, y_offset: int
-) -> Optional[BaseGeometry]:
+def mask_region(mask: npt.NDArray[np.bool_], x_offset: int, y_offset: int) -> BaseGeometry | None:
     """The true pixels of ``mask`` as one geometry in pixel coordinates, or ``None``."""
     rectangles = _rectangles(mask)
     if not rectangles:
@@ -259,11 +258,11 @@ def visible_parts(
 def clip_to_frame(
     geometries: npt.NDArray[np.object_],
     bounds: npt.NDArray[np.float64],
-    frame: Tuple[int, int, int, int],
+    frame: tuple[int, int, int, int],
     row: int,
     col: int,
-    valid_patch: Optional[npt.NDArray[np.bool_]],
-) -> Optional[Tuple[npt.NDArray[np.intp], npt.NDArray[np.object_]]]:
+    valid_patch: npt.NDArray[np.bool_] | None,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.object_]] | None:
     """The parts of the geometries (window pixels) that a patch shows, or ``None`` for none.
 
     ``frame`` is ``(x0, y0, x1, y1)``, the patch inside its window (beyond it is
@@ -320,7 +319,7 @@ class DetectionWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> PatchObjects:
         """The objects visible in the patch at window pixel ``(row, col)``."""
         empty = PatchObjects((), (), patch_size)
@@ -338,8 +337,8 @@ class DetectionWindow:
         visible_areas = shapely.area(clipped)
         boxes = shapely.bounds(clipped)
         options = self._options
-        objects: List[DetectedObject] = []
-        visible: List[BaseGeometry] = []
+        objects: list[DetectedObject] = []
+        visible: list[BaseGeometry] = []
         for position, index in enumerate(hit):
             area = float(visible_areas[position])
             full = float(self._areas[index])
@@ -380,7 +379,7 @@ class DetectionWindow:
         covered = float(shapely.union_all(list(annotation.visible)).area)
         return covered / annotation.patch_size**2 >= min_label_ratio
 
-    def collate(self, annotations: Sequence[PatchObjects], patch_size: int) -> List[PatchObjects]:
+    def collate(self, annotations: Sequence[PatchObjects], patch_size: int) -> list[PatchObjects]:
         """The kept patches' annotations, in patch order."""
         return [PatchObjects(item.objects, (), item.patch_size) for item in annotations]
 
@@ -395,11 +394,11 @@ class DetectionTarget:
         self._geometries: npt.NDArray[np.object_] = np.empty(0, dtype=object)
         self._class_ids: npt.NDArray[np.int64] = np.empty(0, dtype=np.int64)
         self._bounds: npt.NDArray[np.float64] = np.empty((0, 4), dtype=np.float64)
-        self._class_map: Optional[ClassMap] = None
-        self._sha256: Optional[str] = None
+        self._class_map: ClassMap | None = None
+        self._sha256: str | None = None
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "detection"
 
     @property
@@ -417,7 +416,7 @@ class DetectionTarget:
         self._sha256 = labels_sha256(self._labels)
         points = self._options.point_box_size is not None
         parsed, self._class_map = _parse_labels(self._labels, source.crs, points=points)
-        features: List[GeomWithClass] = [
+        features: list[GeomWithClass] = [
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
         ]
         features = [(geometry, cid) for geometry, cid in features if not geometry.is_empty]
@@ -456,7 +455,7 @@ class DetectionTarget:
                 stacklevel=3,
             )
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """Class map, the label settings with a hash of the label file, and the options."""
         if self._sha256 is None:
             raise RuntimeError("DetectionTarget.prepare() must run first")
@@ -477,7 +476,7 @@ class DetectionTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         nearby = self._nearby(transform, height, width)
         geometries = to_pixels(self._geometries[nearby], transform)

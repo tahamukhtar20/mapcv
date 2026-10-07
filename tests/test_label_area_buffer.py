@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -21,14 +21,9 @@ from shapely.geometry import LineString, Point
 from shapely.ops import transform as shapely_transform
 
 pytest.importorskip("rasterio", reason="these tests compare masks with rasterio")
-import rasterio.features  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.labels import buffer_metres, load_vector_labels  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio.features
+from rasterio.transform import Affine
+from test_multi_source import (
     EPSG,
     PATCH,
     reference_transform,
@@ -36,11 +31,16 @@ from test_multi_source import (  # noqa: E402
     write_raster,
 )
 
+from mapcv.config import MapcvConfig
+from mapcv.labels import buffer_metres, load_vector_labels
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
+
 WIDTH, HEIGHT = 448, 384
 TO_UTM = Transformer.from_crs("EPSG:4326", f"EPSG:{EPSG}", always_xy=True)
 
 
-def _feature(geometry: Any, kind: Optional[str] = "road") -> Dict[str, Any]:
+def _feature(geometry: Any, kind: str | None = "road") -> dict[str, Any]:
     return {
         "type": "Feature",
         "properties": {} if kind is None else {"kind": kind},
@@ -48,12 +48,12 @@ def _feature(geometry: Any, kind: Optional[str] = "road") -> Dict[str, Any]:
     }
 
 
-def _write(path: Path, features: List[Dict[str, Any]]) -> Path:
+def _write(path: Path, features: list[dict[str, Any]]) -> Path:
     path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
     return path
 
 
-def _at(region: Dict[str, float], fx: float, fy: float) -> Tuple[float, float]:
+def _at(region: dict[str, float], fx: float, fy: float) -> tuple[float, float]:
     return (
         region["west"] + fx * (region["east"] - region["west"]),
         region["south"] + fy * (region["north"] - region["south"]),
@@ -102,14 +102,14 @@ def test_lines_and_points_become_polygons_only_when_buffered(tmp_path: Path) -> 
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, seed=1)
     return {"region": region_inside(ref, WIDTH, HEIGHT)}
 
 
 def _config(
-    tmp_path: Path, region: Dict[str, float], labels: Dict[str, Any], **extra: Any
+    tmp_path: Path, region: dict[str, float], labels: dict[str, Any], **extra: Any
 ) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
@@ -124,7 +124,7 @@ def _config(
 
 
 def _rasterize(
-    shapes: List[Tuple[Any, int]], entry: Any, manifest: Manifest
+    shapes: list[tuple[Any, int]], entry: Any, manifest: Manifest
 ) -> npt.NDArray[np.uint8]:
     burned: npt.NDArray[np.uint8] = rasterio.features.rasterize(
         [(geometry.__geo_interface__, value) for geometry, value in shapes]
@@ -137,7 +137,7 @@ def _rasterize(
     return burned
 
 
-def test_buffered_roads_and_trees_in_masks(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_buffered_roads_and_trees_in_masks(tmp_path: Path, scene: dict[str, Any]) -> None:
     region = scene["region"]
     road = LineString([_at(region, 0.1, 0.2), _at(region, 0.5, 0.6), _at(region, 0.9, 0.55)])
     trees = [Point(_at(region, fx, fy)) for fx, fy in ((0.3, 0.8), (0.7, 0.25), (0.15, 0.6))]
@@ -168,7 +168,7 @@ def test_buffered_roads_and_trees_in_masks(tmp_path: Path, scene: Dict[str, Any]
 
 
 def test_pixels_outside_the_annotated_area_are_ignored(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     region = scene["region"]
     house = Point(_at(region, 0.4, 0.4)).buffer(0.0002)
@@ -197,7 +197,7 @@ def test_pixels_outside_the_annotated_area_are_ignored(
 
 
 def test_classification_coverage_counts_only_the_annotated_area(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     region = scene["region"]
     field = Point(_at(region, 0.5, 0.5)).buffer(0.0015)
@@ -217,7 +217,7 @@ def test_classification_coverage_counts_only_the_annotated_area(
         assert all(0 < share <= 1 for share in entry["summary"]["class_coverage"].values())
 
 
-def test_existing_label_settings_record_no_new_keys(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_existing_label_settings_record_no_new_keys(tmp_path: Path, scene: dict[str, Any]) -> None:
     path = _write(
         tmp_path / "a.geojson", [_feature(Point(_at(scene["region"], 0.5, 0.5)).buffer(0.0003))]
     )
@@ -229,7 +229,7 @@ def test_existing_label_settings_record_no_new_keys(tmp_path: Path, scene: Dict[
 # ── Config ───────────────────────────────────────────────────────────────────
 
 
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite"},
     "sampler": {"patch_size": 256},
@@ -262,7 +262,7 @@ BASE: Dict[str, Any] = {
         ),
     ],
 )
-def test_config_refuses_bad_buffers_and_areas(changes: Dict[str, Any], message: str) -> None:
+def test_config_refuses_bad_buffers_and_areas(changes: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate({**BASE, **changes})
     assert message in str(raised.value)

@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 
 import mapcv
-
 from mapcv.config import LabelsConfig, MapcvConfig
 from mapcv.imagery import RasterMetadata
-from mapcv.pipeline import run_generate
-from mapcv.sampler import PatchMeta
-from mapcv.splitter import SplitLists, SplitterConfig
-from mapcv.targets import ImageOnlyTarget, SegmentationTarget, WindowTarget, create_target
 from mapcv.manifest import (
     Manifest,
     ManifestEntry,
@@ -25,6 +21,10 @@ from mapcv.manifest import (
     PatchSummary,
     TargetRecord,
 )
+from mapcv.pipeline import run_generate
+from mapcv.sampler import PatchMeta
+from mapcv.splitter import SplitLists, SplitterConfig
+from mapcv.targets import ImageOnlyTarget, SegmentationTarget, WindowTarget, create_target
 from mapcv.writers import FilesWriter, check_compatible, create_writer
 
 
@@ -35,7 +35,7 @@ class FakeRasterSource:
         values = np.arange(7 * 5 * 2, dtype=np.float32)
         self.image = values.reshape(7, 5, 2)
         self.valid = np.ones((7, 5), dtype=np.bool_)
-        self.windows: List[Tuple[int, int, int, int]] = []
+        self.windows: list[tuple[int, int, int, int]] = []
         self.closed = False
         self.metadata = RasterMetadata(
             source_type="eopf_zarr",
@@ -51,7 +51,7 @@ class FakeRasterSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         self.windows.append((row_start, row_stop, col_start, col_stop))
         return (
             self.image[row_start:row_stop, col_start:col_stop],
@@ -85,7 +85,7 @@ def _config(tmp_path: Path) -> MapcvConfig:
 def test_generate_keeps_global_anchors_across_chunk_seams_and_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sources: List[FakeRasterSource] = []
+    sources: list[FakeRasterSource] = []
 
     def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
         source = FakeRasterSource()
@@ -164,7 +164,7 @@ def test_generate_warns_when_labels_miss_the_imagery(
 def test_resumed_run_records_the_same_chunk_indices(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sources: List[FakeRasterSource] = []
+    sources: list[FakeRasterSource] = []
 
     def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
         sources.append(FakeRasterSource())
@@ -212,8 +212,8 @@ def test_generate_warns_when_failed_tiles_stay_in_patches(
 def test_windowed_label_selection_matches_full_rasterization(all_touched: bool) -> None:
     from shapely.geometry import box as make_box
 
-    from mapcv.targets.segmentation import _geometries_in_window, _label_bounds
     from mapcv.rasterizer import rasterize
+    from mapcv.targets.segmentation import _geometries_in_window, _label_bounds
 
     rng = np.random.default_rng(7)
     geometries = []
@@ -309,14 +309,14 @@ def test_global_random_anchors_are_distinct_and_warn_when_capped() -> None:
 # The pipeline is task-agnostic: any Target and Writer plug in.
 # ---------------------------------------------------------------------------
 
-Center = Tuple[int, int]
-Transform = Tuple[float, float, float, float, float, float]
+Center = tuple[int, int]
+Transform = tuple[float, float, float, float, float, float]
 
 
 class CenterWindow:
     """Annotates each patch with its centre pixel in window coordinates."""
 
-    def __init__(self, owner: "CenterTarget", transform: Transform, shape: Tuple[int, int]):
+    def __init__(self, owner: CenterTarget, transform: Transform, shape: tuple[int, int]):
         self.owner = owner
         self.transform = transform
         self.shape = shape
@@ -327,35 +327,35 @@ class CenterWindow:
         col: int,
         patch_size: int,
         pad_mode: str,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> Center:
         return (row + patch_size // 2, col + patch_size // 2)
 
     def accepts(self, annotation: Center, min_label_ratio: float) -> bool:
         return annotation != self.owner.reject
 
-    def collate(self, annotations: Sequence[Center], patch_size: int) -> List[Center]:
+    def collate(self, annotations: Sequence[Center], patch_size: int) -> list[Center]:
         return list(annotations)
 
 
 class CenterTarget:
-    def __init__(self, reject: Optional[Center] = None) -> None:
+    def __init__(self, reject: Center | None = None) -> None:
         self.reject = reject
-        self.prepared_with: List[RasterMetadata] = []
-        self.windows: List[CenterWindow] = []
+        self.prepared_with: list[RasterMetadata] = []
+        self.windows: list[CenterWindow] = []
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "centers"
 
     @property
-    def class_map(self) -> Dict[str, int]:
+    def class_map(self) -> dict[str, int]:
         return {"center": 1}
 
     def prepare(self, source: RasterMetadata) -> None:
         self.prepared_with.append(source)
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         return TargetRecord(type="centers", class_map=self.class_map, options={"radius": 0})
 
     def window(
@@ -363,7 +363,7 @@ class CenterTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         assert valid_mask is not None and valid_mask.shape == (height, width)
         window = CenterWindow(self, transform, (height, width))
@@ -373,28 +373,28 @@ class CenterTarget:
 
 class RecordingWriter:
     def __init__(self) -> None:
-        self.calls: List[Tuple[int, List[Center], List[Tuple[int, int]], Tuple[int, ...]]] = []
-        self.finalized: List[Tuple[int, Optional[SplitLists]]] = []
-        self.supported: Tuple[Optional[str], ...] = ("centers",)
+        self.calls: list[tuple[int, list[Center], list[tuple[int, int]], tuple[int, ...]]] = []
+        self.finalized: list[tuple[int, SplitLists | None]] = []
+        self.supported: tuple[str | None, ...] = ("centers",)
 
     @property
     def layout(self) -> str:
         return "recording"
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         return target_type in self.supported
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         return {"layout": "recording"}
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         return [len(source.bands), patch_size, patch_size]
 
     def write(
         self,
         images: npt.NDArray[Any],
-        annotations: List[Center],
-        metadata: List[PatchMeta],
+        annotations: list[Center],
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
     ) -> None:
@@ -418,14 +418,14 @@ class RecordingWriter:
                 )
             )
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         self.finalized.append((len(manifest.patches), split_lists))
 
 
 def _plug(
     monkeypatch: pytest.MonkeyPatch, target: CenterTarget, writer: RecordingWriter
-) -> List[FakeRasterSource]:
-    sources: List[FakeRasterSource] = []
+) -> list[FakeRasterSource]:
+    sources: list[FakeRasterSource] = []
 
     def open_source(*args: Any, **kwargs: Any) -> FakeRasterSource:
         sources.append(FakeRasterSource())

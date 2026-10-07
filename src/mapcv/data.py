@@ -28,8 +28,9 @@ import importlib
 import importlib.util
 import json
 import os
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -91,12 +92,12 @@ class MapcvDataset:
 
     def __init__(
         self,
-        root: Union[str, "os.PathLike[str]"],
+        root: str | os.PathLike[str],
         split: str = "train",
         *,
         normalize: bool = False,
-        transform: Optional[Callable[[Dict[str, Any]], Any]] = None,
-        as_tensors: Optional[bool] = None,
+        transform: Callable[[dict[str, Any]], Any] | None = None,
+        as_tensors: bool | None = None,
     ) -> None:
         self.root = Path(root)
         manifest_path = self.root / "manifest.json"
@@ -117,14 +118,14 @@ class MapcvDataset:
         if as_tensors and not torch_available:
             raise ImportError("as_tensors=True needs PyTorch: pip install torch")
         self.as_tensors = torch_available if as_tensors is None else as_tensors
-        self._stats: Optional[Dict[str, Any]] = self._load_stats() if normalize else None
+        self._stats: dict[str, Any] | None = self._load_stats() if normalize else None
         self._objects = (
             self._load_objects() if self.manifest.task in ("detection", "instance") else {}
         )
 
     # ── which patches ────────────────────────────────────────────────────────
 
-    def _entries(self, split: str) -> List[ManifestEntry]:
+    def _entries(self, split: str) -> list[ManifestEntry]:
         if split == "all":
             return list(self.manifest.patches)
         listed = self.root / "splits" / f"{split}.txt"
@@ -145,27 +146,27 @@ class MapcvDataset:
         return [by_name[name] for name in names if name in by_name]
 
     @property
-    def classes(self) -> Dict[int, str]:
+    def classes(self) -> dict[int, str]:
         """Class ID to name (``0`` is background for masks)."""
         return {cid: name for name, cid in self.manifest.class_map.items()}
 
     @property
-    def ignore_index(self) -> Optional[int]:
+    def ignore_index(self) -> int | None:
         """The mask value of pixels to leave out of the loss, or ``None``."""
         return self.manifest.ignore_index
 
     # ── side data ────────────────────────────────────────────────────────────
 
-    def _load_stats(self) -> Dict[str, Any]:
+    def _load_stats(self) -> dict[str, Any]:
         path = self.root / "stats.json"
         if path.exists():
-            stats: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            stats: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
             return stats
         from mapcv.stats import dataset_stats
 
         return dataset_stats(self.root, "train")
 
-    def _load_objects(self) -> Dict[str, List[Dict[str, Any]]]:
+    def _load_objects(self) -> dict[str, list[dict[str, Any]]]:
         """COCO annotations by image file name, from the COCO files of the dataset."""
         folder = self.root / "annotations"
         documents = sorted(folder.glob("instances_*.json")) if folder.is_dir() else []
@@ -174,7 +175,7 @@ class MapcvDataset:
                 f"No COCO files in {folder}: MapcvDataset reads boxes from them, so write "
                 "the dataset with task_options formats including coco"
             )
-        objects: Dict[str, List[Dict[str, Any]]] = {}
+        objects: dict[str, list[dict[str, Any]]] = {}
         for document in documents:
             coco = json.loads(document.read_text(encoding="utf-8"))
             names = {image["id"]: image["file_name"] for image in coco["images"]}
@@ -215,7 +216,7 @@ class MapcvDataset:
         files = entry["files"]
         manifest = self.manifest
         names = [record.name for record in manifest.sources]
-        item: Dict[str, Any] = {
+        item: dict[str, Any] = {
             "name": manifest.patch_name(entry),
             "row": entry["row"],
             "col": entry["col"],
@@ -261,7 +262,7 @@ class MapcvDataset:
         return f"MapcvDataset({str(self.root)!r}, split={self.split!r}, {len(self)} patches)"
 
 
-def _to_tensors(item: Dict[str, Any]) -> Dict[str, Any]:
+def _to_tensors(item: dict[str, Any]) -> dict[str, Any]:
     torch: Any = importlib.import_module("torch")
 
     def convert(value: Any) -> Any:
@@ -280,7 +281,7 @@ def _to_tensors(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def splits_of(root: Union[str, "os.PathLike[str]"]) -> Sequence[str]:
+def splits_of(root: str | os.PathLike[str]) -> Sequence[str]:
     """The split lists a dataset has (``train``, ``val``, ``test``), or ``("all",)``."""
     folder = Path(root) / "splits"
     present = [split for split in _SPLITS if (folder / f"{split}.txt").exists()]

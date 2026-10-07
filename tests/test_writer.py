@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 from PIL import Image, JpegImagePlugin
 from pydantic import ValidationError
-from typing import Any, List, Optional, Tuple
 
 from mapcv import SamplerConfig, sample_patches
-from mapcv.sampler import PatchMeta
 from mapcv.manifest import Manifest, TargetRecord
+from mapcv.sampler import PatchMeta
 from mapcv.writer import WriterConfig, write_patches
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,7 +28,7 @@ def _solid(h: int, w: int, c: int = 3, value: int = 128) -> npt.NDArray[np.uint8
 
 def _patches(
     h: int = 16, w: int = 16, ps: int = 8
-) -> Tuple[npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
+) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8] | None, list[PatchMeta]]:
     img = _solid(h, w)
     cfg = SamplerConfig(patch_size=ps, edge_strategy="drop")
     return sample_patches(img, None, cfg)
@@ -37,7 +36,7 @@ def _patches(
 
 def _patches_with_mask(
     h: int = 16, w: int = 16, ps: int = 8
-) -> Tuple[npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
+) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8] | None, list[PatchMeta]]:
     img = _solid(h, w)
     msk = np.ones((h, w), dtype=np.uint8)
     msk[:, w // 2 :] = 2
@@ -65,9 +64,9 @@ def test_writer_config_jpg_subsampling_is_validated(tmp_path: Path) -> None:
 
 
 def test_writer_config_jpg_quality_bounds(tmp_path: Path) -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         WriterConfig(staging_dir=tmp_path, jpg_quality=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         WriterConfig(staging_dir=tmp_path, jpg_quality=101)
 
 
@@ -147,7 +146,7 @@ def _corpus(n: int = 24, size: int = 128) -> npt.NDArray[np.uint8]:
     return out
 
 
-def _write_jpgs(images: npt.NDArray[np.uint8], tmp_path: Path, **config: Any) -> List[Path]:
+def _write_jpgs(images: npt.NDArray[np.uint8], tmp_path: Path, **config: Any) -> list[Path]:
     meta = [PatchMeta(row=i, col=0, padded=False, empty_ratio=0.0) for i in range(len(images))]
     cfg = WriterConfig(staging_dir=tmp_path, image_format="jpg", **config)
     write_patches(images, None, meta, cfg, Manifest())
@@ -156,7 +155,7 @@ def _write_jpgs(images: npt.NDArray[np.uint8], tmp_path: Path, **config: Any) ->
 
 @pytest.mark.parametrize(("setting", "sampling"), [(None, 2), ("4:2:0", 2), ("4:4:4", 0)])
 def test_jpg_sampling_factors_match_the_setting(
-    tmp_path: Path, setting: Optional[str], sampling: int
+    tmp_path: Path, setting: str | None, sampling: int
 ) -> None:
     extra = {} if setting is None else {"jpg_subsampling": setting}
     files = _write_jpgs(_corpus(2), tmp_path, **extra)
@@ -180,7 +179,7 @@ def test_jpg_size_is_close_to_pillows_at_quality_95(tmp_path: Path) -> None:
 def test_jpg_444_is_larger_and_not_worse_than_420(tmp_path: Path) -> None:
     images = _corpus(8)
 
-    def run(sub: str) -> Tuple[int, float]:
+    def run(sub: str) -> tuple[int, float]:
         files = _write_jpgs(images, tmp_path / sub.replace(":", ""), jpg_subsampling=sub)
         size = sum(p.stat().st_size for p in files)
         err = 0.0
@@ -435,8 +434,8 @@ def test_parallel_same_as_serial(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _multi_class_patches() -> Tuple[
-    npt.NDArray[np.uint8], Optional[npt.NDArray[np.uint8]], List[PatchMeta]
+def _multi_class_patches() -> tuple[
+    npt.NDArray[np.uint8], npt.NDArray[np.uint8] | None, list[PatchMeta]
 ]:
     rng = np.random.default_rng(0)
     img = rng.integers(1, 255, size=(32, 32, 3), dtype=np.uint8)
@@ -448,7 +447,7 @@ def _multi_class_patches() -> Tuple[
 @pytest.mark.parametrize("image_format", ["png", "npy"])
 def test_manifest_json_byte_identical_across_runs(tmp_path: Path, image_format: Any) -> None:
     imgs, msks, meta = _multi_class_patches()
-    manifests: List[bytes] = []
+    manifests: list[bytes] = []
     for run in ("run1", "run2"):
         cfg = WriterConfig(staging_dir=tmp_path / run, image_format=image_format)
         m = Manifest(target=TargetRecord(type="segmentation", class_map={"a": 2, "b": 10}))

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -19,17 +19,11 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="change tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-import rasterio.features  # noqa: E402
-import rasterio.warp  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest, ManifestEntry  # noqa: E402
-from mapcv.pipeline import run_generate, run_split  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio
+import rasterio.features
+import rasterio.warp
+from rasterio.transform import Affine
+from test_multi_source import (
     EPSG,
     PATCH,
     expected_on_patch_grid,
@@ -39,6 +33,12 @@ from test_multi_source import (  # noqa: E402
     write_raster,
 )
 
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest, ManifestEntry
+from mapcv.pipeline import run_generate, run_split
+from mapcv.planning import plan
+
 runner = CliRunner()
 WIDTH, HEIGHT = 448, 384
 
@@ -46,14 +46,14 @@ WIDTH, HEIGHT = 448, 384
 # ── Scene: two images and labels ─────────────────────────────────────────────
 
 
-def _polygon(region: Dict[str, float], *corners: Tuple[float, float]) -> List[List[float]]:
+def _polygon(region: dict[str, float], *corners: tuple[float, float]) -> list[list[float]]:
     west, south = region["west"], region["south"]
     dx, dy = region["east"] - west, region["north"] - south
     ring = [[west + fx * dx, south + fy * dy] for fx, fy in corners]
     return ring + [ring[0]]
 
 
-def write_features(path: Path, rings: List[Tuple[List[List[float]], Optional[str]]]) -> Path:
+def write_features(path: Path, rings: list[tuple[list[list[float]], str | None]]) -> Path:
     features = [
         {
             "type": "Feature",
@@ -67,7 +67,7 @@ def write_features(path: Path, rings: List[Tuple[List[List[float]], Optional[str
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "before.tif", ref, WIDTH, HEIGHT, seed=1)
     write_raster(tmp_path / "after.tif", ref, WIDTH, HEIGHT, seed=2)
@@ -90,7 +90,7 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     }
 
 
-def _sources(tmp_path: Path) -> List[Dict[str, Any]]:
+def _sources(tmp_path: Path) -> list[dict[str, Any]]:
     return [
         {"type": "geotiff", "name": "before", "path": str(tmp_path / "before.tif")},
         {"type": "geotiff", "name": "after", "path": str(tmp_path / "after.tif")},
@@ -99,14 +99,14 @@ def _sources(tmp_path: Path) -> List[Dict[str, Any]]:
 
 def change_config(
     tmp_path: Path,
-    region: Dict[str, float],
+    region: dict[str, float],
     *,
-    labels: Optional[Dict[str, Any]] = None,
-    change: Optional[Dict[str, Any]] = None,
+    labels: dict[str, Any] | None = None,
+    change: dict[str, Any] | None = None,
     staging: str = "dataset",
     **writer: Any,
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "task": "change",
         "region": region,
         "imagery": _sources(tmp_path),
@@ -121,7 +121,7 @@ def change_config(
     return MapcvConfig.model_validate(data)
 
 
-def _burn(path: Path, transform: Affine, field: Optional[str] = None) -> npt.NDArray[np.uint8]:
+def _burn(path: Path, transform: Affine, field: str | None = None) -> npt.NDArray[np.uint8]:
     """rasterio's mask of a label file on a patch grid: class IDs, or 1 per feature."""
     shapes = []
     ids = {"house": 1, "shed": 2}
@@ -159,7 +159,7 @@ def _check_images(tmp_path: Path, config: MapcvConfig, manifest: Manifest) -> No
 
 
 XYZ = {"type": "xyz", "zoom": 18, "source": "esri_satellite"}
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "task": "change",
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "imagery": [{**XYZ, "name": "before"}, {**XYZ, "name": "after"}],
@@ -227,7 +227,7 @@ BASE: Dict[str, Any] = {
         ),
     ],
 )
-def test_config_refuses_incomplete_change_settings(changes: Dict[str, Any], message: str) -> None:
+def test_config_refuses_incomplete_change_settings(changes: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate({**BASE, **changes})
     assert message in str(raised.value)
@@ -263,7 +263,7 @@ def test_label_set_paths_resolve_against_the_config_folder(tmp_path: Path) -> No
 # ── Datasets ─────────────────────────────────────────────────────────────────
 
 
-def test_change_polygons_become_the_change_mask(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_change_polygons_become_the_change_mask(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = change_config(tmp_path, scene["region"], labels={"path": str(scene["changes"])})
     manifest = run_generate(config).manifest
     assert manifest.task == "change"
@@ -282,7 +282,7 @@ def test_change_polygons_become_the_change_mask(tmp_path: Path, scene: Dict[str,
 
 
 def test_before_and_after_label_sets_differ_where_objects_change(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     config = change_config(
         tmp_path,
@@ -310,7 +310,7 @@ def test_before_and_after_label_sets_differ_where_objects_change(
     assert changed > 0
 
 
-def test_classes_compare_object_kinds_too(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_classes_compare_object_kinds_too(tmp_path: Path, scene: dict[str, Any]) -> None:
     classes = {"house": 1, "shed": 2}
     label_set = {"label_field": "kind", "classes": classes, "ignore_index": None}
     config = change_config(
@@ -336,7 +336,7 @@ def test_classes_compare_object_kinds_too(tmp_path: Path, scene: Dict[str, Any])
     assert relabeled > 0, "no patch shows the relabeled object"
 
 
-def test_levir_style_masks_are_0_and_255(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_levir_style_masks_are_0_and_255(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = change_config(
         tmp_path,
         scene["region"],
@@ -352,7 +352,7 @@ def test_levir_style_masks_are_0_and_255(tmp_path: Path, scene: Dict[str, Any]) 
 
 
 def test_a_change_raster_marks_change_and_keeps_its_ignore_pixels(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     # A change map on the image grid: 2 = change, 1 = no change, 0 = no data.
     ref = reference_transform()
@@ -390,7 +390,7 @@ def test_a_change_raster_marks_change_and_keeps_its_ignore_pixels(
         assert inside.all()
 
 
-def test_pixels_missing_in_either_image_are_ignored(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_pixels_missing_in_either_image_are_ignored(tmp_path: Path, scene: dict[str, Any]) -> None:
     # The after image covers only the top part of the before image.
     ref = reference_transform()
     write_raster(tmp_path / "after.tif", ref, WIDTH, HEIGHT // 2, seed=2)
@@ -409,7 +409,7 @@ def test_pixels_missing_in_either_image_are_ignored(tmp_path: Path, scene: Dict[
     assert ignored > 0
 
 
-def test_resume_split_plan_and_info(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_resume_split_plan_and_info(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = change_config(tmp_path, scene["region"], labels={"path": str(scene["changes"])})
     full = run_generate(config).manifest
     staging = config.writer.staging_dir
@@ -431,7 +431,7 @@ def test_resume_split_plan_and_info(tmp_path: Path, scene: Dict[str, Any]) -> No
     assert "change" in result.output and "Source before" in result.output
 
 
-def test_plan_reads_both_label_sets(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_plan_reads_both_label_sets(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = change_config(
         tmp_path,
         scene["region"],
@@ -459,7 +459,7 @@ def test_change_template_is_a_valid_config() -> None:
 
 
 def test_labels_without_features_give_an_unchanged_mask(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     empty = write_features(tmp_path / "none.geojson", [])
     config = change_config(
@@ -497,7 +497,7 @@ def _labels_config(tmp_path: Path) -> Any:
     return LabelsConfig(path=tmp_path / "c.geojson")
 
 
-def test_cli_and_plan_describe_change_datasets(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_cli_and_plan_describe_change_datasets(tmp_path: Path, scene: dict[str, Any]) -> None:
     import yaml
 
     data = {
@@ -528,7 +528,7 @@ def test_cli_and_plan_describe_change_datasets(tmp_path: Path, scene: Dict[str, 
     assert any("no patch would show a change" in message for message in estimate.warnings)
 
 
-def test_mcp_sandbox_checks_both_label_sets(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_mcp_sandbox_checks_both_label_sets(tmp_path: Path, scene: dict[str, Any]) -> None:
     from mapcv.agent_tools import config_paths
 
     config = change_config(

@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import geopandas as gpd
 import pandas as pd
@@ -39,7 +39,7 @@ def _square(x: float, y: float, size: float) -> Polygon:
     return box(LON + x, LAT + y, LON + x + size, LAT + y + size)
 
 
-def features() -> List[Dict[str, Any]]:
+def features() -> list[dict[str, Any]]:
     """The reference features: ``geometry`` plus the ``class``, ``rank`` and ``score`` fields."""
     holed = Polygon(
         _square(0.000, 0.000, 0.004).exterior.coords,
@@ -78,7 +78,7 @@ def features() -> List[Dict[str, Any]]:
     ]
 
 
-def frame(rows: List[Dict[str, Any]], crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
+def frame(rows: list[dict[str, Any]], crs: str = "EPSG:4326") -> gpd.GeoDataFrame:
     data = pd.DataFrame(
         {
             "class": pd.Series([row["class"] for row in rows], dtype="object"),
@@ -89,7 +89,7 @@ def frame(rows: List[Dict[str, Any]], crs: str = "EPSG:4326") -> gpd.GeoDataFram
     return gpd.GeoDataFrame(data, geometry=[row["geometry"] for row in rows], crs=crs)
 
 
-def write_geojson(rows: List[Dict[str, Any]], path: Path) -> None:
+def write_geojson(rows: list[dict[str, Any]], path: Path) -> None:
     collection = {
         "type": "FeatureCollection",
         "features": [
@@ -104,7 +104,7 @@ def write_geojson(rows: List[Dict[str, Any]], path: Path) -> None:
     path.write_text(json.dumps(collection, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-def is_polygonal(row: Dict[str, Any]) -> bool:
+def is_polygonal(row: dict[str, Any]) -> bool:
     return row["geometry"].geom_type in ("Polygon", "MultiPolygon")
 
 

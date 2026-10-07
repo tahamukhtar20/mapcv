@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from mapcv.data import splits_of
 from mapcv.manifest import Manifest, ManifestEntry
@@ -36,22 +36,22 @@ def _manifest(root: Path) -> Manifest:
     return Manifest.load(path)
 
 
-def _entries_by_split(root: Path, manifest: Manifest) -> Dict[str, List[ManifestEntry]]:
+def _entries_by_split(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry]]:
     splits = splits_of(root)
     if splits == ("all",):
         return {"all": list(manifest.patches)}
     by_name = {manifest.patch_name(entry): entry for entry in manifest.patches}
-    result: Dict[str, List[ManifestEntry]] = {}
+    result: dict[str, list[ManifestEntry]] = {}
     for split in splits:
         names = (root / "splits" / f"{split}.txt").read_text(encoding="utf-8").split()
         result[split] = [by_name[name] for name in names if name in by_name]
     return result
 
 
-def _stats(root: Path) -> Dict[str, Any]:
+def _stats(root: Path) -> dict[str, Any]:
     path = root / "stats.json"
     if path.exists():
-        stats: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        stats: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         if stats.get("split") in ("train", "all"):
             return stats
     from mapcv.stats import dataset_stats
@@ -62,7 +62,7 @@ def _stats(root: Path) -> Dict[str, Any]:
 # ── Hugging Face Parquet ─────────────────────────────────────────────────────
 
 
-def export_hf_parquet(root: Path, out: Path) -> List[Path]:
+def export_hf_parquet(root: Path, out: Path) -> list[Path]:
     """Write ``out/data/<split>-00000-of-00001.parquet`` and ``out/README.md``; returns the
     Parquet files. ``out`` must not be the dataset folder."""
     try:
@@ -87,7 +87,7 @@ def export_hf_parquet(root: Path, out: Path) -> List[Path]:
         pa.field("crs", pa.string()),
         pa.field("transform", pa.list_(pa.float64(), 6)),
     ]
-    features: Dict[str, Any] = {"name": {"dtype": "string", "_type": "Value"}}
+    features: dict[str, Any] = {"name": {"dtype": "string", "_type": "Value"}}
     for key in keys:
         suffix = Path(manifest.patches[0]["files"][key]).suffix.lower()
         features[key] = (
@@ -117,10 +117,10 @@ def export_hf_parquet(root: Path, out: Path) -> List[Path]:
         fields, metadata={"huggingface": json.dumps({"info": {"features": features}})}
     )
 
-    written: List[Path] = []
+    written: list[Path] = []
     (out / "data").mkdir(parents=True, exist_ok=True)
     for split, entries in by_split.items():
-        columns: Dict[str, List[Any]] = {field.name: [] for field in fields}
+        columns: dict[str, list[Any]] = {field.name: [] for field in fields}
         for entry in entries:
             columns["name"].append(manifest.patch_name(entry))
             for key in keys:
@@ -142,7 +142,7 @@ def export_hf_parquet(root: Path, out: Path) -> List[Path]:
     return written
 
 
-def _hf_card(root: Path, splits: List[str]) -> str:
+def _hf_card(root: Path, splits: list[str]) -> str:
     from mapcv.card import card_text
 
     card = card_text(root)
@@ -241,11 +241,11 @@ def terratorch_config(root: Path, batch_size: int = 8, num_workers: int = 4) -> 
     return "\n".join(lines) + "\n"
 
 
-def _round(value: Optional[float]) -> float:
+def _round(value: float | None) -> float:
     return round(float(value), 6) if value is not None else 0.0
 
 
-def export_terratorch(root: Path, out: Optional[Path] = None) -> Path:
+def export_terratorch(root: Path, out: Path | None = None) -> Path:
     """Write :func:`terratorch_config` to ``out`` (default ``<dataset>/terratorch.yaml``)."""
     path = out or root / "terratorch.yaml"
     path.write_text(terratorch_config(root), encoding="utf-8", newline="\n")

@@ -10,11 +10,12 @@ from __future__ import annotations
 import builtins
 import sys
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -31,7 +32,7 @@ MAP_ID = "0123456789abcdef-SECRETMAPID"
 
 
 class Tiles(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - http.server's name
+    def do_GET(self) -> None:
         parts = self.path.strip("/").split("/")
         if any(part.startswith("expired") for part in parts):
             self.send_response(404)
@@ -63,11 +64,11 @@ def server() -> Iterator[str]:
 class FakeEE:
     """The parts of ``ee`` mapcv uses, recording the calls."""
 
-    def __init__(self, base: str, map_id: str = MAP_ID, fail: Optional[str] = None) -> None:
+    def __init__(self, base: str, map_id: str = MAP_ID, fail: str | None = None) -> None:
         self.base, self.map_id, self.fail = base, map_id, fail
-        self.calls: List[Any] = []
+        self.calls: list[Any] = []
 
-    def Initialize(self, project: Optional[str] = None) -> None:  # noqa: N802 - ee's name
+    def Initialize(self, project: str | None = None) -> None:
         if self.fail:
             raise RuntimeError(self.fail)
         self.calls.append(("Initialize", project))
@@ -76,24 +77,24 @@ class FakeEE:
         fake = self
 
         class Image:
-            def getMapId(self, vis: Dict[str, Any]) -> Dict[str, Any]:  # noqa: N802
+            def getMapId(self, vis: dict[str, Any]) -> dict[str, Any]:
                 fake.calls.append(("getMapId", description, vis))
                 url = f"{fake.base}/v1/projects/p/maps/{fake.map_id}/tiles/{{z}}/{{x}}/{{y}}"
                 return {"tile_fetcher": SimpleNamespace(url_format=url)}
 
         return Image()
 
-    def Image(self, asset: str) -> Any:  # noqa: N802 - ee's name
+    def Image(self, asset: str) -> Any:
         return self._image(("Image", asset))
 
-    def ImageCollection(self, asset: str) -> Any:  # noqa: N802 - ee's name
+    def ImageCollection(self, asset: str) -> Any:
         fake = self
 
         class Collection:
-            def __init__(self, steps: List[Any]) -> None:
+            def __init__(self, steps: list[Any]) -> None:
                 self.steps = steps
 
-            def filterDate(self, start: str, end: str) -> Any:  # noqa: N802
+            def filterDate(self, start: str, end: str) -> Any:
                 return Collection([*self.steps, ("filterDate", start, end)])
 
             def __getattr__(self, reducer: str) -> Any:
@@ -102,8 +103,8 @@ class FakeEE:
         return Collection([])
 
 
-def _engine(**changes: Any) -> Dict[str, Any]:
-    engine: Dict[str, Any] = {
+def _engine(**changes: Any) -> dict[str, Any]:
+    engine: dict[str, Any] = {
         "image": "USGS/NAIP/DOQQ/m_4207148_nw_19_060_20180901",
         "vis": {"bands": ["R", "G", "B"], "min": 0, "max": 255},
         "project": "my-project",
@@ -143,7 +144,7 @@ def _config(tmp_path: Path, policy: str = "lenient", **engine: Any) -> MapcvConf
         ({"vis": {"bands": ["B4"], "stretch": 1}}, "Extra inputs are not permitted"),
     ],
 )
-def test_invalid_settings_are_refused(change: Dict[str, Any], message: str) -> None:
+def test_invalid_settings_are_refused(change: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         EarthEngineImageryConfig.model_validate(_engine(**change))
 

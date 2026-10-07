@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Optional
 
 import pytest
 from pydantic import ValidationError
@@ -18,7 +17,6 @@ from mapcv.config import (
     XYZImageryConfig,
     eopf_local_path,
 )
-
 
 _MINIMAL = """\
 region:
@@ -171,7 +169,7 @@ def test_eopf_path_rejects_unsafe_urls(path: str) -> None:
         ("https://example.com/S2.zarr", None),
     ],
 )
-def test_eopf_local_path(path: str, expected: Optional[str]) -> None:
+def test_eopf_local_path(path: str, expected: str | None) -> None:
     EOPFZarrImageryConfig(path=path)
     local = eopf_local_path(path)
     assert (str(local).replace("\\", "/") if local else None) == (
@@ -263,7 +261,7 @@ def test_web_mercator_limit_applies_only_to_xyz() -> None:
 
 def test_missing_imagery_raises(tmp_path: Path) -> None:
     content = _MINIMAL.replace("imagery:\n  type: xyz\n  zoom: 16\n  source: esri_satellite\n", "")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MapcvConfig.from_yaml(_write(tmp_path, content))
 
 

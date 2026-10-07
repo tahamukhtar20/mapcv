@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 import pytest
@@ -19,7 +19,7 @@ from mapcv.imagery import (
 pytest.importorskip("xarray", reason="EOPF support needs the zarr extra")
 pytest.importorskip("pyproj", reason="EOPF support needs the zarr extra")
 
-import xarray as xr  # noqa: E402
+import xarray as xr
 
 
 def _dataset() -> xr.Dataset:
@@ -152,7 +152,7 @@ def test_eopf_band_that_comes_back_empty_fails_the_read(
         return dataset
 
     monkeypatch.setattr(xr, "open_dataset", dataset_with_failed_band)
-    waits: List[float] = []
+    waits: list[float] = []
     monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
     source = EOPFZarrRasterSource(
         _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
@@ -168,7 +168,7 @@ def test_eopf_read_retries_transient_errors(
     product = tmp_path / "S2_TEST.zarr"
     product.mkdir()
     monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset())
-    waits: List[float] = []
+    waits: list[float] = []
     monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
     source = EOPFZarrRasterSource(
         _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])
@@ -193,7 +193,7 @@ def test_eopf_read_does_not_retry_bad_requests(
     product = tmp_path / "S2_TEST.zarr"
     product.mkdir()
     monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: _dataset())
-    waits: List[float] = []
+    waits: list[float] = []
     monkeypatch.setattr("mapcv.imagery.time.sleep", waits.append)
     source = EOPFZarrRasterSource(
         _region(), EOPFZarrImageryConfig(path=str(product), bands=["b08", "b04"])

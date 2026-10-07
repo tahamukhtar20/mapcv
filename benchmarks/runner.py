@@ -10,10 +10,11 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from shapely.geometry import Polygon
 
@@ -64,7 +65,7 @@ class TileServerProcess:
     def warm(self, scenario: Scenario) -> None:
         """Fetch each tile once so the timed runs do not pay for the server's PNG encoding."""
 
-        def fetch(position: Tuple[int, int]) -> None:
+        def fetch(position: tuple[int, int]) -> None:
             url = (
                 f"http://127.0.0.1:{self.port}/{ZOOM}/{position[0]}/{position[1]}"
                 f".{scenario.tile_format}"
@@ -87,7 +88,7 @@ class TileServerProcess:
         if self._process.stdout is not None:
             self._process.stdout.close()
 
-    def __enter__(self) -> "TileServerProcess":
+    def __enter__(self) -> TileServerProcess:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -107,7 +108,7 @@ class Context:
 
 def _prepare(
     scenario: Scenario, directory: Path, port: int
-) -> Tuple[Path, List[Tuple[Polygon, int]]]:
+) -> tuple[Path, list[tuple[Polygon, int]]]:
     """Fresh directory with labels and config; returns the config path and label geometries."""
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
@@ -136,7 +137,7 @@ def _failure(result: ProcessResult, what: str) -> str:
     return f"{what}: exited {result.exit_code}\n    {_tail(result)}"
 
 
-def _stage_medians(results: Sequence[ProcessResult]) -> Dict[str, float]:
+def _stage_medians(results: Sequence[ProcessResult]) -> dict[str, float]:
     names = sorted({name for result in results for name in result.stages})
     return {
         name: summarise([r.stages[name] for r in results if name in r.stages])["median"]
@@ -145,10 +146,10 @@ def _stage_medians(results: Sequence[ProcessResult]) -> Dict[str, float]:
 
 
 def _timing_summary(
-    results: Sequence[ProcessResult], tiles: int, patches: Optional[int]
-) -> Dict[str, Any]:
+    results: Sequence[ProcessResult], tiles: int, patches: int | None
+) -> dict[str, Any]:
     wall = summarise([r.wall_s for r in results])
-    summary: Dict[str, Any] = {"wall_s": wall, "stages_median_s": _stage_medians(results)}
+    summary: dict[str, Any] = {"wall_s": wall, "stages_median_s": _stage_medians(results)}
     rss = [r.peak_rss_mb for r in results if r.peak_rss_mb is not None]
     if rss:
         summary["peak_rss_mb"] = summarise(rss)
@@ -159,7 +160,7 @@ def _timing_summary(
     return summary
 
 
-def _check_strict(result: ProcessResult) -> List[str]:
+def _check_strict(result: ProcessResult) -> list[str]:
     problems = []
     if result.exit_code == 0:
         problems.append("strict policy: mapcv exited 0 although tiles failed")
@@ -175,15 +176,15 @@ def _dataset_mb(dataset: Path) -> float:
     return round(sum(f.stat().st_size for f in dataset.rglob("*") if f.is_file()) / 2**20, 1)
 
 
-def _run_generate_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
+def _run_generate_scenario(scenario: Scenario, ctx: Context) -> dict[str, Any]:
     run_dir = ctx.workdir / scenario.name
     config, geometries = _prepare(scenario, run_dir, ctx.server.port)
     ctx.server.warm(scenario)
-    results: List[ProcessResult] = []
-    problems: List[str] = []
+    results: list[ProcessResult] = []
+    problems: list[str] = []
     report = CheckReport()
-    reference_hash: Optional[str] = None
-    output_mb: Optional[float] = None
+    reference_hash: str | None = None
+    output_mb: float | None = None
     for repeat in range(ctx.repeat):
         shutil.rmtree(run_dir / "dataset", ignore_errors=True)
         result = _generate(config, str(repeat))
@@ -207,7 +208,7 @@ def _run_generate_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
             problems.append(f"run {repeat + 1} produced different output than run 1")
     problems.extend(report.problems)
 
-    outcome: Dict[str, Any] = {
+    outcome: dict[str, Any] = {
         "runs": [result.to_json() for result in results],
         "checks": report.stats,
         "skipped": report.skipped,
@@ -225,14 +226,14 @@ def _run_generate_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
 
 def _run_baselines(
     scenario: Scenario, ctx: Context, run_dir: Path
-) -> Tuple[Dict[str, Any], List[str]]:
+) -> tuple[dict[str, Any], list[str]]:
     west, south, east, north = region_bounds(scenario)
     tile_url = (
         f"http://127.0.0.1:{ctx.server.port}/{scenario.tile_prefix()}"
         f"{{z}}/{{x}}/{{y}}.{scenario.tile_format}"
     )
-    out: Dict[str, Any] = {}
-    problems: List[str] = []
+    out: dict[str, Any] = {}
+    problems: list[str] = []
     for name in ctx.baselines:
         baseline = baseline_registry.BASELINES[name]
         reason = baseline.missing()
@@ -240,7 +241,7 @@ def _run_baselines(
             out[name] = {"skipped": reason}
             ctx.log(f"    baseline {name}: skipped ({reason})")
             continue
-        results: List[ProcessResult] = []
+        results: list[ProcessResult] = []
         for repeat in range(ctx.repeat):
             output = run_dir / f"baseline-{name}"
             shutil.rmtree(output, ignore_errors=True)
@@ -305,13 +306,13 @@ def _written_images(dataset: Path) -> int:
         return 0  # not created yet
 
 
-def _run_resume_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
+def _run_resume_scenario(scenario: Scenario, ctx: Context) -> dict[str, Any]:
     """An uninterrupted run, then an interrupted + resumed one that must match it exactly."""
     if sys.platform == "win32":
         return {"skipped": ["resume needs SIGINT delivery, which Windows does not support"]}
     root = ctx.workdir / scenario.name
     shutil.rmtree(root, ignore_errors=True)
-    problems: List[str] = []
+    problems: list[str] = []
     identical = False
     ctx.server.warm(scenario)
 
@@ -368,7 +369,7 @@ def _run_resume_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
     }
 
 
-def _disk_problem(scenario: Scenario, ctx: Context) -> Optional[str]:
+def _disk_problem(scenario: Scenario, ctx: Context) -> str | None:
     """A message if the work directory is too small for the scenario's output, else None."""
     copies = 2 if scenario.kind == "resume" else 1
     needed = scenario.expected_patches() * MB_PER_PATCH * copies * 1.3
@@ -382,12 +383,12 @@ def _disk_problem(scenario: Scenario, ctx: Context) -> Optional[str]:
     )
 
 
-def run_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
+def run_scenario(scenario: Scenario, ctx: Context) -> dict[str, Any]:
     """Run one scenario; the returned dict is its entry in the results file."""
     started = time.perf_counter()
     no_room = _disk_problem(scenario, ctx)
     if no_room:
-        outcome: Dict[str, Any] = {"problems": [no_room]}
+        outcome: dict[str, Any] = {"problems": [no_room]}
     elif scenario.kind == "resume":
         outcome = _run_resume_scenario(scenario, ctx)
     else:
@@ -408,10 +409,10 @@ def run_suite(
     label: str = "",
     mode: str = "custom",
     baselines: Sequence[str] = (),
-    workdir: Optional[Path] = None,
+    workdir: Path | None = None,
     keep: bool = False,
     log: Callable[[str], None] = lambda message: None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the named scenarios and return the complete results document."""
     unknown = [name for name in names if name not in SCENARIOS]
     if unknown:
@@ -424,7 +425,7 @@ def run_suite(
     temporary = workdir is None
     root = Path(tempfile.mkdtemp(prefix="mapcv-bench-")) if workdir is None else workdir.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    document: Dict[str, Any] = {
+    document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "created": timestamp(),
         "label": label,

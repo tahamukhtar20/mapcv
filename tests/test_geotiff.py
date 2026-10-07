@@ -14,9 +14,10 @@ import math
 import struct
 import threading
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -151,12 +152,12 @@ class Case:
     count: int
     height: int = 301
     width: int = 257
-    profile: Dict[str, Any] = field(default_factory=dict)
+    profile: dict[str, Any] = field(default_factory=dict)
     crs: str = "EPSG:32633"
-    transform: Tuple[float, ...] = (10.0, 0.0, 500000.0, 0.0, -10.0, 4500000.0)
-    nodata: Optional[float] = None
+    transform: tuple[float, ...] = (10.0, 0.0, 500000.0, 0.0, -10.0, 4500000.0)
+    nodata: float | None = None
     point: bool = False
-    overviews: Tuple[int, ...] = ()
+    overviews: tuple[int, ...] = ()
     sparse: bool = False
 
 
@@ -199,16 +200,16 @@ def _write(case: Case, directory: Path) -> Path:
     from rasterio.transform import Affine
 
     path = directory / f"{case.name}.tif"
-    profile: Dict[str, Any] = dict(
-        driver="GTiff",
-        height=case.height,
-        width=case.width,
-        count=case.count,
-        dtype=case.dtype,
-        crs=CRS.from_user_input(case.crs),
-        transform=Affine(*case.transform),
-        nodata=case.nodata,
-    )
+    profile: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": case.height,
+        "width": case.width,
+        "count": case.count,
+        "dtype": case.dtype,
+        "crs": CRS.from_user_input(case.crs),
+        "transform": Affine(*case.transform),
+        "nodata": case.nodata,
+    }
     profile.update(case.profile)
     values = _source_values(case)
     with rasterio.open(path, "w", **profile) as dst:
@@ -226,9 +227,9 @@ def _write(case: Case, directory: Path) -> Path:
     return path
 
 
-def _cases() -> List[Case]:
-    cases: List[Case] = []
-    layouts: List[Tuple[str, Dict[str, Any]]] = [
+def _cases() -> list[Case]:
+    cases: list[Case] = []
+    layouts: list[tuple[str, dict[str, Any]]] = [
         ("strip", {}),
         ("strip7", {"blockysize": 7}),
         ("tile16", {"tiled": True, "blockxsize": 16, "blockysize": 16}),
@@ -236,7 +237,7 @@ def _cases() -> List[Case]:
         ("tile512", {"tiled": True, "blockxsize": 512, "blockysize": 512}),
     ]
     dtypes = ["uint8", "int8", "uint16", "int16", "uint32", "int32", "float32", "float64"]
-    codecs: List[Tuple[str, Dict[str, Any]]] = [
+    codecs: list[tuple[str, dict[str, Any]]] = [
         ("none", {}),
         ("deflate", {"compress": "deflate"}),
         ("lzw", {"compress": "lzw"}),
@@ -405,7 +406,7 @@ def fixture_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def _random_windows(
     height: int, width: int, rng: np.random.Generator, n: int = 12
-) -> Iterator[Tuple[int, int, int, int]]:
+) -> Iterator[tuple[int, int, int, int]]:
     yield (0, height, 0, width)
     yield (-3, height + 2, -5, width + 1)  # everything, plus a border
     yield (height - 1, height + 4, width - 1, width + 4)  # the last pixel
@@ -417,7 +418,7 @@ def _random_windows(
         yield (r0, r0 + h, c0, c0 + w)
 
 
-def _fill(dtype: np.dtype[Any], nodata: Optional[float]) -> float:
+def _fill(dtype: np.dtype[Any], nodata: float | None) -> float:
     if nodata is None:
         return 0.0
     if dtype.kind == "f":
@@ -431,9 +432,9 @@ def _fill(dtype: np.dtype[Any], nodata: Optional[float]) -> float:
 def _assert_window_matches(
     tif: GeoTiff,
     src: Any,
-    window: Tuple[int, int, int, int],
+    window: tuple[int, int, int, int],
     overview: int = 0,
-    bands: Optional[List[int]] = None,
+    bands: list[int] | None = None,
     atol: float = 0,
 ) -> None:
     from rasterio.windows import Window
@@ -578,7 +579,7 @@ def test_webp_matches_rasterio(count: int, fixture_dir: Path) -> None:
         )
         try:
             path = _write(case, fixture_dir)
-        except Exception as error:  # GDAL built without WebP
+        except Exception as error:  # noqa: BLE001 - GDAL built without WebP (any error)
             pytest.skip(f"rasterio cannot write WebP: {error}")
         tif = GeoTiff(path)
         rng = np.random.default_rng(4)
@@ -620,7 +621,7 @@ def test_lerc_is_rejected_by_name(fixture_dir: Path) -> None:
     pytest.importorskip("rasterio")
     try:
         path = _write(Case("lerc", "float32", 1, profile={"compress": "lerc"}), fixture_dir)
-    except Exception as error:  # GDAL built without LERC
+    except Exception as error:  # noqa: BLE001 - GDAL built without LERC (any error)
         pytest.skip(f"rasterio cannot write LERC: {error}")
     with pytest.raises(ValueError, match=r"LERC compression \(TIFF compression code 34887\)"):
         GeoTiff(path)
@@ -640,7 +641,7 @@ def test_concurrent_reads_share_one_file(fixture_dir: Path) -> None:
     tif = GeoTiff(path)
     with rasterio.open(path) as src:
         expected = src.read().transpose(1, 2, 0)
-    errors: List[BaseException] = []
+    errors: list[BaseException] = []
 
     def worker(seed: int) -> None:
         rng = np.random.default_rng(seed)
@@ -667,7 +668,7 @@ def test_concurrent_reads_share_one_file(fixture_dir: Path) -> None:
 class RangeLog:
     """Ranges requested from the test server."""
 
-    ranges: List[Tuple[int, int]] = field(default_factory=list)
+    ranges: list[tuple[int, int]] = field(default_factory=list)
 
     @property
     def bytes(self) -> int:

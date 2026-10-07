@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from collections.abc import Iterator
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -24,7 +25,7 @@ from mapcv.tile_cache import DEFAULT_TTL, TileCache, freshness_lifetime
 
 runner = CliRunner()
 NOW = 1_800_000_000.0
-NONE: Tuple[None, None, None, None] = (None, None, None, None)
+NONE: tuple[None, None, None, None] = (None, None, None, None)
 
 
 def _date(offset: float) -> str:
@@ -62,7 +63,7 @@ def _date(offset: float) -> str:
         ((None, _date(500), "not a date", None), 500.0),
     ],
 )
-def test_freshness_lifetime(headers: Any, lifetime: Optional[float]) -> None:
+def test_freshness_lifetime(headers: Any, lifetime: float | None) -> None:
     found = freshness_lifetime(headers, NOW)
     if lifetime is None:
         assert found is None
@@ -130,8 +131,8 @@ def test_an_unwritable_cache_warns_once_and_switches_off(tmp_path: Path) -> None
     blocker.write_text("not a folder")
     cache = TileCache("t/{z}/{x}/{y}", blocker, Clock())
     with pytest.warns(UserWarning, match="can't be written") as caught:
-        assert not cache.put(1, 1, 1, b"a", NONE)
-        assert not cache.put(1, 2, 1, b"b", NONE)
+        stored = [cache.put(1, 1, 1, b"a", NONE), cache.put(1, 2, 1, b"b", NONE)]
+    assert stored == [False, False]
     assert len(caught) == 1 and "imagery.cache: false" in str(caught[0].message)
     assert cache.get(1, 1, 1) is None
 
@@ -194,15 +195,15 @@ class TileServer:
     """Serves ``/{z}/{x}/{y}.png`` with chosen caching headers; counts requests."""
 
     def __init__(self) -> None:
-        self.requests: List[str] = []
-        self.headers: Dict[str, str] = {}
-        self.failing: set[Tuple[int, int]] = set()
+        self.requests: list[str] = []
+        self.headers: dict[str, str] = {}
+        self.failing: set[tuple[int, int]] = set()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 - http.server's name
+            def do_GET(self) -> None:
                 owner.requests.append(self.path)
-                z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
+                _z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
                 if (x, y) in owner.failing:
                     self.send_response(404)
                     self.end_headers()
@@ -265,7 +266,7 @@ def _config(server: TileServer, staging: Path, **imagery: Any) -> MapcvConfig:
     )
 
 
-def _files(staging: Path) -> Dict[str, bytes]:
+def _files(staging: Path) -> dict[str, bytes]:
     return {
         p.relative_to(staging).as_posix(): p.read_bytes()
         for p in sorted(staging.rglob("*"))
@@ -310,7 +311,7 @@ def test_headers_and_settings_that_keep_tiles_out(server: TileServer, tmp_path: 
     assert (again.tiles_requested, again.tiles_cached, again.tiles_failed) == (1, first - 1, 1)
 
 
-def _requested_tiles(server: TileServer) -> List[Tuple[int, int]]:
+def _requested_tiles(server: TileServer) -> list[tuple[int, int]]:
     tiles = []
     for path in server.requests:
         _, x, y = path.strip("/").split(".")[0].split("/")

@@ -30,13 +30,14 @@ import json
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, DefaultDict, List, TypeVar
+from typing import Any, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-_stages: DefaultDict[str, float] = defaultdict(float)
+_stages: defaultdict[str, float] = defaultdict(float)
 
 
 def _timed(stage: str, func: F) -> F:
@@ -54,8 +55,8 @@ def _timed(stage: str, func: F) -> F:
 def _install() -> None:
     from mapcv import cli, pipeline
     from mapcv.imagery import XYZRasterSource
-    from mapcv.targets import segmentation
     from mapcv.manifest import Manifest
+    from mapcv.targets import segmentation
     from mapcv.writers import FilesWriter
 
     cli.make_plan = _timed("plan", cli.make_plan)
@@ -83,7 +84,7 @@ def _dump(path: Path, started: float) -> None:
     path.write_text(json.dumps({k: round(v, 4) for k, v in stages.items()}), encoding="utf-8")
 
 
-def main(argv: List[str]) -> None:
+def main(argv: list[str]) -> None:
     """``argv`` is the stage file path followed by the ``mapcv`` arguments."""
     stages_path = Path(argv[0])
     started = time.perf_counter()

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -72,10 +73,10 @@ class Moments:
             self.low[band] = min(self.low[band], float(column.min()))
             self.high[band] = max(self.high[band], float(column.max()))
 
-    def summary(self, names: Sequence[str]) -> Dict[str, Any]:
+    def summary(self, names: Sequence[str]) -> dict[str, Any]:
         """Per-band values as lists in band order (``None`` for a band without pixels)."""
 
-        def values(array: npt.NDArray[np.float64]) -> List[Optional[float]]:
+        def values(array: npt.NDArray[np.float64]) -> list[float | None]:
             return [float(v) if c else None for v, c in zip(array, self.count)]
 
         std = np.sqrt(
@@ -91,7 +92,7 @@ class Moments:
         }
 
 
-def _read_array(path: Path) -> Tuple[npt.NDArray[Any], Optional[float]]:
+def _read_array(path: Path) -> tuple[npt.NDArray[Any], float | None]:
     """A patch file as ``(H, W, C)`` (or ``(T, C, H, W)`` for a stack) and its NoData."""
     suffix = path.suffix.lower()
     if suffix == ".npy":
@@ -113,7 +114,7 @@ def _read_array(path: Path) -> Tuple[npt.NDArray[Any], Optional[float]]:
 
 
 def _valid_pixels(
-    image: npt.NDArray[Any], nodata: Optional[float], black_is_empty: bool
+    image: npt.NDArray[Any], nodata: float | None, black_is_empty: bool
 ) -> npt.NDArray[np.bool_]:
     valid = np.ones(image.shape[:2], dtype=np.bool_)
     if image.dtype.kind == "f":
@@ -127,7 +128,7 @@ def _valid_pixels(
 
 def _split_entries(
     manifest: Manifest, staging_dir: Path, split: str
-) -> Tuple[List[ManifestEntry], str]:
+) -> tuple[list[ManifestEntry], str]:
     """The entries of ``split`` (``all`` for every patch); ``all`` when there are no splits."""
     if split == "all":
         return list(manifest.patches), "all"
@@ -138,7 +139,7 @@ def _split_entries(
     return [entry for entry in manifest.patches if manifest.patch_name(entry) in names], split
 
 
-def _class_names(manifest: Manifest) -> Dict[str, str]:
+def _class_names(manifest: Manifest) -> dict[str, str]:
     """Class ID (as a string) to name; background and IDs without a name get one too."""
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
@@ -146,8 +147,8 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
 
 
 def _median_frequency_weights(
-    pixels: Dict[str, int], present_in: Dict[str, int]
-) -> Dict[str, float]:
+    pixels: dict[str, int], present_in: dict[str, int]
+) -> dict[str, float]:
     """Eigen & Fergus: ``median(freq) / freq(c)``, ``freq(c)`` = the class's pixels over the
     valid pixels of the patches it appears in."""
     freq = {c: pixels[c] / present_in[c] for c in pixels if present_in.get(c) and pixels[c]}
@@ -157,12 +158,12 @@ def _median_frequency_weights(
     return {c: median / f for c, f in sorted(freq.items(), key=lambda item: int(item[0]))}
 
 
-def _class_balance(manifest: Manifest, entries: List[ManifestEntry]) -> Dict[str, Any]:
+def _class_balance(manifest: Manifest, entries: list[ManifestEntry]) -> dict[str, Any]:
     names = _class_names(manifest)
     task = manifest.task
     ignore = manifest.ignore_index
     if task in ("detection", "instance"):
-        objects: Dict[str, int] = {}
+        objects: dict[str, int] = {}
         for entry in entries:
             for cid, count in (entry["summary"].get("class_objects") or {}).items():
                 objects[cid] = objects.get(cid, 0) + int(count)
@@ -173,7 +174,7 @@ def _class_balance(manifest: Manifest, entries: List[ManifestEntry]) -> Dict[str
             }
         }
     if task == "classification":
-        patches: Dict[str, int] = {}
+        patches: dict[str, int] = {}
         for entry in entries:
             for label in entry["summary"].get("labels") or []:
                 patches[str(label)] = patches.get(str(label), 0) + 1
@@ -185,8 +186,8 @@ def _class_balance(manifest: Manifest, entries: List[ManifestEntry]) -> Dict[str
         }
     if task == "regression":
         return {}
-    pixels: Dict[str, int] = {}
-    present_in: Dict[str, int] = {}
+    pixels: dict[str, int] = {}
+    present_in: dict[str, int] = {}
     for entry in entries:
         counts = {
             cid: int(n)
@@ -210,7 +211,7 @@ def _class_balance(manifest: Manifest, entries: List[ManifestEntry]) -> Dict[str
     }
 
 
-def dataset_stats(staging_dir: Path, split: str = "train") -> Dict[str, Any]:
+def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
     """Statistics of the dataset in ``staging_dir`` over ``split`` (or ``all``).
 
     Raises:
@@ -228,16 +229,16 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> Dict[str, Any]:
         "regression",
         "instance",
     )
-    moments: Dict[str, Moments] = {}
+    moments: dict[str, Moments] = {}
     targets = Moments(1) if manifest.task == "regression" else None
 
-    def keys_for(entry: ManifestEntry) -> List[str]:
+    def keys_for(entry: ManifestEntry) -> list[str]:
         if stacked:
             return ["image"]
         return [record.name if record.name in entry["files"] else "image" for record in sources]
 
-    def load(entry: ManifestEntry) -> Dict[str, Any]:
-        loaded: Dict[str, Any] = {
+    def load(entry: ManifestEntry) -> dict[str, Any]:
+        loaded: dict[str, Any] = {
             key: _read_array(staging_dir / entry["files"][key]) for key in keys_for(entry)
         }
         if "mask" in entry["files"]:
@@ -273,7 +274,7 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> Dict[str, Any]:
                 state = moments.setdefault(record.name, Moments(bands))
                 state.add(image, valid)
 
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "mapcv_version": manifest.mapcv_version,
         "task": manifest.task,
         "split": used,
@@ -300,7 +301,7 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> Dict[str, Any]:
     return stats
 
 
-def write_stats(staging_dir: Path, split: str = "train") -> Tuple[Path, Dict[str, Any]]:
+def write_stats(staging_dir: Path, split: str = "train") -> tuple[Path, dict[str, Any]]:
     """Compute :func:`dataset_stats` and write it to ``stats.json`` in the dataset folder."""
     stats = dataset_stats(staging_dir, split)
     path = staging_dir / STATS_FILENAME

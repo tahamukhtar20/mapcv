@@ -18,10 +18,11 @@ from __future__ import annotations
 import io
 import json
 import threading
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -31,27 +32,27 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="raster-label tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-import rasterio.warp  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.enums import Resampling  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
+import rasterio
+import rasterio.warp
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import (  # noqa: E402
+from mapcv.cli import app
+from mapcv.config import (
     LabelsConfig,
     MapcvConfig,
     RasterLabelsConfig,
     RegionConfig,
     XYZImageryConfig,
 )
-from mapcv.imagery import open_raster_source  # noqa: E402
-from mapcv.manifest import Manifest, ManifestMismatchError  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from mapcv.targets import RasterSegmentationTarget, create_target  # noqa: E402
-from mapcv.targets.raster_labels import LabelRasterSampler  # noqa: E402
+from mapcv.imagery import open_raster_source
+from mapcv.manifest import Manifest, ManifestMismatchError
+from mapcv.pipeline import run_generate
+from mapcv.planning import plan
+from mapcv.targets import RasterSegmentationTarget, create_target
+from mapcv.targets.raster_labels import LabelRasterSampler
 
 runner = CliRunner()
 
@@ -78,7 +79,7 @@ def flat(text: str) -> str:
     return "".join(text.split())
 
 
-def utm(lon: float, lat: float, epsg: int = IMAGERY_EPSG) -> Tuple[float, float]:
+def utm(lon: float, lat: float, epsg: int = IMAGERY_EPSG) -> tuple[float, float]:
     x, y = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform(lon, lat)
     return float(x), float(y)
 
@@ -93,7 +94,7 @@ class Imagery:
     width: int
     height: int
 
-    def region(self, margin: float = 0.04) -> Dict[str, float]:
+    def region(self, margin: float = 0.04) -> dict[str, float]:
         corners = [
             self.transform * (col, row) for col in (0, self.width) for row in (0, self.height)
         ]
@@ -112,7 +113,7 @@ def make_imagery(
     height: int = 288,
     pixel: float = 1.0,
     rotation: float = 0.0,
-    nodata_block: Optional[Tuple[int, int, int, int]] = None,
+    nodata_block: tuple[int, int, int, int] | None = None,
 ) -> Imagery:
     """A 3-band uint8 GeoTIFF in UTM 31N (NoData 0) centred on (3E, 48.85N)."""
     cx, cy = utm(CENTER_LON, CENTER_LAT)
@@ -152,7 +153,7 @@ def make_labels(
     epsg: int = IMAGERY_EPSG,
     dtype: str = "uint8",
     values: Sequence[int] = VALUES_U8,
-    nodata: Optional[int] = NODATA,
+    nodata: int | None = NODATA,
     name: str = "labels.tif",
     point: bool = False,
     seed: int = 11,
@@ -162,19 +163,19 @@ def make_labels(
     rng = np.random.default_rng(seed)
     data = rng.choice(np.asarray(values, dtype=dtype), size=(height, width))
     path = directory / name
-    profile: Dict[str, Any] = dict(
-        driver="GTiff",
-        height=height,
-        width=width,
-        count=1,
-        dtype=dtype,
-        crs=CRS.from_epsg(epsg),
-        transform=transform,
-        tiled=True,
-        blockxsize=64,
-        blockysize=64,
-        compress="deflate",
-    )
+    profile: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": dtype,
+        "crs": CRS.from_epsg(epsg),
+        "transform": transform,
+        "tiled": True,
+        "blockxsize": 64,
+        "blockysize": 64,
+        "compress": "deflate",
+    }
     if nodata is not None:
         profile["nodata"] = nodata
     with rasterio.open(path, "w", **profile) as dst:
@@ -189,9 +190,9 @@ def labels_around(
     epsg: int,
     pixel: float,
     *,
-    offset: Tuple[float, float] = (0.0, 0.0),
+    offset: tuple[float, float] = (0.0, 0.0),
     cover: float = 0.8,
-) -> Tuple[Affine, int, int]:
+) -> tuple[Affine, int, int]:
     """A north-up label grid in ``epsg`` with ``pixel`` size covering the central
     ``cover`` of the imagery, its origin shifted by ``offset`` (in label pixels)."""
     corners = [
@@ -212,16 +213,16 @@ def labels_around(
 
 def config_for(
     tmp_path: Path,
-    imagery: Dict[str, Any],
-    region: Dict[str, float],
-    labels: Dict[str, Any],
+    imagery: dict[str, Any],
+    region: dict[str, float],
+    labels: dict[str, Any],
     *,
     staging: str = "dataset",
     image_format: str = "png",
-    split: Optional[Dict[str, Any]] = None,
+    split: dict[str, Any] | None = None,
     **sampler: Any,
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": region,
         "imagery": imagery,
         "labels": {"type": "raster", "classes": CLASSES, **labels},
@@ -238,7 +239,7 @@ def sampler_for(config: MapcvConfig) -> LabelRasterSampler:
     return LabelRasterSampler(config.labels, f"EPSG:{IMAGERY_EPSG}")
 
 
-def six(transform: Affine) -> Tuple[float, float, float, float, float, float]:
+def six(transform: Affine) -> tuple[float, float, float, float, float, float]:
     a, b, c, d, e, f = tuple(transform)[:6]
     return (a, b, c, d, e, f)
 
@@ -262,7 +263,7 @@ def reference_values(
     """Raw label values at the patch's pixel centres, by GDAL's nearest-neighbour warp
     (exact transformation); ``SENTINEL`` outside the label raster."""
     with rasterio.open(label_path) as src:
-        exact: Dict[str, Any] = {"tolerance": 0} if EXACT_WARP else {}
+        exact: dict[str, Any] = {"tolerance": 0} if EXACT_WARP else {}
         if not EXACT_WARP and src.crs != CRS.from_user_input(dst_crs):
             pytest.skip("rasterio < 1.5 cannot reproject without approximating (tolerance)")
         raw = src.read(1).astype(np.int32)
@@ -298,12 +299,12 @@ def tie_mask(label_path: Path, patch: Affine, size: int, dst_crs: str) -> npt.ND
 
 def expected_mask(
     raw: npt.NDArray[np.int64],
-    classes: Dict[int, int],
+    classes: dict[int, int],
     *,
-    nodata: Optional[int],
+    nodata: int | None,
     ignore_values: Sequence[int] = (),
     unmapped: str = "background",
-    ignore: Optional[int] = IGNORE,
+    ignore: int | None = IGNORE,
 ) -> npt.NDArray[np.uint8]:
     """The class table applied value by value, written independently of mapcv's."""
     ignore_value = 0 if ignore is None else ignore
@@ -322,13 +323,13 @@ def assert_masks_match_reference(
     config: MapcvConfig,
     label_path: Path,
     *,
-    classes: Dict[int, int] = CLASSES,
-    nodata: Optional[int] = NODATA,
+    classes: dict[int, int] = CLASSES,
+    nodata: int | None = NODATA,
     ignore_values: Sequence[int] = (),
     unmapped: str = "background",
-    ignore: Optional[int] = IGNORE,
+    ignore: int | None = IGNORE,
     min_patches: int = 4,
-) -> Tuple[Manifest, Comparison]:
+) -> tuple[Manifest, Comparison]:
     """Generate the dataset and compare every mask with the rasterio reference."""
     manifest = run_generate(config).manifest
     assert len(manifest.patches) >= min_patches
@@ -376,7 +377,7 @@ def assert_masks_match_reference(
 # ── Alignment: every mask against rasterio ───────────────────────────────────
 
 
-def _geotiff(imagery: Imagery, **extra: Any) -> Dict[str, Any]:
+def _geotiff(imagery: Imagery, **extra: Any) -> dict[str, Any]:
     return {"type": "geotiff", "path": str(imagery.path), "chunk_rows": 100, **extra}
 
 
@@ -386,7 +387,7 @@ def test_same_grid_is_copied_and_matches_rasterio(tmp_path: Path) -> None:
     transform = imagery.transform * Affine.translation(17, 9)
     labels = make_labels(tmp_path, transform, 260, 240)
     config = config_for(tmp_path, _geotiff(imagery), imagery.region(), {"path": str(labels)})
-    manifest, stats = assert_masks_match_reference(config, labels)
+    _manifest, stats = assert_masks_match_reference(config, labels)
     assert stats.ignored > 0  # imagery NoData, label NoData and the area off the label raster
     # The direct copy and the general path give the same masks.
     sampler = sampler_for(config)
@@ -404,7 +405,7 @@ def test_same_grid_is_copied_and_matches_rasterio(tmp_path: Path) -> None:
     ids=["coarser-2x", "finer-0.5x", "coarser-3x-half-pixel"],
 )
 def test_other_resolution_and_origin_match_rasterio(
-    tmp_path: Path, pixel: float, offset: Tuple[float, float]
+    tmp_path: Path, pixel: float, offset: tuple[float, float]
 ) -> None:
     imagery = make_imagery(tmp_path)
     transform, width, height = labels_around(imagery, IMAGERY_EPSG, pixel, offset=offset)
@@ -425,7 +426,7 @@ def test_labels_in_another_crs_match_rasterio(
 ) -> None:
     imagery = make_imagery(tmp_path)
     transform, width, height = labels_around(imagery, epsg, pixel, offset=(0.29, 0.43))
-    classes: Dict[int, int]
+    classes: dict[int, int]
     values: Sequence[int]
     if dtype == "uint8":
         classes, values, nodata = CLASSES, VALUES_U8, NODATA
@@ -488,7 +489,7 @@ class _Tiles(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
         buffer = io.BytesIO()
         Image.new("RGB", (256, 256), (x % 200 + 20, y % 200 + 20, z)).save(buffer, "PNG")
@@ -536,14 +537,14 @@ def test_xyz_imagery_with_raster_labels_matches_rasterio(
     target.prepare(meta)
     expect_fast = case == "same-grid"
     assert (target.sampler.grid_offset(meta.transform) is not None) is expect_fast
-    manifest, stats = assert_masks_match_reference(config, labels)
+    manifest, _stats = assert_masks_match_reference(config, labels)
     assert manifest.source.crs == "EPSG:3857"
 
 
 # ── Settings: NoData, ignore values, unmapped values, ignore_index ───────────
 
 
-def _small_case(tmp_path: Path) -> Tuple[Imagery, Path]:
+def _small_case(tmp_path: Path) -> tuple[Imagery, Path]:
     imagery = make_imagery(tmp_path, nodata_block=(0, 64, 0, 64))
     transform, width, height = labels_around(imagery, IMAGERY_EPSG, 2.0, offset=(0.3, 0.3))
     return imagery, make_labels(tmp_path, transform, width, height)
@@ -560,7 +561,7 @@ def _small_case(tmp_path: Path) -> Tuple[Imagery, Path]:
     ],
     ids=["unmapped-ignore", "ignore-values", "nodata-override", "no-ignore-index", "ignore-200"],
 )
-def test_label_settings_match_the_reference(tmp_path: Path, settings: Dict[str, Any]) -> None:
+def test_label_settings_match_the_reference(tmp_path: Path, settings: dict[str, Any]) -> None:
     imagery, labels = _small_case(tmp_path)
     config = config_for(
         tmp_path, _geotiff(imagery), imagery.region(), {"path": str(labels), **settings}
@@ -886,12 +887,12 @@ def test_classes_accept_ids_and_names_and_merge_values() -> None:
         ({"classes": {10: 1}, "path": "https://user:pw@example.com/lc.tif"}, "credentials"),
     ],
 )
-def test_invalid_raster_label_settings_are_rejected(labels: Dict[str, Any], message: str) -> None:
+def test_invalid_raster_label_settings_are_rejected(labels: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         _labels(**labels)
 
 
-def _config(labels: Dict[str, Any]) -> MapcvConfig:
+def _config(labels: dict[str, Any]) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
             "region": {"west": 3.0, "south": 48.8, "east": 3.01, "north": 48.81},
@@ -949,7 +950,7 @@ def test_relative_label_raster_paths_resolve_but_urls_do_not(tmp_path: Path) -> 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
-def _region_yaml(region: Dict[str, float]) -> str:
+def _region_yaml(region: dict[str, float]) -> str:
     return "region:\n" + "".join(f"  {key}: {value}\n" for key, value in region.items())
 
 
@@ -1046,7 +1047,7 @@ def _sampler(
 
 def test_32_bit_labels_are_classified_without_a_lookup_table(tmp_path: Path) -> None:
     transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
-    cases: Sequence[Tuple[str, Tuple[int, ...], Dict[int, int]]] = [
+    cases: Sequence[tuple[str, tuple[int, ...], dict[int, int]]] = [
         ("uint32", (5, 70_000, 9, 123_456), {70_000: 1, 5: 2}),
         ("int32", (-70_000, 3, 9, 8), {-70_000: 1, 3: 2}),
     ]
@@ -1091,7 +1092,7 @@ def test_the_general_path_reads_more_when_the_perimeter_misses_pixels(
     window = six(imagery.transform)
     expected = sampler.sample(window, 200, 200)
     # A perimeter estimate that is far too small, or none at all.
-    estimates: Sequence[Optional[Tuple[int, int, int, int]]] = [(0, 1, 0, 1), None]
+    estimates: Sequence[tuple[int, int, int, int] | None] = [(0, 1, 0, 1), None]
     for estimate in estimates:
         monkeypatch.setattr(sampler, "_perimeter_window", lambda *args, e=estimate: e)
         np.testing.assert_array_equal(sampler.sample(window, 200, 200), expected)
@@ -1152,7 +1153,7 @@ def test_the_target_needs_prepare_first() -> None:
         RasterLabelsConfig.model_validate({"type": "raster", "path": "x.tif", "classes": {1: 1}})
     )
     with pytest.raises(RuntimeError, match="prepare"):
-        target.sampler
+        _ = target.sampler
     with pytest.raises(RuntimeError, match="prepare"):
         target.record()
 
@@ -1160,7 +1161,7 @@ def test_the_target_needs_prepare_first() -> None:
 # ── init wizard: label raster values ─────────────────────────────────────────
 
 
-def _bbox(imagery: Imagery) -> Tuple[float, float, float, float]:
+def _bbox(imagery: Imagery) -> tuple[float, float, float, float]:
     region = imagery.region()
     return region["west"], region["south"], region["east"], region["north"]
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import List
 
 import pytest
 import yaml
@@ -23,7 +22,7 @@ def test_citation_matches_the_package_and_the_citing_page() -> None:
     text = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     citation = yaml.safe_load(text)
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'^version = "([^"]+)"', pyproject, re.M)
+    match = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
     assert match is not None
     version = match.group(1)
     assert citation["cff-version"] == "1.2.0"
@@ -31,18 +30,16 @@ def test_citation_matches_the_package_and_the_citing_page() -> None:
     for key in ("title", "authors", "message", "license", "repository-code", "doi"):
         assert citation.get(key), key
     page = (DOCS / "project" / "citing.mdx").read_text(encoding="utf-8")
-    block = re.search(r'<TabItem label="CFF">\s*```yaml\n(.*?)\n\s*```', page, re.S)
+    block = re.search(r'<TabItem label="CFF">\s*```yaml\n(.*?)\n\s*```', page, re.DOTALL)
     assert block is not None
-    shown = "\n".join(
-        line[4:] if line.startswith("    ") else line for line in block.group(1).splitlines()
-    )
+    shown = "\n".join(line.removeprefix("    ") for line in block.group(1).splitlines())
     assert shown.strip() == text.strip(), "the citing page's CFF tab must equal CITATION.cff"
     assert f"version = {{{version}}}" in page
 
 
-def _blocks(markdown: str) -> List[str]:
+def _blocks(markdown: str) -> list[str]:
     """Paragraphs, list items and table rows; headings are left out (pages restructure them)."""
-    blocks: List[str] = []
+    blocks: list[str] = []
     for paragraph in re.split(r"\n\s*\n", markdown):
         paragraph = paragraph.strip()
         if not paragraph or paragraph.startswith("#"):

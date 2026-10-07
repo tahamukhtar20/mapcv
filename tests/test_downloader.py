@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+from typing import Any
 
 import pytest
 
@@ -48,10 +48,10 @@ def _png(value: int) -> bytes:
     return buffer.getvalue()
 
 
-def _fake_fetch(calls: List[Tuple[int, str]]) -> Any:
+def _fake_fetch(calls: list[tuple[int, str]]) -> Any:
     def fetch(
-        requested: List[TileIndex], template: str, **kwargs: Any
-    ) -> Tuple[List[Tuple[TileIndex, bytes]], int, Any]:
+        requested: list[TileIndex], template: str, **kwargs: Any
+    ) -> tuple[list[tuple[TileIndex, bytes]], int, Any]:
         calls.append((len(requested), template))
         callback = kwargs.get("callback")
         for done in range(1, len(requested) + 1):
@@ -65,7 +65,7 @@ def _fake_fetch(calls: List[Tuple[int, str]]) -> Any:
 def test_download_region_fetches_every_tile_in_the_snapped_bbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: List[Tuple[int, str]] = []
+    calls: list[tuple[int, str]] = []
     monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
     results = download_region(4.88, 52.37, 4.89, 52.375, 15, source="esri_satellite")
     assert calls == [(len(results), downloader.URL_TEMPLATES["esri_satellite"])]
@@ -80,9 +80,9 @@ def test_download_region_fetches_every_tile_in_the_snapped_bbox(
     ],
 )
 def test_download_region_rejects_unrepresentable_bbox_before_fetching(
-    monkeypatch: pytest.MonkeyPatch, bbox: Tuple[float, float, float, float]
+    monkeypatch: pytest.MonkeyPatch, bbox: tuple[float, float, float, float]
 ) -> None:
-    calls: List[Tuple[int, str]] = []
+    calls: list[tuple[int, str]] = []
     monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
     with pytest.raises(ValueError):
         download_region(*bbox, 15, source="esri_satellite")
@@ -93,7 +93,7 @@ def test_download_region_rejects_unrepresentable_bbox_before_fetching(
 
 def test_download_region_point_fetches_one_tile(monkeypatch: pytest.MonkeyPatch) -> None:
     # A zero-area box used to snap to the whole world (~2^30 tiles at zoom 15).
-    calls: List[Tuple[int, str]] = []
+    calls: list[tuple[int, str]] = []
     monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch(calls))
     results = download_region(0.0, 0.0, 0.0, 0.0, 15, source="esri_satellite")
     assert [(tile.x, tile.y, tile.z) for tile, _ in results] == [(16384, 16384, 15)]
@@ -115,7 +115,7 @@ def test_download_region_reports_progress_and_logs_instead_of_printing(
     import logging
 
     monkeypatch.setattr(downloader, "fetch_tiles_rs", _fake_fetch([]))
-    seen: List[Tuple[int, int]] = []
+    seen: list[tuple[int, int]] = []
     with caplog.at_level(logging.INFO, logger="mapcv"):
         results = download_region(
             4.88,

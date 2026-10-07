@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pytest
+from pydantic import ValidationError
 
-from mapcv.splitter import SplitterConfig, _classify_entry, split_dataset, split_manifest
 from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord
-
+from mapcv.splitter import SplitterConfig, _classify_entry, split_dataset, split_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -21,7 +20,7 @@ def _entry(
     idx: int,
     *,
     empty_ratio: float = 0.0,
-    counts: Optional[Dict[str, int]] = None,
+    counts: dict[str, int] | None = None,
     mask: bool = False,
 ) -> ManifestEntry:
     fname = f"patch_{idx:07d}.png"
@@ -39,7 +38,7 @@ def _name(entry: ManifestEntry) -> str:
     return entry["files"]["image"].rsplit("/", 1)[-1]
 
 
-def _manifest(entries: List[ManifestEntry]) -> Manifest:
+def _manifest(entries: list[ManifestEntry]) -> Manifest:
     m = Manifest(
         target=TargetRecord(type="segmentation", class_map={"bg": 0, "obj": 1}),
         sampler={"patch_size": 1, "stride": 1},
@@ -52,7 +51,7 @@ def _make_manifest(n: int, *, empty_ratio: float = 0.0) -> Manifest:
     return _manifest([_entry(i, empty_ratio=empty_ratio) for i in range(n)])
 
 
-def _read_lines(path: Path) -> List[str]:
+def _read_lines(path: Path) -> list[str]:
     text = path.read_text().strip()
     return text.split("\n") if text else []
 
@@ -74,14 +73,14 @@ def test_config_defaults() -> None:
 
 
 def test_config_rejects_bad_ratio() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SplitterConfig(test_ratio=1.5)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SplitterConfig(val_ratio=-0.1)
 
 
 def test_config_rejects_zero_sample_limit() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SplitterConfig(sample_limit=0)
 
 
@@ -334,7 +333,7 @@ def test_output_dir_created(tmp_path: Path) -> None:
 
 
 def _grid_manifest(size: int, patch: int, stride: int) -> Manifest:
-    entries: List[ManifestEntry] = []
+    entries: list[ManifestEntry] = []
     for row in range(0, size - patch + 1, stride):
         for col in range(0, size - patch + 1, stride):
             entry = _entry(len(entries))
@@ -402,7 +401,7 @@ def test_labeled_ratio_directory_names(tmp_path: Path, ratio: float, name: str) 
 
 
 @pytest.mark.parametrize("ratios", [[0.0], [1.5], [0.1, 0.1]])
-def test_config_rejects_invalid_labeled_ratios(ratios: List[float]) -> None:
+def test_config_rejects_invalid_labeled_ratios(ratios: list[float]) -> None:
     with pytest.raises(ValueError):
         SplitterConfig(labeled_ratios=ratios)
 

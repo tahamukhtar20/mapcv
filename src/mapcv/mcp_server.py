@@ -13,9 +13,10 @@ import logging
 import sys
 import threading
 import traceback
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Any, Callable, List, Literal, Optional, TypeVar, Union
+from typing import Annotated, Any, Literal, TypeVar
 
 import anyio
 import anyio.from_thread
@@ -74,7 +75,7 @@ def _ok(state: ToolState, result: ToolResult) -> CallToolResult:
     )
 
 
-def _fail(state: ToolState, message: str, data: Optional[dict[str, Any]] = None) -> CallToolResult:
+def _fail(state: ToolState, message: str, data: dict[str, Any] | None = None) -> CallToolResult:
     clean = ToolResult(
         state.redactor.scrub(message), state.redactor.scrub_data(data or {"error": message})
     )
@@ -122,7 +123,7 @@ async def _run(state: ToolState, func: Callable[..., ToolResult], *args: Any) ->
     return await anyio.to_thread.run_sync(partial(_guard, state, partial(func, state, *args)))
 
 
-def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCPServer:
+def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer:
     """Create the server for a folder; write tools exist only with ``allow_write``."""
     state = ToolState(tools.Sandbox(root, allow_write))
     server = MCPServer(
@@ -145,10 +146,10 @@ def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCP
     @server.tool(title="Validate a config", annotations=_READ)
     async def validate_config(
         path: Annotated[
-            Optional[str], Field(description="A YAML config file inside the root.")
+            str | None, Field(description="A YAML config file inside the root.")
         ] = None,
         yaml_text: Annotated[
-            Optional[str],
+            str | None,
             Field(
                 description="Config text to check instead of a file; relative paths are "
                 "relative to the root."
@@ -172,7 +173,7 @@ def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCP
             int, Field(ge=1, le=200, description="Most frequent values listed per field.")
         ] = 20,
         layer: Annotated[
-            Optional[str], Field(description="The table of a GeoPackage that has several.")
+            str | None, Field(description="The table of a GeoPackage that has several.")
         ] = None,
     ) -> CallToolResult:
         """What a label file holds: its fields with their distinct values and counts,
@@ -184,10 +185,10 @@ def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCP
     @server.tool(title="Plan a dataset", annotations=_READ_NETWORK)
     async def plan(
         config: Annotated[
-            Optional[str], Field(description="A YAML config file inside the root.")
+            str | None, Field(description="A YAML config file inside the root.")
         ] = None,
         yaml_text: Annotated[
-            Optional[str], Field(description="Config text to plan instead of a file.")
+            str | None, Field(description="Config text to plan instead of a file.")
         ] = None,
     ) -> CallToolResult:
         """Estimate tiles, patches, disk, memory and warnings for a config without
@@ -261,7 +262,7 @@ def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCP
         def report(done: int, total: int) -> None:
             try:
                 anyio.from_thread.run(ctx.report_progress, done, total, f"chunk {done} of {total}")
-            except Exception:  # noqa: BLE001 - a lost notification must not stop the run
+            except Exception:  # noqa: BLE001, S110 - a lost notification must not stop the run
                 pass
 
         work = partial(_guard, state, partial(tools.execute_generate, state, job, report, cancel))
@@ -293,13 +294,13 @@ def build_server(root: Union[str, Path] = ".", allow_write: bool = False) -> MCP
         ] = "spatial",
         seed: int = 42,
         block_size: Annotated[
-            Optional[int], Field(ge=1, description="Spatial block size in pixels.")
+            int | None, Field(ge=1, description="Spatial block size in pixels.")
         ] = None,
         sample_limit: Annotated[
-            Optional[int], Field(ge=1, description="Use at most this many patches.")
+            int | None, Field(ge=1, description="Use at most this many patches.")
         ] = None,
         labeled_ratios: Annotated[
-            Optional[List[float]],
+            list[float] | None,
             Field(description="Labeled fractions of train for semi-supervised lists."),
         ] = None,
     ) -> CallToolResult:
@@ -337,7 +338,7 @@ def _guard_job(state: ToolState, func: Callable[..., _T], *args: Any) -> _T:
         raise _Refused(_failure(state, exc)) from None
 
 
-def serve(root: Union[str, Path] = ".", allow_write: bool = False) -> None:
+def serve(root: str | Path = ".", allow_write: bool = False) -> None:
     """Run the server over stdio until the client disconnects.
 
     stdout carries the protocol: the library never prints, and its log messages

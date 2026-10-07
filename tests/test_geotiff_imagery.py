@@ -13,7 +13,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -23,26 +23,26 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="GeoTIFF tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-import rasterio.features  # noqa: E402
-import rasterio.transform  # noqa: E402
-import rasterio.warp  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.enums import Resampling  # noqa: E402
-from rasterio.windows import Window  # noqa: E402
+import rasterio
+import rasterio.features
+import rasterio.transform
+import rasterio.warp
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
+from rasterio.windows import Window
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import GeoTiffImageryConfig, MapcvConfig, RegionConfig  # noqa: E402
-from mapcv.imagery import (  # noqa: E402
+from mapcv.cli import app
+from mapcv.config import GeoTiffImageryConfig, MapcvConfig, RegionConfig
+from mapcv.imagery import (
     GeoTiffRasterSource,
     geotiff_fingerprint,
     open_raster_source,
 )
-from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
+from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError
+from mapcv.pipeline import run_generate
+from mapcv.planning import plan
 
 runner = CliRunner()
 
@@ -68,15 +68,15 @@ class Raster:
     height: int
     transform: Affine
     data: npt.NDArray[Any]
-    nodata: Optional[float]
+    nodata: float | None
 
     @property
-    def lonlat_bounds(self) -> Tuple[float, float, float, float]:
+    def lonlat_bounds(self) -> tuple[float, float, float, float]:
         corners = [
             self.transform * (col, row) for col in (0, self.width) for row in (0, self.height)
         ]
         xs, ys = zip(*corners)
-        bounds: Tuple[float, float, float, float] = rasterio.warp.transform_bounds(
+        bounds: tuple[float, float, float, float] = rasterio.warp.transform_bounds(
             CRS.from_epsg(self.epsg),
             CRS.from_epsg(4326),
             min(xs),
@@ -87,7 +87,7 @@ class Raster:
         )
         return bounds
 
-    def region(self, margin: float = 0.05) -> Dict[str, float]:
+    def region(self, margin: float = 0.05) -> dict[str, float]:
         west, south, east, north = self.lonlat_bounds
         dx, dy = (east - west) * margin, (north - south) * margin
         return {
@@ -107,9 +107,9 @@ def make_raster(
     height: int = 512,
     count: int = 3,
     dtype: str = "uint8",
-    nodata: Optional[float] = None,
-    block: Optional[Tuple[int, int, int, int]] = None,
-    overviews: Tuple[int, ...] = (),
+    nodata: float | None = None,
+    block: tuple[int, int, int, int] | None = None,
+    overviews: tuple[int, ...] = (),
     name: str = "scene.tif",
     seed: int = 7,
     tag_nodata: bool = True,
@@ -140,19 +140,19 @@ def make_raster(
         else:
             data[:, r0:r1, c0:c1] = np.nan
     path = directory / name
-    profile: Dict[str, Any] = dict(
-        driver="GTiff",
-        height=height,
-        width=width,
-        count=count,
-        dtype=dtype,
-        crs=CRS.from_epsg(epsg),
-        transform=transform,
-        tiled=True,
-        blockxsize=128,
-        blockysize=128,
-        compress="deflate",
-    )
+    profile: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": count,
+        "dtype": dtype,
+        "crs": CRS.from_epsg(epsg),
+        "transform": transform,
+        "tiled": True,
+        "blockxsize": 128,
+        "blockysize": 128,
+        "compress": "deflate",
+    }
     if nodata is not None and tag_nodata:
         profile["nodata"] = nodata
     with rasterio.open(path, "w", **profile) as dst:
@@ -162,12 +162,12 @@ def make_raster(
     return Raster(path, epsg, width, height, transform, data, nodata)
 
 
-def write_labels(directory: Path, region: Dict[str, float]) -> Path:
+def write_labels(directory: Path, region: dict[str, float]) -> Path:
     """Two irregular polygons (classes a and b) inside ``region``, in lon/lat."""
     west, south = region["west"], region["south"]
     dx, dy = region["east"] - west, region["north"] - south
 
-    def at(fx: float, fy: float) -> List[float]:
+    def at(fx: float, fy: float) -> list[float]:
         return [west + fx * dx, south + fy * dy]
 
     shapes = {
@@ -189,15 +189,15 @@ def write_labels(directory: Path, region: Dict[str, float]) -> Path:
 
 def config_for(
     tmp_path: Path,
-    imagery: Dict[str, Any],
-    region: Dict[str, float],
+    imagery: dict[str, Any],
+    region: dict[str, float],
     *,
-    labels: Optional[Path] = None,
+    labels: Path | None = None,
     image_format: str = "png",
     staging: str = "dataset",
     **sampler: Any,
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": region,
         "imagery": {"type": "geotiff", **imagery},
         "sampler": {
@@ -242,8 +242,8 @@ def _file_window(src: Any, manifest: Manifest, entry: ManifestEntry, size: int) 
 
 
 def _expected_patch(
-    src: Any, window: Window, nodata: Optional[float], indexes: Optional[List[int]] = None
-) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    src: Any, window: Window, nodata: float | None, indexes: list[int] | None = None
+) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
     """rasterio's pixels (zeros outside the file) and which of them have imagery."""
     rows, cols = int(window.height), int(window.width)
     whole = (
@@ -266,7 +266,7 @@ def _expected_patch(
     return data, inside & ~empty
 
 
-def _label_shapes(labels: Path, epsg: int) -> List[Tuple[Any, int]]:
+def _label_shapes(labels: Path, epsg: int) -> list[tuple[Any, int]]:
     ids = {"a": 1, "b": 2}
     shapes = []
     for feature in json.loads(labels.read_text())["features"]:
@@ -281,9 +281,9 @@ def assert_dataset_matches_rasterio(
     config: MapcvConfig,
     raster: Raster,
     *,
-    labels: Optional[Path] = None,
-    indexes: Optional[List[int]] = None,
-    overview_level: Optional[int] = None,
+    labels: Path | None = None,
+    indexes: list[int] | None = None,
+    overview_level: int | None = None,
     expect_patches: int = 4,
 ) -> Manifest:
     """Generate the dataset and check every image and mask against rasterio."""
@@ -669,7 +669,7 @@ def test_file_fingerprint_notices_header_size_and_tail_changes(tmp_path: Path) -
     base = geotiff_fingerprint(str(path))
     assert geotiff_fingerprint(str(path)) == base
 
-    def changed(offset: int, size: Optional[int] = None) -> Dict[str, Any]:
+    def changed(offset: int, size: int | None = None) -> dict[str, Any]:
         data = bytearray(path.read_bytes())
         data[offset] ^= 0xFF
         if size is not None:
@@ -698,14 +698,14 @@ def test_other_sources_do_not_record_a_fingerprint() -> None:
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-_BASE: Dict[str, Any] = {
+_BASE: dict[str, Any] = {
     "region": {"west": 3.0, "south": 48.8, "east": 3.01, "north": 48.81},
     "sampler": {"patch_size": 64},
     "writer": {"staging_dir": "out", "image_format": "png"},
 }
 
 
-def _validate(imagery: Dict[str, Any], **overrides: Any) -> MapcvConfig:
+def _validate(imagery: dict[str, Any], **overrides: Any) -> MapcvConfig:
     return MapcvConfig.model_validate({**_BASE, "imagery": imagery, **overrides})
 
 
@@ -754,7 +754,7 @@ def test_config_rejects_unsafe_paths(path: str, message: str) -> None:
         ({"zoom": 12}, "Extra inputs"),
     ],
 )
-def test_config_rejects_bad_settings(imagery: Dict[str, Any], message: str) -> None:
+def test_config_rejects_bad_settings(imagery: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         _validate({"type": "geotiff", "path": "a.tif", **imagery})
 

@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 from shapely.geometry import box, shape
 
@@ -50,30 +51,30 @@ def _interval(value: str) -> str:
     return f"{start}/{end}"
 
 
-def _post(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", "Accept": "application/geo+json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as response:  # noqa: S310 - https or loopback, checked by the config
-        page: Dict[str, Any] = json.load(response)
+    with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as response:
+        page: dict[str, Any] = json.load(response)
     return page
 
 
-def _get(url: str) -> Dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=_TIMEOUT_S) as response:  # noqa: S310
-        page: Dict[str, Any] = json.load(response)
+def _get(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=_TIMEOUT_S) as response:
+        page: dict[str, Any] = json.load(response)
     return page
 
 
 def search_items(
-    search: StacSearchBase, bbox: Tuple[float, float, float, float]
-) -> Iterator[Dict[str, Any]]:
+    search: StacSearchBase, bbox: tuple[float, float, float, float]
+) -> Iterator[dict[str, Any]]:
     """Every item of the search, page by page (at most 5,000)."""
-    url: Optional[str] = f"{search.catalog}/search"
-    body: Optional[Dict[str, Any]] = {
+    url: str | None = f"{search.catalog}/search"
+    body: dict[str, Any] | None = {
         "collections": [search.collection],
         "bbox": list(bbox),
         "datetime": _interval(search.datetime),
@@ -98,8 +99,8 @@ def search_items(
 
 
 def find_item(
-    search: StacSearchBase, bbox: Tuple[float, float, float, float]
-) -> Tuple[Dict[str, Any], int]:
+    search: StacSearchBase, bbox: tuple[float, float, float, float]
+) -> tuple[dict[str, Any], int]:
     """The item to use for ``bbox`` (west, south, east, north in degrees), and how many
     qualified.
 
@@ -113,7 +114,7 @@ def find_item(
         items = list(search_items(search, bbox))
     except OSError as exc:  # urllib's URLError and HTTPError are OSErrors
         raise RuntimeError(f"STAC search at {search.catalog} failed: {exc}") from exc
-    candidates: List[Tuple[float, str, str, Dict[str, Any]]] = []
+    candidates: list[tuple[float, str, str, dict[str, Any]]] = []
     covering = 0
     for item in items:
         geometry = item.get("geometry")
@@ -136,7 +137,7 @@ def find_item(
     return item, len(candidates)
 
 
-def find_product(search: StacSearchConfig, bbox: Tuple[float, float, float, float]) -> StacMatch:
+def find_product(search: StacSearchConfig, bbox: tuple[float, float, float, float]) -> StacMatch:
     """The EOPF product to use for ``bbox`` (see :func:`find_item`).
 
     Raises:

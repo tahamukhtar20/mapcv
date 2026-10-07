@@ -19,9 +19,10 @@ import csv
 import json
 import math
 import random
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -35,30 +36,30 @@ from shapely.geometry.base import BaseGeometry
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="coverage is checked against rasterio (GDAL)")
-import rasterio  # noqa: E402
-import rasterio.features  # noqa: E402
-import rasterio.warp  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.enums import Resampling  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
+import rasterio
+import rasterio.features
+import rasterio.warp
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import ClassificationOptions, MapcvConfig  # noqa: E402
-from mapcv.imagery import RasterMetadata  # noqa: E402
-from mapcv.manifest import (  # noqa: E402
+from mapcv.cli import app
+from mapcv.config import ClassificationOptions, MapcvConfig
+from mapcv.imagery import RasterMetadata
+from mapcv.manifest import (
     Manifest,
     ManifestEntry,
     ManifestMismatchError,
     PatchSummary,
 )
-from mapcv.pipeline import run_generate, run_split  # noqa: E402
-from mapcv.planning import _CLASSIFICATION_BYTES, plan  # noqa: E402
-from mapcv.sampler import PatchMeta  # noqa: E402
-from mapcv.splitter import SplitterConfig, _stratum  # noqa: E402
-from mapcv.targets import ClassificationTarget, PatchLabels, create_target  # noqa: E402
-from mapcv.targets.classification import ClassificationWindow  # noqa: E402
-from mapcv.writers import (  # noqa: E402
+from mapcv.pipeline import run_generate, run_split
+from mapcv.planning import _CLASSIFICATION_BYTES, plan
+from mapcv.sampler import PatchMeta
+from mapcv.splitter import SplitterConfig, _stratum
+from mapcv.targets import ClassificationTarget, PatchLabels, create_target
+from mapcv.targets.classification import ClassificationWindow
+from mapcv.writers import (
     ClassificationWriter,
     FilesWriter,
     check_compatible,
@@ -88,8 +89,8 @@ IGNORE = 255
 def labels_of(
     mask: Sequence[Sequence[int]],
     *,
-    valid: Optional[Sequence[Sequence[bool]]] = None,
-    ignore: Optional[int] = IGNORE,
+    valid: Sequence[Sequence[bool]] | None = None,
+    ignore: int | None = IGNORE,
     **options: Any,
 ) -> PatchLabels:
     array = np.asarray(mask, dtype=np.uint8)
@@ -98,7 +99,7 @@ def labels_of(
     return window.annotate(0, 0, array.shape[0], "zero", valid_patch)
 
 
-def block(*parts: Tuple[int, int]) -> List[List[int]]:
+def block(*parts: tuple[int, int]) -> list[list[int]]:
     """A 4 x 4 mask holding ``count`` pixels of each ``value``, in row-major order."""
     flat = [value for value, count in parts for _ in range(count)]
     flat += [0] * (16 - len(flat))
@@ -211,7 +212,7 @@ def test_accepts_applies_min_label_ratio_to_the_whole_patch_and_requires_a_label
 # ── a Web Mercator raster with holes in its validity mask ───────────────────
 
 
-def to_lonlat(x: float, y: float) -> Tuple[float, float]:
+def to_lonlat(x: float, y: float) -> tuple[float, float]:
     return math.degrees(x / R), math.degrees(2 * math.atan(math.exp(y / R)) - math.pi / 2)
 
 
@@ -236,9 +237,7 @@ def make_valid_mask(kind: str = "edges") -> npt.NDArray[np.bool_]:
 class FakeSource:
     """A Web Mercator RGB raster with holes in its validity mask, optionally rotated."""
 
-    def __init__(
-        self, valid: Optional[npt.NDArray[np.bool_]] = None, rotation: float = 0.0
-    ) -> None:
+    def __init__(self, valid: npt.NDArray[np.bool_] | None = None, rotation: float = 0.0) -> None:
         rng = np.random.default_rng(0)
         self.valid = make_valid_mask() if valid is None else valid
         image = rng.integers(1, 256, size=(HEIGHT, WIDTH, 3), dtype=np.uint8)
@@ -263,7 +262,7 @@ class FakeSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
         return (
             self.image[row_start:row_stop, col_start:col_stop],
             self.valid[row_start:row_stop, col_start:col_stop],
@@ -296,12 +295,12 @@ class Feature:
     name: str
 
 
-def random_features(seed: int, count: int = 90) -> List[Feature]:
+def random_features(seed: int, count: int = 90) -> list[Feature]:
     """Small and large, multi-part and holed polygons; they overlap and cross patch edges."""
     rng = random.Random(seed)
     left, top = X0 - 20 * RES, Y0 + 20 * RES
     span_x, span_y = (WIDTH + 40) * RES, (HEIGHT + 40) * RES
-    features: List[Feature] = []
+    features: list[Feature] = []
     for index in range(count):
         cx = left + rng.uniform(0, span_x)
         cy = top - rng.uniform(0, span_y)
@@ -329,7 +328,7 @@ def random_features(seed: int, count: int = 90) -> List[Feature]:
     return features
 
 
-def write_labels(path: Path, features: List[Feature], field: str = "class") -> None:
+def write_labels(path: Path, features: list[Feature], field: str = "class") -> None:
     collection = {
         "type": "FeatureCollection",
         "features": [
@@ -347,14 +346,14 @@ def write_labels(path: Path, features: List[Feature], field: str = "class") -> N
 def config_for(
     root: Path,
     *,
-    classification: Optional[Dict[str, Any]] = None,
-    split: Optional[Dict[str, Any]] = None,
-    sampler: Optional[Dict[str, Any]] = None,
-    labels: Optional[Dict[str, Any]] = None,
-    writer: Optional[Dict[str, Any]] = None,
+    classification: dict[str, Any] | None = None,
+    split: dict[str, Any] | None = None,
+    sampler: dict[str, Any] | None = None,
+    labels: dict[str, Any] | None = None,
+    writer: dict[str, Any] | None = None,
     staging: str = "dataset",
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "task": "classification",
         "region": {"west": 4.93, "south": 52.37, "east": 4.95, "north": 52.38},
         "imagery": {"type": "xyz", "zoom": 18, "url_template": "http://127.0.0.1/{z}/{x}/{y}.png"},
@@ -369,7 +368,7 @@ def config_for(
     return MapcvConfig.model_validate(data)
 
 
-def generate(config: MapcvConfig, source: Optional[FakeSource] = None) -> Manifest:
+def generate(config: MapcvConfig, source: FakeSource | None = None) -> Manifest:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: source or FakeSource())
         run_generate(config)
@@ -381,11 +380,11 @@ def generate(config: MapcvConfig, source: Optional[FakeSource] = None) -> Manife
 
 @dataclass
 class Counts:
-    by_class: Dict[int, int]  # pixels per class ID (background excluded)
+    by_class: dict[int, int]  # pixels per class ID (background excluded)
     valid: int  # valid pixels: with imagery, not ignored
 
 
-def rule(counts: Counts, mode: str, min_fraction: float, empty: str) -> Optional[Tuple[int, ...]]:
+def rule(counts: Counts, mode: str, min_fraction: float, empty: str) -> tuple[int, ...] | None:
     """The labels the rule gives (``(0,)`` is background); ``None`` for a skipped patch.
 
     Written apart from mapcv's: classes sorted by pixel count rather than a running maximum.
@@ -403,14 +402,14 @@ def rule(counts: Counts, mode: str, min_fraction: float, empty: str) -> Optional
 
 
 def vector_counts(
-    features: List[Feature],
+    features: list[Feature],
     valid: npt.NDArray[np.bool_],
     affine: Affine,
     row: int,
     col: int,
     *,
     all_touched: bool,
-    ignore: Optional[int] = IGNORE,
+    ignore: int | None = IGNORE,
 ) -> Counts:
     """GDAL's mask of the labels on the patch's grid, counted over the valid pixels."""
     patch = affine * Affine.translation(col, row)
@@ -428,7 +427,7 @@ def vector_counts(
     return Counts(by_class, int(inside.sum()))
 
 
-def grid_anchors(edge: str, stride: int) -> List[Tuple[int, int]]:
+def grid_anchors(edge: str, stride: int) -> list[tuple[int, int]]:
     last_row = HEIGHT - PATCH if edge == "drop" else HEIGHT - 1
     last_col = WIDTH - PATCH if edge == "drop" else WIDTH - 1
     return [
@@ -440,17 +439,17 @@ def grid_anchors(edge: str, stride: int) -> List[Tuple[int, int]]:
 
 def assert_dataset_equals_reference(
     manifest: Manifest,
-    features: List[Feature],
+    features: list[Feature],
     source: FakeSource,
     *,
     mode: str = "single",
     min_fraction: float = 0.0,
     empty: str = "skip",
     all_touched: bool = False,
-    ignore: Optional[int] = IGNORE,
+    ignore: int | None = IGNORE,
     edge: str = "drop",
     stride: int = PATCH,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Every anchor is kept exactly when the reference rule says so, with the same coverage
     and labels. Returns the numbers of kept and skipped patches."""
     kept = {(entry["row"], entry["col"]): entry for entry in manifest.patches}
@@ -510,11 +509,11 @@ VECTOR_CASES = [
 )
 def test_vector_coverage_and_labels_equal_the_gdal_reference(
     tmp_path: Path,
-    options: Dict[str, Any],
+    options: dict[str, Any],
     mask_kind: str,
     rotation: float,
     all_touched: bool,
-    extra: Dict[str, Any],
+    extra: dict[str, Any],
 ) -> None:
     features = random_features(seed=7)
     write_labels(tmp_path / "labels.geojson", features)
@@ -690,7 +689,7 @@ def test_without_a_label_field_every_feature_is_the_class_object(tmp_path: Path)
     assert {row["labels"] for row in rows[1:]} == {"background"}
 
 
-def named_features(names: Sequence[str]) -> List[Feature]:
+def named_features(names: Sequence[str]) -> list[Feature]:
     """One 20 x 20 px square per name, one patch (64 x 64 px) each along the top row."""
     return [
         Feature(
@@ -732,7 +731,7 @@ def test_single_label_names_may_hold_spaces_commas_and_unicode(tmp_path: Path) -
     ],
 )
 def test_unusable_class_names_are_refused_before_any_patch_is_written(
-    tmp_path: Path, name: str, options: Dict[str, Any], message: str
+    tmp_path: Path, name: str, options: dict[str, Any], message: str
 ) -> None:
     write_labels(tmp_path / "labels.geojson", named_features([name]))
     config = config_for(tmp_path, classification=options)
@@ -748,14 +747,14 @@ def test_unusable_class_names_are_refused_before_any_patch_is_written(
 # ── the files ───────────────────────────────────────────────────────────────
 
 
-def read_csv(path: Path) -> List[Dict[str, str]]:
+def read_csv(path: Path) -> list[dict[str, str]]:
     raw = path.read_bytes()
     assert b"\r" not in raw and raw.endswith(b"\n")
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
-def tree_bytes(root: Path) -> Dict[str, bytes]:
+def tree_bytes(root: Path) -> dict[str, bytes]:
     return {
         str(path.relative_to(root)): path.read_bytes()
         for path in sorted(root.rglob("*"))
@@ -766,7 +765,7 @@ def tree_bytes(root: Path) -> Dict[str, bytes]:
 @pytest.fixture(scope="module")
 def split_dataset(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[Tuple[MapcvConfig, Manifest, List[Feature]]]:
+) -> Iterator[tuple[MapcvConfig, Manifest, list[Feature]]]:
     root = tmp_path_factory.mktemp("split")
     features = random_features(seed=11, count=45)
     write_labels(root / "labels.geojson", features)
@@ -780,7 +779,7 @@ def split_dataset(
     yield config, manifest, features
 
 
-def split_names(staging: Path) -> Dict[str, List[str]]:
+def split_names(staging: Path) -> dict[str, list[str]]:
     return {
         name: (staging / "splits" / f"{name}.txt").read_text(encoding="utf-8").split()
         for name in ("train", "val", "test")
@@ -788,7 +787,7 @@ def split_names(staging: Path) -> Dict[str, List[str]]:
 
 
 def test_the_label_files_parse_and_match_the_manifest(
-    split_dataset: Tuple[MapcvConfig, Manifest, List[Feature]],
+    split_dataset: tuple[MapcvConfig, Manifest, list[Feature]],
 ) -> None:
     config, manifest, _ = split_dataset
     staging = config.writer.staging_dir
@@ -825,7 +824,7 @@ def test_the_label_files_parse_and_match_the_manifest(
 
 
 def test_the_manifest_records_the_classification_target(
-    split_dataset: Tuple[MapcvConfig, Manifest, List[Feature]],
+    split_dataset: tuple[MapcvConfig, Manifest, list[Feature]],
 ) -> None:
     config, manifest, _ = split_dataset
     raw = json.loads((config.writer.staging_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -971,7 +970,7 @@ def test_the_cli_split_command_updates_the_label_tables(tmp_path: Path) -> None:
 
 
 def test_class_coverage_in_the_summary_is_the_reference_for_every_kept_patch(
-    split_dataset: Tuple[MapcvConfig, Manifest, List[Feature]],
+    split_dataset: tuple[MapcvConfig, Manifest, list[Feature]],
 ) -> None:
     _, manifest, features = split_dataset
     source = FakeSource(make_valid_mask("noisy"), 14.0)
@@ -993,7 +992,7 @@ def test_class_coverage_in_the_summary_is_the_reference_for_every_kept_patch(
 
 
 def test_strata_come_from_the_assigned_labels() -> None:
-    def entry(labels: List[int], coverage: Dict[str, float]) -> Any:
+    def entry(labels: list[int], coverage: dict[str, float]) -> Any:
         return {
             "summary": {"labels": labels, "class_coverage": coverage, "empty_ratio": 0.0},
         }
@@ -1017,7 +1016,7 @@ def test_stratified_splits_balance_the_classes(tmp_path: Path) -> None:
     )
     manifest = generate(config, FakeSource(make_valid_mask("edges")))
     test = set(split_names(config.writer.staging_dir)["test"])
-    strata: Dict[Any, List[bool]] = {}
+    strata: dict[Any, list[bool]] = {}
     for entry in manifest.patches:
         strata.setdefault(_stratum(entry), []).append(manifest.patch_name(entry) in test)
     assert {leading for _, leading in strata} == {"1", "2", "3"}
@@ -1026,7 +1025,7 @@ def test_stratified_splits_balance_the_classes(tmp_path: Path) -> None:
 
 
 def test_info_shows_the_patches_per_label(
-    split_dataset: Tuple[MapcvConfig, Manifest, List[Feature]],
+    split_dataset: tuple[MapcvConfig, Manifest, list[Feature]],
 ) -> None:
     config, manifest, _ = split_dataset
     result = runner.invoke(app, ["info", str(config.writer.staging_dir)])
@@ -1061,7 +1060,7 @@ VALUES = (0, 10, 20, 30, 40, 99, NODATA)
 EXACT_WARP = tuple(int(part) for part in rasterio.__version__.split(".")[:2]) >= (1, 5)
 
 
-def utm(lon: float, lat: float) -> Tuple[float, float]:
+def utm(lon: float, lat: float) -> tuple[float, float]:
     x, y = Transformer.from_crs("EPSG:4326", f"EPSG:{IMAGERY_EPSG}", always_xy=True).transform(
         lon, lat
     )
@@ -1076,7 +1075,7 @@ class Scene:
     height: int
     data: npt.NDArray[np.uint8]
 
-    def region(self, margin: float = 0.04) -> Dict[str, float]:
+    def region(self, margin: float = 0.04) -> dict[str, float]:
         corners = [self.transform * (c, r) for c in (0, self.width) for r in (0, self.height)]
         xs, ys = zip(*corners)
         west, south, east, north = rasterio.warp.transform_bounds(
@@ -1103,7 +1102,7 @@ def make_scene(
     width: int = 320,
     height: int = 288,
     rotation: float = 0.0,
-    nodata_block: Optional[Tuple[int, int, int, int]] = (60, 120, 150, 230),
+    nodata_block: tuple[int, int, int, int] | None = (60, 120, 150, 230),
 ) -> Scene:
     """A 3-band uint8 GeoTIFF in UTM 31N (NoData 0, in a block and along an edge)."""
     cx, cy = utm(3.0, 48.85)
@@ -1142,7 +1141,7 @@ def make_label_raster(
     pixel: float,
     *,
     cover: float = 0.8,
-    offset: Tuple[float, float] = (0.0, 0.0),
+    offset: tuple[float, float] = (0.0, 0.0),
     blobs: int = 6,
 ) -> Path:
     """A north-up label raster of blobs (so patches get several classes) over the middle
@@ -1188,17 +1187,17 @@ def raster_config(
     scene: Scene,
     label_path: Path,
     *,
-    classification: Optional[Dict[str, Any]] = None,
-    labels: Optional[Dict[str, Any]] = None,
-    sampler: Optional[Dict[str, Any]] = None,
-    split: Optional[Dict[str, Any]] = None,
+    classification: dict[str, Any] | None = None,
+    labels: dict[str, Any] | None = None,
+    sampler: dict[str, Any] | None = None,
+    split: dict[str, Any] | None = None,
     staging: str = "dataset",
 ) -> MapcvConfig:
     classes = {
         value: ({"id": cid, "name": RASTER_NAMES[cid]} if cid else {"id": 0})
         for value, cid in RASTER_CLASSES.items()
     }
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "task": "classification",
         "region": scene.region(),
         "imagery": {"type": "geotiff", "path": str(scene.path)},
@@ -1219,12 +1218,12 @@ def raster_counts(
     patch: Affine,
     size: int,
     *,
-    ignore: Optional[int] = IGNORE,
+    ignore: int | None = IGNORE,
     unmapped: str = "background",
 ) -> Counts:
     """Coverage by GDAL's nearest-neighbour warp of the label raster onto the patch grid."""
     with rasterio.open(label_path) as src:
-        exact: Dict[str, Any] = {"tolerance": 0} if EXACT_WARP else {}
+        exact: dict[str, Any] = {"tolerance": 0} if EXACT_WARP else {}
         if not EXACT_WARP and src.crs != CRS.from_epsg(IMAGERY_EPSG):
             pytest.skip("rasterio < 1.5 cannot reproject without approximating (tolerance)")
         raw = src.read(1).astype(np.int32)
@@ -1295,8 +1294,8 @@ def test_raster_label_coverage_equals_the_gdal_warp_reference(
     epsg: int,
     pixel: float,
     rotation: float,
-    options: Dict[str, Any],
-    label_settings: Dict[str, Any],
+    options: dict[str, Any],
+    label_settings: dict[str, Any],
 ) -> None:
     scene = make_scene(tmp_path, rotation=rotation)
     label_path = make_label_raster(tmp_path, scene, epsg, pixel)
@@ -1345,7 +1344,7 @@ def test_raster_label_coverage_equals_the_gdal_warp_reference(
     assert manifest.class_map == {name: cid for cid, name in RASTER_NAMES.items()}
 
 
-def _source_size(config: MapcvConfig) -> Tuple[int, int]:
+def _source_size(config: MapcvConfig) -> tuple[int, int]:
     """Height and width of the raster mapcv reads (the region's window of the file)."""
     from mapcv.imagery import open_raster_source
 
@@ -1388,8 +1387,8 @@ def test_raster_labels_with_the_sample_classes_are_named_and_sorted(tmp_path: Pa
 # ── configuration ───────────────────────────────────────────────────────────
 
 
-def _raw(tmp_path: Path, **changes: Any) -> Dict[str, Any]:
-    data: Dict[str, Any] = {
+def _raw(tmp_path: Path, **changes: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "task": "classification",
         "region": {"west": 4.93, "south": 52.37, "east": 4.95, "north": 52.38},
         "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite"},
@@ -1467,7 +1466,7 @@ def test_classification_is_a_supported_task(tmp_path: Path) -> None:
     ],
 )
 def test_invalid_classification_configs_fail_clearly(
-    tmp_path: Path, changes: Dict[str, Any], message: str
+    tmp_path: Path, changes: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         MapcvConfig.model_validate(_raw(tmp_path, **changes))
@@ -1536,8 +1535,8 @@ def tile_server() -> Iterator[str]:
         def log_message(self, *args: object) -> None:
             pass
 
-        def do_GET(self) -> None:  # noqa: N802 - http.server API
-            z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
+        def do_GET(self) -> None:
+            _z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
             buffer = io.BytesIO()
             Image.new("RGB", (256, 256), (40 + x % 7 * 20, 60 + y % 5 * 30, 90)).save(buffer, "PNG")
             body = buffer.getvalue()

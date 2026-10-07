@@ -17,9 +17,10 @@ from __future__ import annotations
 import json
 import math
 import random
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -45,7 +46,7 @@ from mapcv.writers import FilesWriter, InstanceWriter, check_compatible, create_
 pycocotools_mask = pytest.importorskip("pycocotools.mask")
 pycocotools_coco = pytest.importorskip("pycocotools.coco")
 rasterio_features = pytest.importorskip("rasterio.features")
-from rasterio.transform import Affine  # noqa: E402
+from rasterio.transform import Affine
 
 R = 6_378_137.0
 # A zoom-18 Web Mercator grid near Amsterdam.
@@ -186,7 +187,7 @@ def test_bbox_area_and_rle_agree_with_pycocotools() -> None:
 # ── fixtures: a Web Mercator raster with holes in its validity mask ─────────
 
 
-def to_lonlat(x: float, y: float) -> Tuple[float, float]:
+def to_lonlat(x: float, y: float) -> tuple[float, float]:
     return math.degrees(x / R), math.degrees(2 * math.atan(math.exp(y / R)) - math.pi / 2)
 
 
@@ -211,7 +212,7 @@ def make_valid_mask(kind: str = "edges") -> npt.NDArray[np.bool_]:
 class FakeSource:
     """A Web Mercator RGB raster with holes in its validity mask."""
 
-    def __init__(self, valid: Optional[npt.NDArray[np.bool_]] = None) -> None:
+    def __init__(self, valid: npt.NDArray[np.bool_] | None = None) -> None:
         rng = np.random.default_rng(0)
         self.valid = make_valid_mask() if valid is None else valid
         image = rng.integers(1, 256, size=(HEIGHT, WIDTH, 3), dtype=np.uint8)
@@ -231,7 +232,7 @@ class FakeSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
         return (
             self.image[row_start:row_stop, col_start:col_stop],
             self.valid[row_start:row_stop, col_start:col_stop],
@@ -264,7 +265,7 @@ class Feature:
     name: str
 
 
-def random_features(seed: int, count: int = 160) -> List[Feature]:
+def random_features(seed: int, count: int = 160) -> list[Feature]:
     """Ordinary, tiny, multi-part, holed and large objects, many crossing patch edges.
 
     They overlap each other, and some lie partly outside the raster.
@@ -272,7 +273,7 @@ def random_features(seed: int, count: int = 160) -> List[Feature]:
     rng = random.Random(seed)
     left, top = X0 - 20 * RES, Y0 + 20 * RES
     span_x, span_y = (WIDTH + 40) * RES, (HEIGHT + 40) * RES
-    features: List[Feature] = []
+    features: list[Feature] = []
     for index in range(count):
         cx = left + rng.uniform(0, span_x)
         cy = top - rng.uniform(0, span_y)
@@ -298,7 +299,7 @@ def random_features(seed: int, count: int = 160) -> List[Feature]:
     return features
 
 
-def write_labels(path: Path, features: List[Feature]) -> None:
+def write_labels(path: Path, features: list[Feature]) -> None:
     collection = {
         "type": "FeatureCollection",
         "features": [
@@ -316,14 +317,14 @@ def write_labels(path: Path, features: List[Feature]) -> None:
 def instance_config(
     root: Path,
     *,
-    instance: Optional[Dict[str, Any]] = None,
-    split: Optional[Dict[str, Any]] = None,
-    sampler: Optional[Dict[str, Any]] = None,
-    labels: Optional[Dict[str, Any]] = None,
+    instance: dict[str, Any] | None = None,
+    split: dict[str, Any] | None = None,
+    sampler: dict[str, Any] | None = None,
+    labels: dict[str, Any] | None = None,
     staging: str = "dataset",
     task: str = "instance",
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "task": task,
         "region": {"west": 4.93, "south": 52.37, "east": 4.95, "north": 52.38},
         "imagery": {"type": "xyz", "zoom": 18, "url_template": "http://127.0.0.1/{z}/{x}/{y}.png"},
@@ -338,26 +339,26 @@ def instance_config(
     return MapcvConfig.model_validate(data)
 
 
-def generate(config: MapcvConfig, source: Optional[FakeSource] = None) -> Manifest:
+def generate(config: MapcvConfig, source: FakeSource | None = None) -> Manifest:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: source or FakeSource())
         run_generate(config)
     return Manifest.load(config.writer.staging_dir / "manifest.json")
 
 
-def load_coco(path: Path) -> Dict[str, Any]:
-    data: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+def load_coco(path: Path) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     return data
 
 
-def annotations_by_image(coco: Dict[str, Any]) -> Dict[int, List[Dict[str, Any]]]:
-    grouped: Dict[int, List[Dict[str, Any]]] = {}
+def annotations_by_image(coco: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
     for ann in coco["annotations"]:
         grouped.setdefault(ann["image_id"], []).append(ann)
     return grouped
 
 
-def stored_mask(ann: Dict[str, Any]) -> npt.NDArray[np.bool_]:
+def stored_mask(ann: dict[str, Any]) -> npt.NDArray[np.bool_]:
     height, width = ann["segmentation"]["size"]
     return decode(ann["segmentation"]["counts"], height, width)
 
@@ -392,9 +393,7 @@ def reference_mask(
     return np.asarray(burned, dtype=bool) & over_imagery
 
 
-def invalid_world_region(
-    valid: npt.NDArray[np.bool_], row: int, col: int
-) -> Optional[BaseGeometry]:
+def invalid_world_region(valid: npt.NDArray[np.bool_], row: int, col: int) -> BaseGeometry | None:
     """Pixels without imagery inside the patch, as a union of one box per pixel (world)."""
     r0, c0 = max(row, 0), max(col, 0)
     r1, c1 = min(row + PATCH, HEIGHT), min(col + PATCH, WIDTH)
@@ -407,18 +406,18 @@ def invalid_world_region(
 
 
 def expected_instances(
-    features: List[Feature],
+    features: list[Feature],
     valid: npt.NDArray[np.bool_],
     row: int,
     col: int,
     options: InstanceOptions,
     all_touched: bool = False,
-) -> List[Expected]:
+) -> list[Expected]:
     left, top = X0 + col * RES, Y0 - row * RES
     patch = box(left, top - PATCH * RES, left + PATCH * RES, top)
     raster = box(X0, Y0 - HEIGHT * RES, X0 + WIDTH * RES, Y0)
     invalid = invalid_world_region(valid, row, col)
-    result: List[Expected] = []
+    result: list[Expected] = []
     for feature in features:
         world = feature.world
         visible = world.intersection(patch).intersection(raster)
@@ -441,7 +440,7 @@ def expected_instances(
     return result
 
 
-def assert_matches(found: List[Dict[str, Any]], expected: List[Expected], where: str) -> int:
+def assert_matches(found: list[dict[str, Any]], expected: list[Expected], where: str) -> int:
     """Every kept annotation is an expected mask (same order); returns how many matched."""
     unmatched = list(found)
     last = -1
@@ -459,7 +458,7 @@ def assert_matches(found: List[Dict[str, Any]], expected: List[Expected], where:
         if match is None:
             assert item.borderline, f"{where}: missing {item.category} with {item.mask.sum()} px"
             continue
-        position, ann = match
+        _position, ann = match
         index = found.index(ann)
         assert index > last, f"{where}: annotations are not in feature order"
         last = index
@@ -473,7 +472,7 @@ def assert_matches(found: List[Dict[str, Any]], expected: List[Expected], where:
 @pytest.fixture(scope="module")
 def split_dataset(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[Tuple[MapcvConfig, List[Feature]]]:
+) -> Iterator[tuple[MapcvConfig, list[Feature]]]:
     root = tmp_path_factory.mktemp("split")
     features = random_features(seed=11)
     write_labels(root / "labels.geojson", features)
@@ -511,7 +510,7 @@ def split_dataset(
     ],
 )
 def test_masks_equal_gdal_rasterization_of_each_feature(
-    tmp_path: Path, options: Dict[str, Any], mask_kind: str, all_touched: bool
+    tmp_path: Path, options: dict[str, Any], mask_kind: str, all_touched: bool
 ) -> None:
     features = random_features(seed=3, count=100)
     write_labels(tmp_path / "labels.geojson", features)
@@ -536,7 +535,7 @@ def test_masks_equal_gdal_rasterization_of_each_feature(
 
 
 def test_coco_files_load_in_pycocotools_and_every_annotation_decodes_to_its_mask(
-    split_dataset: Tuple[MapcvConfig, List[Feature]],
+    split_dataset: tuple[MapcvConfig, list[Feature]],
 ) -> None:
     config, features = split_dataset
     staging = config.writer.staging_dir
@@ -568,7 +567,7 @@ def test_coco_files_load_in_pycocotools_and_every_annotation_decodes_to_its_mask
     assert seen > 100
 
 
-def strict_coco_check(coco: Dict[str, Any], patch_size: int) -> None:
+def strict_coco_check(coco: dict[str, Any], patch_size: int) -> None:
     assert set(coco) == {"info", "licenses", "categories", "images", "annotations"}
     category_ids = [cat["id"] for cat in coco["categories"]]
     assert category_ids == sorted(set(category_ids))
@@ -605,14 +604,14 @@ def strict_coco_check(coco: Dict[str, Any], patch_size: int) -> None:
 
 
 def test_coco_documents_pass_a_strict_schema_check_and_ids_are_stable(
-    split_dataset: Tuple[MapcvConfig, List[Feature]], tmp_path: Path
+    split_dataset: tuple[MapcvConfig, list[Feature]], tmp_path: Path
 ) -> None:
     config, _ = split_dataset
     staging = tmp_path / "copy"
     import shutil
 
     shutil.copytree(config.writer.staging_dir, staging)
-    seen: Dict[int, Dict[str, Any]] = {}
+    seen: dict[int, dict[str, Any]] = {}
     for name in ("train", "val", "test"):
         coco = load_coco(staging / "annotations" / f"instances_{name}.json")
         strict_coco_check(coco, PATCH)
@@ -630,12 +629,12 @@ def test_coco_documents_pass_a_strict_schema_check_and_ids_are_stable(
 
 
 def test_instance_summary_counts_objects_per_class(
-    split_dataset: Tuple[MapcvConfig, List[Feature]],
+    split_dataset: tuple[MapcvConfig, list[Feature]],
 ) -> None:
     config, _ = split_dataset
     staging = config.writer.staging_dir
     manifest = Manifest.load(staging / "manifest.json")
-    by_image: Dict[int, List[Dict[str, Any]]] = {}
+    by_image: dict[int, list[dict[str, Any]]] = {}
     for name in ("train", "val", "test"):
         for image_id, anns in annotations_by_image(
             load_coco(staging / "annotations" / f"instances_{name}.json")
@@ -643,7 +642,7 @@ def test_instance_summary_counts_objects_per_class(
             by_image[image_id] = anns
     assert any(not entry["summary"]["class_objects"] for entry in manifest.patches)
     for index, entry in enumerate(manifest.patches):
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for ann in by_image.get(index + 1, []):
             counts[str(ann["category_id"])] = counts.get(str(ann["category_id"]), 0) + 1
         assert entry["summary"]["class_objects"] == dict(
@@ -802,7 +801,7 @@ def test_min_visible_and_min_area_filter_instances(tmp_path: Path) -> None:
     write_labels(tmp_path / "labels.geojson", [Feature(square, "building"), Feature(sliver, "car")])
     valid = make_valid_mask("full")
 
-    def kept(options: Dict[str, Any], name: str) -> List[Tuple[int, int, int]]:
+    def kept(options: dict[str, Any], name: str) -> list[tuple[int, int, int]]:
         """(patch column, class, area) of every instance, sorted."""
         config = instance_config(
             tmp_path, instance=options, sampler={"edge_strategy": "drop"}, staging=name
@@ -989,7 +988,7 @@ def test_pixel_centres_on_an_edge_follow_gdal_in_shifted_patches(all_touched: bo
     assert compared > 100
 
 
-def write_geotiff(directory: Path, rotation: float) -> Tuple[Any, Dict[str, float]]:
+def write_geotiff(directory: Path, rotation: float) -> tuple[Any, dict[str, float]]:
     """A 400 x 300 px RGB UTM GeoTIFF near Paris with a NoData (0) block, and a region in it."""
     import rasterio
     from pyproj import Transformer
@@ -1035,7 +1034,7 @@ def test_geotiff_masks_equal_rasterio_in_the_file_crs(tmp_path: Path, rotation: 
     rng = random.Random(1)
     west, south = region["west"], region["south"]
     dx, dy = region["east"] - west, region["north"] - south
-    features: List[Dict[str, Any]] = []
+    features: list[dict[str, Any]] = []
     for index in range(14):
         fx, fy = rng.uniform(0.0, 0.9), rng.uniform(0.0, 0.9)
         size = rng.uniform(0.05, 0.25)
@@ -1077,7 +1076,7 @@ def test_geotiff_masks_equal_rasterio_in_the_file_crs(tmp_path: Path, rotation: 
         for feature in features
     ]
     # Where the dataset raster starts in the file (a whole number of pixels), for NoData.
-    a, b, c, d, e, f = manifest.source.transform or (0.0,) * 6
+    _a, _b, c, _d, _e, f = manifest.source.transform or (0.0,) * 6
     t = file_transform
     det = t.a * t.e - t.b * t.d
     offset_col = round(((c - t.c) * t.e - (f - t.f) * t.b) / det)
@@ -1172,7 +1171,7 @@ def test_a_patch_without_labels_has_no_instances_and_a_zero_id_mask(tmp_path: Pa
 # ── determinism, resuming, stratification ───────────────────────────────────
 
 
-def snapshot(staging: Path) -> Dict[str, bytes]:
+def snapshot(staging: Path) -> dict[str, bytes]:
     return {
         path.relative_to(staging).as_posix(): path.read_bytes()
         for path in sorted(staging.rglob("*"))
@@ -1243,7 +1242,7 @@ def test_split_after_generation_rebuilds_the_coco_files(tmp_path: Path) -> None:
 
 
 def test_stratification_uses_instance_classes_and_balances_them(tmp_path: Path) -> None:
-    def entry(objects: Dict[str, int]) -> Any:
+    def entry(objects: dict[str, int]) -> Any:
         return {"summary": {"class_objects": objects, "empty_ratio": 0.0}}
 
     assert _stratum(entry({})) == (0, "")
@@ -1254,7 +1253,7 @@ def test_stratification_uses_instance_classes_and_balances_them(tmp_path: Path) 
     )
     manifest = generate(config)
     test = set((config.writer.staging_dir / "splits" / "test.txt").read_text().split())
-    strata: Dict[Any, List[bool]] = {}
+    strata: dict[Any, list[bool]] = {}
     for entry_ in manifest.patches:
         strata.setdefault(_stratum(entry_), []).append(manifest.patch_name(entry_) in test)
     assert len(strata) > 1
@@ -1263,7 +1262,7 @@ def test_stratification_uses_instance_classes_and_balances_them(tmp_path: Path) 
 
 
 def test_manifest_records_the_instance_target(
-    split_dataset: Tuple[MapcvConfig, List[Feature]],
+    split_dataset: tuple[MapcvConfig, list[Feature]],
 ) -> None:
     config, _ = split_dataset
     manifest = Manifest.load(config.writer.staging_dir / "manifest.json")
@@ -1377,8 +1376,8 @@ def test_kml_labels_work_for_instances(tmp_path: Path) -> None:
 # ── config validation, factories, the large-feature warning ─────────────────
 
 
-def _raw(tmp_path: Path, **changes: Any) -> Dict[str, Any]:
-    data: Dict[str, Any] = {
+def _raw(tmp_path: Path, **changes: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "task": "instance",
         "region": {"west": 4.93, "south": 52.37, "east": 4.95, "north": 52.38},
         "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite"},
@@ -1421,7 +1420,7 @@ def test_instance_defaults(tmp_path: Path) -> None:
     ],
 )
 def test_invalid_instance_configs_fail_clearly(
-    tmp_path: Path, changes: Dict[str, Any], message: str
+    tmp_path: Path, changes: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         MapcvConfig.model_validate(_raw(tmp_path, **changes))
@@ -1483,8 +1482,8 @@ def tile_server() -> Iterator[str]:
         def log_message(self, *args: object) -> None:
             pass
 
-        def do_GET(self) -> None:  # noqa: N802 - http.server API
-            z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
+        def do_GET(self) -> None:
+            _z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
             buffer = io.BytesIO()
             Image.new("RGB", (256, 256), (40 + x % 7 * 20, 60 + y % 5 * 30, 90)).save(buffer, "PNG")
             body = buffer.getvalue()

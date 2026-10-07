@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -231,7 +232,7 @@ def test_basic_grid_shape_3channel() -> None:
 def test_basic_grid_shape_single_channel() -> None:
     img = np.full((32, 32), 200, dtype=np.uint8)
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
-    patches, masks, meta = sample_patches(img, None, cfg)
+    patches, _masks, _meta = sample_patches(img, None, cfg)
     assert patches.shape == (16, 8, 8)
 
 
@@ -239,7 +240,7 @@ def test_mask_returned_when_provided() -> None:
     img = _solid_strip(32, 32, 1)
     msk = np.ones((32, 32), dtype=np.uint8)
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
-    patches, masks, meta = sample_patches(img, msk, cfg)
+    patches, masks, _meta = sample_patches(img, msk, cfg)
     assert masks is not None
     assert masks.shape == (patches.shape[0], 8, 8)
 
@@ -267,7 +268,7 @@ def test_pad_mode_zero_fills_with_zeros() -> None:
 def test_drop_strategy_no_partial_patches() -> None:
     img = _solid_strip(10, 10, 1)
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
-    patches, _, meta = sample_patches(img, None, cfg)
+    _patches, _, meta = sample_patches(img, None, cfg)
     for m in meta:
         assert not m["padded"]
 
@@ -275,7 +276,7 @@ def test_drop_strategy_no_partial_patches() -> None:
 def test_shift_strategy_all_in_bounds() -> None:
     img = _solid_strip(10, 10, 1)
     cfg = SamplerConfig(patch_size=8, edge_strategy="shift")
-    patches, _, meta = sample_patches(img, None, cfg)
+    _patches, _, meta = sample_patches(img, None, cfg)
     for m in meta:
         assert m["row"] + 8 <= 10 and m["col"] + 8 <= 10
         assert not m["padded"]
@@ -286,7 +287,7 @@ def test_max_empty_ratio_filters_black_patches() -> None:
     img = np.zeros((8, 16, 3), dtype=np.uint8)
     img[:, 8:, :] = 128
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop", max_empty_ratio=0.5)
-    patches, _, meta = sample_patches(img, None, cfg)
+    _patches, _, meta = sample_patches(img, None, cfg)
     # Patch at col=0 is all black -> filtered out.
     assert len(meta) == 1
     assert meta[0]["col"] == 8
@@ -297,7 +298,7 @@ def test_min_label_ratio_filters_unlabeled_patches() -> None:
     msk = np.zeros((8, 16), dtype=np.uint8)
     msk[:, 8:] = 1  # only right half labeled
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop", min_label_ratio=0.5)
-    patches, masks, meta = sample_patches(img, msk, cfg)
+    _patches, _masks, meta = sample_patches(img, msk, cfg)
     assert len(meta) == 1
     assert meta[0]["col"] == 8
 
@@ -305,7 +306,7 @@ def test_min_label_ratio_filters_unlabeled_patches() -> None:
 def test_no_filters_keeps_all_patches() -> None:
     img = np.zeros((8, 16, 1), dtype=np.uint8)
     cfg = SamplerConfig(patch_size=8, edge_strategy="drop")
-    patches, _, meta = sample_patches(img, None, cfg)
+    _patches, _, meta = sample_patches(img, None, cfg)
     # max_empty_ratio=1.0 by default: black patches are not filtered.
     assert len(meta) == 2
 
@@ -340,7 +341,7 @@ def test_empty_result_with_mask() -> None:
     img = np.zeros((8, 8), dtype=np.uint8)
     msk = np.zeros((8, 8), dtype=np.uint8)
     cfg = SamplerConfig(patch_size=4, edge_strategy="drop", max_empty_ratio=0.0)
-    patches, masks, meta = sample_patches(img, msk, cfg)
+    patches, masks, _meta = sample_patches(img, msk, cfg)
     assert patches.shape == (0, 4, 4)
     assert masks is not None and masks.shape == (0, 4, 4)
 
@@ -463,9 +464,9 @@ def test_min_label_ratio_does_not_count_ignored_pixels() -> None:
 class _RecordingWindow:
     """Annotates a patch with its anchor and records what the sampler passes in."""
 
-    def __init__(self, reject: Tuple[int, int] = (-1, -1)) -> None:
+    def __init__(self, reject: tuple[int, int] = (-1, -1)) -> None:
         self.reject = reject
-        self.calls: List[Tuple[int, int, int, str, Optional[Tuple[int, ...]], float]] = []
+        self.calls: list[tuple[int, int, int, str, tuple[int, ...] | None, float]] = []
 
     def annotate(
         self,
@@ -473,17 +474,17 @@ class _RecordingWindow:
         col: int,
         patch_size: int,
         pad_mode: str,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
-    ) -> Tuple[int, int]:
+        valid_patch: npt.NDArray[np.bool_] | None,
+    ) -> tuple[int, int]:
         shape = None if valid_patch is None else tuple(valid_patch.shape)
         self.calls.append((row, col, patch_size, pad_mode, shape, -1.0))
         return (row, col)
 
-    def accepts(self, annotation: Tuple[int, int], min_label_ratio: float) -> bool:
+    def accepts(self, annotation: tuple[int, int], min_label_ratio: float) -> bool:
         assert min_label_ratio == 0.25
         return annotation != self.reject
 
-    def collate(self, annotations: Sequence[Tuple[int, int]], patch_size: int) -> None:
+    def collate(self, annotations: Sequence[tuple[int, int]], patch_size: int) -> None:
         raise AssertionError("the sampler does not collate")
 
 
@@ -542,7 +543,7 @@ def test_annotated_sampling_without_patches_returns_empty_arrays() -> None:
 @pytest.mark.parametrize("ignore_index", [None, 255])
 @pytest.mark.parametrize("min_label_ratio", [0.0, 0.3])
 def test_mask_sampling_is_the_annotated_sampler_with_a_mask_window(
-    ignore_index: Optional[int], min_label_ratio: float
+    ignore_index: int | None, min_label_ratio: float
 ) -> None:
     rng = np.random.default_rng(5)
     image = rng.integers(0, 256, size=(13, 11, 3), dtype=np.uint8)

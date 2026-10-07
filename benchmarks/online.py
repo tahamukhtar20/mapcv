@@ -14,14 +14,14 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from benchmarks.measure import ROOT, mapcv_generate_command, run_process
 
 QUICKSTART = ROOT / "examples" / "quickstart"
 
 
-def run_online(workdir: Path | None = None) -> Dict[str, Any]:
+def run_online(workdir: Path | None = None) -> dict[str, Any]:
     """Run ``examples/quickstart`` once and return timings and a few sanity numbers."""
     if not QUICKSTART.is_dir():
         return {"status": "skipped", "problems": [], "reason": f"{QUICKSTART} not found"}

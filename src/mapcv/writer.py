@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -77,7 +77,7 @@ class WriterConfig(BaseModel):
     stack_sources: bool = False
 
     @model_validator(mode="after")
-    def _world_files_need_a_png_or_jpg(self) -> "WriterConfig":
+    def _world_files_need_a_png_or_jpg(self) -> WriterConfig:
         if (
             self.world_files
             and self.image_format not in ("png", "jpg")
@@ -93,18 +93,18 @@ class WriterConfig(BaseModel):
 
 def _entry(
     image_name: str,
-    mask_name: Optional[str],
+    mask_name: str | None,
     row: int,
     col: int,
     padded: bool,
     chunk: int,
-    counts: Optional[Dict[str, int]],
+    counts: dict[str, int] | None,
     empty_ratio: float,
-    extra_files: Optional[Dict[str, str]] = None,
+    extra_files: dict[str, str] | None = None,
     images_dir: str = IMAGES_DIR,
     masks_dir: str = MASKS_DIR,
     image_key: str = "image",
-    values: Optional[Dict[str, Any]] = None,
+    values: dict[str, Any] | None = None,
 ) -> ManifestEntry:
     files = {image_key: f"{images_dir}/{image_name}"}
     summary = PatchSummary(empty_ratio=empty_ratio)
@@ -119,7 +119,7 @@ def _entry(
     return ManifestEntry(row=row, col=col, padded=padded, chunk=chunk, files=files, summary=summary)
 
 
-def _class_counts(mask: npt.NDArray[Any]) -> Optional[Dict[str, int]]:
+def _class_counts(mask: npt.NDArray[Any]) -> dict[str, int] | None:
     """Pixels per class ID, keys ascending; ``None`` for a float mask (a regression target)."""
     if mask.dtype.kind not in "biu":
         return None
@@ -133,7 +133,7 @@ def _class_counts(mask: npt.NDArray[Any]) -> Optional[Dict[str, int]]:
     return {str(int(value)): int(count) for value, count in zip(values, counts)}
 
 
-def _value_stats(target: npt.NDArray[Any]) -> Dict[str, Any]:
+def _value_stats(target: npt.NDArray[Any]) -> dict[str, Any]:
     """Statistics of a float target patch (regression): pixels with a value and their
     minimum, maximum and mean (computed in float64)."""
     values = target[np.isfinite(target)].astype(np.float64)
@@ -172,8 +172,8 @@ def _check_masks(masks: Any, count: int, mask_format: str) -> None:
 
 
 def _mask_nodata(
-    ignore_index: Optional[int], dtype: "np.dtype[Any]", nan_marks_missing: bool = False
-) -> Optional[float]:
+    ignore_index: int | None, dtype: np.dtype[Any], nan_marks_missing: bool = False
+) -> float | None:
     """The ``GDAL_NODATA`` of a GeoTIFF mask: its ``ignore_index`` (pixels without imagery),
     or, with ``nan_marks_missing`` (regression targets), ``NaN`` for a float mask."""
     if ignore_index is None:
@@ -185,7 +185,7 @@ def _mask_nodata(
     return float(ignore_index)
 
 
-def _image_nodata(dtype: "np.dtype[Any]", source: SourceRecord) -> Optional[float]:
+def _image_nodata(dtype: np.dtype[Any], source: SourceRecord) -> float | None:
     """The ``GDAL_NODATA`` of a GeoTIFF image of ``source``.
 
     A GeoTIFF source's own no-data value (``fingerprint.nodata``) when it has one the
@@ -205,7 +205,7 @@ def _image_nodata(dtype: "np.dtype[Any]", source: SourceRecord) -> Optional[floa
     return float("nan") if dtype.kind == "f" else None
 
 
-def _georeference(manifest: Manifest) -> Tuple[int, bool]:
+def _georeference(manifest: Manifest) -> tuple[int, bool]:
     """EPSG code of the source CRS and whether it is geographic."""
     crs = manifest.source.crs
     if crs is None:
@@ -216,12 +216,12 @@ def _georeference(manifest: Manifest) -> Tuple[int, bool]:
 
 def _write_geotiffs(
     patches: npt.NDArray[Any],
-    names: List[str],
+    names: list[str],
     directory: Path,
-    meta: List[PatchMeta],
+    meta: list[PatchMeta],
     manifest: Manifest,
-    nodata: Optional[float],
-    band_names: Optional[List[str]],
+    nodata: float | None,
+    band_names: list[str] | None,
 ) -> None:
     """Write ``(N, H, W)`` or ``(N, H, W, C)`` patches as GeoTIFFs georeferenced from ``meta``."""
     epsg, geographic = _georeference(manifest)
@@ -245,7 +245,7 @@ def _write_geotiffs(
 
 
 def _write_world_files(
-    directory: Path, stems: List[str], suffix: str, meta: List[PatchMeta], manifest: Manifest
+    directory: Path, stems: list[str], suffix: str, meta: list[PatchMeta], manifest: Manifest
 ) -> None:
     for stem, item in zip(stems, meta):
         text = world_file_text(manifest.transform_at(item["row"], item["col"]))
@@ -254,10 +254,10 @@ def _write_world_files(
 
 def _write_python_masks(
     masks: npt.NDArray[Any],
-    stems: List[str],
+    stems: list[str],
     directory: Path,
     config: WriterConfig,
-    meta: List[PatchMeta],
+    meta: list[PatchMeta],
     manifest: Manifest,
 ) -> None:
     """Masks the Rust PNG writer does not take: NPY, GeoTIFF and 16-bit or NPY-image PNG."""
@@ -282,7 +282,7 @@ def _write_python_masks(
 
 
 def _write_npy_images(
-    images: npt.NDArray[Any], stems: List[str], directory: Path, time_steps: Optional[int] = None
+    images: npt.NDArray[Any], stems: list[str], directory: Path, time_steps: int | None = None
 ) -> None:
     for stem, image in zip(stems, images):
         channels_first = image[np.newaxis, ...] if image.ndim == 2 else np.moveaxis(image, -1, 0)
@@ -294,8 +294,8 @@ def _write_npy_images(
 
 def write_patches(
     image_patches: npt.NDArray[Any],
-    mask_patches: Optional[npt.NDArray[Any]],
-    meta: List[PatchMeta],
+    mask_patches: npt.NDArray[Any] | None,
+    meta: list[PatchMeta],
     config: WriterConfig,
     manifest: Manifest,
     chunk_index: int = 0,
@@ -303,9 +303,9 @@ def write_patches(
     images_dir: str = IMAGES_DIR,
     masks_dir: str = MASKS_DIR,
     image_key: str = "image",
-    source: Optional[SourceRecord] = None,
-    band_names: Optional[List[str]] = None,
-    time_steps: Optional[int] = None,
+    source: SourceRecord | None = None,
+    band_names: list[str] | None = None,
+    time_steps: int | None = None,
 ) -> None:
     """Write patches to ``Images/`` and ``Masks/`` and append their entries to ``manifest``.
 
@@ -359,7 +359,7 @@ def write_patches(
     if mask_patches is not None:
         masks_path.mkdir(parents=True, exist_ok=True)
 
-    counts: List[Optional[Dict[str, int]]] = [None] * len(meta)
+    counts: list[dict[str, int] | None] = [None] * len(meta)
     if rust_images:
         results = _write_patch_files(
             np.ascontiguousarray(image_patches),
@@ -402,14 +402,14 @@ def write_patches(
             for item, image in zip(meta, image_patches)
         ]
 
-    stats: List[Optional[Dict[str, Any]]] = [None] * len(meta)
+    stats: list[dict[str, Any] | None] = [None] * len(meta)
     if mask_patches is not None and not rust_masks:
         _write_python_masks(mask_patches, stems, masks_path, config, meta, manifest)
         counts = [_class_counts(mask) for mask in mask_patches]
         if mask_patches.dtype.kind == "f":
             stats = [_value_stats(mask) for mask in mask_patches]
 
-    world: List[Dict[str, str]] = [{} for _ in meta]
+    world: list[dict[str, str]] = [{} for _ in meta]
     if config.world_files:
         if rust_images:
             _write_world_files(
@@ -446,7 +446,7 @@ def write_patches(
 
 def write_source_images(
     image_patches: npt.NDArray[Any],
-    meta: List[PatchMeta],
+    meta: list[PatchMeta],
     config: WriterConfig,
     manifest: Manifest,
     start: int,
@@ -454,7 +454,7 @@ def write_source_images(
     *,
     source: SourceRecord,
     images_dir: str,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Write a further imagery source's patches, numbered like the first source's.
 
     ``image_patches`` are the source's patches at the positions in ``meta`` (read on

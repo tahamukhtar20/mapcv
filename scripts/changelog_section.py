@@ -10,7 +10,9 @@ from pathlib import Path
 def changelog_section(text: str, version: str) -> str:
     """Return the body under ``## [version]``, up to the next ``## [`` heading."""
     match = re.search(
-        rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, flags=re.M | re.S
+        rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
     )
     if match is None or not match.group(1).strip():
         raise ValueError(f"CHANGELOG.md has no section for version {version}")

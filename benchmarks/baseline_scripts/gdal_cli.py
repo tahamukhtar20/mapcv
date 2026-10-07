@@ -27,7 +27,6 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List
 
 TILE = 256
 HALF = math.pi * 6378137.0  # half the Web Mercator world width, in metres
@@ -162,7 +161,7 @@ def main() -> None:
     images.mkdir(exist_ok=True)
     masks.mkdir(exist_ok=True)
     translate = tool("gdal_translate")
-    jobs: List[List[str]] = []
+    jobs: list[list[str]] = []
     for row in range(0, height - size + 1, step):
         for col in range(0, width - size + 1, step):
             name = f"r{row}_c{col}.png"

@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import math
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -43,19 +43,19 @@ IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 # ---------------------------------------------------------------------------
 
 
-def _images(shape: Tuple[int, ...], dtype: Any = np.uint8) -> npt.NDArray[Any]:
+def _images(shape: tuple[int, ...], dtype: Any = np.uint8) -> npt.NDArray[Any]:
     return np.zeros(shape, dtype=dtype)
 
 
-def _meta(n: int) -> List[Tuple[int, int, bool]]:
+def _meta(n: int) -> list[tuple[int, int, bool]]:
     return [(0, i, False) for i in range(n)]
 
 
 def _write(
     tmp_path: Path,
     images: Any,
-    masks: Optional[Any] = None,
-    meta: Optional[List[Tuple[int, int, bool]]] = None,
+    masks: Any | None = None,
+    meta: list[tuple[int, int, bool]] | None = None,
     start_idx: int = 0,
     image_format: str = "png",
     jpg_quality: int = 95,
@@ -91,14 +91,14 @@ def test_write_patches_valid_input_still_writes(tmp_path: Path) -> None:
         (1, 0, 0, 3),  # zero patch size
     ],
 )
-def test_write_patches_rejects_bad_image_shape(tmp_path: Path, shape: Tuple[int, ...]) -> None:
+def test_write_patches_rejects_bad_image_shape(tmp_path: Path, shape: tuple[int, ...]) -> None:
     with pytest.raises(ValueError, match="image_patches"):
         _write(tmp_path, _images(shape))
     assert not any(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("shape", [(2, 4, 4), (4, 4, 3), (1, 2, 4, 4, 3)])
-def test_write_patches_rejects_wrong_dimensions(tmp_path: Path, shape: Tuple[int, ...]) -> None:
+def test_write_patches_rejects_wrong_dimensions(tmp_path: Path, shape: tuple[int, ...]) -> None:
     with pytest.raises(ValueError, match=r"image_patches must be a uint8 array shaped"):
         _write(tmp_path, _images(shape), meta=_meta(shape[0]))
 
@@ -131,7 +131,7 @@ def test_write_patches_rejects_meta_length_mismatch(tmp_path: Path, n_meta: int)
     ],
 )
 def test_write_patches_rejects_mask_shape_mismatch(
-    tmp_path: Path, mask_shape: Tuple[int, ...]
+    tmp_path: Path, mask_shape: tuple[int, ...]
 ) -> None:
     with pytest.raises(ValueError, match=r"mask_patches must be shaped \(2, 4, 4\)"):
         _write(tmp_path, _images((2, 4, 4, 3)), _images(mask_shape))
@@ -201,7 +201,7 @@ def _png(width: int, height: int) -> bytes:
 
 
 @pytest.mark.parametrize("size", [(1, 1), (512, 512), (256, 255), (255, 256)])
-def test_stitch_rejects_tiles_that_are_not_256px(size: Tuple[int, int]) -> None:
+def test_stitch_rejects_tiles_that_are_not_256px(size: tuple[int, int]) -> None:
     with pytest.raises(ValueError, match="every tile must be 256x256"):
         stitch_tiles([(TileIndex(0, 0, 1), _png(*size))])
 
@@ -285,13 +285,13 @@ def test_rasterize_negative_size_is_a_normal_error() -> None:
         (10, 10, 4, 0),
     ],
 )
-def test_grid_anchors_reject_zero_sizes(args: Tuple[int, int, int, int]) -> None:
+def test_grid_anchors_reject_zero_sizes(args: tuple[int, int, int, int]) -> None:
     with pytest.raises(ValueError, match="> 0"):
         grid_sample_anchors(*args)
 
 
 @pytest.mark.parametrize("args", [(0, 10, 4, 5), (10, 0, 4, 5), (10, 10, 0, 5)])
-def test_random_anchors_reject_zero_sizes(args: Tuple[int, int, int, int]) -> None:
+def test_random_anchors_reject_zero_sizes(args: tuple[int, int, int, int]) -> None:
     with pytest.raises(ValueError, match="> 0"):
         random_sample_anchors(*args)
 

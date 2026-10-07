@@ -28,7 +28,7 @@ import io
 import json
 import tarfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -47,7 +47,7 @@ def _load(root: Path) -> Manifest:
     return Manifest.load(path)
 
 
-def _split_lists(root: Path, manifest: Manifest) -> Dict[str, List[ManifestEntry]]:
+def _split_lists(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry]]:
     """Each split's entries in its list's order (``all``, in manifest order, without lists)."""
     splits = splits_of(root)
     if splits == ("all",):
@@ -68,9 +68,9 @@ def _check_out(root: Path, out: Path) -> None:
         raise ValueError("export to a folder outside the dataset folder")
 
 
-def _coco_by_image(root: Path) -> Dict[str, List[Dict[str, Any]]]:
+def _coco_by_image(root: Path) -> dict[str, list[dict[str, Any]]]:
     """Detection and instance annotations by image file name, from the COCO files."""
-    found: Dict[str, List[Dict[str, Any]]] = {}
+    found: dict[str, list[dict[str, Any]]] = {}
     for path in sorted((root / "annotations").glob("instances_*.json")):
         coco = json.loads(path.read_text(encoding="utf-8"))
         names = {image["id"]: image["file_name"] for image in coco["images"]}
@@ -83,9 +83,9 @@ def _sample_json(
     manifest: Manifest,
     entry: ManifestEntry,
     split: str,
-    objects: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    objects: dict[str, list[dict[str, Any]]] | None = None,
 ) -> bytes:
-    record: Dict[str, Any] = {
+    record: dict[str, Any] = {
         "name": manifest.patch_name(entry),
         "row": entry["row"],
         "col": entry["col"],
@@ -105,8 +105,8 @@ def _members(
     entry: ManifestEntry,
     root: Path,
     split: str,
-    objects: Optional[Dict[str, List[Dict[str, Any]]]],
-) -> List[tuple[str, bytes]]:
+    objects: dict[str, list[dict[str, Any]]] | None,
+) -> list[tuple[str, bytes]]:
     stem = Path(manifest.patch_name(entry)).stem
     first = manifest.sources[0].name
     members = []
@@ -131,7 +131,7 @@ def _add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
     tar.addfile(info, io.BytesIO(data))
 
 
-def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> List[Path]:
+def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> list[Path]:
     """Write the tar shards and ``shards.json``; returns the shards (see the module docs)."""
     if shard_bytes < 1:
         raise ValueError("shard_bytes must be positive")
@@ -139,15 +139,15 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> 
     manifest = _load(root)
     objects = _coco_by_image(root) if manifest.task in ("detection", "instance") else None
     out.mkdir(parents=True, exist_ok=True)
-    index: Dict[str, Any] = {
+    index: dict[str, Any] = {
         "splits": {},
         "manifest_version": manifest.version,
         "task": manifest.task,
     }
-    written: List[Path] = []
+    written: list[Path] = []
     for split, entries in _split_lists(root, manifest).items():
-        shards: List[Dict[str, Any]] = []
-        tar: Optional[tarfile.TarFile] = None
+        shards: list[dict[str, Any]] = []
+        tar: tarfile.TarFile | None = None
         size = 0
         for entry in entries:
             members = _members(manifest, entry, root, split, objects)
@@ -156,7 +156,8 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> 
                 if tar is not None:
                     tar.close()
                 path = out / f"{split}-{len(shards):06d}.tar"
-                tar = tarfile.open(path, "w", format=tarfile.USTAR_FORMAT)
+                # Closed above when the next shard starts, and after the last one.
+                tar = tarfile.open(path, "w", format=tarfile.USTAR_FORMAT)  # noqa: SIM115
                 shards.append({"file": path.name, "samples": 0})
                 written.append(path)
                 size = 0

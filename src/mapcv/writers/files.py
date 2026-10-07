@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
 from mapcv.footprints import FOOTPRINTS_FILENAME, write_footprints
 from mapcv.imagery import RasterMetadata
+from mapcv.manifest import IMAGES_DIR, MASKS_DIR
 from mapcv.sampler import PatchMeta
 from mapcv.splitter import SplitLists
-from mapcv.manifest import IMAGES_DIR, MASKS_DIR
 from mapcv.writer import Manifest, WriterConfig, write_patches, write_source_images
 
 
@@ -31,9 +31,9 @@ class FilesWriter:
     and each entry's ``files`` has one key per source name.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({None, "segmentation", "regression"})
+    TARGET_TYPES: frozenset[str | None] = frozenset({None, "segmentation", "regression"})
 
-    def __init__(self, config: WriterConfig, sources: Optional[List[str]] = None) -> None:
+    def __init__(self, config: WriterConfig, sources: list[str] | None = None) -> None:
         self._config = config
         self._sources = sources
         self._wrote = False
@@ -50,10 +50,10 @@ class FilesWriter:
     def layout(self) -> str:
         return "files"
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         return target_type in self.TARGET_TYPES
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         # Only what changes the files of a patch: a resumed run must write the same kind.
         # ``world_files`` appears only when on, so datasets from before it existed resume.
         block = {
@@ -68,7 +68,7 @@ class FilesWriter:
             block["stack_sources"] = True
         return block
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         if self._config.image_format in ("npy", "tif"):
             return [len(source.bands), patch_size, patch_size]
         return [patch_size, patch_size, 3]
@@ -76,11 +76,11 @@ class FilesWriter:
     def write(
         self,
         images: npt.NDArray[np.generic],
-        annotations: Optional[npt.NDArray[Any]],
-        metadata: List[PatchMeta],
+        annotations: npt.NDArray[Any] | None,
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
-        others: Optional[Dict[str, npt.NDArray[np.generic]]] = None,
+        others: dict[str, npt.NDArray[np.generic]] | None = None,
     ) -> None:
         """Write one chunk; ``others`` holds the further sources' patches by name."""
         if annotations is not None and (
@@ -103,11 +103,11 @@ class FilesWriter:
     def _write_sources(
         self,
         images: npt.NDArray[np.generic],
-        annotations: Optional[npt.NDArray[Any]],
-        metadata: List[PatchMeta],
+        annotations: npt.NDArray[Any] | None,
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
-        others: Dict[str, npt.NDArray[np.generic]],
+        others: dict[str, npt.NDArray[np.generic]],
     ) -> None:
         sources = self._sources or []
         first, rest = sources[0], sources[1:]
@@ -153,11 +153,11 @@ class FilesWriter:
     def _write_stack(
         self,
         images: npt.NDArray[np.generic],
-        annotations: Optional[npt.NDArray[Any]],
-        metadata: List[PatchMeta],
+        annotations: npt.NDArray[Any] | None,
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
-        others: Dict[str, npt.NDArray[np.generic]],
+        others: dict[str, npt.NDArray[np.generic]],
     ) -> None:
         """One file per patch holding every source (``writer.stack_sources``).
 
@@ -179,7 +179,7 @@ class FilesWriter:
             time_steps=len(sources),
         )
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         if not self._config.footprints:
             return
         if manifest.upgraded_from is not None and not self._wrote:

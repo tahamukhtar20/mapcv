@@ -6,7 +6,6 @@ import importlib.util
 import zipfile
 from pathlib import Path
 from types import ModuleType
-from typing import Dict
 
 import pytest
 
@@ -60,7 +59,7 @@ def test_pr_title_policy(title: str, ok: bool) -> None:
     assert bool(pattern.fullmatch(title)) is ok
 
 
-def _wheel(path: Path, files: Dict[str, bytes]) -> Path:
+def _wheel(path: Path, files: dict[str, bytes]) -> Path:
     """Write a minimal wheel holding ``files`` and a RECORD with their hashes."""
     record_hash = _load("check_installed_wheel").record_hash
     record = "".join(f"{name},{record_hash(data)},{len(data)}\n" for name, data in files.items())

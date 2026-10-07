@@ -12,6 +12,7 @@ shifted mask.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import random
 import re
@@ -21,16 +22,17 @@ import struct
 import sys
 import threading
 import warnings
+from collections.abc import Iterator, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
-import shapely
 import shapefile
+import shapely
 import yaml
 from PIL import Image
 from pydantic import ValidationError
@@ -63,8 +65,8 @@ def flat(text: str) -> str:
 
 
 def load(
-    path: Path, field: Optional[str] = "class", **kwargs: Any
-) -> Tuple[List[GeomWithClass], Dict[str, int], List[str]]:
+    path: Path, field: str | None = "class", **kwargs: Any
+) -> tuple[list[GeomWithClass], dict[str, int], list[str]]:
     """``load_vector_labels`` plus the text of the warnings it raised."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -92,13 +94,13 @@ def assert_same(got: Sequence[GeomWithClass], expected: Sequence[GeomWithClass])
         )
 
 
-def reference(field: Optional[str] = "class", points: bool = False, path: Path = GEOJSON) -> Any:
+def reference(field: str | None = "class", points: bool = False, path: Path = GEOJSON) -> Any:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return parse_geojson(path.read_bytes(), field, None, points=points)
 
 
-def skipped(messages: List[str]) -> str:
+def skipped(messages: list[str]) -> str:
     """The text of the skipped-feature warning, without the format name."""
     assert len(messages) == 1
     return messages[0].split(": ", 1)[1]
@@ -113,7 +115,7 @@ MIXED += ["labels_32633.parquet"]
 @pytest.mark.parametrize("name", MIXED)
 @pytest.mark.parametrize("field", ["class", "rank", "score", None])
 @pytest.mark.parametrize("points", [False, True])
-def test_mixed_formats_match_the_geojson(name: str, field: Optional[str], points: bool) -> None:
+def test_mixed_formats_match_the_geojson(name: str, field: str | None, points: bool) -> None:
     if name.endswith(".parquet"):
         pytest.importorskip("pyarrow")
     expected, expected_map = reference(field, points)
@@ -133,7 +135,7 @@ def test_fixture_covers_the_hard_cases() -> None:
     holes = [len(polygon.interiors) for g, _ in geometries for polygon in _polygons(g)]
     assert max(holes) >= 1
     # A polygon lying inside a hole of its own multipolygon (the hard case for Shapefiles).
-    nested = [g for g, _ in geometries if g.geom_type == "MultiPolygon" and len(g.geoms) == 2][0]
+    nested = next(g for g, _ in geometries if g.geom_type == "MultiPolygon" and len(g.geoms) == 2)
     assert (
         any(nested.geoms[0].interiors[0].coords)
         and nested.geoms[0].contains(nested.geoms[1]) is False
@@ -141,7 +143,7 @@ def test_fixture_covers_the_hard_cases() -> None:
     assert nested.geoms[1].within(Polygon(nested.geoms[0].interiors[0]))
 
 
-def _polygons(geometry: Any) -> List[Polygon]:
+def _polygons(geometry: Any) -> list[Polygon]:
     if geometry.geom_type == "Polygon":
         return [geometry]
     if geometry.geom_type == "MultiPolygon":
@@ -193,7 +195,7 @@ def test_an_unknown_label_field_is_an_error_listing_the_columns(name: str) -> No
 
 @pytest.mark.parametrize("name", ["polygons.shp", "polygons_32633.shp", "polygons_latin1.shp"])
 @pytest.mark.parametrize("field", ["class", "rank", "score", None])
-def test_shapefile_polygons_match_the_geojson(name: str, field: Optional[str]) -> None:
+def test_shapefile_polygons_match_the_geojson(name: str, field: str | None) -> None:
     expected, expected_map = reference(field)
     got, class_map, messages = load(DATA / name, field)
     assert_same(got, expected)
@@ -439,7 +441,7 @@ def rewrite_rings(source: Path, target: Path, reverse: bool) -> Path:
             writer.field(name, kind, size, decimals)
         for shape, record in zip(shapes, records):
             bounds = [*shape.parts, len(shape.points)]
-            rings = [shape.points[a:b] for a, b in zip(bounds, bounds[1:])]
+            rings = [shape.points[a:b] for a, b in itertools.pairwise(bounds)]
             writer.poly([ring[::-1] if reverse else ring for ring in rings])
             writer.record(*record)
     shutil.copy(source.with_suffix(".prj"), target.with_suffix(".prj"))
@@ -523,8 +525,8 @@ def gpkg_blob(
 
 def make_gpkg(
     path: Path,
-    rows: Sequence[Tuple[Optional[bytes], Optional[str]]],
-    srs: Sequence[Tuple[int, str, str, int, str]] = (
+    rows: Sequence[tuple[bytes | None, str | None]],
+    srs: Sequence[tuple[int, str, str, int, str]] = (
         (4326, "WGS 84", "EPSG", 4326, "undefined"),
         (-1, "Undefined Cartesian SRS", "NONE", -1, "undefined"),
         (0, "Undefined geographic SRS", "NONE", 0, "undefined"),
@@ -579,7 +581,7 @@ def test_geopackage_header_variants(
 
 
 def test_empty_and_null_geometries_are_ignored(tmp_path: Path) -> None:
-    rows: List[Tuple[Optional[bytes], Optional[str]]] = [
+    rows: list[tuple[bytes | None, str | None]] = [
         (gpkg_blob(SQUARE), "a"),
         (None, "b"),
         (gpkg_blob(Polygon(), empty=True), "c"),
@@ -643,9 +645,9 @@ def test_geopackage_crs_from_the_wkt_definition(tmp_path: Path) -> None:
     ],
 )
 def test_geopackage_with_an_unknown_crs_is_an_error(
-    tmp_path: Path, srs_id: int, srs: Optional[List[Tuple[int, str, str, int, str]]], message: str
+    tmp_path: Path, srs_id: int, srs: list[tuple[int, str, str, int, str]] | None, message: str
 ) -> None:
-    extra: Tuple[Tuple[int, str, str, int, str], ...] = (
+    extra: tuple[tuple[int, str, str, int, str], ...] = (
         (4326, "WGS 84", "EPSG", 4326, "undefined"),
         (0, "u", "NONE", 0, "undefined"),
         (-1, "u", "NONE", -1, "undefined"),
@@ -784,7 +786,7 @@ def pq() -> Any:
 
 def rewrite_geo(source: Path, target: Path, change: Any) -> Path:
     """Copy a GeoParquet file with its ``geo`` metadata changed by ``change(geo_dict)``."""
-    import pyarrow.parquet as parquet
+    from pyarrow import parquet
 
     table = parquet.read_table(source)
     geo = json.loads(table.schema.metadata[b"geo"])
@@ -824,7 +826,7 @@ def test_geoparquet_crs_null_is_unknown_and_missing_means_crs84(pq: Any, tmp_pat
     assert class_map == expected_map
 
 
-def _set_crs(geo: Dict[str, Any], crs: Any) -> None:
+def _set_crs(geo: dict[str, Any], crs: Any) -> None:
     column = geo["columns"][geo["primary_column"]]
     if crs is ...:
         column.pop("crs", None)
@@ -857,7 +859,7 @@ def test_malformed_geoparquet_metadata(pq: Any, tmp_path: Path, change: Any, mes
 
 
 def test_geoparquet_primary_column_must_exist(pq: Any, tmp_path: Path) -> None:
-    def change(geo: Dict[str, Any]) -> None:
+    def change(geo: dict[str, Any]) -> None:
         geo["columns"]["nope"] = geo["columns"].pop("geometry")
         geo["primary_column"] = "nope"
 
@@ -1019,7 +1021,7 @@ REGION = {"west": 16.358, "south": 48.188, "east": 16.392, "north": 48.206}
 
 def write_config(
     tmp_path: Path,
-    labels: Dict[str, Any],
+    labels: dict[str, Any],
     url: str = "http://127.0.0.1:9/{z}/{x}/{y}.png",
     **extra: Any,
 ) -> Path:
@@ -1078,7 +1080,7 @@ def test_validate_and_plan_accept_the_new_formats(pq: Any, tmp_path: Path) -> No
         ("labels.parquet", None),
         ("labels_32633.parquet", None),
     ):
-        labels: Dict[str, Any] = {"path": str(DATA / name), "label_field": "class"}
+        labels: dict[str, Any] = {"path": str(DATA / name), "label_field": "class"}
         if layer:
             labels["layer"] = layer
         config = write_config(tmp_path, labels)
@@ -1102,9 +1104,7 @@ def test_validate_shows_the_layer(tmp_path: Path) -> None:
 def test_wizard_reads_a_geopackage_and_asks_for_its_layer(tmp_path: Path) -> None:
     out = tmp_path / "mapcv.yaml"
     path = str(DATA / "labels_2layers.gpkg")
-    answers = (
-        "\n".join(["esri", path, "landuse", "17", "y", "class", "", "256", "./ds", "y"]) + "\n"
-    )
+    answers = f"esri\n{path}\nlanduse\n17\ny\nclass\n\n256\n./ds\ny" + "\n"
     result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers)
     assert result.exit_code == 0, result.output
     config = MapcvConfig.from_yaml(out)
@@ -1232,7 +1232,7 @@ class _NoiseTiles(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
         pixels = np.random.default_rng([z, x, y]).integers(1, 256, (256, 256, 3), dtype=np.uint8)
         buffer = BytesIO()
@@ -1263,9 +1263,9 @@ class Runs:
     def __init__(self, directory: Path, url: str) -> None:
         self.directory = directory
         self.url = url
-        self.done: Dict[str, Tuple[Path, Dict[str, Any]]] = {}
+        self.done: dict[str, tuple[Path, dict[str, Any]]] = {}
 
-    def generate(self, labels: Dict[str, Any], **extra: Any) -> Tuple[Path, Dict[str, Any]]:
+    def generate(self, labels: dict[str, Any], **extra: Any) -> tuple[Path, dict[str, Any]]:
         key = json.dumps([labels, extra], sort_keys=True)
         if key not in self.done:
             directory = self.directory / f"run{len(self.done)}"
@@ -1286,7 +1286,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory, tiles: str) -> Runs:
     return Runs(tmp_path_factory.mktemp("runs"), tiles)
 
 
-def tree(staging: Path) -> Dict[str, bytes]:
+def tree(staging: Path) -> dict[str, bytes]:
     """Every file of a dataset but the manifest, by relative path."""
     return {
         path.relative_to(staging).as_posix(): path.read_bytes()
@@ -1308,18 +1308,18 @@ E2E = [
 @pytest.mark.parametrize("task", ["segmentation", "detection", "instance"])
 @pytest.mark.parametrize("name, equivalent, layer", E2E)
 def test_generate_is_byte_identical_to_the_geojson_run(
-    runs: Runs, name: str, equivalent: str, layer: Optional[str], task: str
+    runs: Runs, name: str, equivalent: str, layer: str | None, task: str
 ) -> None:
     """Images, masks, boxes and splits equal those of the equivalent GeoJSON, byte for byte."""
     if name.endswith(".parquet"):
         pytest.importorskip("pyarrow")
-    extra: Dict[str, Any] = {"task": task}
+    extra: dict[str, Any] = {"task": task}
     if task == "detection":
         extra["detection"] = {"point_box_size": 24, "min_visible": 0.0}
     if task == "instance":
         extra["instance"] = {"min_visible": 0.0}
-    base: Dict[str, Any] = {"label_field": "class"}
-    own: Dict[str, Any] = {"path": str(DATA / name), **base}
+    base: dict[str, Any] = {"label_field": "class"}
+    own: dict[str, Any] = {"path": str(DATA / name), **base}
     if layer:
         own["layer"] = layer
     expected, expected_manifest = runs.generate({"path": str(DATA / equivalent), **base}, **extra)

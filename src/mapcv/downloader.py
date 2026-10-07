@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 import numpy as np
 import numpy.typing as npt
 
 from mapcv._mapcv_rs import (
     TileIndex,
-    fetch_tiles as fetch_tiles_rs,
     snap_bbox,
-    stitch_tiles as stitch_tiles_rs,
-    tile_transform as tile_transform_rs,
     tiles,
 )
+from mapcv._mapcv_rs import (
+    fetch_tiles as fetch_tiles_rs,
+)
+from mapcv._mapcv_rs import (
+    stitch_tiles as stitch_tiles_rs,
+)
+from mapcv._mapcv_rs import (
+    tile_transform as tile_transform_rs,
+)
 
-URL_TEMPLATES: Dict[str, str] = {
+URL_TEMPLATES: dict[str, str] = {
     # Esri
     "esri_satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     "esri_topo": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
@@ -30,7 +36,7 @@ URL_TEMPLATES: Dict[str, str] = {
 _log = logging.getLogger(__name__)
 
 
-def resolve_url_template(url_template: Optional[str], source: Optional[str]) -> str:
+def resolve_url_template(url_template: str | None, source: str | None) -> str:
     """Return a URL template string from an explicit template or a built-in source name."""
     if url_template:
         return url_template
@@ -47,14 +53,14 @@ def download_region(
     east: float,
     north: float,
     zoom: int,
-    url_template: Optional[str] = None,
-    source: Optional[str] = None,
+    url_template: str | None = None,
+    source: str | None = None,
     max_connections: int = 16,
     policy: str = "lenient",
     snap_to_tiles: bool = True,
     max_failed_ratio: float = 0.05,
-    progress: Optional[Callable[[int, int], None]] = None,
-) -> List[Tuple[TileIndex, bytes]]:
+    progress: Callable[[int, int], None] | None = None,
+) -> list[tuple[TileIndex, bytes]]:
     """Fetch all tiles for a bbox at the given zoom and return (tile, bytes) pairs.
 
     policy controls failure handling: "strict" raises on any failure, "lenient"
@@ -103,13 +109,13 @@ def stitch_region(
     east: float,
     north: float,
     zoom: int,
-    url_template: Optional[str] = None,
-    source: Optional[str] = None,
+    url_template: str | None = None,
+    source: str | None = None,
     max_connections: int = 16,
     policy: str = "lenient",
     max_failed_ratio: float = 0.05,
-    progress: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[npt.NDArray[np.uint8], Tuple[float, float, float, float, float, float]]:
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[npt.NDArray[np.uint8], tuple[float, float, float, float, float, float]]:
     """Fetch tiles, decode in parallel, and return a stitched (H, W, 3) image with its transform.
 
     Returns ``(image_array, transform)`` where ``transform`` is the

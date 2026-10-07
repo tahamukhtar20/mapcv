@@ -16,7 +16,7 @@ import re
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_serializer, with_config
 from pydantic_core import to_json
@@ -25,7 +25,7 @@ from typing_extensions import TypedDict
 from mapcv.labels import ClassMap
 
 MANIFEST_VERSION: int = 3
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 # A manifest whose first key is ``"version": 3`` (as mapcv writes it).
 _CURRENT_VERSION_FIRST = re.compile(rf'\s*\{{\s*"version"\s*:\s*{MANIFEST_VERSION}\s*,')
@@ -35,7 +35,7 @@ IMAGES_DIR = "Images"
 MASKS_DIR = "Masks"
 
 
-def mapcv_version() -> Optional[str]:
+def mapcv_version() -> str | None:
     """The installed mapcv version, or ``None`` when running from an uninstalled tree."""
     try:
         return _package_version("mapcv")
@@ -61,11 +61,11 @@ class PatchSummary(TypedDict, total=False):
     Other tasks add their own keys.
     """
 
-    class_pixels: Dict[str, int]
-    class_objects: Dict[str, int]
-    class_coverage: Dict[str, float]
-    labels: List[int]
-    values: Dict[str, Any]
+    class_pixels: dict[str, int]
+    class_objects: dict[str, int]
+    class_coverage: dict[str, float]
+    labels: list[int]
+    values: dict[str, Any]
     region: str
     empty_ratio: float
 
@@ -86,7 +86,7 @@ class ManifestEntry(TypedDict):
     col: int
     padded: bool
     chunk: int
-    files: Dict[str, str]
+    files: dict[str, str]
     summary: PatchSummary
 
 
@@ -104,19 +104,19 @@ class SourceRecord(BaseModel):
 
     name: str = "image"
     source_type: str = "xyz"
-    product_id: Optional[str] = None
-    bands: List[str] = Field(default_factory=list)
-    dtype: Optional[str] = None
-    crs: Optional[str] = None
-    transform: Optional[Transform] = None
-    patch_shape: List[int] = Field(default_factory=list)
+    product_id: str | None = None
+    bands: list[str] = Field(default_factory=list)
+    dtype: str | None = None
+    crs: str | None = None
+    transform: Transform | None = None
+    patch_shape: list[int] = Field(default_factory=list)
     # Identity of the input file (a GeoTIFF's size, time and header hash, or a URL's ETag),
     # so a resumed run refuses a different file. Absent for sources that have none.
-    fingerprint: Optional[Dict[str, Any]] = None
+    fingerprint: dict[str, Any] | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_missing_fingerprint(self, handler: Any) -> Dict[str, Any]:
-        data: Dict[str, Any] = handler(self)
+    def _omit_missing_fingerprint(self, handler: Any) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
         if data.get("fingerprint") is None:
             data.pop("fingerprint", None)
         return data
@@ -134,10 +134,10 @@ class TargetRecord(BaseModel):
 
     type: str
     class_map: ClassMap = Field(default_factory=dict)
-    ignore_index: Optional[int] = None
-    dtype: Optional[str] = None
-    labels: Optional[Dict[str, Any]] = None
-    options: Dict[str, Any] = Field(default_factory=dict)
+    ignore_index: int | None = None
+    dtype: str | None = None
+    labels: dict[str, Any] | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManifestMismatchError(ValueError):
@@ -153,15 +153,15 @@ class Manifest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     version: int = MANIFEST_VERSION
-    mapcv_version: Optional[str] = None
+    mapcv_version: str | None = None
     task: str = "segmentation"
-    sources: List[SourceRecord] = Field(default_factory=list)
-    target: Optional[TargetRecord] = None
-    writer: Optional[Dict[str, Any]] = None
-    sampler: Optional[Dict[str, Any]] = None
-    patches: List[ManifestEntry] = Field(default_factory=list)
+    sources: list[SourceRecord] = Field(default_factory=list)
+    target: TargetRecord | None = None
+    writer: dict[str, Any] | None = None
+    sampler: dict[str, Any] | None = None
+    patches: list[ManifestEntry] = Field(default_factory=list)
 
-    _upgraded_from: Optional[int] = PrivateAttr(default=None)
+    _upgraded_from: int | None = PrivateAttr(default=None)
 
     # ── convenience views ────────────────────────────────────────────────────
 
@@ -178,12 +178,12 @@ class Manifest(BaseModel):
         return self.target.class_map if self.target is not None else {}
 
     @property
-    def ignore_index(self) -> Optional[int]:
+    def ignore_index(self) -> int | None:
         """Mask value of pixels without imagery, or ``None``."""
         return self.target.ignore_index if self.target is not None else None
 
     @property
-    def upgraded_from(self) -> Optional[int]:
+    def upgraded_from(self) -> int | None:
         """The on-disk version (1 or 2) when this manifest was upgraded on load."""
         return self._upgraded_from
 
@@ -218,7 +218,7 @@ class Manifest(BaseModel):
         a, b, c, d, e, f = transform
         return (a, b, c + a * col + b * row, d, e, f + d * col + e * row)
 
-    def patch_bounds(self, entry: ManifestEntry) -> Tuple[float, float, float, float]:
+    def patch_bounds(self, entry: ManifestEntry) -> tuple[float, float, float, float]:
         """``(left, bottom, right, top)`` of a patch in the source CRS."""
         size = (self.sampler or {}).get("patch_size")
         if size is None:
@@ -231,7 +231,7 @@ class Manifest(BaseModel):
     # ── reading and writing ──────────────────────────────────────────────────
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Manifest":
+    def from_dict(cls, data: dict[str, Any]) -> Manifest:
         """Validate a parsed manifest of any supported version, upgrading 1 and 2 to 3.
 
         Raises:
@@ -251,7 +251,7 @@ class Manifest(BaseModel):
         return manifest
 
     @classmethod
-    def load(cls, path: Path) -> "Manifest":
+    def load(cls, path: Path) -> Manifest:
         """Read a version-1, -2 or -3 manifest; older versions are upgraded in memory.
 
         The file is not modified. A version-1 or -2 manifest becomes version 3
@@ -293,11 +293,11 @@ class Manifest(BaseModel):
 # ── upgrading versions 1 and 2 ───────────────────────────────────────────────
 
 
-def _upgrade_entry(entry: Dict[str, Any], has_target: bool) -> Dict[str, Any]:
+def _upgrade_entry(entry: dict[str, Any], has_target: bool) -> dict[str, Any]:
     files = {"image": f"{IMAGES_DIR}/{entry['filename']}"}
     if entry.get("mask_filename"):
         files["mask"] = f"{MASKS_DIR}/{entry['mask_filename']}"
-    summary: Dict[str, Any] = {}
+    summary: dict[str, Any] = {}
     if has_target:
         summary["class_pixels"] = dict(entry.get("per_class_pixel_counts") or {})
     summary["empty_ratio"] = entry.get("empty_ratio", 0.0)
@@ -311,7 +311,7 @@ def _upgrade_entry(entry: Dict[str, Any], has_target: bool) -> Dict[str, Any]:
     }
 
 
-def _upgrade_v2(data: Dict[str, Any]) -> Dict[str, Any]:
+def _upgrade_v2(data: dict[str, Any]) -> dict[str, Any]:
     """A version-1 or -2 manifest in the version-3 shape.
 
     Version 2 recorded ``labels.ignore_index`` only from the 0.3 development
@@ -322,7 +322,7 @@ def _upgrade_v2(data: Dict[str, Any]) -> Dict[str, Any]:
     labels = data.get("labels")
     class_map = data.get("class_map") or {}
     has_masks = any(entry.get("mask_filename") for entry in patches)
-    target: Optional[Dict[str, Any]] = None
+    target: dict[str, Any] | None = None
     if labels is not None or has_masks or class_map:
         settings = dict(labels) if labels is not None else None
         ignore_index = settings.pop("ignore_index", None) if settings is not None else None
@@ -365,7 +365,7 @@ def _upgrade_v2(data: Dict[str, Any]) -> Dict[str, Any]:
 # ── resuming ─────────────────────────────────────────────────────────────────
 
 
-def _transforms_differ(a: Optional[Transform], b: Optional[Transform]) -> bool:
+def _transforms_differ(a: Transform | None, b: Transform | None) -> bool:
     if a is None or b is None:
         return a != b
     return not all(math.isclose(x, y, rel_tol=1e-9, abs_tol=1e-9) for x, y in zip(a, b))
@@ -392,8 +392,8 @@ _TARGET_FIELDS = {
 }
 
 
-def _resume_mismatches(manifest: Manifest, expected: Manifest) -> List[str]:
-    mismatches: List[str] = []
+def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
+    mismatches: list[str] = []
     if manifest.task != expected.task:
         mismatches.append("task")
     if [s.name for s in manifest.sources] != [s.name for s in expected.sources]:
@@ -474,9 +474,9 @@ def load_or_create_manifest(path: Path, expected: Manifest) -> Manifest:
     return manifest
 
 
-def patch_folders(manifest: Manifest) -> List[str]:
+def patch_folders(manifest: Manifest) -> list[str]:
     """The top-level folders the patches' files live in, in first-seen order."""
-    folders: Dict[str, None] = {}
+    folders: dict[str, None] = {}
     for entry in manifest.patches:
         for path in entry["files"].values():
             folders.setdefault(path.split("/", 1)[0], None)

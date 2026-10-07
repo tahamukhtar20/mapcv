@@ -6,16 +6,17 @@ from __future__ import annotations
 import hashlib
 import json
 import warnings
+from collections.abc import Sequence
 from functools import lru_cache
 from math import pi
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import shapely
-from shapely.geometry import MultiPolygon, Polygon as ShapelyPolygon
-from shapely.geometry import shape
+from shapely.geometry import MultiPolygon, shape
+from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
@@ -24,15 +25,15 @@ from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 
 _RE: float = 6_378_137.0
 
-GeomWithClass = Tuple[BaseGeometry, int]
-ClassMap = Dict[str, int]
+GeomWithClass = tuple[BaseGeometry, int]
+ClassMap = dict[str, int]
 
 _POLYGON_TYPES = frozenset({"Polygon", "MultiPolygon"})
 _POINT_TYPES = frozenset({"Point", "MultiPoint"})
 _LINE_TYPES = frozenset({"LineString", "MultiLineString", "LinearRing"})
 
 #: Buffer distances in metres: ``(line, point)``, either ``None`` for "do not buffer".
-BufferDistances = Tuple[Optional[float], Optional[float]]
+BufferDistances = tuple[float | None, float | None]
 
 
 def _utm_epsg(lon: float, lat: float) -> int:
@@ -42,7 +43,7 @@ def _utm_epsg(lon: float, lat: float) -> int:
 
 
 @lru_cache(maxsize=128)
-def _utm_transformers(epsg: int) -> Tuple[Any, Any]:
+def _utm_transformers(epsg: int) -> tuple[Any, Any]:
     from pyproj import Transformer
 
     return (
@@ -74,8 +75,8 @@ def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
 def _to_mercator(
     x: npt.NDArray[np.float64],
     y: npt.NDArray[np.float64],
-    z: Optional[npt.NDArray[np.float64]] = None,
-) -> Tuple[npt.NDArray[np.float64], ...]:
+    z: npt.NDArray[np.float64] | None = None,
+) -> tuple[npt.NDArray[np.float64], ...]:
     # lat >= +/-90 clamps to +/-inf - matches Rust xy() guard
     # z is passed by shapely.ops.transform for 3D geometries and returned unchanged
     mx: npt.NDArray[np.float64] = _RE * np.radians(x)
@@ -92,7 +93,7 @@ def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
     return result
 
 
-def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> List[BaseGeometry]:
+def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> list[BaseGeometry]:
     """Reproject many WGS-84 geometries to Web Mercator in one vectorized pass.
 
     Same values as :func:`transform_to_mercator` per geometry, but one shapely call
@@ -123,7 +124,7 @@ _WGS84_CRS_NAMES = frozenset(
 )
 
 
-def _normalize_label(value: Any) -> Optional[str]:
+def _normalize_label(value: Any) -> str | None:
     """Return a stable string form of a label value, or ``None`` when missing."""
     if value is None:
         return None
@@ -142,10 +143,10 @@ def _normalize_label(value: Any) -> Optional[str]:
 
 
 def assign_class_ids(
-    labels: List[Optional[str]],
-    label_field: Optional[str],
-    classes: Optional[ClassMap] = None,
-) -> Tuple[List[int], ClassMap]:
+    labels: list[str | None],
+    label_field: str | None,
+    classes: ClassMap | None = None,
+) -> tuple[list[int], ClassMap]:
     """Map raw label values to mask class IDs.
 
     Without ``label_field`` every geometry is class 1 and the class map is
@@ -196,13 +197,13 @@ def _warn_skipped(
 
 def _with_class_ids(
     source: str,
-    geometries: List[BaseGeometry],
-    labels: List[Optional[str]],
-    label_field: Optional[str],
-    classes: Optional[ClassMap],
+    geometries: list[BaseGeometry],
+    labels: list[str | None],
+    label_field: str | None,
+    classes: ClassMap | None,
     non_polygon: int,
     points: bool = False,
-) -> Tuple[List[GeomWithClass], ClassMap]:
+) -> tuple[list[GeomWithClass], ClassMap]:
     ids, class_map = assign_class_ids(labels, label_field, classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
@@ -213,9 +214,9 @@ def _with_class_ids(
 
 def parse_kml(
     data: bytes,
-    label_field: Optional[str] = None,
-    classes: Optional[ClassMap] = None,
-) -> Tuple[List[GeomWithClass], ClassMap]:
+    label_field: str | None = None,
+    classes: ClassMap | None = None,
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse KML bytes into (geometry, class_id) pairs.
 
     Labels are read from ``<Data>`` or ``<SimpleData>`` fields named
@@ -224,8 +225,8 @@ def parse_kml(
     Returns (geometries, class_map).
     """
     raw_polys, non_polygon = _parse_kml_bytes(data, label_field)
-    geometries: List[BaseGeometry] = []
-    labels: List[Optional[str]] = []
+    geometries: list[BaseGeometry] = []
+    labels: list[str | None] = []
     for poly_group, label in raw_polys:
         parts = [ShapelyPolygon(rings[0], rings[1:]) for rings in poly_group]
         geometries.append(parts[0] if len(parts) == 1 else MultiPolygon(parts))
@@ -245,11 +246,11 @@ def _check_geojson_crs(obj: Any) -> None:
         )
 
 
-def _polygon_parts(geom: BaseGeometry) -> Optional[BaseGeometry]:
+def _polygon_parts(geom: BaseGeometry) -> BaseGeometry | None:
     if geom.geom_type in _POLYGON_TYPES:
         return geom
     if geom.geom_type == "GeometryCollection":
-        parts: List[ShapelyPolygon] = []
+        parts: list[ShapelyPolygon] = []
         for part in getattr(geom, "geoms", []):
             if part.geom_type == "Polygon":
                 parts.append(part)
@@ -262,11 +263,11 @@ def _polygon_parts(geom: BaseGeometry) -> Optional[BaseGeometry]:
 
 def parse_geojson(
     data: bytes,
-    label_field: Optional[str] = None,
-    classes: Optional[ClassMap] = None,
+    label_field: str | None = None,
+    classes: ClassMap | None = None,
     points: bool = False,
-    buffer: Optional[BufferDistances] = None,
-) -> Tuple[List[GeomWithClass], ClassMap]:
+    buffer: BufferDistances | None = None,
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
     Accepts a FeatureCollection or a single Feature in WGS-84 lon/lat.
@@ -278,19 +279,19 @@ def parse_geojson(
     obj: Any = json.loads(data.decode("utf-8"))
     top_type: str = obj.get("type", "")
     if top_type == "FeatureCollection":
-        features: List[Any] = obj.get("features") or []
+        features: list[Any] = obj.get("features") or []
     elif top_type == "Feature":
         features = [obj]
     else:
         raise ValueError(f"Expected FeatureCollection or Feature, got: {top_type!r}")
     _check_geojson_crs(obj)
 
-    geometries: List[Optional[BaseGeometry]] = []
-    raw_labels: List[Any] = []
+    geometries: list[BaseGeometry | None] = []
+    raw_labels: list[Any] = []
     for feat in features:
         geom_dict: Any = feat.get("geometry")
         geometries.append(shape(geom_dict) if geom_dict is not None else None)
-        props: Dict[str, Any] = feat.get("properties") or {}
+        props: dict[str, Any] = feat.get("properties") or {}
         raw_labels.append(props.get(label_field) if label_field else None)
     return _polygon_features(
         "GeoJSON", geometries, raw_labels, label_field, classes, points, buffer=buffer
@@ -299,14 +300,14 @@ def parse_geojson(
 
 def _polygon_features(
     source: str,
-    geometries: Sequence[Optional[BaseGeometry]],
+    geometries: Sequence[BaseGeometry | None],
     raw_labels: Sequence[Any],
-    label_field: Optional[str],
-    classes: Optional[ClassMap],
+    label_field: str | None,
+    classes: ClassMap | None,
     points: bool,
-    unreadable: Optional[Set[int]] = None,
-    buffer: Optional[BufferDistances] = None,
-) -> Tuple[List[GeomWithClass], ClassMap]:
+    unreadable: set[int] | None = None,
+    buffer: BufferDistances | None = None,
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Keep the polygon (and, with ``points``, point) features and give them class IDs.
 
     The one place where every vector format gets the same rules: a feature without a
@@ -316,8 +317,8 @@ def _polygon_features(
     having no polygon geometry because the format stored a kind mapcv cannot read.
     """
     line_m, point_m = buffer if buffer is not None else (None, None)
-    kept: List[BaseGeometry] = []
-    labels: List[Optional[str]] = []
+    kept: list[BaseGeometry] = []
+    labels: list[str | None] = []
     non_polygon = 0
     for index, parsed in enumerate(geometries):
         if parsed is None:
@@ -363,7 +364,7 @@ def _format_name(path: Path) -> str:
 
 
 def _read_table(
-    path: Path, kind: str, layer: Optional[str], fields: Optional[Sequence[str]]
+    path: Path, kind: str, layer: str | None, fields: Sequence[str] | None
 ) -> vector_files.VectorTable:
     if kind == "GeoPackage":
         return vector_files.read_gpkg(path, layer, fields)
@@ -372,7 +373,7 @@ def _read_table(
     return vector_files.read_geoparquet(path, fields)
 
 
-def _check_layer(path: Path, kind: str, layer: Optional[str]) -> None:
+def _check_layer(path: Path, kind: str, layer: str | None) -> None:
     if layer is not None and kind != "GeoPackage":
         raise ValueError(
             f"labels.layer applies to GeoPackage files only, not '{path.name}'; remove it."
@@ -381,12 +382,12 @@ def _check_layer(path: Path, kind: str, layer: Optional[str]) -> None:
 
 def load_vector_labels(
     path: Path,
-    label_field: Optional[str] = None,
-    classes: Optional[ClassMap] = None,
+    label_field: str | None = None,
+    classes: ClassMap | None = None,
     points: bool = False,
-    layer: Optional[str] = None,
-    buffer: Optional[BufferDistances] = None,
-) -> Tuple[List[GeomWithClass], ClassMap]:
+    layer: str | None = None,
+    buffer: BufferDistances | None = None,
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Read a vector label file of any supported format into ``(geometry, class_id)`` pairs.
 
     The format follows the file suffix: ``.geojson``/``.json``, ``.kml``, ``.gpkg``
@@ -443,7 +444,7 @@ def load_vector_labels(
             ) from exc
     fields = [label_field] if label_field else []
     table = _read_table(path, kind, layer, fields)
-    raw_labels: List[Any] = table.columns[label_field] if label_field else []
+    raw_labels: list[Any] = table.columns[label_field] if label_field else []
     if not label_field:
         raw_labels = [None] * len(table.geometries)
     return _polygon_features(
@@ -451,7 +452,7 @@ def load_vector_labels(
     )
 
 
-def vector_layers(path: Path) -> List[str]:
+def vector_layers(path: Path) -> list[str]:
     """Layer names of a GeoPackage; an empty list for every other format.
 
     Raises:
@@ -462,7 +463,7 @@ def vector_layers(path: Path) -> List[str]:
     return []
 
 
-def vector_attributes(path: Path, layer: Optional[str] = None) -> Dict[str, List[Any]]:
+def vector_attributes(path: Path, layer: str | None = None) -> dict[str, list[Any]]:
     """Every attribute column of a GeoPackage, Shapefile or GeoParquet file, by name.
 
     For the wizard's field listing: the raw values of each column, in feature order.

@@ -29,8 +29,9 @@ import json
 import os
 import posixpath
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -57,17 +58,17 @@ SPLIT_NAMES = ("train", "val", "test")
 DEFAULT_CATEGORY = "object"
 
 # One stored object: [category_id, x, y, width, height, area, truncated (0/1)].
-ObjectRow = List[Any]
+ObjectRow = list[Any]
 
 
-def categories(class_map: ClassMap) -> Dict[int, str]:
+def categories(class_map: ClassMap) -> dict[int, str]:
     """Class ID to name, ascending by ID; ``{1: "object"}`` without a class map."""
     if not class_map:
         return {1: DEFAULT_CATEGORY}
     return {cid: name for name, cid in sorted(class_map.items(), key=lambda item: item[1])}
 
 
-def yolo_indices(class_map: ClassMap) -> Dict[int, int]:
+def yolo_indices(class_map: ClassMap) -> dict[int, int]:
     """Class ID to YOLO class index: 0, 1, ... in ascending class-ID order."""
     return {cid: index for index, cid in enumerate(categories(class_map))}
 
@@ -79,7 +80,7 @@ def _number(value: float) -> str:
 
 
 def yolo_lines(
-    objects: Sequence[ObjectRow], indices: Dict[int, int], width: int, height: int
+    objects: Sequence[ObjectRow], indices: dict[int, int], width: int, height: int
 ) -> str:
     """YOLO label text: ``class cx cy w h`` per object, normalized by the image size."""
     lines = []
@@ -106,14 +107,14 @@ def _chunk_file(staging: Path, chunk: int) -> Path:
     return staging / OBJECTS_DIR / f"chunk_{chunk:06d}.json"
 
 
-def load_objects(manifest: Manifest, staging: Path, noun: str = "boxes") -> List[List[ObjectRow]]:
+def load_objects(manifest: Manifest, staging: Path, noun: str = "boxes") -> list[list[ObjectRow]]:
     """Every patch's stored objects, in manifest order (``noun`` names them in errors).
 
     Raises:
         ValueError: A chunk file or a patch in it is missing (the dataset is incomplete).
     """
-    by_chunk: Dict[int, Dict[str, List[ObjectRow]]] = {}
-    result: List[List[ObjectRow]] = []
+    by_chunk: dict[int, dict[str, list[ObjectRow]]] = {}
+    result: list[list[ObjectRow]] = []
     for entry in manifest.patches:
         chunk = entry["chunk"]
         if chunk not in by_chunk:
@@ -138,14 +139,14 @@ def load_objects(manifest: Manifest, staging: Path, noun: str = "boxes") -> List
 def coco_document(
     manifest: Manifest,
     objects: Sequence[Sequence[ObjectRow]],
-    names: Optional[FrozenSet[str]] = None,
+    names: frozenset[str] | None = None,
     description: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """A COCO detection document for the patches whose image file name is in ``names``
     (all patches when ``None``), with IDs that do not depend on the selection."""
     size = int((manifest.sampler or {}).get("patch_size") or 0)
-    images: List[Dict[str, Any]] = []
-    annotations: List[Dict[str, Any]] = []
+    images: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
     next_id = 1
     for index, (entry, rows) in enumerate(zip(manifest.patches, objects)):
         file_name = posixpath.basename(entry["files"]["image"])
@@ -178,7 +179,7 @@ def coco_document(
     }
 
 
-def dump_coco(document: Dict[str, Any]) -> str:
+def dump_coco(document: dict[str, Any]) -> str:
     """COCO JSON with one image, annotation or category per line (diffable, greppable)."""
     parts = []
     for key, value in document.items():
@@ -196,14 +197,14 @@ class DetectionWriter:
     Annotations must be the detection target's collated :class:`PatchObjects`.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({"detection"})
+    TARGET_TYPES: frozenset[str | None] = frozenset({"detection"})
 
     def __init__(self, config: WriterConfig, options: DetectionOptions) -> None:
         self._config = config
         self._formats = tuple(options.formats)
 
     @classmethod
-    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> "DetectionWriter":
+    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> DetectionWriter:
         """The writer of an existing detection dataset, to rebuild its split outputs."""
         options = manifest.target.options if manifest.target is not None else {}
         formats = options.get("formats") or list(DetectionOptions().formats)
@@ -213,10 +214,10 @@ class DetectionWriter:
     def layout(self) -> str:
         return "files"
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         return target_type in self.TARGET_TYPES
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         # As the files layout records it, minus mask_format: detection writes no masks.
         block = {
             "layout": self.layout,
@@ -235,14 +236,14 @@ class DetectionWriter:
             block["world_files"] = True
         return block
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         return FilesWriter(self._config).patch_shape(source, patch_size)
 
     def write(
         self,
         images: npt.NDArray[np.generic],
-        annotations: List[PatchObjects],
-        metadata: List[PatchMeta],
+        annotations: list[PatchObjects],
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
     ) -> None:
@@ -259,7 +260,7 @@ class DetectionWriter:
         labels_dir = staging / LABELS_DIR
         if "yolo" in self._formats:
             labels_dir.mkdir(parents=True, exist_ok=True)
-        stored: Dict[str, List[ObjectRow]] = {}
+        stored: dict[str, list[ObjectRow]] = {}
         for entry, annotation in zip(manifest.patches[start:], annotations):
             if not isinstance(annotation, PatchObjects):
                 raise TypeError("DetectionWriter writes detection targets: PatchObjects expected")
@@ -288,7 +289,7 @@ class DetectionWriter:
             json.dumps({"chunk": chunk_index, "patches": patches}, separators=(",", ":")) + "\n",
         )
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write ``patches.geojson`` (``writer.footprints``) and the annotation files."""
         if self._config.footprints:
             path = self._config.staging_dir / FOOTPRINTS_FILENAME
@@ -300,13 +301,13 @@ class DetectionWriter:
                 )
         self.write_annotations(manifest, split_lists)
 
-    def write_annotations(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def write_annotations(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write the COCO files, YOLO image lists and ``dataset.yaml`` for the split."""
         staging = self._config.staging_dir
         objects = load_objects(manifest, staging)
         annotations_dir = staging / ANNOTATIONS_DIR
         annotations_dir.mkdir(parents=True, exist_ok=True)
-        splits: Dict[str, List[str]] = (
+        splits: dict[str, list[str]] = (
             {name: list(getattr(split_lists, name)) for name in SPLIT_NAMES}
             if split_lists is not None
             else {}
@@ -314,7 +315,7 @@ class DetectionWriter:
 
         coco_files = {f"instances_{name}.json" for name in (*SPLIT_NAMES, "all")}
         if "coco" in self._formats:
-            wanted: Dict[str, Optional[FrozenSet[str]]]
+            wanted: dict[str, frozenset[str] | None]
             if split_lists is None:
                 wanted = {"instances_all.json": None}
             else:
@@ -348,14 +349,14 @@ class DetectionWriter:
         _write_text(staging / DATASET_YAML, dataset_yaml(manifest, splits))
 
 
-def dataset_yaml(manifest: Manifest, splits: Dict[str, List[str]]) -> str:
+def dataset_yaml(manifest: Manifest, splits: dict[str, list[str]]) -> str:
     """Ultralytics' dataset file: image lists per split and class ``names``.
 
     There is no ``path`` key: Ultralytics then takes the dataset root from the
     folder of the YAML file itself, so the dataset keeps working when it is moved
     or copied to another machine. The image lists sit next to it.
     """
-    data: Dict[str, Any] = {"train": "train.txt", "val": "val.txt"}
+    data: dict[str, Any] = {"train": "train.txt", "val": "val.txt"}
     if splits.get("test"):
         data["test"] = "test.txt"
     data["names"] = {

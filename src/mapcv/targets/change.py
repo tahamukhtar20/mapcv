@@ -11,7 +11,7 @@ on the grid of the first (before) image.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -28,7 +28,7 @@ from mapcv.targets.segmentation import SegmentationTarget
 # The class name of changed pixels in the manifest's class map.
 CHANGE_CLASS = "change"
 
-_LabelTarget = Union[SegmentationTarget, RasterSegmentationTarget]
+_LabelTarget = SegmentationTarget | RasterSegmentationTarget
 
 
 def _window_mask(
@@ -36,7 +36,7 @@ def _window_mask(
     transform: Transform,
     height: int,
     width: int,
-    valid_mask: Optional[npt.NDArray[np.bool_]],
+    valid_mask: npt.NDArray[np.bool_] | None,
 ) -> npt.NDArray[Any]:
     """The label target's class mask of a window (all background without labels nearby)."""
     window = target.window(transform, height, width, valid_mask)
@@ -51,12 +51,12 @@ class ChangeTarget:
     def __init__(
         self,
         options: ChangeOptions,
-        labels: Union[LabelsConfig, RasterLabelsConfig, None] = None,
+        labels: LabelsConfig | RasterLabelsConfig | None = None,
     ) -> None:
         self._options = options
-        self._changed: Optional[_LabelTarget] = None
-        self._before: Optional[SegmentationTarget] = None
-        self._after: Optional[SegmentationTarget] = None
+        self._changed: _LabelTarget | None = None
+        self._before: SegmentationTarget | None = None
+        self._after: SegmentationTarget | None = None
         if options.before is not None and options.after is not None:
             self._before = SegmentationTarget(options.before)
             self._after = SegmentationTarget(options.after)
@@ -71,7 +71,7 @@ class ChangeTarget:
             raise ValueError("task: change needs labels, or change.before and change.after")
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "change"
 
     @property
@@ -88,10 +88,10 @@ class ChangeTarget:
             if target is not None:
                 target.prepare(source)
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """The change class, ignore value and change value, and the label settings with
         their files' hashes (both sets', for a before/after comparison)."""
-        labels: Optional[Dict[str, Any]]
+        labels: dict[str, Any] | None
         if self._changed is not None:
             changed = self._changed.record()
             labels = changed.labels if changed is not None else None
@@ -116,7 +116,7 @@ class ChangeTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         value = self._options.change_value
         ignore = self._ignore_index

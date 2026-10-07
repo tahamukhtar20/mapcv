@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 import numpy as np
 import pytest
@@ -25,16 +26,16 @@ from mapcv.stac import _interval, find_product
 REGION = (4.40, 48.70, 4.45, 48.75)
 
 
-def _square(west: float, south: float, east: float, north: float) -> Dict[str, Any]:
+def _square(west: float, south: float, east: float, north: float) -> dict[str, Any]:
     ring = [[west, south], [east, south], [east, north], [west, north], [west, south]]
     return {"type": "Polygon", "coordinates": [ring]}
 
 
 def _item(
-    item_id: str, cloud: Optional[float], when: str, covers: bool = True, href: str = "x.zarr"
-) -> Dict[str, Any]:
+    item_id: str, cloud: float | None, when: str, covers: bool = True, href: str = "x.zarr"
+) -> dict[str, Any]:
     geometry = _square(4.0, 48.0, 5.0, 49.0) if covers else _square(4.42, 48.0, 5.0, 49.0)
-    properties: Dict[str, Any] = {"datetime": when}
+    properties: dict[str, Any] = {"datetime": when}
     if cloud is not None:
         properties["eo:cloud_cover"] = cloud
     return {
@@ -49,10 +50,10 @@ def _item(
 class Catalog:
     """A STAC API: ``/search`` answers in pages of two items."""
 
-    def __init__(self, items: List[Dict[str, Any]], status: int = 200) -> None:
+    def __init__(self, items: list[dict[str, Any]], status: int = 200) -> None:
         self.items = items
         self.status = status
-        self.requests: List[Dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -88,12 +89,12 @@ class Catalog:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 owner.requests.append(request)
                 self._answer(int(request.get("token", 0)))
 
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 owner.requests.append({"get": self.path})
                 self._answer(int(self.path.rsplit("=", 1)[1]))
 
@@ -209,7 +210,7 @@ def test_datetime_intervals(value: str, interval: str) -> None:
         ({"type": "eopf_zarr", "path": "a.zarr", "scl_mask": []}, "scene classes 0-11"),
     ],
 )
-def test_config_refusals(data: Dict[str, Any], message: str) -> None:
+def test_config_refusals(data: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         EOPFZarrImageryConfig.model_validate(data)
 
@@ -230,9 +231,6 @@ def test_a_searched_product_with_masked_clouds(catalog: Catalog, tmp_path: Path)
     xr = pytest.importorskip("xarray")
     pytest.importorskip("xarray_eopf")
     from pyproj import Transformer
-
-    from mapcv.manifest import Manifest
-    from mapcv.pipeline import run_generate
     from test_eopf_zarr_fixture import (
         EPSG,
         HEIGHT,
@@ -244,6 +242,9 @@ def test_a_searched_product_with_masked_clouds(catalog: Catalog, tmp_path: Path)
         _digital_numbers,
         _group,
     )
+
+    from mapcv.manifest import Manifest
+    from mapcv.pipeline import run_generate
 
     r10 = {name: _digital_numbers(WIDTH, HEIGHT, seed) for seed, name in enumerate(["b02", "b04"])}
     scl = np.random.default_rng(7).integers(0, 12, size=(HEIGHT // 2, WIDTH // 2)).astype(np.uint8)

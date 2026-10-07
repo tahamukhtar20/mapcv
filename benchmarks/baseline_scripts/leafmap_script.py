@@ -25,15 +25,15 @@ for _variable, _data in (("PROJ_DATA", "share/proj"), ("GDAL_DATA", "share/gdal"
     if _variable not in os.environ and (Path(sys.prefix) / _data).is_dir():
         os.environ[_variable] = str(Path(sys.prefix) / _data)
 
-import leafmap  # noqa: E402
-import mercantile  # noqa: E402
-import numpy as np  # noqa: E402
-import rasterio  # noqa: E402
-from PIL import Image  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.features import rasterize  # noqa: E402
-from shapely.geometry import shape  # noqa: E402
-from shapely.ops import transform as reproject  # noqa: E402
+import leafmap
+import mercantile
+import numpy as np
+import rasterio
+from PIL import Image
+from pyproj import Transformer
+from rasterio.features import rasterize
+from shapely.geometry import shape
+from shapely.ops import transform as reproject
 
 
 def main() -> None:

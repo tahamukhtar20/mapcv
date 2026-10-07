@@ -11,7 +11,7 @@ products are read fails here. 10 m bands must come through exactly (decoded, wit
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -19,12 +19,12 @@ import pytest
 
 xr = pytest.importorskip("xarray", reason="needs the zarr extra")
 pytest.importorskip("xarray_eopf", reason="needs the zarr extra")
-from pyproj import Transformer  # noqa: E402
+from pyproj import Transformer
 
-from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, RegionConfig  # noqa: E402
-from mapcv.imagery import EOPFZarrRasterSource  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
+from mapcv.config import EOPFZarrImageryConfig, MapcvConfig, RegionConfig
+from mapcv.imagery import EOPFZarrRasterSource
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
 
 X0, Y0 = 600000.0, 5400000.0
 WIDTH, HEIGHT = 120, 100  # at 10 m
@@ -42,7 +42,7 @@ def _decoded(values: npt.NDArray[np.uint16]) -> npt.NDArray[np.float64]:
     return np.where(values == 0, np.nan, values * 0.0001 - 0.1)
 
 
-def _group(resolution: int, bands: Dict[str, npt.NDArray[np.uint16]]) -> Any:
+def _group(resolution: int, bands: dict[str, npt.NDArray[np.uint16]]) -> Any:
     height, width = next(iter(bands.values())).shape
     attrs = {"scale_factor": 0.0001, "add_offset": -0.1, "_FillValue": 0, "proj:epsg": EPSG}
     return xr.Dataset(
@@ -58,7 +58,7 @@ def _group(resolution: int, bands: Dict[str, npt.NDArray[np.uint16]]) -> Any:
 
 
 @pytest.fixture(scope="module")
-def product(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, object]:
+def product(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     r10 = {
         name: _digital_numbers(WIDTH, HEIGHT, seed)
         for seed, name in enumerate(["b02", "b03", "b04", "b08"])
@@ -81,7 +81,7 @@ def product(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, object]:
     return {"path": path, "r10": r10, "r20": r20}
 
 
-def _region(col0: int, row0: int, col1: int, row1: int) -> Dict[str, float]:
+def _region(col0: int, row0: int, col1: int, row1: int) -> dict[str, float]:
     """A lon/lat box just inside the given 10 m pixel span (the grid snaps outward)."""
     to_lonlat = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
     corners = [
@@ -103,7 +103,7 @@ def test_the_eopf_engine_is_installed() -> None:
     assert "eopf-zarr" in xr.backends.list_engines()
 
 
-def test_the_source_reads_the_product_exactly(product: Dict[str, object]) -> None:
+def test_the_source_reads_the_product_exactly(product: dict[str, object]) -> None:
     config = EOPFZarrImageryConfig(
         type="eopf_zarr", path=str(product["path"]), bands=["b04", "b08", "b11"]
     )
@@ -129,7 +129,7 @@ def test_the_source_reads_the_product_exactly(product: Dict[str, object]) -> Non
         source.close()
 
 
-def test_a_dataset_from_the_product(product: Dict[str, object], tmp_path: Path) -> None:
+def test_a_dataset_from_the_product(product: dict[str, object], tmp_path: Path) -> None:
     config = MapcvConfig.model_validate(
         {
             "region": _region(10, 10, 74, 74),
@@ -144,7 +144,7 @@ def test_a_dataset_from_the_product(product: Dict[str, object], tmp_path: Path) 
     r10 = product["r10"]
     assert isinstance(r10, dict)
     for entry in manifest.patches:
-        a, _, c, _, e, f = manifest.patch_transform(entry)
+        _a, _, c, _, _e, f = manifest.patch_transform(entry)
         col, row = round((c - X0) / 10), round((Y0 - f) / 10)
         patch = np.load(tmp_path / "dataset" / entry["files"]["image"])
         for index, band in enumerate(["b02", "b04"]):

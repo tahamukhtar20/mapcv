@@ -27,15 +27,16 @@ Conventions:
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Sequence, Tuple
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
 
 from mapcv._mapcv_rs import GeoTiff as _RustGeoTiff
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 DEFAULT_CACHE_BYTES = 64 * 1024 * 1024
 
@@ -50,17 +51,17 @@ class GeoTiffInfo:
     dtype: np.dtype[Any]
     #: EPSG code of the CRS; ``None`` when the file has no CRS or one that is
     #: not identified by an EPSG code (see ``crs_error``).
-    epsg: Optional[int]
-    crs_error: Optional[str]
-    crs_citation: Optional[str]
-    transform: Optional[Transform]
+    epsg: int | None
+    crs_error: str | None
+    crs_citation: str | None
+    transform: Transform | None
     raster_type: Literal["area", "point"]
-    nodata: Optional[float]
+    nodata: float | None
     tiled: bool
     #: ``(rows, cols)`` of one tile or strip, as rasterio's ``block_shapes``.
-    block_size: Tuple[int, int]
+    block_size: tuple[int, int]
     #: ``(height, width)`` of each overview, largest first.
-    overviews: Tuple[Tuple[int, int], ...]
+    overviews: tuple[tuple[int, int], ...]
     compression: str
     predictor: int
     planar: bool
@@ -68,7 +69,7 @@ class GeoTiffInfo:
     byte_order: Literal["little", "big"]
     bigtiff: bool
 
-    def overview_transform(self, overview: int) -> Optional[Transform]:
+    def overview_transform(self, overview: int) -> Transform | None:
         """The transform of overview level ``overview`` (0 = full resolution).
 
         Scaled from the full-resolution transform by the size ratios, as GDAL
@@ -147,9 +148,9 @@ class GeoTiff:
         col0: int,
         col1: int,
         *,
-        bands: Optional[Sequence[int]] = None,
+        bands: Sequence[int] | None = None,
         overview: int = 0,
-    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
         """Read rows ``row0:row1`` and columns ``col0:col1`` of overview ``overview``.
 
         Returns ``(data, valid)``: ``data`` is ``(rows, cols, bands)`` in the

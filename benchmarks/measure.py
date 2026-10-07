@@ -10,9 +10,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any
 
 try:
     import psutil
@@ -28,10 +29,10 @@ class ProcessResult:
     """What one child process did."""
 
     wall_s: float
-    peak_rss_mb: Optional[float]
+    peak_rss_mb: float | None
     exit_code: int
     interrupted: bool = False
-    stages: Dict[str, float] = field(default_factory=dict)
+    stages: dict[str, float] = field(default_factory=dict)
     log: Path = Path()
 
     def log_tail(self, lines: int = 12) -> str:
@@ -41,7 +42,7 @@ class ProcessResult:
             return ""
         return "\n".join(text.strip().splitlines()[-lines:])
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self) -> dict[str, Any]:
         return {
             "wall_s": round(self.wall_s, 3),
             "peak_rss_mb": self.peak_rss_mb,
@@ -51,7 +52,7 @@ class ProcessResult:
         }
 
 
-def child_env() -> Dict[str, str]:
+def child_env() -> dict[str, str]:
     """Environment for children: importable ``benchmarks``, plain unstyled output."""
     env = dict(os.environ)
     python_path = env.get("PYTHONPATH")
@@ -60,7 +61,7 @@ def child_env() -> Dict[str, str]:
     return env
 
 
-def _tree_rss(root: "psutil.Process") -> int:
+def _tree_rss(root: psutil.Process) -> int:
     total = root.memory_info().rss
     for child in root.children(recursive=True):
         try:
@@ -75,8 +76,8 @@ def run_process(
     cwd: Path,
     log: Path,
     *,
-    stages_file: Optional[Path] = None,
-    interrupt_when: Optional[Callable[[], bool]] = None,
+    stages_file: Path | None = None,
+    interrupt_when: Callable[[], bool] | None = None,
     timeout_s: float = 3600,
 ) -> ProcessResult:
     """Run ``command`` to completion, sampling the summed RSS of it and its children.
@@ -125,7 +126,7 @@ def run_process(
             stop.set()
             if sampler is not None:
                 sampler.join()
-    stages: Dict[str, float] = {}
+    stages: dict[str, float] = {}
     if stages_file is not None and stages_file.exists():
         try:
             stages = json.loads(stages_file.read_text(encoding="utf-8"))
@@ -141,7 +142,7 @@ def run_process(
     )
 
 
-def mapcv_generate_command(config: Path, stages_file: Path) -> List[str]:
+def mapcv_generate_command(config: Path, stages_file: Path) -> list[str]:
     """``mapcv generate CONFIG --yes`` run in-process by the stage-timing wrapper."""
     return [
         sys.executable,
@@ -154,7 +155,7 @@ def mapcv_generate_command(config: Path, stages_file: Path) -> List[str]:
     ]
 
 
-def summarise(values: Sequence[float]) -> Dict[str, float]:
+def summarise(values: Sequence[float]) -> dict[str, float]:
     """Median and spread of repeated measurements (``stdev`` is 0 for a single run)."""
     if not values:
         return {}

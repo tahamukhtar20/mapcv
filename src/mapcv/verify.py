@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 
@@ -29,8 +28,8 @@ class VerifyReport:
     patches: int = 0
     files: int = 0
     checked_hashes: int = 0
-    problems: List[str] = field(default_factory=list)
-    notes: List[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -45,16 +44,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _listed_files(manifest: Manifest) -> List[str]:
+def _listed_files(manifest: Manifest) -> list[str]:
     """Every file the manifest lists, in patch order, without duplicates."""
-    seen: Dict[str, None] = {}
+    seen: dict[str, None] = {}
     for entry in manifest.patches:
         for path in entry["files"].values():
             seen.setdefault(path, None)
     return list(seen)
 
 
-def _dataset_files(staging_dir: Path, manifest: Manifest) -> List[str]:
+def _dataset_files(staging_dir: Path, manifest: Manifest) -> list[str]:
     """The files a checksum list covers: patches, the manifest and the split lists."""
     extra = ["manifest.json"]
     splits = staging_dir / "splits"
@@ -76,7 +75,7 @@ def write_checksums(staging_dir: Path) -> Path:
     return path
 
 
-def _check_image(path: Path, shape: List[int]) -> Optional[str]:
+def _check_image(path: Path, shape: list[int]) -> str | None:
     """``None`` if the file decodes to ``shape`` (the source's ``patch_shape``)."""
     from mapcv.stats import _read_array
 
@@ -136,7 +135,7 @@ def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport:
                     f"list (first: {unknown[0]}); re-split with mapcv split"
                 )
 
-    referenced: Set[str] = set(listed)
+    referenced: set[str] = set(listed)
     orphans = sorted(
         path.relative_to(staging_dir).as_posix()
         for folder in patch_folders(manifest)

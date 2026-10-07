@@ -22,6 +22,7 @@ def test_the_stubs_match_the_compiled_module() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "mypy.stubtest", "mapcv._mapcv_rs"],
         capture_output=True,
+        check=False,
         text=True,
         timeout=300,
     )

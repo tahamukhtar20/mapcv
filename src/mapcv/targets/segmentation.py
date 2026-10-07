@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, cast
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -46,14 +46,14 @@ def labels_empty_message(what: str, outcome: str) -> str:
     )
 
 
-def label_buffer(labels: Any) -> Optional[Tuple[Optional[float], Optional[float]]]:
+def label_buffer(labels: Any) -> tuple[float | None, float | None] | None:
     """The ``(line, point)`` buffer widths of a labels block or label file, or ``None``."""
     if labels.buffer is None:
         return None
     return labels.buffer.line, labels.buffer.point
 
 
-def load_labels(labels: LabelsConfig, points: bool = False) -> Tuple[List[GeomWithClass], ClassMap]:
+def load_labels(labels: LabelsConfig, points: bool = False) -> tuple[list[GeomWithClass], ClassMap]:
     """Every label file's features in WGS-84 lon/lat with class IDs, and the class map.
 
     One ``labels.path`` is read as :func:`mapcv.labels.load_vector_labels` reads it. With
@@ -82,8 +82,8 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> Tuple[List[GeomWi
             layer=labels.layer,
             buffer=label_buffer(labels),
         )
-    geometries: List[Any] = []
-    names: List[Optional[str]] = []
+    geometries: list[Any] = []
+    names: list[str | None] = []
     for file in labels.files:
         raw, file_map = load_vector_labels(
             file.path,
@@ -110,11 +110,11 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> Tuple[List[GeomWi
     return [(geometry, cid) for geometry, cid in zip(geometries, ids) if cid], class_map
 
 
-def label_settings(labels: LabelsConfig, exclude: Set[str]) -> Dict[str, Any]:
+def label_settings(labels: LabelsConfig, exclude: set[str]) -> dict[str, Any]:
     """A labels block as a target record stores it: without paths (machine-specific; the
     files are identified by their hash) and without the ``exclude`` keys. Several files
     keep their settings in order, with ``class`` as the config writes it."""
-    settings: Dict[str, Any] = labels.model_dump(mode="json", exclude=exclude | {"path", "files"})
+    settings: dict[str, Any] = labels.model_dump(mode="json", exclude=exclude | {"path", "files"})
     if labels.files is not None:
         settings["files"] = [
             file.model_dump(mode="json", by_alias=True, exclude={"path"}) for file in labels.files
@@ -137,7 +137,7 @@ def labels_sha256(labels: LabelsConfig) -> str:
     return digest.hexdigest()
 
 
-def _area_geometries(path: Path, destination_crs: str) -> List[GeomWithClass]:
+def _area_geometries(path: Path, destination_crs: str) -> list[GeomWithClass]:
     """The polygons of an annotated-area file in ``destination_crs`` (classes ignored)."""
     raw, _ = load_vector_labels(path)
     return [(transform_geometry_to_crs(geometry, destination_crs), 1) for geometry, _ in raw]
@@ -145,7 +145,7 @@ def _area_geometries(path: Path, destination_crs: str) -> List[GeomWithClass]:
 
 def _parse_labels(
     labels: LabelsConfig, destination_crs: str, points: bool = False
-) -> Tuple[List[GeomWithClass], ClassMap]:
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Label geometries in ``destination_crs`` with their class IDs, and the class map.
 
     The file is read by :func:`mapcv.labels.load_vector_labels`, whatever its format.
@@ -164,7 +164,7 @@ def _parse_labels(
     return transformed, class_map
 
 
-def _check_ignore_index(ignore: Optional[int], class_map: ClassMap) -> None:
+def _check_ignore_index(ignore: int | None, class_map: ClassMap) -> None:
     """Fail when a class would get the mask value reserved for ignored pixels."""
     clashing = sorted(name for name, cid in class_map.items() if cid == ignore)
     if clashing:
@@ -175,7 +175,7 @@ def _check_ignore_index(ignore: Optional[int], class_map: ClassMap) -> None:
         )
 
 
-def _raster_bounds(source: RasterMetadata) -> Tuple[float, float, float, float]:
+def _raster_bounds(source: RasterMetadata) -> tuple[float, float, float, float]:
     a, _, c, _, e, f = source.transform
     xs = (c, c + a * source.width)
     ys = (f, f + e * source.height)
@@ -183,7 +183,7 @@ def _raster_bounds(source: RasterMetadata) -> Tuple[float, float, float, float]:
 
 
 def _warn_if_labels_miss_raster(
-    geometries: List[GeomWithClass],
+    geometries: list[GeomWithClass],
     source: RasterMetadata,
     what: str = "polygon",
     outcome: str = "every mask will be background",
@@ -197,7 +197,7 @@ def _warn_if_labels_miss_raster(
         warnings.warn(labels_miss_message(what, outcome), UserWarning, stacklevel=3)
 
 
-def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:
+def _label_bounds(geometries: list[GeomWithClass]) -> npt.NDArray[np.float64]:
     """(N, 4) minx, miny, maxx, maxy per label geometry, computed once per run."""
     if not geometries:
         return np.empty((0, 4), dtype=np.float64)
@@ -207,12 +207,12 @@ def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:
 
 
 def _geometries_in_window(
-    geometries: List[GeomWithClass],
+    geometries: list[GeomWithClass],
     bounds: npt.NDArray[np.float64],
     transform: Transform,
     height: int,
     width: int,
-) -> List[GeomWithClass]:
+) -> list[GeomWithClass]:
     """Label geometries whose bounding box touches the window, in their original order.
 
     Order matters: later polygons overwrite earlier ones when rasterized.
@@ -241,17 +241,17 @@ class SegmentationTarget:
 
     def __init__(self, labels: LabelsConfig) -> None:
         self._labels = labels
-        self._geometries: List[GeomWithClass] = []
+        self._geometries: list[GeomWithClass] = []
         self._bounds: npt.NDArray[np.float64] = np.empty((0, 4), dtype=np.float64)
-        self._class_map: Optional[ClassMap] = None
-        self._sha256: Optional[str] = None
+        self._class_map: ClassMap | None = None
+        self._sha256: str | None = None
         # labels.annotated_area: its polygons in the raster CRS, and the file's hash.
-        self._area: Optional[List[GeomWithClass]] = None
+        self._area: list[GeomWithClass] | None = None
         self._area_bounds: npt.NDArray[np.float64] = np.empty((0, 4), dtype=np.float64)
-        self._area_sha256: Optional[str] = None
+        self._area_sha256: str | None = None
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "segmentation"
 
     @property
@@ -272,7 +272,7 @@ class SegmentationTarget:
             self._area = _area_geometries(area, source.crs)
             self._area_bounds = _label_bounds(self._area)
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """Class map and ignore value, plus the label settings and a hash of the label
         file, so a resumed run notices edits."""
         if self._sha256 is None:
@@ -297,7 +297,7 @@ class SegmentationTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         if not self._geometries and self._area is None:
             return NullWindow()

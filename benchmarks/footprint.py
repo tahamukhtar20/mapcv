@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from benchmarks.measure import child_env
 
@@ -21,9 +21,15 @@ from benchmarks.measure import child_env
 _TOOLING = {"pip", "setuptools", "wheel"}
 
 
-def _run(command: List[str], cwd: Path) -> str:
+def _run(command: list[str], cwd: Path) -> str:
     result = subprocess.run(
-        command, cwd=cwd, capture_output=True, text=True, env=child_env(), timeout=1800
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=child_env(),
+        timeout=1800,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"{' '.join(command[:4])} failed:\n{result.stderr.strip()[-800:]}")
@@ -34,7 +40,7 @@ def _dir_mb(path: Path) -> float:
     return round(sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 2**20, 1)
 
 
-def measure_footprint(requirement: str = "mapcv") -> Dict[str, Any]:
+def measure_footprint(requirement: str = "mapcv") -> dict[str, Any]:
     """Wheel size, dependency count, install time and disk size for ``pip install REQUIREMENT``."""
     with tempfile.TemporaryDirectory(prefix="mapcv-footprint-") as tmp:
         work = Path(tmp)
@@ -72,8 +78,10 @@ def measure_footprint(requirement: str = "mapcv") -> Dict[str, Any]:
             [
                 python,
                 "-c",
-                "from importlib.metadata import requires; "
-                "print(chr(10).join(r for r in requires('mapcv') or [] if 'extra ==' not in r))",
+                (
+                    "from importlib.metadata import requires; "
+                    "print(chr(10).join(r for r in requires('mapcv') or [] if 'extra ==' not in r))"
+                ),
             ],
             work,
         ).splitlines()

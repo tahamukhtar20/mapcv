@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -19,10 +20,10 @@ FOOTPRINTS_FILENAME = "patches.geojson"
 _DECIMALS = 9
 
 
-def _split_of(split_lists: Optional[SplitLists]) -> Dict[str, str]:
+def _split_of(split_lists: SplitLists | None) -> dict[str, str]:
     if split_lists is None:
         return {}
-    split: Dict[str, str] = {}
+    split: dict[str, str] = {}
     for name, names in (
         ("train", split_lists.train),
         ("val", split_lists.val),
@@ -54,14 +55,12 @@ def _rings(manifest: Manifest, patch_size: int) -> npt.NDArray[np.float64]:
     return np.round(rings, _DECIMALS)
 
 
-def _features(
-    manifest: Manifest, patch_size: int, split_lists: Optional[SplitLists]
-) -> Iterator[str]:
+def _features(manifest: Manifest, patch_size: int, split_lists: SplitLists | None) -> Iterator[str]:
     split = _split_of(split_lists)
     rings = _rings(manifest, patch_size)
     for entry, ring in zip(manifest.patches, rings):
         name = manifest.patch_name(entry)
-        properties: Dict[str, Any] = {
+        properties: dict[str, Any] = {
             "filename": name,
             "split": split.get(name),
             "row": entry["row"],
@@ -82,7 +81,7 @@ def _features(
         )
 
 
-def write_footprints(manifest: Manifest, split_lists: Optional[SplitLists], path: Path) -> None:
+def write_footprints(manifest: Manifest, split_lists: SplitLists | None, path: Path) -> None:
     """Write the footprint index of ``manifest``'s patches to ``path`` (atomically).
 
     One Feature per patch, in manifest order. Each footprint is the patch's four

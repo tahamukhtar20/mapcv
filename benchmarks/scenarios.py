@@ -7,7 +7,7 @@ import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Literal
 
 from shapely.geometry import Polygon
 
@@ -63,7 +63,7 @@ class Scenario:
             options.append(f"l{self.latency_ms}")
         return "".join(f"{option}/" for option in options)
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data["tiles"] = self.tiles
         return data
@@ -195,10 +195,10 @@ _SCENARIOS = [
     ),
 ]
 
-SCENARIOS: Dict[str, Scenario] = {scenario.name: scenario for scenario in _SCENARIOS}
+SCENARIOS: dict[str, Scenario] = {scenario.name: scenario for scenario in _SCENARIOS}
 
 
-def names_in_group(group: Group) -> List[str]:
+def names_in_group(group: Group) -> list[str]:
     """Scenario names of one group, in definition order."""
     return [scenario.name for scenario in _SCENARIOS if scenario.group == group]
 
@@ -211,7 +211,7 @@ def _lat(y: float) -> float:
     return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / 2**ZOOM))))
 
 
-def region_bounds(scenario: Scenario) -> Tuple[float, float, float, float]:
+def region_bounds(scenario: Scenario) -> tuple[float, float, float, float]:
     """(west, south, east, north) of the scenario's tile block, shrunk by 1e-7 degrees.
 
     The shrink keeps the edges strictly inside the outer tiles so the region
@@ -226,7 +226,7 @@ def region_bounds(scenario: Scenario) -> Tuple[float, float, float, float]:
     )
 
 
-def make_labels(scenario: Scenario, path: Path) -> List[Tuple[Polygon, int]]:
+def make_labels(scenario: Scenario, path: Path) -> list[tuple[Polygon, int]]:
     """Write jittered, non-overlapping rectangles in three classes; return them with class ids.
 
     Fully deterministic (seeded), so every run and every machine sees the same labels.
@@ -236,8 +236,8 @@ def make_labels(scenario: Scenario, path: Path) -> List[Tuple[Polygon, int]]:
     columns = max(1, int(math.sqrt(scenario.polygons * (east - west) / (north - south))))
     rows = max(1, math.ceil(scenario.polygons / columns))
     cell_w, cell_h = (east - west) / columns, (north - south) / rows
-    features: List[Dict[str, Any]] = []
-    geometries: List[Tuple[Polygon, int]] = []
+    features: list[dict[str, Any]] = []
+    geometries: list[tuple[Polygon, int]] = []
     for row in range(rows):
         for column in range(columns):
             if len(features) >= scenario.polygons:

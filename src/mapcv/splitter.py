@@ -7,9 +7,10 @@ import math
 import random
 import warnings
 from collections import defaultdict
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import DefaultDict, Dict, Hashable, List, Literal, Optional, Sequence, Set, Tuple
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -33,16 +34,16 @@ class SplitterConfig(BaseModel):
 
     test_ratio: float = Field(default=0.20, ge=0.0, le=1.0)
     val_ratio: float = Field(default=0.10, ge=0.0, le=1.0)
-    labeled_ratios: List[float] = Field(default_factory=lambda: [0.10, 0.20, 0.30])
+    labeled_ratios: list[float] = Field(default_factory=lambda: [0.10, 0.20, 0.30])
     seed: int = 42
     strategy: Literal["spatial", "stratified", "random", "region"] = "spatial"
     # Default: 4 x patch size, smaller for small rasters (at least 10 blocks).
-    block_size: Optional[int] = Field(default=None, ge=1)
-    sample_limit: Optional[int] = Field(default=None, ge=1)
+    block_size: int | None = Field(default=None, ge=1)
+    sample_limit: int | None = Field(default=None, ge=1)
 
     @field_validator("labeled_ratios")
     @classmethod
-    def _validate_labeled_ratios(cls, ratios: List[float]) -> List[float]:
+    def _validate_labeled_ratios(cls, ratios: list[float]) -> list[float]:
         for ratio in ratios:
             if not 0.0 < ratio <= 1.0:
                 raise ValueError(f"labeled_ratios must be in (0, 1], got {ratio}")
@@ -59,9 +60,9 @@ class SplitLists:
     A patch's name is the file name of its image (:meth:`Manifest.patch_name`).
     """
 
-    train: List[str]
-    val: List[str]
-    test: List[str]
+    train: list[str]
+    val: list[str]
+    test: list[str]
 
 
 def _write_list(path: Path, names: Sequence[str]) -> None:
@@ -74,13 +75,13 @@ def ratio_dirname(ratio: float) -> str:
     return format(round(ratio * 100, 4), "g")
 
 
-def _class_counts(entry: ManifestEntry, ignore_key: Optional[str]) -> Dict[str, int]:
+def _class_counts(entry: ManifestEntry, ignore_key: str | None) -> dict[str, int]:
     """Per-class pixel counts without the ignore value (pixels with no imagery)."""
     counts = entry["summary"].get("class_pixels") or {}
     return {k: v for k, v in counts.items() if k != ignore_key}
 
 
-def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> int:
+def _classify_entry(entry: ManifestEntry, ignore_key: str | None = None) -> int:
     """Classify a manifest entry as 0 (empty), 1 (fully labeled), or 2 (mixed).
 
     When a mask is present the classification uses the summary's class pixel
@@ -103,7 +104,7 @@ def _classify_entry(entry: ManifestEntry, ignore_key: Optional[str] = None) -> i
     return 2
 
 
-def _stratum(entry: ManifestEntry, ignore_key: Optional[str] = None) -> Tuple[int, str]:
+def _stratum(entry: ManifestEntry, ignore_key: str | None = None) -> tuple[int, str]:
     """Stratify on labeled fraction and, when masked, the dominant foreground class.
 
     Detection patches (``class_objects`` in the summary) are stratified on whether
@@ -127,7 +128,7 @@ def _stratum(entry: ManifestEntry, ignore_key: Optional[str] = None) -> Tuple[in
     return _classify_entry(entry, ignore_key), dominant
 
 
-def _manifest_patch_geometry(manifest: Manifest) -> Tuple[Optional[int], Optional[int]]:
+def _manifest_patch_geometry(manifest: Manifest) -> tuple[int | None, int | None]:
     """Return ``(patch_size, stride)`` recorded by the generating sampler, if known."""
     sampler = manifest.sampler or {}
     patch_size = sampler.get("patch_size")
@@ -138,22 +139,22 @@ def _manifest_patch_geometry(manifest: Manifest) -> Tuple[Optional[int], Optiona
     )
 
 
-def _split_counts(n: int, config: SplitterConfig) -> Tuple[int, int]:
+def _split_counts(n: int, config: SplitterConfig) -> tuple[int, int]:
     test = math.ceil(n * config.test_ratio)
     val = math.ceil((n - test) * config.val_ratio)
     return test, val
 
 
 def _assign_groups(
-    groups: Sequence[List[ManifestEntry]],
+    groups: Sequence[list[ManifestEntry]],
     config: SplitterConfig,
-) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry]]:
+) -> tuple[list[ManifestEntry], list[ManifestEntry], list[ManifestEntry]]:
     """Fill test, then val, then train with whole groups in the given order."""
     total = sum(len(group) for group in groups)
     test_target, val_target = _split_counts(total, config)
-    test: List[ManifestEntry] = []
-    val: List[ManifestEntry] = []
-    train: List[ManifestEntry] = []
+    test: list[ManifestEntry] = []
+    val: list[ManifestEntry] = []
+    train: list[ManifestEntry] = []
     for group in groups:
         # Take a group only if it moves the split closer to its target, so large
         # spatial blocks do not overshoot small held-out sets.
@@ -167,14 +168,14 @@ def _assign_groups(
 
 
 def _overlapping(
-    candidates: List[ManifestEntry], held_out: List[ManifestEntry], patch_size: int
-) -> Set[int]:
+    candidates: list[ManifestEntry], held_out: list[ManifestEntry], patch_size: int
+) -> set[int]:
     """Indices of ``candidates`` whose footprint overlaps any ``held_out`` footprint."""
-    buckets: DefaultDict[Tuple[int, int], List[ManifestEntry]] = defaultdict(list)
+    buckets: defaultdict[tuple[int, int], list[ManifestEntry]] = defaultdict(list)
     for entry in held_out:
         buckets[(entry["row"] // patch_size, entry["col"] // patch_size)].append(entry)
 
-    overlapping: Set[int] = set()
+    overlapping: set[int] = set()
     for index, entry in enumerate(candidates):
         row, col = entry["row"], entry["col"]
         cell_row, cell_col = row // patch_size, col // patch_size
@@ -198,7 +199,7 @@ def _overlapping(
 _MIN_BLOCKS = 10
 
 
-def _default_block_size(entries: List[ManifestEntry], patch_size: int) -> int:
+def _default_block_size(entries: list[ManifestEntry], patch_size: int) -> int:
     """4 x patch size, shrunk (to no less than one patch) so small rasters still
     divide into at least ``_MIN_BLOCKS`` blocks."""
     if not entries:
@@ -210,13 +211,13 @@ def _default_block_size(entries: List[ManifestEntry], patch_size: int) -> int:
 
 
 def _spatial_split(
-    entries: List[ManifestEntry],
+    entries: list[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
-    patch_size: Optional[int],
-) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry], int]:
+    patch_size: int | None,
+) -> tuple[list[ManifestEntry], list[ManifestEntry], list[ManifestEntry], int]:
     block = config.block_size or _default_block_size(entries, patch_size or 1)
-    blocks: DefaultDict[Tuple[int, int], List[ManifestEntry]] = defaultdict(list)
+    blocks: defaultdict[tuple[int, int], list[ManifestEntry]] = defaultdict(list)
     for entry in entries:
         blocks[(entry["row"] // block, entry["col"] // block)].append(entry)
     ordered = [blocks[key] for key in sorted(blocks)]
@@ -234,14 +235,14 @@ def _spatial_split(
 
 
 def _region_split(
-    entries: List[ManifestEntry],
+    entries: list[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
-    patch_size: Optional[int],
-) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry], int]:
+    patch_size: int | None,
+) -> tuple[list[ManifestEntry], list[ManifestEntry], list[ManifestEntry], int]:
     """Whole regions (``summary.region``) to one split each, in a seeded random order;
     patches that still overlap a held-out patch (adjacent regions) are dropped."""
-    regions: DefaultDict[str, List[ManifestEntry]] = defaultdict(list)
+    regions: defaultdict[str, list[ManifestEntry]] = defaultdict(list)
     for entry in entries:
         region = entry["summary"].get("region")
         if region is None:
@@ -263,17 +264,17 @@ def _region_split(
 
 
 def _stratified_split(
-    entries: List[ManifestEntry],
+    entries: list[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
-    ignore_key: Optional[str] = None,
-) -> Tuple[List[ManifestEntry], List[ManifestEntry], List[ManifestEntry]]:
-    strata: Dict[Hashable, List[ManifestEntry]] = defaultdict(list)
+    ignore_key: str | None = None,
+) -> tuple[list[ManifestEntry], list[ManifestEntry], list[ManifestEntry]]:
+    strata: dict[Hashable, list[ManifestEntry]] = defaultdict(list)
     for entry in entries:
         strata[_stratum(entry, ignore_key)].append(entry)
-    test: List[ManifestEntry] = []
-    val: List[ManifestEntry] = []
-    train: List[ManifestEntry] = []
+    test: list[ManifestEntry] = []
+    val: list[ManifestEntry] = []
+    train: list[ManifestEntry] = []
     for key in sorted(strata, key=str):
         members = strata[key]
         rng.shuffle(members)
@@ -285,20 +286,20 @@ def _stratified_split(
 
 
 def _apply_sample_limit(
-    entries: List[ManifestEntry],
+    entries: list[ManifestEntry],
     config: SplitterConfig,
     rng: random.Random,
-    ignore_key: Optional[str] = None,
-) -> List[ManifestEntry]:
+    ignore_key: str | None = None,
+) -> list[ManifestEntry]:
     if config.sample_limit is None or config.sample_limit >= len(entries):
         return list(entries)
     if config.strategy == "random":
         return rng.sample(entries, config.sample_limit)
     # Keep the stratum mix when subsampling.
-    strata: Dict[Hashable, List[ManifestEntry]] = defaultdict(list)
+    strata: dict[Hashable, list[ManifestEntry]] = defaultdict(list)
     for entry in entries:
         strata[_stratum(entry, ignore_key)].append(entry)
-    pool: List[ManifestEntry] = []
+    pool: list[ManifestEntry] = []
     for key in sorted(strata, key=str):
         members = strata[key]
         k = min(round(len(members) / len(entries) * config.sample_limit), len(members))
@@ -310,7 +311,7 @@ def split_dataset(
     manifest: Manifest,
     config: SplitterConfig,
     output_dir: Path,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Write train/val/test split lists derived from *manifest* to *output_dir*.
 
     Returns:
@@ -326,7 +327,7 @@ def split_manifest(
     manifest: Manifest,
     config: SplitterConfig,
     output_dir: Path,
-) -> Tuple[Dict[str, int], SplitLists]:
+) -> tuple[dict[str, int], SplitLists]:
     """Like :func:`split_dataset`, but also return the train/val/test filename lists.
 
     Writes to *output_dir*:
@@ -349,7 +350,7 @@ def _split(
     config: SplitterConfig,
     output_dir: Path,
     stacklevel: int,
-) -> Tuple[Dict[str, int], SplitLists]:
+) -> tuple[dict[str, int], SplitLists]:
     rng = random.Random(config.seed)
     ignore = manifest.ignore_index
     ignore_key = str(ignore) if ignore is not None else None

@@ -12,10 +12,11 @@ import os
 import time
 import warnings
 from collections import defaultdict
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, DefaultDict, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -59,7 +60,7 @@ class GenerateResult:
     staging_dir: Path
     manifest: Manifest
     new_patches: int
-    split_counts: Optional[Dict[str, int]]
+    split_counts: dict[str, int] | None
     tiles_requested: int
     tiles_failed: int
     seconds: float
@@ -67,7 +68,7 @@ class GenerateResult:
     tiles_cached: int = 0
 
 
-def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
+def _global_anchors(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
     if config.mode == "random":
         return random_anchors_for(height, width, config)
     return list(
@@ -81,8 +82,8 @@ def _global_anchors(height: int, width: int, config: SamplerConfig) -> List[Tupl
     )
 
 
-def _group_anchors(anchors: List[Tuple[int, int]], chunk_rows: int) -> List[List[Tuple[int, int]]]:
-    grouped: DefaultDict[int, List[Tuple[int, int]]] = defaultdict(list)
+def _group_anchors(anchors: list[tuple[int, int]], chunk_rows: int) -> list[list[tuple[int, int]]]:
+    grouped: defaultdict[int, list[tuple[int, int]]] = defaultdict(list)
     for anchor in anchors:
         grouped[anchor[0] // chunk_rows].append(anchor)
     return [grouped[index] for index in sorted(grouped)]
@@ -94,12 +95,12 @@ _FAILED_TILES_WARNING = 0.5
 
 def _process_anchor_chunk(
     source: WindowedRasterSource,
-    anchors: List[Tuple[int, int]],
+    anchors: list[tuple[int, int]],
     sampler: SamplerConfig,
     target: Target,
-    others: Optional[Dict[str, AlignedSource]] = None,
-) -> Tuple[
-    npt.NDArray[Any], List[Annotation], List[PatchMeta], Dict[str, npt.NDArray[Any]], WindowTarget
+    others: dict[str, AlignedSource] | None = None,
+) -> tuple[
+    npt.NDArray[Any], list[Annotation], list[PatchMeta], dict[str, npt.NDArray[Any]], WindowTarget
 ]:
     """Read one chunk's window and sample its patches.
 
@@ -115,7 +116,7 @@ def _process_anchor_chunk(
     col_stop = min(source.metadata.width, max(col + patch_size for _, col in anchors))
 
     image, valid_mask = source.read_window(row_start, row_stop, col_start, col_stop)
-    other_images: Dict[str, npt.NDArray[Any]] = {}
+    other_images: dict[str, npt.NDArray[Any]] = {}
     for name, other in (others or {}).items():
         other_image, other_valid = other.read_window(row_start, row_stop, col_start, col_stop)
         other_images[name] = other_image
@@ -136,7 +137,7 @@ def _process_anchor_chunk(
         col_offset=col_start,
         valid_mask=valid_mask,
     )
-    other_patches: Dict[str, npt.NDArray[Any]] = {}
+    other_patches: dict[str, npt.NDArray[Any]] = {}
     for name, other_image in other_images.items():
         kept = [
             extract_array_patch(
@@ -156,7 +157,7 @@ def _process_anchor_chunk(
     return images, annotations, metadata, other_patches, window
 
 
-def _check_stackable(records: List[SourceRecord]) -> None:
+def _check_stackable(records: list[SourceRecord]) -> None:
     """Refuse sources that cannot share one (T, C, H, W) array (``writer.stack_sources``)."""
     first = records[0]
     for record in records[1:]:
@@ -169,9 +170,9 @@ def _check_stackable(records: List[SourceRecord]) -> None:
             )
 
 
-def _open_sources(config: MapcvConfig) -> List[WindowedRasterSource]:
+def _open_sources(config: MapcvConfig) -> list[WindowedRasterSource]:
     """Open every imagery source in order, closing the opened ones if one fails."""
-    opened: List[WindowedRasterSource] = []
+    opened: list[WindowedRasterSource] = []
     try:
         for imagery in config.sources:
             if isinstance(imagery, GeoTiffImageryConfig):
@@ -193,7 +194,7 @@ def _open_sources(config: MapcvConfig) -> List[WindowedRasterSource]:
 @contextmanager
 def _sources(
     config: MapcvConfig,
-) -> Iterator[Tuple[List[WindowedRasterSource], Dict[str, AlignedSource]]]:
+) -> Iterator[tuple[list[WindowedRasterSource], dict[str, AlignedSource]]]:
     """The opened sources and, by name, every further one aligned to the first's grid;
     all are closed on exit."""
     _log.debug("Opening imagery")
@@ -210,9 +211,7 @@ def _sources(
             each.close()
 
 
-def _area_of_interest(
-    config: MapcvConfig, source: WindowedRasterSource
-) -> Optional[AreaOfInterest]:
+def _area_of_interest(config: MapcvConfig, source: WindowedRasterSource) -> AreaOfInterest | None:
     if config.region.path is None:
         return None
     return AreaOfInterest(config.region, source.metadata.crs, source.metadata.transform)
@@ -224,7 +223,7 @@ def _area_of_interest(
 _WINDOW_BYTES = 256 * 2**20
 
 
-def _pixel_bytes(sources: List[WindowedRasterSource]) -> int:
+def _pixel_bytes(sources: list[WindowedRasterSource]) -> int:
     """Bytes of one pixel of every source together, as read."""
     return sum(
         max(1, len(each.metadata.bands)) * np.dtype(each.metadata.dtype).itemsize
@@ -241,8 +240,8 @@ def _max_window_width(rows: int, width: int, pixel_bytes: int, patch_size: int) 
 
 
 def _column_windows(
-    group: List[Tuple[int, int]], patch_size: int, pixel_bytes: int
-) -> List[List[Tuple[int, int]]]:
+    group: list[tuple[int, int]], patch_size: int, pixel_bytes: int
+) -> list[list[tuple[int, int]]]:
     """``group`` as it is, or, when its window would pass :data:`_WINDOW_BYTES`, split
     into column ranges whose windows stay below it (left to right, order kept)."""
     rows = max(row for row, _ in group) + patch_size - min(row for row, _ in group)
@@ -252,7 +251,7 @@ def _column_windows(
     if max_width >= width:
         return [group]
     step = max_width - patch_size
-    split: Dict[int, List[Tuple[int, int]]] = {}
+    split: dict[int, list[tuple[int, int]]] = {}
     for anchor in group:
         split.setdefault((anchor[1] - first) // step, []).append(anchor)
     return [split[key] for key in sorted(split)]
@@ -260,9 +259,9 @@ def _column_windows(
 
 def _anchor_groups(
     config: MapcvConfig,
-    sources: List[WindowedRasterSource],
-    aoi: Optional[AreaOfInterest],
-) -> List[List[Tuple[int, int]]]:
+    sources: list[WindowedRasterSource],
+    aoi: AreaOfInterest | None,
+) -> list[list[tuple[int, int]]]:
     """Every patch anchor of the raster, grouped into the chunks they are read in."""
     meta = sources[0].metadata
     patch_size = config.sampler.patch_size
@@ -295,10 +294,10 @@ class Patch:
     col: int
     image: npt.NDArray[Any]
     target: Any
-    transform: Tuple[float, float, float, float, float, float]
+    transform: tuple[float, float, float, float, float, float]
     crs: str
     padded: bool
-    others: Dict[str, npt.NDArray[Any]]
+    others: dict[str, npt.NDArray[Any]]
 
 
 ConfigLike = Union[MapcvConfig, str, "os.PathLike[str]"]
@@ -309,7 +308,7 @@ def _config(config: ConfigLike) -> MapcvConfig:
 
 
 def generate(
-    config: ConfigLike, *, progress: Optional[Callable[[int, int], None]] = None
+    config: ConfigLike, *, progress: Callable[[int, int], None] | None = None
 ) -> GenerateResult:
     """Build (or resume) the dataset a config describes; the library form of
     ``mapcv generate``.
@@ -324,10 +323,10 @@ def generate(
 
 
 def split(
-    dataset: Union[str, "os.PathLike[str]"],
-    config: Optional[SplitterConfig] = None,
+    dataset: str | os.PathLike[str],
+    config: SplitterConfig | None = None,
     **settings: Any,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Rewrite a dataset's split lists from its manifest; the library form of
     ``mapcv split``. Returns the patch count of each split and ``dropped``.
 
@@ -371,7 +370,7 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
 
 
 def run_generate(
-    config: MapcvConfig, on_chunk: Optional[Callable[[int, int], None]] = None
+    config: MapcvConfig, on_chunk: Callable[[int, int], None] | None = None
 ) -> GenerateResult:
     """Generate a patch dataset from the configured imagery source.
 
@@ -402,10 +401,10 @@ def run_generate(
     with _sources(config) as (opened, others):
         source = opened[0]
         target.prepare(source.metadata)
-        records: List[SourceRecord] = []
+        records: list[SourceRecord] = []
         for name, opened_source in zip(names, opened):
             meta = opened_source.metadata
-            grid: Dict[str, Any] = {}
+            grid: dict[str, Any] = {}
             aligned = others.get(name)
             if aligned is not None and not aligned.alignment.identity:
                 # How the source's own grid maps onto the dataset's (the first source's).
@@ -432,7 +431,7 @@ def run_generate(
             _check_stackable(records)
         aoi = _area_of_interest(config, source)
         # An area of interest is recorded so a resumed run notices other polygons.
-        region_record: Dict[str, Any] = {"region": aoi.record()} if aoi is not None else {}
+        region_record: dict[str, Any] = {"region": aoi.record()} if aoi is not None else {}
         expected = Manifest(
             mapcv_version=mapcv_version(),
             task=config.task,
@@ -524,8 +523,8 @@ def run_generate(
                 stacklevel=2,
             )
 
-    split_counts: Optional[Dict[str, int]] = None
-    split_lists: Optional[SplitLists] = None
+    split_counts: dict[str, int] | None = None
+    split_lists: SplitLists | None = None
     if config.split is not None:
         split_counts, split_lists = split_manifest(manifest, config.split, staging / _SPLITS_SUBDIR)
     writer.finalize(manifest, split_lists)
@@ -544,8 +543,8 @@ def run_generate(
 
 def run_split(
     staging_dir: Path,
-    split_config: Optional[SplitterConfig] = None,
-) -> Dict[str, int]:
+    split_config: SplitterConfig | None = None,
+) -> dict[str, int]:
     """Split an existing dataset (manifest version 1, 2 or 3); return split counts.
 
     The manifest is read, never rewritten. Outputs that depend on the split

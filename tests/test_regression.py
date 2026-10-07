@@ -9,7 +9,7 @@ nearest neighbour (``tolerance=0``, exact) onto each patch's grid otherwise, the
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -18,24 +18,24 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="regression tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-import rasterio.warp  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.enums import Resampling  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio
+import rasterio.warp
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
+from test_multi_source import (
     EPSG,
     PATCH,
     reference_transform,
     region_inside,
     write_raster,
 )
+
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
+from mapcv.planning import plan
 
 runner = CliRunner()
 WIDTH, HEIGHT = 448, 384
@@ -48,7 +48,7 @@ def write_values(
     height: int,
     *,
     dtype: str = "float32",
-    nodata: Optional[float] = None,
+    nodata: float | None = None,
     epsg: int = EPSG,
     seed: int = 4,
 ) -> npt.NDArray[Any]:
@@ -60,19 +60,19 @@ def write_values(
         data = rng.integers(0, 3000, size=(height, width)).astype(dtype)
     if nodata is not None:
         data[100:140, 50:200] = nodata
-    profile: Dict[str, Any] = dict(
-        driver="GTiff",
-        height=height,
-        width=width,
-        count=1,
-        dtype=dtype,
-        crs=CRS.from_epsg(epsg),
-        transform=transform,
-        tiled=True,
-        blockxsize=128,
-        blockysize=128,
-        compress="deflate",
-    )
+    profile: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": dtype,
+        "crs": CRS.from_epsg(epsg),
+        "transform": transform,
+        "tiled": True,
+        "blockxsize": 128,
+        "blockysize": 128,
+        "compress": "deflate",
+    }
     if nodata is not None:
         profile["nodata"] = nodata
     with rasterio.open(path, "w", **profile) as dst:
@@ -81,7 +81,7 @@ def write_values(
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, seed=1)
     return {"region": region_inside(ref, WIDTH, HEIGHT), "ref": ref}
@@ -89,8 +89,8 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
 
 def regression_config(
     tmp_path: Path,
-    region: Dict[str, float],
-    labels: Dict[str, Any],
+    region: dict[str, float],
+    labels: dict[str, Any],
     *,
     staging: str = "dataset",
     **writer: Any,
@@ -113,8 +113,8 @@ def expected_target(
     *,
     scale: float = 1.0,
     offset: float = 0.0,
-    valid_min: Optional[float] = None,
-    valid_max: Optional[float] = None,
+    valid_min: float | None = None,
+    valid_max: float | None = None,
 ) -> npt.NDArray[np.float32]:
     """rasterio's nearest-neighbour value at every patch pixel centre, scaled, NaN if invalid."""
     with rasterio.open(path) as src:
@@ -180,7 +180,7 @@ def _assert_targets(config: MapcvConfig, manifest: Manifest, path: Path, **scali
 # ── Datasets ─────────────────────────────────────────────────────────────────
 
 
-def test_targets_on_the_imagery_grid_with_nodata(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_targets_on_the_imagery_grid_with_nodata(tmp_path: Path, scene: dict[str, Any]) -> None:
     write_values(tmp_path / "height.tif", scene["ref"], WIDTH, HEIGHT, nodata=-9999.0)
     config = regression_config(tmp_path, scene["region"], {"path": str(tmp_path / "height.tif")})
     assert config.writer.mask_format == "tif"  # floats do not fit PNG: GeoTIFF by default
@@ -192,7 +192,7 @@ def test_targets_on_the_imagery_grid_with_nodata(tmp_path: Path, scene: Dict[str
 
 
 def test_scaled_integer_values_on_another_crs_and_grid(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     # Decimetres in an int16 raster, in lon/lat at about 3 m, NoData -1.
     ref = scene["ref"]
@@ -209,7 +209,7 @@ def test_scaled_integer_values_on_another_crs_and_grid(
     _assert_targets(config, manifest, tmp_path / "dem.tif", scale=0.1, offset=100.0, valid_max=2500)
 
 
-def test_pixels_without_imagery_have_no_target(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_pixels_without_imagery_have_no_target(tmp_path: Path, scene: dict[str, Any]) -> None:
     ref = scene["ref"]
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, seed=1)
     with rasterio.open(tmp_path / "image.tif", "r+") as dst:
@@ -235,7 +235,7 @@ def test_pixels_without_imagery_have_no_target(tmp_path: Path, scene: Dict[str, 
     assert holes > 0
 
 
-def test_min_label_ratio_counts_pixels_with_a_value(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_min_label_ratio_counts_pixels_with_a_value(tmp_path: Path, scene: dict[str, Any]) -> None:
     write_values(tmp_path / "height.tif", scene["ref"], WIDTH, HEIGHT, nodata=-9999.0)
     config = regression_config(
         tmp_path, scene["region"], {"path": str(tmp_path / "height.tif")}, staging="ratio"
@@ -246,7 +246,7 @@ def test_min_label_ratio_counts_pixels_with_a_value(tmp_path: Path, scene: Dict[
         assert entry["summary"]["values"]["valid"] >= 0.999 * PATCH * PATCH
 
 
-def test_resume_plan_info_and_several_sources(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_resume_plan_info_and_several_sources(tmp_path: Path, scene: dict[str, Any]) -> None:
     write_values(tmp_path / "height.tif", scene["ref"], WIDTH, HEIGHT, nodata=-9999.0)
     config = regression_config(tmp_path, scene["region"], {"path": str(tmp_path / "height.tif")})
     full = run_generate(config).manifest
@@ -290,7 +290,7 @@ def test_resume_plan_info_and_several_sources(tmp_path: Path, scene: Dict[str, A
 
 
 XYZ = {"type": "xyz", "zoom": 18, "source": "esri_satellite"}
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "imagery": XYZ,
     "sampler": {"patch_size": 256},
@@ -324,7 +324,7 @@ VALUES = {"type": "continuous", "path": "chm.tif"}
         ),
     ],
 )
-def test_config_refuses_bad_regression_settings(changes: Dict[str, Any], message: str) -> None:
+def test_config_refuses_bad_regression_settings(changes: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate({**BASE, **changes})
     assert message in str(raised.value)

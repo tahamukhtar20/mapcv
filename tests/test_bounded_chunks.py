@@ -8,24 +8,24 @@ few seconds and when the run stops, keeping only the entries of finished chunks.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
 
-from test_geotiff_imagery import config_for, make_raster, write_labels  # noqa: E402
+from test_geotiff_imagery import config_for, make_raster, write_labels
 
-from mapcv import pipeline  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import _column_windows, run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from mapcv.writers import create_writer  # noqa: E402
+from mapcv import pipeline
+from mapcv.manifest import Manifest
+from mapcv.pipeline import _column_windows, run_generate
+from mapcv.planning import plan
+from mapcv.writers import create_writer
 
 PATCH = 64
 
 
-def _files(staging: Path) -> Dict[str, bytes]:
+def _files(staging: Path) -> dict[str, bytes]:
     return {
         path.relative_to(staging).as_posix(): path.read_bytes()
         for folder in ("Images", "Masks")
@@ -47,12 +47,12 @@ def _wide_config(tmp_path: Path, staging: str = "dataset", **sampler: Any) -> An
     )
 
 
-def _windows(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[int, int]]:
+def _windows(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
     """Record (rows, cols) of every chunk window the pipeline reads."""
-    seen: List[Tuple[int, int]] = []
+    seen: list[tuple[int, int]] = []
     original = pipeline._process_anchor_chunk
 
-    def record(source: Any, group: List[Tuple[int, int]], *args: Any) -> Any:
+    def record(source: Any, group: list[tuple[int, int]], *args: Any) -> Any:
         rows = max(r for r, _ in group) + PATCH - min(r for r, _ in group)
         cols = max(c for _, c in group) + PATCH - min(c for _, c in group)
         seen.append((rows, cols))
@@ -122,7 +122,7 @@ def test_the_manifest_is_saved_every_few_seconds_not_after_every_chunk(
 ) -> None:
     config = _wide_config(tmp_path)
     manifest_path = config.writer.staging_dir / "manifest.json"
-    saved: List[int] = []
+    saved: list[int] = []
 
     def on_chunk(done: int, total: int) -> None:
         if done:

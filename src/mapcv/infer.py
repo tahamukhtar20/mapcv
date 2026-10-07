@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -44,14 +45,14 @@ def _stride(patch_size: int, overlap: float) -> int:
 
 
 def predict_raster(
-    config: Union[MapcvConfig, str, "os.PathLike[str]"],
+    config: MapcvConfig | str | os.PathLike[str],
     fn: Predictor,
-    out: Union[str, "os.PathLike[str]"],
+    out: str | os.PathLike[str],
     *,
     overlap: float = 0.5,
     batch_size: int = 16,
     output: Literal["argmax", "scores"] = "argmax",
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Predict every pixel of the config's region with ``fn`` and write a GeoTIFF.
 
@@ -102,7 +103,7 @@ def _predict(
     overlap: float,
     batch_size: int,
     output: str,
-    progress: Optional[Callable[[int, int], None]],
+    progress: Callable[[int, int], None] | None,
 ) -> Path:
     meta = source.metadata
     height, width = meta.height, meta.width
@@ -116,18 +117,18 @@ def _predict(
     # Strips of patch rows: each strip reads the rows its patches cover and is done
     # with every output row above the next strip's first patch row.
     chunk = max(patch, meta.chunk_rows)
-    strips: List[List[int]] = []
+    strips: list[list[int]] = []
     for row in rows:
         if strips and row - strips[-1][0] < chunk:
             strips[-1].append(row)
         else:
             strips.append([row])
 
-    result: Optional[npt.NDArray[Any]] = None
+    result: npt.NDArray[Any] | None = None
     channels = 0
     single = False
     valid_out = np.zeros((height, width), dtype=bool)
-    carry: Optional[Tuple[int, npt.NDArray[np.float64], npt.NDArray[np.float64]]] = None
+    carry: tuple[int, npt.NDArray[np.float64], npt.NDArray[np.float64]] | None = None
     if progress is not None:
         progress(0, len(strips))
     for done, strip in enumerate(strips, start=1):
@@ -135,7 +136,7 @@ def _predict(
         bottom = min(height, strip[-1] + patch)
         image, valid = source.read_window(top, bottom, 0, width)
         valid_out[top:bottom] |= valid
-        sums: Optional[npt.NDArray[np.float64]] = None
+        sums: npt.NDArray[np.float64] | None = None
         total = np.zeros((bottom - top, width), dtype=np.float64)
         if carry is not None:
             carry_top, carry_sums, carry_total = carry

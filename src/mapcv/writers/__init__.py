@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 from mapcv.manifest import Manifest
 from mapcv.splitter import SplitLists
@@ -34,8 +33,8 @@ __all__ = [
 
 def create_writer(
     config: WriterConfig,
-    target: Optional[Target] = None,
-    sources: Optional[List[str]] = None,
+    target: Target | None = None,
+    sources: list[str] | None = None,
 ) -> Writer:
     """The writer a ``writer:`` block asks for, for ``target``'s annotations.
 
@@ -84,7 +83,7 @@ def check_compatible(target: Target, writer: Writer) -> None:
 
 
 def refresh_split_outputs(
-    manifest: Manifest, staging_dir: Path, split_lists: Optional[SplitLists]
+    manifest: Manifest, staging_dir: Path, split_lists: SplitLists | None
 ) -> None:
     """Rebuild the outputs that depend on the split after ``mapcv split``.
 

@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from benchmarks import baselines as baseline_registry
 from benchmarks.runner import run_suite
 from benchmarks.scenarios import SCENARIOS, Group, names_in_group
 
-GROUPS: Dict[str, Group] = {"quick": "quick", "standard": "standard", "large": "large"}
+GROUPS: dict[str, Group] = {"quick": "quick", "standard": "standard", "large": "large"}
 DEFAULT_REPEAT = 3
 
 
-def expand(selection: Sequence[str]) -> List[str]:
+def expand(selection: Sequence[str]) -> list[str]:
     """Scenario names, with ``quick``/``standard``/``large``/``all`` expanded to their members."""
-    names: List[str] = []
+    names: list[str] = []
     for item in selection:
         if item == "all":
             expanded = list(SCENARIOS)
@@ -91,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _row(name: str, entry: Dict[str, Any]) -> str:
+def _row(name: str, entry: dict[str, Any]) -> str:
     summary = entry.get("summary", {})
     if "uninterrupted_wall_s" in summary:
         timing = (
@@ -110,7 +111,7 @@ def _row(name: str, entry: Dict[str, Any]) -> str:
     return f"  {name:<12} {entry['status']:<7} {timing}"
 
 
-def print_report(document: Dict[str, Any], out: Path) -> None:
+def print_report(document: dict[str, Any], out: Path) -> None:
     print("\nscenario     status  wall time (median)  throughput  peak RSS")
     for name, entry in document["scenarios"].items():
         print(_row(name, entry))
@@ -148,7 +149,7 @@ def print_report(document: Dict[str, Any], out: Path) -> None:
     print(f"Results written to {out}")
 
 
-def compare_table(document: Dict[str, Any], markdown: bool = False) -> str:
+def compare_table(document: dict[str, Any], markdown: bool = False) -> str:
     """mapcv and each baseline per scenario: median wall time, peak memory, and whether
     the baseline's data matched mapcv's (a time is only comparable when it did)."""
     rows = [("scenario", "tool", "wall time", "peak RSS", "vs mapcv", "same data")]
@@ -195,16 +196,16 @@ def compare_table(document: Dict[str, Any], markdown: bool = False) -> str:
     )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Entry point; returns the process exit code (non-zero if any check failed)."""
     args = build_parser().parse_args(argv)
     if args.command == "compare":
         print(compare_table(json.loads(args.results.read_text(encoding="utf-8")), args.markdown))
         return 0
     if args.command == "list":
-        for group in GROUPS:
+        for group, members in GROUPS.items():
             print(f"{group}:")
-            for name in names_in_group(GROUPS[group]):
+            for name in names_in_group(members):
                 print(f"  {name:<12} {SCENARIOS[name].description}")
         print("baselines:", ", ".join(sorted(baseline_registry.BASELINES)) or "none registered")
         return 0

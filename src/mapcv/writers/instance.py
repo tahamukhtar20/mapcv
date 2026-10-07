@@ -28,8 +28,9 @@ from __future__ import annotations
 import json
 import posixpath
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -58,7 +59,7 @@ from mapcv.writers.files import FilesWriter
 MASKS_DIR = "masks"
 
 # One stored instance: [category_id, x, y, width, height, area, truncated (0/1), rle counts].
-InstanceRow = List[Any]
+InstanceRow = list[Any]
 
 
 def _row(item: Instance) -> InstanceRow:
@@ -68,14 +69,14 @@ def _row(item: Instance) -> InstanceRow:
 def coco_document(
     manifest: Manifest,
     instances: Sequence[Sequence[InstanceRow]],
-    names: Optional[FrozenSet[str]] = None,
+    names: frozenset[str] | None = None,
     description: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """A COCO instance segmentation document for the patches whose image file name is in
     ``names`` (all patches when ``None``), with IDs that do not depend on the selection."""
     size = int((manifest.sampler or {}).get("patch_size") or 0)
-    images: List[Dict[str, Any]] = []
-    annotations: List[Dict[str, Any]] = []
+    images: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
     next_id = 1
     for index, (entry, rows) in enumerate(zip(manifest.patches, instances)):
         file_name = posixpath.basename(entry["files"]["image"])
@@ -115,14 +116,14 @@ class InstanceWriter:
     Annotations must be the instance target's collated :class:`PatchInstances`.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({"instance"})
+    TARGET_TYPES: frozenset[str | None] = frozenset({"instance"})
 
     def __init__(self, config: WriterConfig, options: InstanceOptions) -> None:
         self._config = config
         self._options = options
 
     @classmethod
-    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> "InstanceWriter":
+    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> InstanceWriter:
         """The writer of an existing instance dataset, to rebuild its split outputs."""
         options = manifest.target.options if manifest.target is not None else {}
         return cls(WriterConfig(staging_dir=staging_dir), InstanceOptions.model_validate(options))
@@ -131,10 +132,10 @@ class InstanceWriter:
     def layout(self) -> str:
         return "files"
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         return target_type in self.TARGET_TYPES
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         # As the files layout records it; mask_format only matters with instance-ID masks.
         exclude = {"staging_dir", "world_files", "footprints", "stack_sources"}
         if not self._options.id_mask:
@@ -144,14 +145,14 @@ class InstanceWriter:
             block["world_files"] = True
         return block
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         return FilesWriter(self._config).patch_shape(source, patch_size)
 
     def write(
         self,
         images: npt.NDArray[np.generic],
-        annotations: List[PatchInstances],
-        metadata: List[PatchMeta],
+        annotations: list[PatchInstances],
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
     ) -> None:
@@ -164,7 +165,7 @@ class InstanceWriter:
                 raise TypeError("InstanceWriter writes instance targets: PatchInstances expected")
         staging = self._config.staging_dir
         start = len(manifest.patches)
-        id_masks: Optional[npt.NDArray[np.uint16]] = None
+        id_masks: npt.NDArray[np.uint16] | None = None
         if self._options.id_mask:
             id_masks = np.stack([_id_mask(annotation) for annotation in annotations])
         write_patches(
@@ -177,7 +178,7 @@ class InstanceWriter:
             images_dir=IMAGES_DIR,
             masks_dir=MASKS_DIR,
         )
-        stored: Dict[str, List[InstanceRow]] = {}
+        stored: dict[str, list[InstanceRow]] = {}
         for entry, annotation in zip(manifest.patches[start:], annotations):
             entry["summary"] = PatchSummary(
                 class_objects=annotation.class_counts, empty_ratio=entry["summary"]["empty_ratio"]
@@ -196,7 +197,7 @@ class InstanceWriter:
             json.dumps({"chunk": chunk_index, "patches": patches}, separators=(",", ":")) + "\n",
         )
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write ``patches.geojson`` (``writer.footprints``) and the annotation files."""
         if self._config.footprints:
             path = self._config.staging_dir / FOOTPRINTS_FILENAME
@@ -208,13 +209,13 @@ class InstanceWriter:
                 )
         self.write_annotations(manifest, split_lists)
 
-    def write_annotations(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def write_annotations(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write the COCO files for the split."""
         staging = self._config.staging_dir
         instances = load_objects(manifest, staging, "instances")
         annotations_dir = staging / ANNOTATIONS_DIR
         annotations_dir.mkdir(parents=True, exist_ok=True)
-        wanted: Dict[str, Optional[FrozenSet[str]]]
+        wanted: dict[str, frozenset[str] | None]
         if split_lists is None:
             wanted = {"instances_all.json": None}
         else:

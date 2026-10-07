@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import io
-import sys
 import json
 import math
+import sys
 import threading
 import time
+from collections.abc import Awaitable, Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+from typing import Any, TypeVar
 
 import pytest
 from PIL import Image
@@ -18,14 +19,13 @@ from typer.testing import CliRunner
 
 pytest.importorskip("mcp")
 
-import anyio  # noqa: E402 - a dependency of mcp, absent without the mcp extra
+import anyio
+from mcp.client import Client
+from mcp.types import CallToolResult
 
-from mcp.client import Client  # noqa: E402
-from mcp.types import CallToolResult  # noqa: E402
-
-from mapcv import planning  # noqa: E402
-from mapcv.cli import app  # noqa: E402
-from mapcv.mcp_server import build_server  # noqa: E402
+from mapcv import planning
+from mapcv.cli import app
+from mapcv.mcp_server import build_server
 
 T = TypeVar("T")
 
@@ -45,12 +45,12 @@ def _lat(y: float) -> float:
 
 class _Tiles(BaseHTTPRequestHandler):
     delay = 0.0
-    requests: List[str] = []
+    requests: list[str] = []
 
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         type(self).requests.append(self.path)
         if type(self).delay:
             time.sleep(type(self).delay)
@@ -83,7 +83,7 @@ def tile_server() -> Iterator[str]:
     server.shutdown()
 
 
-def _bbox() -> Tuple[float, float, float, float]:
+def _bbox() -> tuple[float, float, float, float]:
     eps = 1e-7
     return _lon(X0) + eps, _lat(Y0 + NY) + eps, _lon(X0 + NX) - eps, _lat(Y0) - eps
 
@@ -115,7 +115,7 @@ def config_text(
     template: str,
     staging: str = "dataset",
     extra_imagery: str = "",
-    region: Optional[Tuple[float, float, float, float]] = None,
+    region: tuple[float, float, float, float] | None = None,
     zoom: int = ZOOM,
 ) -> str:
     west, south, east, north = region or _bbox()
@@ -177,12 +177,12 @@ async def call(client: Client, tool: str, **arguments: Any) -> CallToolResult:
     return await client.call_tool(tool, arguments)
 
 
-def data(result: CallToolResult) -> Dict[str, Any]:
+def data(result: CallToolResult) -> dict[str, Any]:
     assert result.structured_content is not None
     return dict(result.structured_content)
 
 
-def tree(path: Path) -> Dict[str, bytes]:
+def tree(path: Path) -> dict[str, bytes]:
     return {
         p.relative_to(path).as_posix(): p.read_bytes()
         for p in sorted(path.rglob("*"))
@@ -222,9 +222,9 @@ def test_write_mode_offers_every_tool_with_annotations(project: Path) -> None:
 
 
 def test_journey_inspect_validate_plan_generate_info_split(project: Path) -> None:
-    events: List[Tuple[float, Optional[float]]] = []
+    events: list[tuple[float, float | None]] = []
 
-    async def on_progress(progress: float, total: Optional[float], message: Optional[str]) -> None:
+    async def on_progress(progress: float, total: float | None, message: str | None) -> None:
         events.append((progress, total))
 
     async def scenario(client: Client) -> None:
@@ -239,7 +239,7 @@ def test_journey_inspect_validate_plan_generate_info_split(project: Path) -> Non
             {"value": "building", "count": 2},
             {"value": "water", "count": 1},
         ]
-        west, south, east, north = _bbox()
+        west, _south, _east, north = _bbox()
         assert found["extent"]["west"] > west and found["extent"]["north"] < north
 
         valid = await call(client, "validate_config", path="mapcv.yaml")
@@ -511,7 +511,7 @@ def test_a_symlink_inside_an_existing_output_folder_is_refused(
 
 
 def test_large_jobs_are_refused_until_confirmed(project: Path, tile_server: str) -> None:
-    west, south, east, north = _bbox()
+    west, south, _east, _north = _bbox()
     # About 44 700 tiles at zoom 18 (the limit is 20 000): planned, never fetched here.
     wide = (west, south, west + 0.3, south + 0.17)
     template = f"{tile_server}/{{z}}/{{x}}/{{y}}.png"
@@ -559,10 +559,10 @@ def test_credentials_in_url_template_never_appear(project: Path, tile_server: st
     (project / "secret.yaml").write_text(config_text(template, "secret_out"))
     (project / "failing.yaml").write_text(config_text(failing, "failing_out"))
     broken = config_text(template).replace("zoom: 18", "zoom: 99")
-    texts: List[str] = []
+    texts: list[str] = []
 
     async def scenario(client: Client) -> None:
-        results: List[CallToolResult] = []
+        results: list[CallToolResult] = []
         for tool, arguments in (
             ("validate_config", {"path": "secret.yaml"}),
             ("validate_config", {"yaml_text": broken}),
@@ -595,32 +595,35 @@ def test_credentials_in_url_template_never_appear(project: Path, tile_server: st
 # ── Schema ───────────────────────────────────────────────────────────────────
 
 
-def _model_paths(model: Any, prefix: str = "", seen: Optional[Tuple[Any, ...]] = None) -> List[str]:
+def _model_paths(model: Any, prefix: str = "", seen: tuple[Any, ...] | None = None) -> list[str]:
     """Dotted names of every field of a pydantic model and of the models inside it."""
     from typing import get_args
 
     from pydantic import BaseModel
 
     seen = (*(seen or ()), model)
-    paths: List[str] = []
+    paths: list[str] = []
     for field, info in model.model_fields.items():
         name = info.alias or field  # the schema (and the YAML) use the alias
         paths.append(f"{prefix}{name}")
         stack = [info.annotation]
         while stack:
             annotation = stack.pop()
-            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-                if annotation not in seen:
-                    paths.extend(_model_paths(annotation, f"{prefix}{name}.", seen))
+            if (
+                isinstance(annotation, type)
+                and issubclass(annotation, BaseModel)
+                and annotation not in seen
+            ):
+                paths.extend(_model_paths(annotation, f"{prefix}{name}.", seen))
             stack.extend(get_args(annotation))
     return paths
 
 
-def _schema_paths(schema: Dict[str, Any], node: Dict[str, Any], prefix: str = "") -> List[str]:
+def _schema_paths(schema: dict[str, Any], node: dict[str, Any], prefix: str = "") -> list[str]:
     """The same dotted names, read from the JSON schema the tool returns."""
     definitions = schema.get("$defs", {})
 
-    def resolve(part: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def resolve(part: dict[str, Any]) -> list[dict[str, Any]]:
         if "$ref" in part:
             return resolve(definitions[part["$ref"].rsplit("/", 1)[1]])
         found = [part]
@@ -632,7 +635,7 @@ def _schema_paths(schema: Dict[str, Any], node: Dict[str, Any], prefix: str = ""
             found.extend(resolve(items))
         return found
 
-    paths: List[str] = []
+    paths: list[str] = []
     for part in resolve(node):
         for name, child in part.get("properties", {}).items():
             paths.append(f"{prefix}{name}")
@@ -643,7 +646,7 @@ def _schema_paths(schema: Dict[str, Any], node: Dict[str, Any], prefix: str = ""
 def test_schema_tool_has_every_config_field(project: Path) -> None:
     from mapcv.config import MapcvConfig
 
-    async def scenario(client: Client) -> Dict[str, Any]:
+    async def scenario(client: Client) -> dict[str, Any]:
         result = await call(client, "describe_config_schema")
         assert not result.is_error
         return data(result)
@@ -710,7 +713,7 @@ def test_cancel_stops_after_a_chunk_and_the_run_resumes(project: Path, tmp_path:
         with anyio.CancelScope() as scope:
 
             async def on_progress(
-                progress: float, total: Optional[float], message: Optional[str]
+                progress: float, total: float | None, message: str | None
             ) -> None:
                 if progress >= 1 and total and progress < total:
                     cancelled.set()
@@ -759,10 +762,10 @@ def test_mapcv_mcp_serves_over_stdio(project: Path) -> None:
         async with Client(parameters) as client:
             names = {tool.name for tool in (await client.list_tools()).tools}
             assert names == READ_TOOLS | WRITE_TOOLS
-            events: List[float] = []
+            events: list[float] = []
 
             async def on_progress(
-                progress: float, total: Optional[float], message: Optional[str]
+                progress: float, total: float | None, message: str | None
             ) -> None:
                 events.append(progress)
 
@@ -785,7 +788,7 @@ def test_tool_exceptions_become_error_results(
 ) -> None:
     from mapcv import agent_tools
 
-    raised: List[Exception] = [
+    raised: list[Exception] = [
         ValueError("a user mistake"),
         agent_tools.ConfigInvalid("the config has errors", [{"field": "region", "message": "bad"}]),
         TypeError("internal detail with SECRET"),
@@ -830,7 +833,7 @@ def test_a_failing_generate_step_is_reported(
 def test_serve_runs_over_stdio(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from mapcv import mcp_server
 
-    seen: List[Any] = []
+    seen: list[Any] = []
 
     class _Server:
         def run(self, transport: str) -> None:

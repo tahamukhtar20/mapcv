@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -21,20 +21,20 @@ class Writer(Protocol):
     def layout(self) -> str:
         """The layout's name, recorded as the manifest's ``writer.layout``."""
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         """Whether this layout can store a target's annotations (``None``: no target)."""
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         """The manifest's ``writer`` block (``layout`` first); a resumed run must reproduce it."""
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         """Shape of one stored image patch (the manifest's ``patch_shape``)."""
 
     def write(
         self,
         images: npt.NDArray[np.generic],
         annotations: AnnotationBatch,
-        metadata: List[PatchMeta],
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
     ) -> None:
@@ -48,5 +48,5 @@ class Writer(Protocol):
         the run stops, keeping only the entries of finished chunks.
         """
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Called once after the last chunk and the split (``None`` without a split)."""

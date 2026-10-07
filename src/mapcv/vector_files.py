@@ -17,11 +17,12 @@ import codecs
 import importlib
 import json
 import sqlite3
+from collections.abc import Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -47,12 +48,12 @@ class VectorTable:
     """Features of a vector file: geometries in lon/lat and the requested columns."""
 
     #: One entry per feature; ``None`` for a feature without geometry.
-    geometries: List[Optional[BaseGeometry]] = field(default_factory=list)
+    geometries: list[BaseGeometry | None] = field(default_factory=list)
     #: Attribute values by column name, each a list as long as ``geometries``.
-    columns: Dict[str, List[Any]] = field(default_factory=dict)
+    columns: dict[str, list[Any]] = field(default_factory=dict)
     #: Features whose geometry is a kind the file format stores but mapcv cannot read
     #: (a shapefile MultiPatch); they are counted as lacking polygon geometry.
-    unreadable: Set[int] = field(default_factory=set)
+    unreadable: set[int] = field(default_factory=set)
 
 
 # --- shared helpers ------------------------------------------------------------------
@@ -64,8 +65,8 @@ def _check_file(path: Path) -> None:
 
 
 def _require_columns(
-    wanted: Optional[Sequence[str]], available: Sequence[str], what: str, kind: str
-) -> List[str]:
+    wanted: Sequence[str] | None, available: Sequence[str], what: str, kind: str
+) -> list[str]:
     """The columns to read: ``wanted`` (checked against ``available``), or all of them."""
     if wanted is None:
         return list(available)
@@ -85,7 +86,7 @@ def _wgs84_lonlat(crs: Any) -> bool:
     return bool(crs.equals(CRS.from_epsg(4326), ignore_axis_order=True))
 
 
-def _to_wgs84(geometries: List[Optional[BaseGeometry]], crs: Any, what: str) -> None:
+def _to_wgs84(geometries: list[BaseGeometry | None], crs: Any, what: str) -> None:
     """Reproject ``geometries`` in place from ``crs`` to EPSG:4326 longitude/latitude."""
     if _wgs84_lonlat(crs):
         return
@@ -120,17 +121,17 @@ def _to_wgs84(geometries: List[Optional[BaseGeometry]], crs: Any, what: str) -> 
         geometries[index] = geometry
 
 
-def _parse_wkb(blobs: Sequence[Optional[bytes]], what: str) -> List[Optional[BaseGeometry]]:
+def _parse_wkb(blobs: Sequence[bytes | None], what: str) -> list[BaseGeometry | None]:
     """Decode WKB blobs (``None`` stays ``None``)."""
     present = [index for index, blob in enumerate(blobs) if blob is not None]
-    result: List[Optional[BaseGeometry]] = [None] * len(blobs)
+    result: list[BaseGeometry | None] = [None] * len(blobs)
     if not present:
         return result
     array = np.empty(len(present), dtype=object)
     array[:] = [blobs[index] for index in present]
     try:
         decoded = shapely.from_wkb(array)
-    except Exception as exc:  # noqa: BLE001 - GEOS errors have no stable public type
+    except Exception as exc:
         raise ValueError(
             f"{what}: a geometry is not valid WKB ({exc}). The file may be corrupt, or hold "
             "curved geometries (CircularString and the like), which mapcv does not read; "
@@ -166,7 +167,7 @@ def _open_gpkg(path: Path) -> sqlite3.Connection:
         raise ValueError(f"{path.name}: cannot open the GeoPackage ({exc}).") from exc
 
 
-def _gpkg_layers(connection: sqlite3.Connection, path: Path) -> List[Tuple[str, str, int]]:
+def _gpkg_layers(connection: sqlite3.Connection, path: Path) -> list[tuple[str, str, int]]:
     """Feature tables as ``(table, geometry column, srs_id)``, sorted by table name."""
     try:
         rows = connection.execute(
@@ -183,7 +184,7 @@ def _gpkg_layers(connection: sqlite3.Connection, path: Path) -> List[Tuple[str, 
     return [(str(name), str(column), int(srs_id)) for name, column, srs_id in rows]
 
 
-def gpkg_layer_names(path: Path) -> List[str]:
+def gpkg_layer_names(path: Path) -> list[str]:
     """Names of the feature tables (layers) of a GeoPackage, sorted.
 
     Raises:
@@ -232,7 +233,7 @@ def _gpkg_crs(connection: sqlite3.Connection, srs_id: int, what: str) -> Any:
     )
 
 
-def _gpkg_order(connection: sqlite3.Connection, table: str, info: List[Any]) -> str:
+def _gpkg_order(connection: sqlite3.Connection, table: str, info: list[Any]) -> str:
     """The ``ORDER BY`` clause that gives a feature table its stable, file order.
 
     Feature order decides which polygon wins where polygons overlap and the order and IDs
@@ -252,7 +253,7 @@ def _gpkg_order(connection: sqlite3.Connection, table: str, info: List[Any]) -> 
     return " ORDER BY rowid"
 
 
-def _gpkg_wkb(blob: Any, what: str) -> Optional[bytes]:
+def _gpkg_wkb(blob: Any, what: str) -> bytes | None:
     """The WKB inside a GeoPackage geometry blob, or ``None`` for an empty geometry."""
     if blob is None:
         return None
@@ -281,7 +282,7 @@ def _gpkg_wkb(blob: Any, what: str) -> Optional[bytes]:
 
 
 def read_gpkg(
-    path: Path, layer: Optional[str] = None, fields: Optional[Sequence[str]] = None
+    path: Path, layer: str | None = None, fields: Sequence[str] | None = None
 ) -> VectorTable:
     """Read one feature table of a GeoPackage.
 
@@ -325,8 +326,8 @@ def read_gpkg(
         columns = _require_columns(fields, attributes, f"layer '{table}'", "layer")
         select = ", ".join(_quote(name) for name in [geometry_column, *columns])
         order = _gpkg_order(connection, table, info)
-        blobs: List[Optional[bytes]] = []
-        values: Dict[str, List[Any]] = {name: [] for name in columns}
+        blobs: list[bytes | None] = []
+        values: dict[str, list[Any]] = {name: [] for name in columns}
         try:
             cursor = connection.execute(f"SELECT {select} FROM {_quote(table)}{order}")
             while True:
@@ -349,7 +350,7 @@ def read_gpkg(
 # --- Shapefile -----------------------------------------------------------------------
 
 
-def _sidecar(path: Path, suffix: str) -> Optional[Path]:
+def _sidecar(path: Path, suffix: str) -> Path | None:
     """The ``.dbf``/``.prj``/... file next to a ``.shp``, whatever the case of its suffix."""
     for candidate in (path.with_suffix(suffix), path.with_suffix(suffix.upper())):
         if candidate.is_file():
@@ -363,7 +364,7 @@ def _sidecar(path: Path, suffix: str) -> Optional[Path]:
     return None
 
 
-def shapefile_files(path: Path) -> List[Path]:
+def shapefile_files(path: Path) -> list[Path]:
     """The files that make up a shapefile (the ``.shp`` first), those that exist."""
     files = [path]
     for suffix in (".shx", ".dbf", ".prj", ".cpg"):
@@ -373,7 +374,7 @@ def shapefile_files(path: Path) -> List[Path]:
     return files
 
 
-def _shapefile_encoding(cpg: Optional[Path]) -> str:
+def _shapefile_encoding(cpg: Path | None) -> str:
     """The attribute encoding: the ``.cpg`` file's, else UTF-8."""
     if cpg is None:
         return "utf-8"
@@ -390,7 +391,7 @@ def _shapefile_encoding(cpg: Optional[Path]) -> str:
     )
 
 
-def _parts(record: Any) -> List[npt.NDArray[np.float64]]:
+def _parts(record: Any) -> list[npt.NDArray[np.float64]]:
     """The vertex arrays (``(n, 2)``, x and y only) of a shape's parts (rings or lines)."""
     points = np.asarray(record.points, dtype=np.float64)
     if points.size == 0:
@@ -403,7 +404,7 @@ def _parts(record: Any) -> List[npt.NDArray[np.float64]]:
     return [points[start:end] for start, end in zip(starts, ends)]
 
 
-def _organize_rings(rings: List[npt.NDArray[np.float64]]) -> Optional[BaseGeometry]:
+def _organize_rings(rings: list[npt.NDArray[np.float64]]) -> BaseGeometry | None:
     """Polygons with holes from the rings of a shapefile polygon shape.
 
     The format only says that exterior rings run clockwise and holes counter-clockwise,
@@ -421,7 +422,7 @@ def _organize_rings(rings: List[npt.NDArray[np.float64]]) -> Optional[BaseGeomet
     inner, outer = inner[keep], outer[keep]
     depth = np.bincount(inner, minlength=len(shells))
     areas = shapely.area(shells)
-    holes: Dict[int, List[Any]] = {}
+    holes: dict[int, list[Any]] = {}
     for index in np.flatnonzero(depth % 2 == 1):
         around = outer[inner == index]
         parent = min(around, key=lambda candidate: (-depth[candidate], areas[candidate]))
@@ -440,7 +441,7 @@ class _SingleRing:
         self.ring = ring
 
 
-def _shape_geometry(record: Any) -> Union[BaseGeometry, _SingleRing, None]:
+def _shape_geometry(record: Any) -> BaseGeometry | _SingleRing | None:
     """A shapely geometry (x and y only) from a pyshp shape; ``None`` for a null shape.
 
     A polygon with a single ring is returned as :class:`_SingleRing`, for the caller to
@@ -476,7 +477,7 @@ def _shape_geometry(record: Any) -> Union[BaseGeometry, _SingleRing, None]:
     raise TypeError(f"shape type {shape_type}")
 
 
-def _build_single_rings(table: VectorTable, pending: List[Tuple[int, _SingleRing]]) -> None:
+def _build_single_rings(table: VectorTable, pending: list[tuple[int, _SingleRing]]) -> None:
     """Fill the polygons of single-ring shapes into ``table`` with one vectorized call."""
     if not pending:
         return
@@ -487,7 +488,7 @@ def _build_single_rings(table: VectorTable, pending: List[Tuple[int, _SingleRing
         table.geometries[index] = polygon
 
 
-def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> VectorTable:
+def read_shapefile(path: Path, fields: Sequence[str] | None = None) -> VectorTable:
     """Read a Shapefile (``.shp`` with its ``.dbf``, ``.prj`` and ``.cpg``) with pyshp.
 
     Args:
@@ -521,7 +522,7 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
     shx = _sidecar(path, ".shx")
 
     table = VectorTable()
-    handles: List[Any] = []
+    handles: list[Any] = []
     try:
         shp_file = path.open("rb")
         handles.append(shp_file)
@@ -542,7 +543,7 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
             _read_shapefile_features(reader, dbf_file is not None, columns, table, path.name)
         except ValueError:
             raise
-        except Exception as exc:  # noqa: BLE001 - pyshp raises many types for corrupt input
+        except Exception as exc:
             if "decode" in str(exc).lower():
                 raise ValueError(
                     f"{path.name}: its attributes do not decode as {encoding} ({exc}). "
@@ -563,20 +564,20 @@ def read_shapefile(path: Path, fields: Optional[Sequence[str]] = None) -> Vector
 
 
 def _read_shapefile_features(
-    reader: Any, has_dbf: bool, columns: List[str], table: VectorTable, name: str
+    reader: Any, has_dbf: bool, columns: list[str], table: VectorTable, name: str
 ) -> None:
     """Fill ``table`` from ``reader``, keeping shapes and attribute records in step.
 
     A record deleted in the dbf is dropped with its shape, as GDAL does.
     """
     missing = object()
-    pairs: Iterator[Tuple[Any, Any]]
+    pairs: Iterator[tuple[Any, Any]]
     if has_dbf:
         records = reader.iterRecords(fields=columns, deleted_as_None=True)
         pairs = zip_longest(reader.iterShapes(), records, fillvalue=missing)
     else:
         pairs = ((shape, None) for shape in reader.iterShapes())
-    pending: List[Tuple[int, _SingleRing]] = []
+    pending: list[tuple[int, _SingleRing]] = []
     for shape, record in pairs:
         if shape is missing or record is missing:
             raise ValueError(
@@ -611,14 +612,14 @@ _PARQUET_INSTALL = (
 )
 
 
-def _pyarrow() -> Tuple[Any, Any]:
+def _pyarrow() -> tuple[Any, Any]:
     try:
         return importlib.import_module("pyarrow"), importlib.import_module("pyarrow.parquet")
     except ImportError as exc:
         raise ValueError(_PARQUET_INSTALL) from exc
 
 
-def _geo_metadata(schema: Any, name: str) -> Tuple[str, Dict[str, Any]]:
+def _geo_metadata(schema: Any, name: str) -> tuple[str, dict[str, Any]]:
     """``(primary column, its metadata)`` from the file's ``geo`` key."""
     raw = (schema.metadata or {}).get(b"geo")
     if raw is None:
@@ -641,7 +642,7 @@ def _geo_metadata(schema: Any, name: str) -> Tuple[str, Dict[str, Any]]:
     return str(primary), column
 
 
-def read_geoparquet(path: Path, fields: Optional[Sequence[str]] = None) -> VectorTable:
+def read_geoparquet(path: Path, fields: Sequence[str] | None = None) -> VectorTable:
     """Read a GeoParquet file (WKB geometry) with pyarrow, an optional dependency.
 
     Args:
@@ -658,7 +659,7 @@ def read_geoparquet(path: Path, fields: Optional[Sequence[str]] = None) -> Vecto
     try:
         parquet = pq.ParquetFile(str(path))
         schema = parquet.schema_arrow
-    except Exception as exc:  # noqa: BLE001 - pyarrow raises ArrowInvalid, OSError, ...
+    except Exception as exc:
         raise ValueError(
             f"{path.name}: cannot read it as a Parquet file ({exc}). "
             "The file may be corrupt or truncated."
@@ -708,14 +709,14 @@ def read_geoparquet(path: Path, fields: Optional[Sequence[str]] = None) -> Vecto
     # A named field is read whatever its type; the wizard's all-columns read takes scalars.
     available = scalar if fields is None else [name for name in schema.names if name != primary]
     columns = _require_columns(fields, available, path.name, "file")
-    blobs: List[Optional[bytes]] = []
-    values: Dict[str, List[Any]] = {name: [] for name in columns}
+    blobs: list[bytes | None] = []
+    values: dict[str, list[Any]] = {name: [] for name in columns}
     try:
         for batch in parquet.iter_batches(batch_size=_READ_CHUNK, columns=[primary, *columns]):
             blobs.extend(batch.column(0).to_pylist())
             for index, name in enumerate(columns, start=1):
                 values[name].extend(batch.column(index).to_pylist())
-    except Exception as exc:  # noqa: BLE001 - pyarrow raises many types for corrupt input
+    except Exception as exc:
         raise ValueError(
             f"{path.name}: cannot read its features ({exc}). The file may be corrupt."
         ) from exc

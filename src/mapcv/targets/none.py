@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import numpy.typing as npt
 
@@ -18,7 +16,7 @@ class ImageOnlyTarget:
     """A target that annotates nothing."""
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return None
 
     @property
@@ -28,7 +26,7 @@ class ImageOnlyTarget:
     def prepare(self, source: RasterMetadata) -> None:
         return None
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         return None
 
     def window(
@@ -36,6 +34,6 @@ class ImageOnlyTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         return NullWindow()

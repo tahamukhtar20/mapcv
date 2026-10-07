@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -20,14 +20,14 @@ from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
 
 pytest.importorskip("rasterio", reason="AOI tests write their imagery with rasterio")
-from rasterio.transform import Affine  # noqa: E402
+from rasterio.transform import Affine
+from test_multi_source import EPSG, reference_transform, write_raster
 
-from mapcv._mapcv_rs import grid_sample_anchors  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate, run_split  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from test_multi_source import EPSG, reference_transform, write_raster  # noqa: E402
+from mapcv._mapcv_rs import grid_sample_anchors
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate, run_split
+from mapcv.planning import plan
 
 PATCH = 32
 WIDTH, HEIGHT = 640, 384
@@ -42,7 +42,7 @@ def _lonlat_box(ref: Affine, col0: float, row0: float, col1: float, row1: float)
     return shapely_transform(TO_LONLAT.transform, box(x0, y0, x1, y1).segmentize(5.0))
 
 
-def _write_aoi(path: Path, polygons: List[Tuple[Any, Dict[str, Any]]]) -> Path:
+def _write_aoi(path: Path, polygons: list[tuple[Any, dict[str, Any]]]) -> Path:
     features = [
         {"type": "Feature", "properties": props, "geometry": geometry.__geo_interface__}
         for geometry, props in polygons
@@ -52,7 +52,7 @@ def _write_aoi(path: Path, polygons: List[Tuple[Any, Dict[str, Any]]]) -> Path:
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, seed=1)
     # Three regions: two far apart on the left and right, one small in the middle.
@@ -78,8 +78,8 @@ def _config(tmp_path: Path, aoi: Path, staging: str = "dataset", **extra: Any) -
 
 
 def _expected(
-    config: MapcvConfig, manifest: Manifest, polygons: List[Tuple[Any, Dict[str, Any]]]
-) -> Dict[Tuple[int, int], str]:
+    config: MapcvConfig, manifest: Manifest, polygons: list[tuple[Any, dict[str, Any]]]
+) -> dict[tuple[int, int], str]:
     """Every grid anchor whose patch overlaps a polygon, with its region (largest overlap)."""
     from mapcv.imagery import open_raster_source
 
@@ -90,12 +90,12 @@ def _expected(
         (shapely_transform(TO_UTM.transform, geometry), props["name"])
         for geometry, props in polygons
     ]
-    expected: Dict[Tuple[int, int], str] = {}
+    expected: dict[tuple[int, int], str] = {}
     for row, col in grid_sample_anchors(height, width, PATCH, PATCH, "drop"):
         x0, y0 = transform * (col, row + PATCH)
         x1, y1 = transform * (col + PATCH, row)
         patch = box(x0, y0, x1, y1)
-        areas: Dict[str, float] = {}
+        areas: dict[str, float] = {}
         for geometry, name in world:
             area = patch.intersection(geometry).area
             if area > 0:
@@ -105,7 +105,7 @@ def _expected(
     return expected
 
 
-def test_patches_cover_only_the_area_of_interest(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_patches_cover_only_the_area_of_interest(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = _config(tmp_path, scene["aoi"])
     region = config.region
     west = min(g.bounds[0] for g, _ in scene["polygons"])
@@ -119,11 +119,11 @@ def test_patches_cover_only_the_area_of_interest(tmp_path: Path, scene: Dict[str
 
 
 def test_far_apart_polygons_are_read_in_small_windows(
-    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from mapcv.imagery import GeoTiffRasterSource
 
-    widths: List[int] = []
+    widths: list[int] = []
     real_read = GeoTiffRasterSource.read_window
 
     def read_window(self: Any, r0: int, r1: int, c0: int, c1: int) -> Any:
@@ -137,7 +137,7 @@ def test_far_apart_polygons_are_read_in_small_windows(
     assert max(widths) < 300
 
 
-def test_resume_and_an_edited_area(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_resume_and_an_edited_area(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = _config(tmp_path, scene["aoi"])
     full = run_generate(config).manifest
     staging = config.writer.staging_dir
@@ -150,7 +150,7 @@ def test_resume_and_an_edited_area(tmp_path: Path, scene: Dict[str, Any]) -> Non
         run_generate(_config(tmp_path, scene["aoi"]))
 
 
-def test_region_split_keeps_each_region_in_one_split(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_region_split_keeps_each_region_in_one_split(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = _config(tmp_path, scene["aoi"])
     manifest = run_generate(config).manifest
     from mapcv.splitter import SplitterConfig
@@ -158,7 +158,7 @@ def test_region_split_keeps_each_region_in_one_split(tmp_path: Path, scene: Dict
     run_split(
         config.writer.staging_dir, SplitterConfig(strategy="region", test_ratio=0.3, val_ratio=0.2)
     )
-    splits: Dict[str, Set[str]] = {}
+    splits: dict[str, set[str]] = {}
     region_of = {manifest.patch_name(e): e["summary"]["region"] for e in manifest.patches}
     for name in ("train", "val", "test"):
         names = (config.writer.staging_dir / "splits" / f"{name}.txt").read_text().split()
@@ -175,7 +175,7 @@ def test_region_split_keeps_each_region_in_one_split(tmp_path: Path, scene: Dict
         run_split(small.writer.staging_dir, SplitterConfig(strategy="region"))
 
 
-def test_region_split_needs_regions(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_region_split_needs_regions(tmp_path: Path, scene: dict[str, Any]) -> None:
     from mapcv.splitter import SplitterConfig
 
     ref = scene["ref"]
@@ -194,7 +194,7 @@ def test_region_split_needs_regions(tmp_path: Path, scene: Dict[str, Any]) -> No
         run_split(config.writer.staging_dir, SplitterConfig(strategy="region"))
 
 
-def test_numbered_regions_and_plan_estimate(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_numbered_regions_and_plan_estimate(tmp_path: Path, scene: dict[str, Any]) -> None:
     aoi = _write_aoi(tmp_path / "unnamed.geojson", [(g, {}) for g, _ in scene["polygons"]])
     config = MapcvConfig.model_validate(
         {
@@ -211,7 +211,7 @@ def test_numbered_regions_and_plan_estimate(tmp_path: Path, scene: Dict[str, Any
     assert 0.6 * len(manifest.patches) <= estimate.patches <= 1.6 * len(manifest.patches)
 
 
-def test_mcp_refuses_an_area_outside_its_root(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_mcp_refuses_an_area_outside_its_root(tmp_path: Path, scene: dict[str, Any]) -> None:
     from mapcv.agent_tools import Sandbox, ToolFailure, ToolState, config_paths, parse_config_text
 
     root = tmp_path / "root"
@@ -240,7 +240,7 @@ def test_mcp_refuses_an_area_outside_its_root(tmp_path: Path, scene: Dict[str, A
         ),
     ],
 )
-def test_config_refuses_bad_areas(tmp_path: Path, region: Dict[str, Any], message: str) -> None:
+def test_config_refuses_bad_areas(tmp_path: Path, region: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate(
             {
@@ -253,7 +253,7 @@ def test_config_refuses_bad_areas(tmp_path: Path, region: Dict[str, Any], messag
     assert message in str(raised.value)
 
 
-def test_area_path_resolves_against_the_config(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_area_path_resolves_against_the_config(tmp_path: Path, scene: dict[str, Any]) -> None:
     folder = tmp_path / "project"
     (folder / "areas").mkdir(parents=True)
     (folder / "areas" / "aoi.geojson").write_text(scene["aoi"].read_text())
@@ -270,7 +270,7 @@ def test_area_path_resolves_against_the_config(tmp_path: Path, scene: Dict[str, 
 # ── Exact geometry (a lon/lat grid of half-degree pixels: no rounding anywhere) ───
 
 
-def _exact_aoi(tmp_path: Path, polygons: List[Tuple[Any, Dict[str, Any]]]) -> Any:
+def _exact_aoi(tmp_path: Path, polygons: list[tuple[Any, dict[str, Any]]]) -> Any:
     from mapcv.aoi import AreaOfInterest
     from mapcv.config import RegionConfig
 

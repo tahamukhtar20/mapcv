@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, cast
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -23,7 +23,7 @@ if not _NPZ.exists() or not _META_FILE.exists():
     )
 
 
-def _load() -> Tuple[Any, List[Dict[str, Any]]]:
+def _load() -> tuple[Any, list[dict[str, Any]]]:
     npz = np.load(str(_NPZ))
     meta = json.loads(_META_FILE.read_text())
     return npz, meta
@@ -32,10 +32,10 @@ def _load() -> Tuple[Any, List[Dict[str, Any]]]:
 _NPZ_DATA, _META = _load()
 
 
-def _run_case(entry: Dict[str, Any]) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+def _run_case(entry: dict[str, Any]) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
     geom = wkt_loads(entry["wkt"])
     class_id: int = entry["class_id"]
-    transform = cast(Tuple[float, float, float, float, float, float], tuple(entry["transform"]))
+    transform = cast(tuple[float, float, float, float, float, float], tuple(entry["transform"]))
     h, w = entry["out_shape"]
     all_touched = bool(entry.get("all_touched", False))
     our = rasterize([(geom, class_id)], (h, w), transform, all_touched=all_touched)
@@ -44,7 +44,7 @@ def _run_case(entry: Dict[str, Any]) -> Tuple[npt.NDArray[np.uint8], npt.NDArray
 
 
 @pytest.mark.parametrize("entry", _META)
-def test_rasterize_matches_rasterio(entry: Dict[str, Any]) -> None:
+def test_rasterize_matches_rasterio(entry: dict[str, Any]) -> None:
     """Our rasterize() must match rasterio pixel-for-pixel, in both all_touched modes."""
     our, golden = _run_case(entry)
     mismatch = int(np.sum(our != golden))

@@ -23,7 +23,6 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 import yaml
@@ -51,7 +50,7 @@ class Tiles(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
         buffer = io.BytesIO()
         Image.new("RGB", (256, 256), ((x * 37) % 256, (y * 53) % 256, z * 9)).save(buffer, "PNG")
@@ -63,7 +62,7 @@ class Tiles(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def run(args: List[str], cwd: Path, stdin: Optional[str] = None, expect: int = 0) -> str:
+def run(args: list[str], cwd: Path, stdin: str | None = None, expect: int = 0) -> str:
     print(f"$ mapcv {' '.join(args)}", flush=True)
     result = subprocess.run(
         ["mapcv", *args],
@@ -75,6 +74,7 @@ def run(args: List[str], cwd: Path, stdin: Optional[str] = None, expect: int = 0
         errors="replace",
         env=ENV,
         timeout=600,
+        check=False,
     )
     output = result.stdout + result.stderr
     if result.returncode != expect:

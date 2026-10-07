@@ -38,7 +38,7 @@ import math
 import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -80,7 +80,7 @@ _ERROR_SAFETY = 4.0
 _MIN_MARGIN = 1e-3
 _MAX_CELL_ERROR = 0.05
 _MIN_PIECE = 1 << 15
-_proj_pool: Optional[ThreadPoolExecutor] = None
+_proj_pool: ThreadPoolExecutor | None = None
 
 
 def _proj_executor() -> ThreadPoolExecutor:
@@ -107,7 +107,7 @@ LABEL_RASTER_MISS_MESSAGE = (
 )
 
 
-def integer_nodata(nodata: Optional[float], dtype: np.dtype[Any]) -> Optional[int]:
+def integer_nodata(nodata: float | None, dtype: np.dtype[Any]) -> int | None:
     """The file's NoData value when an integer raster can hold it, else ``None``."""
     if nodata is None or not math.isfinite(nodata) or nodata != int(nodata):
         return None
@@ -121,8 +121,8 @@ class _Classifier:
     def __init__(
         self,
         dtype: np.dtype[Any],
-        mapping: Dict[int, int],
-        ignored: Tuple[int, ...],
+        mapping: dict[int, int],
+        ignored: tuple[int, ...],
         unmapped: int,
         ignore: int,
     ) -> None:
@@ -131,7 +131,7 @@ class _Classifier:
         fits = {value: code for value, code in mapping.items() if info.min <= value <= info.max}
         fits.update({value: ignore for value in ignored if info.min <= value <= info.max})
         self._unmapped = unmapped
-        self._lut: Optional[npt.NDArray[np.uint8]] = None
+        self._lut: npt.NDArray[np.uint8] | None = None
         if dtype.itemsize <= 2:
             # 8- and 16-bit rasters: one table lookup per pixel, through the unsigned view.
             unsigned = np.dtype(f"u{dtype.itemsize}")
@@ -166,7 +166,7 @@ class _GridSampler:
     pixels outside the raster (``_fill``).
     """
 
-    _out_dtype: "np.dtype[Any]"
+    _out_dtype: np.dtype[Any]
     _fill: Any
 
     def __init__(self, path: str, band: int, imagery_crs: str) -> None:
@@ -226,7 +226,7 @@ class _GridSampler:
 
     # ── geometry ─────────────────────────────────────────────────────────────
 
-    def _composed(self, transform: Transform) -> Tuple[float, float, float, float, float, float]:
+    def _composed(self, transform: Transform) -> tuple[float, float, float, float, float, float]:
         """``(pu, pv, p0, qu, qv, q0)``: label column ``pu*u + pv*v + p0`` and row
         ``qu*u + qv*v + q0`` of the imagery pixel position ``(u, v)``, same CRS only.
 
@@ -248,7 +248,7 @@ class _GridSampler:
 
     def _fractional(
         self, transform: Transform, u: npt.NDArray[np.float64], v: npt.NDArray[np.float64]
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """Fractional label ``(row, col)`` of imagery pixel positions ``(u, v)`` (broadcast)."""
         if self._same_crs:
             pu, pv, p0, qu, qv, q0 = self._composed(transform)
@@ -261,7 +261,7 @@ class _GridSampler:
 
     def _project(
         self, x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         """Imagery-CRS coordinates (broadcast) projected into the label CRS.
 
         PROJ transforms the points of an array one after another, so the array is cut
@@ -291,7 +291,7 @@ class _GridSampler:
                 future.result()
         return lx.reshape(shape), ly.reshape(shape)
 
-    def grid_offset(self, transform: Transform) -> Optional[Tuple[int, int]]:
+    def grid_offset(self, transform: Transform) -> tuple[int, int] | None:
         """``(row, col)`` of the window's first pixel in the label raster when both share
         a CRS and a pixel grid (up to a whole-pixel offset), else ``None``."""
         if not self._same_crs:
@@ -320,7 +320,7 @@ class _GridSampler:
             row, col = offset
             return self._copy(row, col, height, width)
         if self._same_crs:
-            pu, pv, _, qu, _, _ = self._composed(transform)
+            _pu, pv, _, qu, _, _ = self._composed(transform)
             if pv == 0.0 and qu == 0.0:
                 return self._separable(transform, height, width)
         return self._general(transform, height, width)
@@ -404,7 +404,7 @@ class _GridSampler:
 
     def _interpolated_pixels(
         self, transform: Transform, start: int, stop: int, width: int
-    ) -> Tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
         """Label ``(row, col)`` indices of imagery rows ``[start, stop)``, the same as
         projecting every centre, for a fraction of the projections.
 
@@ -482,7 +482,7 @@ class _GridSampler:
 
     def _perimeter_window(
         self, transform: Transform, height: int, width: int
-    ) -> Optional[Tuple[int, int, int, int]]:
+    ) -> tuple[int, int, int, int] | None:
         """The label pixels under the window, estimated from its outermost pixel centres
         and widened by a margin; ``None`` when the window misses the label raster."""
         cols = np.arange(width, dtype=np.float64) + 0.5
@@ -573,7 +573,7 @@ class ValueRasterSampler(_GridSampler):
     def __init__(self, labels: ContinuousLabelsConfig, imagery_crs: str) -> None:
         super().__init__(labels.path, labels.band, imagery_crs)
         nodata = labels.nodata if labels.nodata is not None else self.info.nodata
-        self.nodata: Optional[float] = None if nodata is None else float(nodata)
+        self.nodata: float | None = None if nodata is None else float(nodata)
         self._labels = labels
         self._out_dtype = np.dtype(np.float32)
         self._fill = np.float32(np.nan)
@@ -599,11 +599,11 @@ class RasterSegmentationTarget:
     def __init__(self, labels: RasterLabelsConfig) -> None:
         self._labels = labels
         self._class_map: ClassMap = labels.class_map()
-        self._sampler: Optional[LabelRasterSampler] = None
-        self._fingerprint: Optional[Dict[str, Any]] = None
+        self._sampler: LabelRasterSampler | None = None
+        self._fingerprint: dict[str, Any] | None = None
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "segmentation"
 
     @property
@@ -630,7 +630,7 @@ class RasterSegmentationTarget:
             # Attribute the warning to the caller of prepare().
             warnings.warn(LABEL_RASTER_MISS_MESSAGE.format(value=value), UserWarning, stacklevel=3)
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """Class map and ignore value, plus the label settings and a fingerprint of the
         label raster (as for GeoTIFF imagery), so a resumed run notices another file."""
         if self._fingerprint is None:
@@ -651,7 +651,7 @@ class RasterSegmentationTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         mask = self.sampler.sample(transform, height, width)
         return MaskWindow(mask, self._labels.ignore_index)

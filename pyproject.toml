@@ -169,9 +169,24 @@ line-length = 100
 extend-exclude = ["website"]
 
 [tool.ruff.lint]
-# ruff 0.16 enables many more rules by default; keep the established set until
-# the codebase is migrated to the new defaults in its own change.
-select = ["E4", "E7", "E9", "F"]
+# ruff's default rule set (pyupgrade, isort, bugbear, ruff-specific rules and more), less
+# rules that do not fit this codebase:
+ignore = [
+    # Validators raise ValueError on purpose: pydantic reports it as a validation error,
+    # while a TypeError would escape as a crash.
+    "TRY004",
+    # `typing.Self` needs Python 3.11; mapcv supports 3.10.
+    "PYI034",
+    # int(round(x)) stays: with numpy < 2, round() of a numpy float is not an int.
+    "RUF046",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer declares options as call defaults: typer.Option(...).
+"src/mapcv/cli.py" = ["B008"]
+# Class-level lists of baseline metadata and test doubles, never mutated.
+"benchmarks/**" = ["RUF012"]
+"tests/**" = ["RUF012"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

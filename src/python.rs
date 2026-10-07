@@ -15,7 +15,7 @@ use crate::{
 use numpy::ndarray::{Dimension, Ix3, Ix4};
 use numpy::{
     IntoPyArray, PyArray, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray, PyUntypedArray,
-    PyUntypedArrayMethods, ToPyArray,
+    PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -220,14 +220,16 @@ fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
 fn tiles(
+    py: Python<'_>,
     west: f64,
     south: f64,
     east: f64,
     north: f64,
     zooms: Vec<u8>,
 ) -> PyResult<Vec<PyTileIndex>> {
-    let result =
-        tile_math::tiles(west, south, east, north, &zooms).map_err(PyValueError::new_err)?;
+    let result = py
+        .detach(|| tile_math::tiles(west, south, east, north, &zooms))
+        .map_err(PyValueError::new_err)?;
     Ok(result.into_iter().map(Into::into).collect())
 }
 
@@ -431,11 +433,13 @@ fn rasterize(
     }
     let (a, b, c, d, e, f) = transform;
     let aff = rasterizer::Affine { a, b, c, d, e, f };
-    let buf = rasterizer::rasterize(&polygons, width, height, aff, all_touched)
+    // The polygons are plain Rust data by now: burn them without holding the GIL.
+    let buf = py
+        .detach(|| rasterizer::rasterize(&polygons, width, height, aff, all_touched))
         .map_err(PyValueError::new_err)?;
     let arr = numpy::ndarray::Array2::from_shape_vec((height, width), buf)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    Ok(arr.to_pyarray(py).unbind())
+    Ok(arr.into_pyarray(py).unbind())
 }
 
 /// Write image and mask patches to disk in parallel using rayon.
@@ -527,18 +531,18 @@ fn write_patches<'py>(
         )));
     }
 
-    let img_data: Vec<u8> = images
+    // Borrowed, not copied: the arrays stay alive (and, being read-only borrows,
+    // unchanged) while the GIL is released below.
+    let img_data: &[u8] = images
         .as_slice()
-        .map_err(|e| PyValueError::new_err(format!("image_patches cannot be read: {e}")))?
-        .to_vec();
-    let (msk_data, has_mask): (Vec<u8>, bool) = match masks {
+        .map_err(|e| PyValueError::new_err(format!("image_patches cannot be read: {e}")))?;
+    let (msk_data, has_mask): (&[u8], bool) = match masks {
         Some(ref m) => (
             m.as_slice()
-                .map_err(|e| PyValueError::new_err(format!("mask_patches cannot be read: {e}")))?
-                .to_vec(),
+                .map_err(|e| PyValueError::new_err(format!("mask_patches cannot be read: {e}")))?,
             true,
         ),
-        None => (Vec::new(), false),
+        None => (&[], false),
     };
 
     let images_path = std::path::PathBuf::from(images_dir);
@@ -549,8 +553,8 @@ fn write_patches<'py>(
     let results = py
         .detach(|| {
             patch_writer::write_patches(
-                &img_data,
-                &msk_data,
+                img_data,
+                msk_data,
                 has_mask,
                 n_patches,
                 patch_size,
@@ -664,9 +668,9 @@ fn write_geotiffs<'py>(
 /// canvas would be too large.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
-fn stitch_tiles(
-    py: Python,
-    tile_data: Vec<(PyTileIndex, Vec<u8>)>,
+fn stitch_tiles<'py>(
+    py: Python<'py>,
+    tile_data: Vec<(PyTileIndex, Bound<'py, pyo3::types::PyBytes>)>,
 ) -> PyResult<(Py<PyArray3<u8>>, u32, u32)> {
     let indices: Vec<TileIndex> = tile_data
         .iter()
@@ -678,14 +682,18 @@ fn stitch_tiles(
         .collect();
     tile_math::check_no_antimeridian_wrap(&indices)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("stitch_tiles: {e}")))?;
-    let raw: Vec<(u32, u32, u8, Vec<u8>)> = tile_data
-        .into_iter()
-        .map(|(t, bytes)| (t.x, t.y, t.z, bytes))
+    // The tiles' bytes are borrowed (``bytes`` is immutable and kept alive by
+    // ``tile_data``), not copied element by element into new vectors.
+    let raw: Vec<(u32, u32, u8, &[u8])> = tile_data
+        .iter()
+        .map(|(t, bytes)| (t.x, t.y, t.z, bytes.as_bytes()))
         .collect();
-    let (canvas, min_x, min_y, h, w) = stitcher::stitch_tiles(&raw).map_err(|e| match e {
-        stitcher::StitchError::InvalidInput(msg) => PyValueError::new_err(msg),
-        stitcher::StitchError::Failed(msg) => PyRuntimeError::new_err(msg),
-    })?;
+    let (canvas, min_x, min_y, h, w) =
+        py.detach(|| stitcher::stitch_tiles(&raw))
+            .map_err(|e| match e {
+                stitcher::StitchError::InvalidInput(msg) => PyValueError::new_err(msg),
+                stitcher::StitchError::Failed(msg) => PyRuntimeError::new_err(msg),
+            })?;
     let arr = numpy::ndarray::Array3::from_shape_vec((h, w, 3), canvas)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok((arr.into_pyarray(py).unbind(), min_x, min_y))
@@ -716,10 +724,12 @@ fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64,
 #[pyfunction]
 #[pyo3(signature = (data, label_field=None))]
 fn parse_kml(
+    py: Python<'_>,
     data: &[u8],
     label_field: Option<&str>,
 ) -> PyResult<(Vec<(Vec<kml_parser::Polygon>, Option<String>)>, usize)> {
-    let result = kml_parser::parse_kml(data, label_field)
+    let result = py
+        .detach(|| kml_parser::parse_kml(data, label_field))
         .map_err(|err| PyValueError::new_err(format!("invalid KML: {err}")))?;
     Ok((result.polygons, result.skipped_non_polygon))
 }

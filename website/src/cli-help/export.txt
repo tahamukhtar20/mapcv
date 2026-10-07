@@ -1,0 +1,29 @@
+ Usage: mapcv export [OPTIONS] {staging_dir}
+
+ Export a dataset: Hugging Face Parquet, WebDataset shards, Zarr or a TerraTorch
+ config.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ *  --format    -f      <str>               hf-parquet (Hugging Face), webdataset     │
+│                                            (tar shards), zarr (one store) or         │
+│                                            terratorch (a data config).               │
+│                                            [required]                                │
+│    --out       -o      <path>              hf-parquet, webdataset, zarr: a new       │
+│                                            folder (required). terratorch: the YAML   │
+│                                            file (default                             │
+│                                            STAGING_DIR/terratorch.yaml).             │
+│    --shard-mb          <int range> [x>=1]  webdataset: largest shard size in MB.     │
+│                                            [default: 1000]                           │
+│    --help      -h                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv export dataset/ --format hf-parquet --out dataset-hf/
+
+ mapcv export dataset/ --format terratorch   writes dataset/terratorch.yaml
+
+

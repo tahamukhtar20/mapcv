@@ -7,6 +7,7 @@ its spinner, progress bar and styled output.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -574,7 +575,19 @@ def run_generate(
 
     split_counts: dict[str, int] | None = None
     split_lists: SplitLists | None = None
-    if config.split is not None:
+    # A run with nothing new keeps the dataset's splits, which `mapcv split` may have
+    # changed since: re-splitting here would undo that (and break SHA256SUMS).
+    kept = _existing_splits(staging / _SPLITS_SUBDIR) if resumed_patches and not chunks else None
+    if kept is not None:
+        split_counts, split_lists, settings = kept
+        if config.split is not None and settings != config.split.model_dump(mode="json"):
+            warnings.warn(
+                f"{_SPLITS_SUBDIR}/ was made with other split settings (by mapcv split) and is "
+                f"kept as it is; run `mapcv split {staging}` to apply other settings",
+                UserWarning,
+                stacklevel=2,
+            )
+    elif config.split is not None:
         split_counts, split_lists = split_manifest(manifest, config.split, staging / _SPLITS_SUBDIR)
     writer.finalize(manifest, split_lists)
 
@@ -588,6 +601,26 @@ def run_generate(
         seconds=time.monotonic() - started,
         tiles_cached=cached,
     )
+
+
+def _existing_splits(
+    splits_dir: Path,
+) -> tuple[dict[str, int], SplitLists, dict[str, Any]] | None:
+    """The split lists already in ``splits_dir`` (counts, lists, settings), or ``None``
+    when they are incomplete."""
+    record_path = splits_dir / "split.json"
+    names = ("train", "val", "test")
+    if not record_path.is_file() or not all((splits_dir / f"{n}.txt").is_file() for n in names):
+        return None
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        lists = {n: (splits_dir / f"{n}.txt").read_text(encoding="utf-8").split() for n in names}
+    except (OSError, ValueError):
+        return None
+    counts = {n: len(lists[n]) for n in names}
+    counts["dropped"] = int(record.get("dropped", 0))
+    settings = record.get("settings") if isinstance(record, dict) else None
+    return counts, SplitLists(**lists), settings if isinstance(settings, dict) else {}
 
 
 def run_split(

@@ -101,7 +101,7 @@ $ mapcv init height.yaml -t regression     # float targets from a raster of valu
 
 <Code code={planHelp} lang="text" title="mapcv plan --help" />
 
-Loads the config, parses the label file and estimates the run without downloading imagery. It uses the network only to read the header of a remote (`https://`, `s3://`) GeoTIFF or label raster, and to fetch [`labels.osm`](/mapcv/reference/configuration/#labels-from-openstreetmap-labelsosm) from Overpass. The panel shows the task (unless it is segmentation), the region size in km, ground resolution, raster size, tile count and download size (XYZ), label polygons (or, for a label raster, its CRS, size and pixel size, read from the header only) and the class map, the number of objects (detection and instance), patch count, output size, split settings and memory per chunk. Warnings follow the panel: skipped label features, a missing label file, labels (or a label raster) that don't intersect the region, or no patch fitting the region.
+Loads the config, parses the label file and estimates the run without downloading imagery. A file the config reads that does not exist (`labels.path`, `region.path`, a local `imagery.path`, ...) stops it with exit code 1 and the key that names it; `mapcv validate` only warns about missing files. It uses the network only to read the header of a remote (`https://`, `s3://`) GeoTIFF or label raster, and to fetch [`labels.osm`](/mapcv/reference/configuration/#labels-from-openstreetmap-labelsosm) from Overpass. The panel shows the task (unless it is segmentation), the region size in km, ground resolution, raster size, tile count and download size (XYZ), label polygons (or, for a label raster, its CRS, size and pixel size, read from the header only) and the class map, the number of objects (detection and instance), patch count, output size, split settings and memory per chunk. Warnings follow the panel: skipped label features, a missing label file, labels (or a label raster) that don't intersect the region, or no patch fitting the region.
 
 Estimates use typical tile and file sizes. For Sentinel-2 the raster size is computed on the UTM grid of the region (with the `zarr` extra installed); the product's exact grid is known only once it is opened, so the real size can differ by a few pixels.
 
@@ -109,7 +109,7 @@ Estimates use typical tile and file sizes. For Sentinel-2 the raster size is com
 
 <Code code={generateHelp} lang="text" title="mapcv generate --help" />
 
-1. Prints the same plan as `mapcv plan`. With `--dry-run` it stops here.
+1. Prints the same plan as `mapcv plan` (and, like it, stops with exit code 1 when a file the config reads is missing). With `--dry-run` it stops here.
 2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no; answering no exits with code 1). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
 3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar (plain lines when the output is not a terminal), saving the manifest every few seconds and whenever the run stops (Ctrl-C, an error).
 4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files and folders in the dataset (patch folders, `manifest.json`, `splits/`, `patches.geojson`, and the COCO, YOLO or label-table files of the task), the class balance, and next steps.
@@ -123,7 +123,7 @@ Make that folder writable, or set writer.staging_dir to a folder you can write t
 
 Ctrl-C stops with `Interrupted. Finished chunks are saved; run the same command again to resume.` and exit code 130.
 
-**Resuming:** run the same command again. Patches already in the manifest are skipped, and XYZ tiles are only fetched for chunks still to do. When everything is already written it prints `Nothing left to do: all 77 patches are already written.` Resuming refuses a folder made with different imagery, labels (including edits to the label file), sampler or writer settings, by mapcv 0.1, by mapcv 0.2 with `sampler.mode: random`, or by a newer mapcv; a 0.2 dataset resumes only with `labels.ignore_index: null` (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)).
+**Resuming:** run the same command again. Patches already in the manifest are skipped, and XYZ tiles are only fetched for chunks still to do. When everything is already written it prints `Nothing left to do: all 77 patches are already written.` Resuming refuses a folder made with different imagery, labels (including edits to the label file), sampler or writer settings, by mapcv 0.1, by mapcv 0.2 with `sampler.mode: random`, or by a newer mapcv; a 0.2 dataset resumes only with `labels.ignore_index: null` (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)). A run with nothing new to do leaves the dataset as it is, split lists included, even if `mapcv split` changed them since; it warns when they differ from the config's `split` settings. A run that writes no patch at all (the region is smaller than one patch, or every patch was dropped by `sampler.max_empty_ratio` or `min_label_ratio`) ends with `No patches were written.` and exit code 1.
 
 ```console
 $ mapcv generate mapcv.yaml
@@ -402,7 +402,7 @@ Paths under your home folder are shown with `~`. The example above comes from a 
 | Code | When |
 | --- | --- |
 | `0` | Success (also `generate --dry-run`, and `init` when the written file still needs edits) |
-| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, a file that can't be read or written, file exists without `--force`, `mapcv verify` found a problem, `mapcv doctor` found a failed check, a declined large-job prompt, or the input ended during `mapcv init`'s questions |
+| `1` | Config not found or invalid, a file the config reads is missing (`plan`, `generate`), generation failed or wrote no patch, resume refused, dataset or manifest not found, a file that can't be read or written, file exists without `--force`, `mapcv verify` found a problem, `mapcv doctor` found a failed check, a declined large-job prompt, or the input ended during `mapcv init`'s questions |
 | `2` | Invalid command-line usage: an unknown command or option, a missing argument, or an option value that is not allowed (`stats --split nope`, `export --format coco`, `export` without the `--out` its format needs, `cache --expired` without `--clear`, a `split` ratio out of range, `mcp --root` that is not a folder). Also a large job without a terminal and without `--yes`. `mapcv` with no command prints the help and exits with 2 too |
 | `130` | Interrupted with Ctrl-C (any command; `generate` keeps the finished chunks) |
 

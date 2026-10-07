@@ -146,7 +146,7 @@ def test_fetch_tiles_max_failed_ratio_exceeded(httpserver: Any) -> None:
         )
     message = str(excinfo.value)
     assert "2 x HTTP 404 Not Found" in message
-    assert "/tile/14/" in message  # one example URL
+    assert "/…/14/" in message  # one example URL: host and z/x/y, the rest elided
     assert "max_connections" in message
 
 
@@ -161,7 +161,7 @@ def test_fetch_tiles_reports_why_tiles_failed(httpserver: Any) -> None:
 
     assert failed == 3
     assert dict(causes) == {"HTTP 410 Gone": 2, "response is not an image": 1}
-    assert example is not None and "/tile/14/" in example
+    assert example is not None and "/…/14/" in example
 
 
 def test_fetch_tiles_reasons_empty_without_failures(httpserver: Any) -> None:

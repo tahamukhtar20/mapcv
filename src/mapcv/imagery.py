@@ -331,14 +331,28 @@ class XYZRasterSource:
             raise ValueError("XYZ imagery returned no tiles for the requested region")
 
         self._config = config
-        self._template = resolve_url_template(config.url_template, config.source)
+        engine = config.earth_engine
+        fingerprint: Optional[Dict[str, Any]] = None
+        if engine is not None:
+            from mapcv import earth_engine
+
+            # A fresh map URL each time; it holds a short-lived map ID, so the cache and
+            # the manifest key on the image and its rendering instead.
+            self._template = earth_engine.tile_url(engine)
+            cache_key = "earth-engine:" + engine.model_dump_json(exclude={"project"})
+            product_id = earth_engine.product_id(engine)
+            fingerprint = {"earth_engine": engine.model_dump(mode="json", exclude={"project"})}
+        else:
+            self._template = resolve_url_template(config.url_template, config.source)
+            cache_key = self._template
+            product_id = config.source or _xyz_product_id(self._template)
         self._zoom = config.zoom
         # Tiles are fetched lazily per window and evicted once windows move
         # past them, so memory stays bounded to about one chunk of tiles and
         # a resumed run only downloads the chunks it still needs.
         self._tiles: Dict[Tuple[int, int], bytes] = {}
         self._attempted: Set[Tuple[int, int]] = set()
-        self._cache = TileCache(self._template) if config.cache else None
+        self._cache = TileCache(cache_key) if config.cache else None
         self.tiles_requested = 0
         self.tiles_cached = 0
         self.tiles_failed = 0
@@ -351,7 +365,7 @@ class XYZRasterSource:
 
         self.metadata = RasterMetadata(
             source_type="xyz",
-            product_id=config.source or _xyz_product_id(self._template),
+            product_id=product_id,
             width=(self._max_x - self._min_x + 1) * 256,
             height=(self._max_y - self._min_y + 1) * 256,
             bands=["red", "green", "blue"],
@@ -359,6 +373,7 @@ class XYZRasterSource:
             crs="EPSG:3857",
             transform=tile_transform(self._min_x, self._min_y, config.zoom),
             chunk_rows=config.strip_rows * 256,
+            fingerprint=fingerprint,
         )
 
     def read_window(

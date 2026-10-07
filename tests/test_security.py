@@ -44,7 +44,18 @@ def test_url_sanitization_on_failure(httpserver: Any) -> None:
     assert "SECRET_123" not in error_msg
     assert "api_key" not in error_msg
     assert "fragment-secret" not in error_msg
-    assert httpserver.url_for("/tile/0/0/0.png") in error_msg
+    # Host and the tile's z/x/y identify the request; the rest of the path is elided.
+    host = httpserver.url_for("/").rstrip("/")
+    assert f"{host}/…/0/0/0.png" in error_msg
+
+
+def test_path_secrets_are_not_shown_on_failure(httpserver: Any) -> None:
+    """Keys and short-lived map IDs in the path (``/v1/<key>/...``) are elided too."""
+    httpserver.expect_request("/v1/PATHSECRET99/0/0/0.png").respond_with_data("No", status=403)
+    url_template = httpserver.url_for("/v1/PATHSECRET99/{z}/{x}/{y}.png")
+    with pytest.raises(RuntimeError) as excinfo:
+        fetch_tiles(tiles=[TileIndex(0, 0, 0)], url_template=url_template, policy="strict")
+    assert "PATHSECRET99" not in str(excinfo.value) and "HTTP 403" in str(excinfo.value)
 
 
 def test_stitch_rejects_canvas_above_byte_budget() -> None:

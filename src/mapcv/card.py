@@ -56,7 +56,14 @@ _ATTRIBUTION = {
 def _attribution(record: SourceRecord) -> Optional[str]:
     if record.source_type in ("eopf_zarr", "stac_cog"):
         return "Contains modified Copernicus Sentinel data"
-    return _ATTRIBUTION.get(record.product_id or "")
+    product = record.product_id or ""
+    if product.startswith("earth-engine:"):
+        asset = product.removeprefix("earth-engine:")
+        return (
+            f"Imagery rendered with Google Earth Engine from {asset}; cite the data "
+            "provider as the asset's Earth Engine catalog page asks"
+        )
+    return _ATTRIBUTION.get(product)
 
 
 def _size_category(count: int) -> str:

@@ -100,6 +100,11 @@ zarr = [
     "pystac-client>=0.8; python_version < '3.14'",
 ]
 
+# Google Earth Engine imagery (imagery.earth_engine); the Apache-2.0 earthengine-api.
+gee = [
+    "earthengine-api>=1.0",
+]
+
 # The MCP server for AI agents (`mapcv mcp`); the official MCP Python SDK (MIT).
 mcp = [
     "mcp>=2.3,<3",

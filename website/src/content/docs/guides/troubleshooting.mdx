@@ -102,6 +102,12 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles or 5 GB without a terminal. Read the plan, then pass `--yes`.
 
+## Google Earth Engine
+
+**`Earth Engine imagery needs the gee extra: pip install "mapcv[gee]"`** Install it: `pip install "mapcv[gee]"`.
+
+**`Earth Engine could not render '…': … Log in once with earthengine authenticate …`** Earth Engine refused the request. Run `earthengine authenticate` once, set `imagery.earth_engine.project` to a Cloud project registered for Earth Engine, and check the asset ID in the [Earth Engine catalog](https://developers.google.com/earth-engine/datasets). Earth Engine's own message follows the asset name.
+
 ## Sentinel-2 / EOPF
 
 **`EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'.`** Install the extra: `pip install "mapcv[zarr]"`.

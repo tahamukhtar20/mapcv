@@ -75,6 +75,10 @@ dev = [
 parquet = [
     "pyarrow>=14",
 ]
+# `mapcv export --format hf-parquet` (Hugging Face Parquet).
+export = [
+    "pyarrow>=14",
+]
 docs = [
     "matplotlib",
     "ipywidgets",

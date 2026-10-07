@@ -13,6 +13,7 @@ import splitHelp from '../../../cli-help/split.txt?raw';
 import statsHelp from '../../../cli-help/stats.txt?raw';
 import cardHelp from '../../../cli-help/card.txt?raw';
 import verifyHelp from '../../../cli-help/verify.txt?raw';
+import exportHelp from '../../../cli-help/export.txt?raw';
 import validateHelp from '../../../cli-help/validate.txt?raw';
 import cacheHelp from '../../../cli-help/cache.txt?raw';
 import mcpHelp from '../../../cli-help/mcp.txt?raw';
@@ -30,6 +31,7 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | [`mapcv stats`](#mapcv-stats) | Per-band mean/std and class weights into `stats.json` | no |
 | [`mapcv card`](#mapcv-card) | Write a dataset card (`README.md`) | no |
 | [`mapcv verify`](#mapcv-verify) | Check every file is there and unchanged | no |
+| [`mapcv export`](#mapcv-export) | Hugging Face Parquet or a TerraTorch data config | no |
 | [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
 | [`mapcv cache`](#mapcv-cache) | Show or clear the on-disk tile cache | no |
 | [`mapcv mcp`](#mapcv-mcp) | Serve mapcv to AI agents over MCP | only when an agent generates |
@@ -201,6 +203,20 @@ $ mapcv verify copy-of-dataset
 ```
 
 Exit code `1` when anything is missing, empty, unreadable (`--deep`) or changed.
+
+## `mapcv export`
+
+<Code code={exportHelp} lang="text" title="mapcv export --help" />
+
+Writes a dataset in the form another tool reads; the dataset itself is not changed.
+
+- **`hf-parquet`** (needs `pip install "mapcv[export]"`): `OUT/data/<split>-00000-of-00001.parquet` for each split (`all` without split lists) and `OUT/README.md`, a [dataset card](#mapcv-card) whose metadata names the split files, so `datasets.load_dataset("OUT")` and the Hugging Face Hub read it as is. Each patch file is a `{bytes, path}` column holding the file exactly as written (PNG and JPEG columns are typed as images; NPY and GeoTIFF columns hold the bytes, for `np.load(io.BytesIO(...))` or rasterio's `MemoryFile`), next to `name`, `row`, `col`, `crs`, `transform` and, for classification, `labels`.
+- **`terratorch`**: the `data:` section of a TerraTorch training config, `GenericNonGeoSegmentationDataModule` (or `GenericNonGeoPixelwiseRegressionDataModule`) with the dataset's `Images/` and `Masks/` folders, its split lists, `num_classes`, and the band `means` and `stds` of the train split (from `stats.json`, or computed). It covers single-source segmentation and regression datasets written as `tif` or `png` (TerraTorch reads files with GDAL, which cannot read NPY). A comment says which `ignore_index` the task needs: `-1` for GeoTIFF masks, whose ignore value TerraTorch reads as missing, and `255` for PNG masks.
+
+```console
+$ mapcv export dataset --format terratorch
+✓ TerraTorch data config written to dataset/terratorch.yaml; paste it into your training config.
+```
 
 ## `mapcv validate`
 

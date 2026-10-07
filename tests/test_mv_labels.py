@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pytest
 from shapely.geometry import MultiPolygon, Polygon
@@ -151,17 +151,17 @@ _KML_CASES = [
     ("multigeometry", MULTIGEOMETRY_KML, None),
 ]
 
-_DATA: List[Dict[str, Any]] = json.loads(_GOLDEN.read_text())
+_DATA: list[dict[str, Any]] = json.loads(_GOLDEN.read_text())
 _BY_ID = {c["kml_id"]: c for c in _DATA}
 
 _COORD_TOL = 1e-10
 
 
-def _exterior_coords(geom: BaseGeometry) -> List[Tuple[float, float]]:
+def _exterior_coords(geom: BaseGeometry) -> list[tuple[float, float]]:
     if isinstance(geom, Polygon):
         return [(c[0], c[1]) for c in geom.exterior.coords]
     if isinstance(geom, MultiPolygon):
-        return [(c[0], c[1]) for c in list(geom.geoms)[0].exterior.coords]
+        return [(c[0], c[1]) for c in next(iter(geom.geoms)).exterior.coords]
     return []
 
 

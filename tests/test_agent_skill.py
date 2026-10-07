@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 import yaml
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
     not _SKILL.exists(), reason="not a source checkout (the sdist leaves out agent/)"
 )
 
-_BASE: Dict[str, Any] = {
+_BASE: dict[str, Any] = {
     "region": {"west": 4.9375, "south": 52.3725, "east": 4.9515, "north": 52.3780},
     "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite"},
     "sampler": {"patch_size": 256},
@@ -29,7 +29,7 @@ _BASE: Dict[str, Any] = {
 }
 
 
-def _recipes() -> List[str]:
+def _recipes() -> list[str]:
     text = _SKILL.read_text(encoding="utf-8")
     return re.findall(r"```yaml\n(.*?)```", text, flags=re.DOTALL)
 

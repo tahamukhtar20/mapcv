@@ -16,7 +16,7 @@ import io
 import json
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import geopandas as gpd
 import mercantile
@@ -169,7 +169,7 @@ _KML_CASES = [
 
 # ---- hand-picked coordinate pairs ----
 
-_HAND_PICKED: List[Tuple[float, float]] = [
+_HAND_PICKED: list[tuple[float, float]] = [
     (-122.4194, 37.7749),  # San Francisco
     (139.6917, 35.6895),  # Tokyo
     (-43.1729, -22.9068),  # Rio de Janeiro
@@ -189,13 +189,13 @@ _RASTER_SIZE = 128
 _RASTER_TRANSFORM = (1.0, 0.0, 0.0, 0.0, -1.0, float(_RASTER_SIZE))
 
 
-def _random_lng_lat(rng: random.Random) -> Tuple[float, float]:
+def _random_lng_lat(rng: random.Random) -> tuple[float, float]:
     lng = rng.uniform(-180.0, 180.0)
     lat = rng.uniform(-85.0, 85.0)
     return lng, lat
 
 
-def _random_bbox(rng: random.Random) -> Tuple[float, float, float, float]:
+def _random_bbox(rng: random.Random) -> tuple[float, float, float, float]:
     """Return (west, south, east, north) with west < east, max 2 degrees wide/tall."""
     lng1 = rng.uniform(-170.0, 160.0)
     lat1 = rng.uniform(-80.0, 75.0)
@@ -213,8 +213,8 @@ def generate_tile_math_golden() -> None:
     rng2 = random.Random(SEED)
 
     # ---- xy section ----
-    xy_entries: List[Dict[str, Any]] = []
-    coords_500: List[Tuple[float, float]] = list(_HAND_PICKED)
+    xy_entries: list[dict[str, Any]] = []
+    coords_500: list[tuple[float, float]] = list(_HAND_PICKED)
     while len(coords_500) < 500:
         coords_500.append(_random_lng_lat(rng2))
 
@@ -223,7 +223,7 @@ def generate_tile_math_golden() -> None:
         xy_entries.append({"lng": lng, "lat": lat, "mx": mx, "my": my})
 
     # ---- tile section ----
-    tile_entries: List[Dict[str, Any]] = []
+    tile_entries: list[dict[str, Any]] = []
     zooms_cycle = list(range(1, 23))
     for i, (lng, lat) in enumerate(coords_500):
         zoom = zooms_cycle[i % len(zooms_cycle)]
@@ -231,8 +231,8 @@ def generate_tile_math_golden() -> None:
         tile_entries.append({"lng": lng, "lat": lat, "zoom": zoom, "x": t.x, "y": t.y, "z": t.z})
 
     # ---- xy_bounds + bounds from first 200 tiles ----
-    xy_bounds_entries: List[Dict[str, Any]] = []
-    bounds_entries: List[Dict[str, Any]] = []
+    xy_bounds_entries: list[dict[str, Any]] = []
+    bounds_entries: list[dict[str, Any]] = []
     for entry in tile_entries[:200]:
         t = mercantile.Tile(x=entry["x"], y=entry["y"], z=entry["z"])
         xb = mercantile.xy_bounds(t)
@@ -262,14 +262,14 @@ def generate_tile_math_golden() -> None:
 
     # ---- tiles section (50 standard bboxes, west < east only) ----
     # Use zoom <= 14 and stream-with-limit to avoid OOM on high-zoom large bboxes.
-    tiles_entries: List[Dict[str, Any]] = []
+    tiles_entries: list[dict[str, Any]] = []
     rng3 = random.Random(SEED)
     zoom_list = [8, 10, 12]
     _TILE_LIMIT = 5_000
     while len(tiles_entries) < 50:
         w, s, e, n = _random_bbox(rng3)
         zoom = rng3.choice(zoom_list)
-        tile_set: List[List[int]] = []
+        tile_set: list[list[int]] = []
         overflow = False
         for t in mercantile.tiles(w, s, e, n, zooms=[zoom]):
             tile_set.append([t.x, t.y, t.z])
@@ -282,7 +282,7 @@ def generate_tile_math_golden() -> None:
             {"west": w, "south": s, "east": e, "north": n, "zoom": zoom, "tiles": tile_set}
         )
 
-    golden: Dict[str, Any] = {
+    golden: dict[str, Any] = {
         "xy": xy_entries,
         "tile": tile_entries,
         "xy_bounds": xy_bounds_entries,
@@ -301,7 +301,7 @@ def generate_transform_golden() -> None:
     """Write tests/golden/transform_golden.json."""
     transformer = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
     rng2 = random.Random(SEED)
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     for _ in range(1000):
         lng = rng2.uniform(-180.0, 180.0)
         lat = rng2.uniform(-85.0, 85.0)
@@ -329,7 +329,7 @@ def generate_rasterize_golden() -> None:
     transform = Affine(a, b, c, d, e, f)
     size = _RASTER_SIZE
 
-    geom_cases: List[Tuple[Any, int]] = [
+    geom_cases: list[tuple[Any, int]] = [
         # case 0: unit square -> 1 pixel at (row=127, col=0)
         (_rect_polygon(0, 0, 1, 1), 1),
         # case 1: full image square
@@ -365,7 +365,7 @@ def generate_rasterize_golden() -> None:
         geom_cases.append((_random_convex_polygon(rng2), rng2.randint(1, 5)))
 
     # Boundary cases (#70, #71, #124). World y = 128 - pixel row.
-    def _px(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    def _px(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
         return [(x, size - y) for x, y in points]
 
     geom_cases += [
@@ -396,8 +396,8 @@ def generate_rasterize_golden() -> None:
         ),
     ]
 
-    masks: Dict[str, Any] = {}
-    meta: List[Dict[str, Any]] = []
+    masks: dict[str, Any] = {}
+    meta: list[dict[str, Any]] = []
 
     # Every case once with all_touched=False (cases 0..N-1), then again with
     # all_touched=True (cases N..2N-1).
@@ -436,11 +436,11 @@ def generate_rasterize_golden() -> None:
 
 def generate_label_parse_golden() -> None:
     """Write tests/golden/label_parse_golden.json."""
-    cases: List[Dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
 
     for kml_id, kml_bytes, _label_field in _KML_CASES:
         gdf = gpd.read_file(io.BytesIO(kml_bytes), driver="KML")
-        features: List[Dict[str, Any]] = []
+        features: list[dict[str, Any]] = []
         for _, row in gdf.iterrows():
             geom = row.geometry
             if geom is None or geom.is_empty:

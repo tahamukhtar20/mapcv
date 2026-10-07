@@ -21,9 +21,10 @@ import argparse
 import json
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from shapely.geometry import LineString, MultiPolygon, Polygon, box, mapping
 from shapely.geometry.base import BaseGeometry
@@ -35,8 +36,8 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent
 ATTRIBUTION = "© OpenStreetMap contributors"
 LICENSE = "ODbL-1.0"
 
-Bbox = Tuple[float, float, float, float]  # west, south, east, north
-Classifier = Callable[[Dict[str, str]], Optional[str]]
+Bbox = tuple[float, float, float, float]  # west, south, east, north
+Classifier = Callable[[dict[str, str]], str | None]
 
 
 @dataclass(frozen=True)
@@ -47,8 +48,8 @@ class LabelSpec:
     bbox: Bbox
     query: str
     classify: Classifier
-    keep_tags: Tuple[str, ...]
-    class_order: Tuple[str, ...]
+    keep_tags: tuple[str, ...]
+    class_order: tuple[str, ...]
     simplify_deg: float
     precision: int
     min_area_deg2: float
@@ -72,7 +73,7 @@ QUICKSTART_QUERY = f"""[out:json][timeout:60];
 out geom;"""
 
 
-def _classify_building(tags: Dict[str, str]) -> Optional[str]:
+def _classify_building(tags: dict[str, str]) -> str | None:
     return "building" if tags.get("building", "no") != "no" else None
 
 
@@ -106,7 +107,7 @@ _LANDCOVER_CLASSES = {
 }
 
 
-def _classify_landcover(tags: Dict[str, str]) -> Optional[str]:
+def _classify_landcover(tags: dict[str, str]) -> str | None:
     # natural=* wins over landuse=* (e.g. a lake inside a residential area).
     for key in ("natural", "landuse"):
         name = _LANDCOVER_CLASSES.get((key, tags.get(key, "")))
@@ -115,7 +116,7 @@ def _classify_landcover(tags: Dict[str, str]) -> Optional[str]:
     return None
 
 
-SPECS: Dict[str, LabelSpec] = {
+SPECS: dict[str, LabelSpec] = {
     "quickstart": LabelSpec(
         output=EXAMPLES_DIR / "quickstart" / "buildings.geojson",
         bbox=QUICKSTART_BBOX,
@@ -146,20 +147,20 @@ SPECS: Dict[str, LabelSpec] = {
 }
 
 
-def fetch(query: str) -> Dict[str, Any]:
+def fetch(query: str) -> dict[str, Any]:
     """Run one Overpass query and return the decoded JSON."""
     body = urllib.parse.urlencode({"data": query}).encode()
     request = urllib.request.Request(OVERPASS_URL, data=body, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=180) as response:
-        result: Dict[str, Any] = json.load(response)
+        result: dict[str, Any] = json.load(response)
     return result
 
 
-def _line(points: List[Dict[str, float]]) -> List[Tuple[float, float]]:
+def _line(points: list[dict[str, float]]) -> list[tuple[float, float]]:
     return [(point["lon"], point["lat"]) for point in points]
 
 
-def _way_polygon(element: Dict[str, Any]) -> Optional[BaseGeometry]:
+def _way_polygon(element: dict[str, Any]) -> BaseGeometry | None:
     coords = _line(element.get("geometry", []))
     if len(coords) < 4 or coords[0] != coords[-1]:
         return None  # unclosed way: not an area
@@ -167,8 +168,8 @@ def _way_polygon(element: Dict[str, Any]) -> Optional[BaseGeometry]:
     return polygon if polygon.is_valid else polygon.buffer(0)
 
 
-def _relation_polygon(element: Dict[str, Any]) -> Optional[BaseGeometry]:
-    rings: Dict[str, List[LineString]] = {"outer": [], "inner": []}
+def _relation_polygon(element: dict[str, Any]) -> BaseGeometry | None:
+    rings: dict[str, list[LineString]] = {"outer": [], "inner": []}
     for member in element.get("members", []):
         role = member.get("role") or "outer"
         if member.get("type") == "way" and role in rings and member.get("geometry"):
@@ -180,7 +181,7 @@ def _relation_polygon(element: Dict[str, Any]) -> Optional[BaseGeometry]:
     return outer.difference(inner) if not inner.is_empty else outer
 
 
-def _polygon_parts(geometry: BaseGeometry) -> List[Polygon]:
+def _polygon_parts(geometry: BaseGeometry) -> list[Polygon]:
     if isinstance(geometry, Polygon):
         return [geometry]
     if isinstance(geometry, MultiPolygon):
@@ -196,7 +197,7 @@ def _round(value: Any, precision: int) -> Any:
     return value
 
 
-def _clean(spec: LabelSpec, geometry: BaseGeometry) -> Optional[BaseGeometry]:
+def _clean(spec: LabelSpec, geometry: BaseGeometry) -> BaseGeometry | None:
     if spec.clip:
         geometry = geometry.intersection(box(*spec.bbox))
     if spec.simplify_deg:
@@ -207,7 +208,7 @@ def _clean(spec: LabelSpec, geometry: BaseGeometry) -> Optional[BaseGeometry]:
     return parts[0] if len(parts) == 1 else MultiPolygon(parts)
 
 
-def _feature(geometry: BaseGeometry, properties: Dict[str, str], precision: int) -> Dict[str, Any]:
+def _feature(geometry: BaseGeometry, properties: dict[str, str], precision: int) -> dict[str, Any]:
     geojson = mapping(geometry)
     return {
         "type": "Feature",
@@ -219,7 +220,7 @@ def _feature(geometry: BaseGeometry, properties: Dict[str, str], precision: int)
     }
 
 
-def build(spec: LabelSpec, data: Dict[str, Any]) -> Dict[str, Any]:
+def build(spec: LabelSpec, data: dict[str, Any]) -> dict[str, Any]:
     """Convert an Overpass ``out geom`` response into a GeoJSON FeatureCollection.
 
     Features are ordered by ``spec.class_order`` because mapcv draws later
@@ -227,10 +228,10 @@ def build(spec: LabelSpec, data: Dict[str, Any]) -> Dict[str, Any]:
     class are merged first, which keeps the file small when OSM maps many
     adjacent parcels (fields, ditches) that a 10 m pixel cannot tell apart.
     """
-    by_class: Dict[str, List[Tuple[str, Dict[str, str], BaseGeometry]]] = {}
+    by_class: dict[str, list[tuple[str, dict[str, str], BaseGeometry]]] = {}
     skipped = 0
     for element in data.get("elements", []):
-        tags: Dict[str, str] = element.get("tags", {})
+        tags: dict[str, str] = element.get("tags", {})
         name = spec.classify(tags)
         if name is None:
             continue
@@ -244,7 +245,7 @@ def build(spec: LabelSpec, data: Dict[str, Any]) -> Dict[str, Any]:
         osm_id = f"{element['type']}/{element['id']}"
         by_class.setdefault(name, []).append((osm_id, tags, geometry))
 
-    features: List[Dict[str, Any]] = []
+    features: list[dict[str, Any]] = []
     for name in spec.class_order:
         members = sorted(by_class.get(name, []), key=lambda member: member[0])
         if spec.dissolve:
@@ -288,7 +289,7 @@ def main() -> None:
     args = parser.parse_args()
 
     spec = SPECS[args.example]
-    raw: Optional[Path] = args.raw
+    raw: Path | None = args.raw
     if raw is not None and raw.exists():
         data = json.loads(raw.read_text())
     else:
@@ -298,7 +299,7 @@ def main() -> None:
     collection = build(spec, data)
     output: Path = args.output or spec.output
     output.write_text(json.dumps(collection, separators=(",", ":"), ensure_ascii=False) + "\n")
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for feature in collection["features"]:
         counts[feature["properties"]["class"]] = counts.get(feature["properties"]["class"], 0) + 1
     size_kb = output.stat().st_size / 1000

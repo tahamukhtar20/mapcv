@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from mapcv.manifest import Manifest, SourceRecord
 from mapcv.stats import STATS_FILENAME
@@ -53,7 +53,7 @@ _ATTRIBUTION = {
 }
 
 
-def _attribution(record: SourceRecord) -> Optional[str]:
+def _attribution(record: SourceRecord) -> str | None:
     if record.source_type in ("eopf_zarr", "stac_cog"):
         return "Contains modified Copernicus Sentinel data"
     product = record.product_id or ""
@@ -73,7 +73,7 @@ def _size_category(count: int) -> str:
     return "100K<n<1M" if count < 1_000_000 else "n>1M"
 
 
-def _gsd(record: SourceRecord) -> Optional[float]:
+def _gsd(record: SourceRecord) -> float | None:
     if record.crs is None or record.transform is None:
         return None
     from mapcv.planning import _pixel_size_m
@@ -84,7 +84,7 @@ def _gsd(record: SourceRecord) -> Optional[float]:
         return None
 
 
-def _source_rows(manifest: Manifest) -> List[str]:
+def _source_rows(manifest: Manifest) -> list[str]:
     rows = [
         "| Source | Type | Product | CRS | Pixel size | Bands |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -99,8 +99,8 @@ def _source_rows(manifest: Manifest) -> List[str]:
     return rows
 
 
-def _split_counts(staging_dir: Path) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def _split_counts(staging_dir: Path) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for split in ("train", "val", "test"):
         path = staging_dir / "splits" / f"{split}.txt"
         if path.exists():
@@ -111,7 +111,7 @@ def _split_counts(staging_dir: Path) -> Dict[str, int]:
 def card_text(staging_dir: Path) -> str:
     """The card of the dataset in ``staging_dir`` (see the module docs)."""
     manifest = Manifest.load(staging_dir / "manifest.json")
-    stats: Dict[str, Any] = {}
+    stats: dict[str, Any] = {}
     stats_path = staging_dir / STATS_FILENAME
     if stats_path.exists():
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
@@ -167,8 +167,10 @@ def card_text(staging_dir: Path) -> str:
         body += [
             "## Normalisation",
             "",
-            f"Per-band mean and standard deviation over the `{stats.get('split', 'all')}` "
-            "patches, from `stats.json` (`mapcv stats`):",
+            (
+                f"Per-band mean and standard deviation over the `{stats.get('split', 'all')}` "
+                "patches, from `stats.json` (`mapcv stats`):"
+            ),
             "",
             "| Source | Band | Mean | Std |",
             "| --- | --- | --- | --- |",
@@ -189,8 +191,10 @@ def card_text(staging_dir: Path) -> str:
         "",
         "## Provenance",
         "",
-        f"- Made by mapcv {manifest.mapcv_version or '(unknown version)'}, manifest version "
-        f"{manifest.version}.",
+        (
+            f"- Made by mapcv {manifest.mapcv_version or '(unknown version)'}, manifest version "
+            f"{manifest.version}."
+        ),
     ]
     if labels.get("sha256"):
         body.append(f"- Label file SHA-256: `{labels['sha256']}`.")
@@ -212,10 +216,12 @@ def card_text(staging_dir: Path) -> str:
         "",
         "## Licence",
         "",
-        "The licence is `other` until you set it: the imagery provider's terms (and the "
-        "label source's, such as ODbL for OpenStreetMap) decide what you may share and how "
-        "to credit it. Check them before publishing; see "
-        "[Providers & licensing](https://tahamukhtar20.github.io/mapcv/project/providers/).",
+        (
+            "The licence is `other` until you set it: the imagery provider's terms (and the "
+            "label source's, such as ODbL for OpenStreetMap) decide what you may share and how "
+            "to credit it. Check them before publishing; see "
+            "[Providers & licensing](https://tahamukhtar20.github.io/mapcv/project/providers/)."
+        ),
         "",
     ]
     return "\n".join(front + [""] + body)

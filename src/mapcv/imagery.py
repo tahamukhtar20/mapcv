@@ -9,13 +9,13 @@ import sys
 import time
 import urllib.request
 import warnings
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from collections import Counter
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
+from typing import Any, Protocol
 from urllib.parse import quote, urlsplit
 
 import numpy as np
@@ -33,12 +33,12 @@ from mapcv._mapcv_rs import (
     tiles,
 )
 from mapcv.config import (
+    _LOOPBACK_HOSTS,
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     RegionConfig,
     StacCogImageryConfig,
     XYZImageryConfig,
-    _LOOPBACK_HOSTS,
     _validate_eopf_path,
     eopf_local_path,
 )
@@ -46,13 +46,12 @@ from mapcv.downloader import resolve_url_template
 from mapcv.geotiff import GeoTiff
 from mapcv.tile_cache import TileCache
 
-
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 # Tiles Rust leaves to Pillow (JPEG, ...) are decoded in these threads; Pillow
 # releases the GIL in its decoders. Created on first use and reused across windows.
 _PILLOW_THREADS = min(8, os.cpu_count() or 1)
-_pillow_pool: Optional[ThreadPoolExecutor] = None
+_pillow_pool: ThreadPoolExecutor | None = None
 
 
 def _pillow_executor() -> ThreadPoolExecutor:
@@ -72,14 +71,14 @@ class RasterMetadata:
     product_id: str
     width: int
     height: int
-    bands: List[str]
+    bands: list[str]
     dtype: str
     crs: str
     transform: Transform
     chunk_rows: int
     #: Identifies the exact input file(s), for sources whose input can change under the same
     #: name (a GeoTIFF); recorded in the manifest so a resumed run refuses a different file.
-    fingerprint: Optional[Dict[str, Any]] = None
+    fingerprint: dict[str, Any] | None = None
 
 
 class WindowedRasterSource(Protocol):
@@ -89,7 +88,7 @@ class WindowedRasterSource(Protocol):
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
         """Read one channels-last pixel window and its validity mask."""
 
     def close(self) -> None:
@@ -202,11 +201,11 @@ class AlignedSource:
         self.source = source
         self.alignment = alignment
         self.metadata = source.metadata
-        self._empty: Optional[Tuple[Tuple[int, ...], "np.dtype[Any]"]] = None
+        self._empty: tuple[tuple[int, ...], np.dtype[Any]] | None = None
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
         """Read reference pixels ``[row_start, row_stop) x [col_start, col_stop)``."""
         meta = self.metadata
         k, row_offset, col_offset = (
@@ -240,7 +239,7 @@ class AlignedSource:
             image[~inside] = 0
         return image, mask
 
-    def _empty_like(self) -> Tuple[Tuple[int, ...], "np.dtype[Any]"]:
+    def _empty_like(self) -> tuple[tuple[int, ...], np.dtype[Any]]:
         """Trailing shape and dtype of this source's windows (read once, from one pixel)."""
         if self._empty is None:
             sample, _ = self.source.read_window(0, 1, 0, 1)
@@ -264,7 +263,7 @@ def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> B
     return shapely_transform(_wgs84_transformer(destination_crs).transform, geometry)
 
 
-def region_bounds_in_crs(region: RegionConfig, crs: str) -> Tuple[float, float, float, float]:
+def region_bounds_in_crs(region: RegionConfig, crs: str) -> tuple[float, float, float, float]:
     """``(left, bottom, right, top)`` of the WGS-84 ``region`` in ``crs``.
 
     The region's edges are densified before projecting, so the box also covers the
@@ -282,7 +281,7 @@ _GRID_EPS = 1e-9
 
 def snap_interval_to_grid(
     low: float, high: float, origin: float, step: float, eps: float = _GRID_EPS
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """Expand ``[low, high]`` outward to the nearest grid lines ``origin + k * step``.
 
     ``eps`` (in steps) keeps an edge that sits on a grid line, up to float noise, from
@@ -332,7 +331,7 @@ class XYZRasterSource:
 
         self._config = config
         engine = config.earth_engine
-        fingerprint: Optional[Dict[str, Any]] = None
+        fingerprint: dict[str, Any] | None = None
         if engine is not None:
             from mapcv import earth_engine
 
@@ -350,14 +349,14 @@ class XYZRasterSource:
         # Tiles are fetched lazily per window and evicted once windows move
         # past them, so memory stays bounded to about one chunk of tiles and
         # a resumed run only downloads the chunks it still needs.
-        self._tiles: Dict[Tuple[int, int], bytes] = {}
-        self._attempted: Set[Tuple[int, int]] = set()
+        self._tiles: dict[tuple[int, int], bytes] = {}
+        self._attempted: set[tuple[int, int]] = set()
         self._cache = TileCache(cache_key) if config.cache else None
         self.tiles_requested = 0
         self.tiles_cached = 0
         self.tiles_failed = 0
         self.failure_causes: Counter[str] = Counter()
-        self.failure_example: Optional[str] = None
+        self.failure_example: str | None = None
         self._min_x = min(tile.x for tile in target_tiles)
         self._max_x = max(tile.x for tile in target_tiles)
         self._min_y = min(tile.y for tile in target_tiles)
@@ -378,7 +377,7 @@ class XYZRasterSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
         height = max(0, row_stop - row_start)
         width = max(0, col_stop - col_start)
         if height == 0 or width == 0:
@@ -422,7 +421,7 @@ class XYZRasterSource:
         self,
         window: npt.NDArray[np.uint8],
         valid: npt.NDArray[np.bool_],
-        undecoded: List[Tuple[int, int]],
+        undecoded: list[tuple[int, int]],
         row_start: int,
         row_stop: int,
         col_start: int,
@@ -472,7 +471,7 @@ class XYZRasterSource:
         for key in [key for key in self._tiles if key[1] < tile_row]:
             del self._tiles[key]
 
-    def _fetch(self, keys: List[Tuple[int, int]]) -> None:
+    def _fetch(self, keys: list[tuple[int, int]]) -> None:
         missing = [key for key in keys if key not in self._attempted]
         if not missing:
             return
@@ -521,7 +520,7 @@ class XYZRasterSource:
 
 
 def _dataset_crs(dataset: Any) -> str:
-    candidates: List[Any] = []
+    candidates: list[Any] = []
     for key in ("crs", "crs_wkt", "spatial_ref"):
         candidates.append(dataset.attrs.get(key))
 
@@ -537,6 +536,7 @@ def _dataset_crs(dataset: Any) -> str:
 
     try:
         from pyproj import CRS
+        from pyproj.exceptions import CRSError
     except ImportError as exc:  # pragma: no cover - optional dependency guard
         raise RuntimeError("Install EOPF support with 'pip install mapcv[zarr]'.") from exc
 
@@ -544,8 +544,8 @@ def _dataset_crs(dataset: Any) -> str:
         if candidate:
             try:
                 return str(CRS.from_user_input(candidate).to_string())
-            except Exception:
-                continue
+            except (CRSError, TypeError, ValueError):
+                continue  # not a CRS pyproj reads; try the next attribute
     raise ValueError("EOPF dataset does not expose a readable projected CRS")
 
 
@@ -567,11 +567,11 @@ def _coordinate_transform(dataset: Any, resolution: int) -> Transform:
 
 
 def _snap_bounds_to_grid(
-    bounds: Tuple[float, float, float, float],
+    bounds: tuple[float, float, float, float],
     x_values: npt.NDArray[Any],
     y_values: npt.NDArray[Any],
     resolution: int,
-) -> Tuple[float, float, float, float]:
+) -> tuple[float, float, float, float]:
     """Expand ``bounds`` outward to pixel edges of the product grid.
 
     The reader builds its output grid from the bbox origin, so an unsnapped bbox
@@ -600,7 +600,7 @@ _NOT_RETRYABLE = (ValueError, TypeError, KeyError, IndexError, NotImplementedErr
 
 
 def _check_band_coverage(
-    finite: npt.NDArray[np.bool_], bands: List[str], row_start: int, row_stop: int
+    finite: npt.NDArray[np.bool_], bands: list[str], row_start: int, row_stop: int
 ) -> None:
     """Fail when a band is empty where other bands have data.
 
@@ -624,7 +624,7 @@ class EOPFZarrRasterSource:
     """Lazy window reader for one Sentinel-2 L2A EOPF Zarr product."""
 
     def __init__(self, region: RegionConfig, config: EOPFZarrImageryConfig) -> None:
-        fingerprint: Dict[str, Any] = {}
+        fingerprint: dict[str, Any] = {}
         if config.search is not None:
             from mapcv.stac import find_product
 
@@ -765,14 +765,14 @@ class EOPFZarrRasterSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         """Read a window, retrying transient failures (timeouts, empty bands)."""
         for attempt in range(1, EOPF_READ_ATTEMPTS + 1):
             try:
                 return self._read_window_once(row_start, row_stop, col_start, col_stop)
             except _NOT_RETRYABLE:
                 raise
-            except Exception as exc:  # noqa: BLE001 - network stacks raise many types
+            except Exception as exc:
                 if attempt == EOPF_READ_ATTEMPTS:
                     raise RuntimeError(
                         f"reading rows {row_start}-{row_stop} failed {attempt} times; last "
@@ -783,7 +783,7 @@ class EOPFZarrRasterSource:
 
     def _read_window_once(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         window = self._dataset[self._bands].isel(
             y=slice(row_start, row_stop), x=slice(col_start, col_stop)
         )
@@ -844,7 +844,7 @@ def _remote_http_url(url: str) -> str:
     return host + quote(key, safe="/%")
 
 
-def geotiff_fingerprint(location: str) -> Dict[str, Any]:
+def geotiff_fingerprint(location: str) -> dict[str, Any]:
     """A cheap identity of a GeoTIFF, so a resumed run notices a different file.
 
     Local files: size and the SHA-256 of the first and last 64 KiB (where the TIFF headers
@@ -869,13 +869,13 @@ def geotiff_fingerprint(location: str) -> Dict[str, Any]:
             "size": stat.st_size,
             "sha256_head_tail": digest.hexdigest(),
         }
-    fingerprint: Dict[str, Any] = {"kind": "url", "url": location}
+    fingerprint: dict[str, Any] = {"kind": "url", "url": location}
     request = urllib.request.Request(
         _remote_http_url(location),
         headers={"Range": f"bytes=0-{_FINGERPRINT_BYTES - 1}", "User-Agent": "mapcv"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:
             head = response.read(_FINGERPRINT_BYTES)
             etag = response.headers.get("ETag")
             content_range = response.headers.get("Content-Range", "")
@@ -890,7 +890,7 @@ def geotiff_fingerprint(location: str) -> Dict[str, Any]:
     return fingerprint
 
 
-def _nodata_mask(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray[np.bool_]:
+def _nodata_mask(data: npt.NDArray[Any], nodata: float | None) -> npt.NDArray[np.bool_]:
     """Pixels where every band is NoData (or non-finite, for float rasters)."""
     empty = _all_equal(data, nodata)
     if np.issubdtype(data.dtype, np.floating):
@@ -898,7 +898,7 @@ def _nodata_mask(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray
     return empty
 
 
-def _all_equal(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray[np.bool_]:
+def _all_equal(data: npt.NDArray[Any], nodata: float | None) -> npt.NDArray[np.bool_]:
     if nodata is None or np.isnan(nodata):
         return np.zeros(data.shape[:2], dtype=np.bool_)
     if np.issubdtype(data.dtype, np.integer):
@@ -908,7 +908,7 @@ def _all_equal(data: npt.NDArray[Any], nodata: Optional[float]) -> npt.NDArray[n
     return np.asarray(np.all(data == data.dtype.type(nodata), axis=-1), dtype=np.bool_)
 
 
-def _json_nodata(nodata: Optional[float]) -> Optional[Any]:
+def _json_nodata(nodata: float | None) -> Any | None:
     """``nodata`` as a JSON-safe, self-equal value (``NaN != NaN`` would break resuming)."""
     if nodata is None:
         return None
@@ -916,8 +916,8 @@ def _json_nodata(nodata: Optional[float]) -> Optional[Any]:
 
 
 def region_pixel_window(
-    bounds: Tuple[float, float, float, float], transform: Transform, height: int, width: int
-) -> Tuple[int, int, int, int, bool]:
+    bounds: tuple[float, float, float, float], transform: Transform, height: int, width: int
+) -> tuple[int, int, int, int, bool]:
     """Pixel window ``(row0, row1, col0, col1)`` covering ``bounds``, clipped to the raster.
 
     The CRS box is mapped through the inverse of the (possibly rotated) pixel transform
@@ -929,8 +929,8 @@ def region_pixel_window(
     det = a * e - b * d
     if det == 0:
         raise ValueError("the GeoTIFF's pixel transform is degenerate")
-    cols: List[float] = []
-    rows: List[float] = []
+    cols: list[float] = []
+    rows: list[float] = []
     for x, y in ((left, bottom), (left, top), (right, bottom), (right, top)):
         cols.append((e * (x - c) - b * (y - f)) / det)
         rows.append((a * (y - f) - d * (x - c)) / det)
@@ -974,7 +974,7 @@ class GeoTiffRasterSource:
         region: RegionConfig,
         config: GeoTiffImageryConfig,
         *,
-        image_format: Optional[str] = None,
+        image_format: str | None = None,
     ) -> None:
         # URL safety rules are enforced by GeoTiffImageryConfig validation.
         location = geotiff_location(config.path)
@@ -1067,7 +1067,7 @@ class GeoTiffRasterSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
         data, inside = self._tif.read_window(
             self._row0 + row_start,
             self._row0 + row_stop,
@@ -1120,7 +1120,7 @@ class StacCogRasterSource:
             return location
 
         locations = {key: href(key) for key in wanted}
-        opened: Dict[str, WindowedRasterSource] = {}
+        opened: dict[str, WindowedRasterSource] = {}
         try:
             for key, location in locations.items():
                 opened[key] = GeoTiffRasterSource(
@@ -1156,7 +1156,7 @@ class StacCogRasterSource:
             if config.scl_mask is not None
             else None
         )
-        fingerprint: Dict[str, Any] = {
+        fingerprint: dict[str, Any] = {
             "stac": {
                 "catalog": config.search.catalog,
                 "collection": config.search.collection,
@@ -1181,9 +1181,9 @@ class StacCogRasterSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
         layers = []
-        valid: Optional[npt.NDArray[np.bool_]] = None
+        valid: npt.NDArray[np.bool_] | None = None
         for key in self._bands:
             data, band_valid = self._aligned[key].read_window(
                 row_start, row_stop, col_start, col_stop
@@ -1208,7 +1208,7 @@ def open_raster_source(
     region: RegionConfig,
     imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig | StacCogImageryConfig,
     *,
-    image_format: Optional[str] = None,
+    image_format: str | None = None,
 ) -> WindowedRasterSource:
     """Construct the configured raster source.
 

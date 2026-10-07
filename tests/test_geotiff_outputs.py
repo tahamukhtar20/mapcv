@@ -12,9 +12,10 @@ import io
 import json
 import sys
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -43,7 +44,7 @@ pyproj = pytest.importorskip("pyproj", reason="footprints are checked against py
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mapcv-0.2.0"
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ class _NoiseTiles(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
         rng = np.random.default_rng([z, x, y])
         pixels = rng.integers(1, 256, size=(256, 256, 3), dtype=np.uint8)
@@ -100,7 +101,7 @@ def _check_geotiff(
     *,
     count: int,
     dtype: str,
-    nodata: Optional[float],
+    nodata: float | None,
 ) -> npt.NDArray[Any]:
     """Assert a patch file's georeferencing; returns its pixels, ``(bands, rows, cols)``."""
     expected = manifest.patch_transform(entry)
@@ -129,7 +130,7 @@ def _patch_meta(row: int, col: int) -> PatchMeta:
     return PatchMeta(row=row, col=col, padded=False, empty_ratio=0.0)
 
 
-def _manifest(crs: str, transform: Transform, bands: List[str], patch_size: int) -> Manifest:
+def _manifest(crs: str, transform: Transform, bands: list[str], patch_size: int) -> Manifest:
     return Manifest(
         sources=[SourceRecord(crs=crs, transform=transform, bands=bands)],
         sampler={"patch_size": patch_size},
@@ -243,7 +244,7 @@ class _FakeEopf:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         window = (slice(row_start, row_stop), slice(col_start, col_stop))
         return self.image[window], self.valid[window]
 
@@ -358,8 +359,8 @@ def test_a_tif_image_with_an_npy_mask_and_the_other_way_round(tmp_path: Path) ->
 # ── footprints: patches.geojson ──────────────────────────────────────────────
 
 
-def _footprints(staging: Path) -> Dict[str, Any]:
-    data: Dict[str, Any] = json.loads((staging / "patches.geojson").read_text(encoding="utf-8"))
+def _footprints(staging: Path) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((staging / "patches.geojson").read_text(encoding="utf-8"))
     return data
 
 
@@ -558,8 +559,8 @@ def _write_raw(
     transform: Transform,
     epsg: int,
     geographic: bool,
-    nodata: Optional[float] = None,
-    band_names: Optional[List[str]] = None,
+    nodata: float | None = None,
+    band_names: list[str] | None = None,
 ) -> Path:
     array = np.ascontiguousarray(array)
     n, h, w = array.shape[:3]
@@ -715,7 +716,7 @@ def test_world_files_need_a_png_or_jpg(tmp_path: Path) -> None:
     ],
 )
 def test_resume_refuses_a_changed_output_format(
-    tmp_path: Path, first: Dict[str, Any], second: Dict[str, Any]
+    tmp_path: Path, first: dict[str, Any], second: dict[str, Any]
 ) -> None:
     run_generate(_eopf_config(tmp_path, "d", **first))
     with pytest.raises(ManifestMismatchError, match="writer"):
@@ -782,7 +783,7 @@ class _BlackIsDataRaster:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.bool_]]:
         window = (slice(row_start, row_stop), slice(col_start, col_stop))
         return self.image[window], self.valid[window]
 
@@ -795,7 +796,7 @@ def test_empty_ratio_counts_invalid_pixels_not_black_ones(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, image_format: str
 ) -> None:
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: _BlackIsDataRaster())
-    imagery: Dict[str, Any] = (
+    imagery: dict[str, Any] = (
         {"type": "eopf_zarr", "path": str(tmp_path / "unused.zarr")}
         if image_format == "npy"
         else {"type": "xyz", "zoom": 18, "url_template": "http://127.0.0.1:1/{z}/{x}/{y}.png"}

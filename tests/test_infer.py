@@ -9,7 +9,7 @@ is read back with rasterio and compared with the source raster and its grid.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -17,11 +17,11 @@ import pytest
 import yaml
 
 pytest.importorskip("rasterio", reason="the output is checked with rasterio")
-import rasterio  # noqa: E402
+import rasterio
+from test_multi_source import EPSG, reference_transform, region_inside
 
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.infer import blend_window, predict_raster  # noqa: E402
-from test_multi_source import EPSG, reference_transform, region_inside  # noqa: E402
+from mapcv.config import MapcvConfig
+from mapcv.infer import blend_window, predict_raster
 
 WIDTH, HEIGHT = 300, 230
 
@@ -61,12 +61,12 @@ def _config(tmp_path: Path, patch: int, chunk_rows: int = 64) -> MapcvConfig:
     )
 
 
-def _read(path: Path) -> Tuple[npt.NDArray[Any], Any]:
+def _read(path: Path) -> tuple[npt.NDArray[Any], Any]:
     with rasterio.open(path) as src:
         return src.read(), src
 
 
-def _window(path: Path) -> Tuple[int, int, int, int]:
+def _window(path: Path) -> tuple[int, int, int, int]:
     """Where the output sits on the input grid: (row, col, height, width)."""
     with rasterio.open(path) as src:
         transform, height, width = src.transform, src.height, src.width
@@ -130,8 +130,8 @@ def test_argmax_classes_and_pixels_without_imagery(tmp_path: Path) -> None:
 
 def test_batches_progress_yaml_configs_and_small_rasters(tmp_path: Path) -> None:
     data = _raster(tmp_path)
-    sizes: List[int] = []
-    calls: List[Tuple[int, int]] = []
+    sizes: list[int] = []
+    calls: list[tuple[int, int]] = []
 
     def record(batch: npt.NDArray[Any]) -> npt.NDArray[np.float32]:
         sizes.append(batch.shape[0])

@@ -28,8 +28,9 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from shapely.geometry import LineString, Point, Polygon, mapping
 from shapely.geometry.base import BaseGeometry
@@ -43,7 +44,7 @@ ATTRIBUTION = "© OpenStreetMap contributors (ODbL)"
 _LINEAR_KEYS = ("highway", "barrier", "railway", "waterway")
 
 
-def _selector(tags: Dict[str, Any]) -> str:
+def _selector(tags: dict[str, Any]) -> str:
     parts = []
     for key, value in tags.items():
         if value == "*":
@@ -69,7 +70,7 @@ def overpass_query(source: OsmLabelsSource) -> str:
     return f"[out:json][timeout:{source.timeout}];\n(\n{statements});\nout geom;\n"
 
 
-def _matches(tags: Dict[str, str], wanted: Dict[str, Any]) -> bool:
+def _matches(tags: dict[str, str], wanted: dict[str, Any]) -> bool:
     for key, value in wanted.items():
         if key not in tags:
             return False
@@ -81,18 +82,18 @@ def _matches(tags: Dict[str, str], wanted: Dict[str, Any]) -> bool:
     return True
 
 
-def _class_of(tags: Dict[str, str], classes: Sequence[OsmClass]) -> Optional[str]:
+def _class_of(tags: dict[str, str], classes: Sequence[OsmClass]) -> str | None:
     for entry in classes:
         if _matches(tags, entry.tags):
             return entry.name
     return None
 
 
-def _coords(points: Sequence[Dict[str, float]]) -> List[Tuple[float, float]]:
+def _coords(points: Sequence[dict[str, float]]) -> list[tuple[float, float]]:
     return [(float(p["lon"]), float(p["lat"])) for p in points if p is not None]
 
 
-def _way_geometry(element: Dict[str, Any]) -> Optional[BaseGeometry]:
+def _way_geometry(element: dict[str, Any]) -> BaseGeometry | None:
     coords = _coords(element.get("geometry") or [])
     if len(coords) < 2:
         return None
@@ -107,10 +108,10 @@ def _way_geometry(element: Dict[str, Any]) -> Optional[BaseGeometry]:
     return LineString(coords)
 
 
-def _relation_geometry(element: Dict[str, Any]) -> Optional[BaseGeometry]:
+def _relation_geometry(element: dict[str, Any]) -> BaseGeometry | None:
     if element.get("tags", {}).get("type") not in ("multipolygon", "boundary"):
         return None
-    rings: Dict[str, List[LineString]] = {"outer": [], "inner": []}
+    rings: dict[str, list[LineString]] = {"outer": [], "inner": []}
     for member in element.get("members", []):
         coords = _coords(member.get("geometry") or [])
         if member.get("type") == "way" and len(coords) >= 2:
@@ -124,18 +125,18 @@ def _relation_geometry(element: Dict[str, Any]) -> Optional[BaseGeometry]:
 
 
 def features_from_overpass(
-    answer: Dict[str, Any], classes: Sequence[OsmClass]
-) -> List[Dict[str, Any]]:
+    answer: dict[str, Any], classes: Sequence[OsmClass]
+) -> list[dict[str, Any]]:
     """GeoJSON features (``class``, ``osm_id``) from an Overpass ``out geom`` answer, in
     class order, then by OSM type and ID."""
     order = {entry.name: index for index, entry in enumerate(classes)}
-    found: List[Tuple[int, str, int, Dict[str, Any]]] = []
+    found: list[tuple[int, str, int, dict[str, Any]]] = []
     for element in answer.get("elements", []):
         name = _class_of(element.get("tags", {}), classes)
         if name is None:
             continue
         kind = element.get("type")
-        geometry: Optional[BaseGeometry]
+        geometry: BaseGeometry | None
         if kind == "node":
             geometry = Point(float(element["lon"]), float(element["lat"]))
         elif kind == "way":
@@ -156,7 +157,7 @@ def features_from_overpass(
     return [feature for *_, feature in found]
 
 
-def _fetch(source: OsmLabelsSource, query: str) -> Dict[str, Any]:
+def _fetch(source: OsmLabelsSource, query: str) -> dict[str, Any]:
     data = urllib.parse.urlencode({"data": query}).encode("utf-8")
     request = urllib.request.Request(
         source.overpass_url,
@@ -165,8 +166,8 @@ def _fetch(source: OsmLabelsSource, query: str) -> Dict[str, Any]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=source.timeout + 30) as response:  # noqa: S310 - https or loopback, checked by the config
-            answer: Dict[str, Any] = json.load(response)
+        with urllib.request.urlopen(request, timeout=source.timeout + 30) as response:
+            answer: dict[str, Any] = json.load(response)
     except OSError as exc:
         raise RuntimeError(
             f"Overpass request to {source.overpass_url} failed: {exc}. The public server "
@@ -175,10 +176,10 @@ def _fetch(source: OsmLabelsSource, query: str) -> Dict[str, Any]:
     return answer
 
 
-def osm_labels_file(source: OsmLabelsSource, folder: Optional[Path] = None) -> Path:
+def osm_labels_file(source: OsmLabelsSource, folder: Path | None = None) -> Path:
     """The cached GeoJSON of ``source``'s labels, fetched from Overpass the first time."""
     query = overpass_query(source)
-    key = hashlib.sha256(f"{source.overpass_url}\n{query}".encode("utf-8")).hexdigest()[:24]
+    key = hashlib.sha256(f"{source.overpass_url}\n{query}".encode()).hexdigest()[:24]
     folder = folder if folder is not None else cache_dir() / "osm"
     path = folder / f"{key}.geojson"
     if path.is_file():
@@ -201,6 +202,6 @@ def osm_labels_file(source: OsmLabelsSource, folder: Optional[Path] = None) -> P
     return path
 
 
-def default_class_ids(source: OsmLabelsSource) -> Dict[str, int]:
+def default_class_ids(source: OsmLabelsSource) -> dict[str, int]:
     """Class IDs in config order (1, 2, 3, ...) when ``labels.classes`` is not given."""
     return {entry.name: index for index, entry in enumerate(source.classes, start=1)}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from shapely.geometry import Point
 
@@ -20,8 +20,8 @@ if not _GOLDEN.exists():
     )
 
 
-def _load() -> List[Dict[str, Any]]:
-    result: List[Dict[str, Any]] = json.loads(_GOLDEN.read_text())
+def _load() -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = json.loads(_GOLDEN.read_text())
     return result
 
 
@@ -34,7 +34,7 @@ _TOL_M = 1e-3
 def test_xy_matches_pyproj() -> None:
     """Rust xy() must agree with pyproj EPSG:4326->3857 within 1 mm."""
     max_dx = max_dy = 0.0
-    failures: List[str] = []
+    failures: list[str] = []
     for i, entry in enumerate(_DATA):
         lng, lat = entry["lng"], entry["lat"]
         our_x, our_y = rust_xy(lng, lat)
@@ -54,7 +54,7 @@ def test_xy_matches_pyproj() -> None:
 def test_transform_to_mercator_matches_pyproj() -> None:
     """Python transform_to_mercator() must agree with pyproj within 1 mm."""
     max_dx = max_dy = 0.0
-    failures: List[str] = []
+    failures: list[str] = []
     for i, entry in enumerate(_DATA):
         lng, lat = entry["lng"], entry["lat"]
         pt = transform_to_mercator(Point(lng, lat))

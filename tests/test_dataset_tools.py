@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -22,20 +22,21 @@ from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
 
-from mapcv.card import card_text, write_card  # noqa: E402
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest, SourceRecord  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.stats import Moments, _valid_pixels, dataset_stats, write_stats  # noqa: E402
-from mapcv.verify import CHECKSUMS_FILENAME, verify_dataset, write_checksums  # noqa: E402
-from test_multi_source import (  # noqa: E402
+from test_multi_source import (
     PATCH,
     reference_transform,
     region_inside,
     write_labels,
     write_raster,
 )
+
+from mapcv.card import card_text, write_card
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest, SourceRecord
+from mapcv.pipeline import run_generate
+from mapcv.stats import Moments, _valid_pixels, dataset_stats, write_stats
+from mapcv.verify import CHECKSUMS_FILENAME, verify_dataset, write_checksums
 
 runner = CliRunner()
 ENV = {"COLUMNS": "200"}
@@ -45,7 +46,7 @@ WIDTH, HEIGHT = 470, 400
 
 def _config(tmp_path: Path, imagery: Any, labels: Path | None, **extra: Any) -> MapcvConfig:
     writer = {"staging_dir": str(tmp_path / "dataset"), **extra.pop("writer", {})}
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": extra.pop("region"),
         "imagery": imagery,
         "sampler": {"patch_size": PATCH, "edge_strategy": "pad"},
@@ -59,7 +60,7 @@ def _config(tmp_path: Path, imagery: Any, labels: Path | None, **extra: Any) -> 
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=5)
     write_raster(tmp_path / "other.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=6)
@@ -71,11 +72,11 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     return {"region": region, "labels": write_labels(tmp_path, inner)}
 
 
-def _names(staging: Path, split: str) -> List[str]:
+def _names(staging: Path, split: str) -> list[str]:
     return (staging / "splits" / f"{split}.txt").read_text(encoding="utf-8").split()
 
 
-def _entries(staging: Path, split: str) -> List[Any]:
+def _entries(staging: Path, split: str) -> list[Any]:
     manifest = Manifest.load(staging / "manifest.json")
     if split == "all":
         return list(manifest.patches)
@@ -98,8 +99,8 @@ def _image(path: Path) -> npt.NDArray[Any]:
 
 
 def _expected_moments(
-    staging: Path, entries: List[Any], key: str, ignore: int = 255
-) -> Dict[str, Any]:
+    staging: Path, entries: list[Any], key: str, ignore: int = 255
+) -> dict[str, Any]:
     pixels = []
     for entry in entries:
         image = _image(staging / entry["files"][key]).astype(np.float64)
@@ -115,7 +116,7 @@ def _expected_moments(
     }
 
 
-def _assert_source(found: Dict[str, Any], expected: Dict[str, Any]) -> None:
+def _assert_source(found: dict[str, Any], expected: dict[str, Any]) -> None:
     np.testing.assert_allclose(found["mean"], expected["mean"], rtol=1e-12)
     np.testing.assert_allclose(found["std"], expected["std"], rtol=1e-10)
     np.testing.assert_array_equal(found["min"], expected["min"])
@@ -123,9 +124,9 @@ def _assert_source(found: Dict[str, Any], expected: Dict[str, Any]) -> None:
     assert found["pixels"] == [expected["pixels"]] * len(found["mean"])
 
 
-def _expected_weights(staging: Path, entries: List[Any]) -> Dict[int, float]:
-    pixels: Dict[int, int] = {}
-    present_in: Dict[int, int] = {}
+def _expected_weights(staging: Path, entries: list[Any]) -> dict[int, float]:
+    pixels: dict[int, int] = {}
+    present_in: dict[int, int] = {}
     for entry in entries:
         mask = _image(staging / entry["files"]["mask"])[:, :, 0]
         valid = int((mask != 255).sum())
@@ -181,7 +182,7 @@ def test_valid_pixels_rules() -> None:
 
 @pytest.mark.parametrize("image_format", ["png", "npy", "tif"])
 def test_band_stats_and_class_weights_over_the_train_split(
-    tmp_path: Path, scene: Dict[str, Any], image_format: str
+    tmp_path: Path, scene: dict[str, Any], image_format: str
 ) -> None:
     count = 3 if image_format == "png" else 4
     imagery = {"type": "geotiff", "path": str(tmp_path / "image.tif")}
@@ -228,7 +229,7 @@ def test_band_stats_and_class_weights_over_the_train_split(
     assert every["sources"] != stats["sources"]
 
 
-def test_stacked_sources_match_separate_files(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_stacked_sources_match_separate_files(tmp_path: Path, scene: dict[str, Any]) -> None:
     imagery = [
         {"type": "geotiff", "name": "t1", "path": str(tmp_path / "image.tif")},
         {
@@ -249,7 +250,7 @@ def test_stacked_sources_match_separate_files(tmp_path: Path, scene: Dict[str, A
 
 
 def _generated(
-    tmp_path: Path, scene: Dict[str, Any], imagery: Any, staging: str, *, stack: bool
+    tmp_path: Path, scene: dict[str, Any], imagery: Any, staging: str, *, stack: bool
 ) -> Path:
     config = _config(
         tmp_path,
@@ -300,7 +301,7 @@ def test_image_only_datasets_leave_out_nodata_pixels(tmp_path: Path) -> None:
     assert "classes" not in stats
 
 
-def _small_boxes(tmp_path: Path, region: Dict[str, float]) -> Path:
+def _small_boxes(tmp_path: Path, region: dict[str, float]) -> Path:
     """Small squares spread over the region, each a few metres across."""
     west, south = region["west"], region["south"]
     dx, dy = region["east"] - west, region["north"] - south
@@ -321,7 +322,7 @@ def _small_boxes(tmp_path: Path, region: Dict[str, float]) -> Path:
     return path
 
 
-def test_regression_targets_and_detection_objects(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_regression_targets_and_detection_objects(tmp_path: Path, scene: dict[str, Any]) -> None:
     import rasterio
 
     ref = reference_transform()
@@ -380,7 +381,7 @@ def test_regression_targets_and_detection_objects(tmp_path: Path, scene: Dict[st
 
 
 def test_classification_balance_empty_splits_and_weight_edges(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     import csv
 
@@ -418,7 +419,7 @@ def test_classification_balance_empty_splits_and_weight_edges(
 
 
 @pytest.fixture
-def dataset(tmp_path: Path, scene: Dict[str, Any]) -> Path:
+def dataset(tmp_path: Path, scene: dict[str, Any]) -> Path:
     config = _config(
         tmp_path,
         {"type": "geotiff", "path": str(tmp_path / "image.tif")},
@@ -497,7 +498,7 @@ def test_verify_split_lists_and_missing_or_broken_manifests(dataset: Path, tmp_p
 
 @pytest.mark.parametrize("image_format", ["png", "jpg", "tif"])
 def test_deep_verify_reads_every_format(
-    tmp_path: Path, scene: Dict[str, Any], image_format: str
+    tmp_path: Path, scene: dict[str, Any], image_format: str
 ) -> None:
     config = _config(
         tmp_path,

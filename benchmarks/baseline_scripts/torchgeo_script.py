@@ -29,7 +29,7 @@ from torchgeo.datasets import RasterDataset, VectorDataset, stack_samples
 from torchgeo.samplers import GridGeoSampler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _mosaic import fetch_geotiff  # noqa: E402
+from _mosaic import fetch_geotiff
 
 
 def main() -> None:

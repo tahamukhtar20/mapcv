@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -19,7 +19,7 @@ from mapcv.planning import (
 
 
 def _config(**overrides: Any) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": {"west": 74.2, "south": 31.4, "east": 74.4, "north": 31.6},
         "imagery": {"type": "xyz", "zoom": 15, "source": "esri_satellite"},
         "sampler": {"patch_size": 256},

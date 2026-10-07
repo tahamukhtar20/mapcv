@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -22,14 +23,14 @@ import pytest
 from pydantic import ValidationError
 
 pytest.importorskip("rasterio", reason="the band COGs are written with rasterio")
-import rasterio  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.transform import from_origin  # noqa: E402
+import rasterio
+from pyproj import Transformer
+from rasterio.transform import from_origin
+from test_stac import Catalog, _item, _square
 
-from mapcv.config import MapcvConfig, StacCogImageryConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from test_stac import Catalog, _item, _square  # noqa: E402
+from mapcv.config import MapcvConfig, StacCogImageryConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
 
 X0, Y0, EPSG = 600000.0, 5400000.0, 32631
 W10, H10 = 160, 128
@@ -68,10 +69,10 @@ class Files:
                 if body:
                     self.wfile.write(part)
 
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 self._send(True)
 
-            def do_HEAD(self) -> None:  # noqa: N802
+            def do_HEAD(self) -> None:
                 self._send(False)
 
             def log_message(self, *args: Any) -> None:
@@ -103,9 +104,9 @@ def _cog(path: Path, data: npt.NDArray[Any], size: float) -> None:
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Iterator[Dict[str, Any]]:
+def scene(tmp_path: Path) -> Iterator[dict[str, Any]]:
     rng = np.random.default_rng(3)
-    bands: Dict[str, npt.NDArray[Any]] = {
+    bands: dict[str, npt.NDArray[Any]] = {
         "red": rng.integers(1, 9000, (H10, W10)).astype(np.uint16),
         "green": rng.integers(1, 9000, (H10, W10)).astype(np.uint16),
         "swir16": rng.integers(1, 9000, (H10 // 2, W10 // 2)).astype(np.uint16),
@@ -131,7 +132,7 @@ def scene(tmp_path: Path) -> Iterator[Dict[str, Any]]:
     files.server.server_close()
 
 
-def _config(tmp_path: Path, scene: Dict[str, Any], **imagery: Any) -> MapcvConfig:
+def _config(tmp_path: Path, scene: dict[str, Any], **imagery: Any) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
             "region": scene["region"],
@@ -146,7 +147,7 @@ def _config(tmp_path: Path, scene: Dict[str, Any], **imagery: Any) -> MapcvConfi
     )
 
 
-def test_bands_of_two_resolutions_and_masked_clouds(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_bands_of_two_resolutions_and_masked_clouds(tmp_path: Path, scene: dict[str, Any]) -> None:
     run_generate(_config(tmp_path, scene, bands=["swir16", "red", "green"], scl_mask=[8, 9, 10]))
     manifest = Manifest.load(tmp_path / "dataset" / "manifest.json")
     source = manifest.source
@@ -181,7 +182,7 @@ def test_bands_of_two_resolutions_and_masked_clouds(tmp_path: Path, scene: Dict[
         assert entry["summary"]["empty_ratio"] == pytest.approx(float(masked.mean()))
 
 
-def test_refusals(tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refusals(tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="has no 'nir' asset; it has: green, red, scl, swir16"):
         run_generate(_config(tmp_path, scene, bands=["red", "nir"]))
     item = scene["catalog"].items[0]
@@ -214,7 +215,7 @@ def test_refusals(tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.Mon
     ],
 )
 def test_config_refusals(
-    tmp_path: Path, imagery: Dict[str, Any], writer: Dict[str, Any], message: str
+    tmp_path: Path, imagery: dict[str, Any], writer: dict[str, Any], message: str
 ) -> None:
     data = {
         "region": {"west": 3.0, "south": 48.0, "east": 3.01, "north": 48.01},
@@ -231,10 +232,10 @@ def test_config_refusals(
     assert defaults.bands == ["red", "green", "blue", "nir"]
 
 
-def test_plan_label_and_card(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_plan_label_and_card(tmp_path: Path, scene: dict[str, Any]) -> None:
+    import yaml
     from typer.testing import CliRunner
 
-    import yaml
     from mapcv.card import card_text
     from mapcv.cli import app
     from mapcv.planning import plan

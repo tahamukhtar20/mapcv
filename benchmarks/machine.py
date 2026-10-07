@@ -8,7 +8,7 @@ import platform
 import subprocess
 import sys
 from importlib import metadata
-from typing import Any, Dict, Optional
+from typing import Any
 
 from benchmarks.measure import ROOT
 
@@ -39,7 +39,7 @@ def _cpu_model() -> str:
     return platform.processor() or platform.machine()
 
 
-def _ram_gb() -> Optional[float]:
+def _ram_gb() -> float | None:
     if psutil is not None:
         return round(float(psutil.virtual_memory().total) / 2**30, 1)
     try:
@@ -48,7 +48,7 @@ def _ram_gb() -> Optional[float]:
         return None
 
 
-def _git(*args: str) -> Optional[str]:
+def _git(*args: str) -> str | None:
     try:
         result = subprocess.run(
             ["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=True
@@ -58,14 +58,14 @@ def _git(*args: str) -> Optional[str]:
     return result.stdout.strip()
 
 
-def _version(package: str) -> Optional[str]:
+def _version(package: str) -> str | None:
     try:
         return metadata.version(package)
     except metadata.PackageNotFoundError:
         return None
 
 
-def machine_info() -> Dict[str, Any]:
+def machine_info() -> dict[str, Any]:
     """Hardware, OS and interpreter."""
     return {
         "os": platform.platform(),
@@ -79,7 +79,7 @@ def machine_info() -> Dict[str, Any]:
     }
 
 
-def load_average() -> Optional[float]:
+def load_average() -> float | None:
     """One-minute load average (None on Windows); high values mean other work disturbs timings."""
     try:
         return round(os.getloadavg()[0], 2)
@@ -87,7 +87,7 @@ def load_average() -> Optional[float]:
         return None
 
 
-def mapcv_info() -> Dict[str, Any]:
+def mapcv_info() -> dict[str, Any]:
     """The mapcv under test: version, where it is imported from, git state, key libraries."""
     import mapcv
 

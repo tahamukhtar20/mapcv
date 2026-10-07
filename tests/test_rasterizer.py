@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import platform
 import random
-from typing import List, NamedTuple, Tuple
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -13,7 +14,7 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 
 from mapcv import rasterize
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 # Identity: pixel (col, row) maps to world (col, row).
 IDENTITY: Transform = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
@@ -297,7 +298,7 @@ def test_tiny_geographic_pixels_are_not_singular() -> None:
 
 _EXACT_PARITY_MACHINES = {"x86_64", "AMD64"}
 
-_RIO_TRANSFORMS: List[Transform] = [
+_RIO_TRANSFORMS: list[Transform] = [
     (1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
     (0.5, 0.0, 1024.0, 0.0, -0.25, 4096.0),
     (0.5971642834779395, 0.0, 1113194.9079327357, 0.0, -0.5971642834779395, 6800125.4543973),
@@ -306,7 +307,7 @@ _RIO_TRANSFORMS: List[Transform] = [
 ]
 
 
-def _random_pixel_rings(rng: random.Random, w: int, h: int) -> List[List[Tuple[float, float]]]:
+def _random_pixel_rings(rng: random.Random, w: int, h: int) -> list[list[tuple[float, float]]]:
     """A random polygon in pixel space, biased towards GDAL's tie cases."""
     kind = rng.choice(["star", "sliver", "near_h", "snapped", "hole", "dup"])
     cx, cy = rng.uniform(-3, w + 3), rng.uniform(-3, h + 3)
@@ -361,11 +362,11 @@ class _PixelShape(NamedTuple):
     ambiguous_edges: MultiLineString
 
 
-def _pixel_shape(rings: List[List[Tuple[float, float]]], value: int) -> _PixelShape:
+def _pixel_shape(rings: list[list[tuple[float, float]]], value: int) -> _PixelShape:
     boundary, ambiguous = [], []
     for ring in rings:
         closed = ring + ring[:1]
-        for start, end in zip(closed, closed[1:]):
+        for start, end in itertools.pairwise(closed):
             if start == end:
                 continue
             line = LineString([start, end])
@@ -376,7 +377,7 @@ def _pixel_shape(rings: List[List[Tuple[float, float]]], value: int) -> _PixelSh
 
 
 def _is_tie(
-    shapes: List[_PixelShape], row: int, col: int, values: Tuple[int, int], touched: bool
+    shapes: list[_PixelShape], row: int, col: int, values: tuple[int, int], touched: bool
 ) -> bool:
     """True if floating-point noise can explain why GDAL and mapcv differ at a pixel.
 
@@ -442,14 +443,14 @@ def test_matches_rasterio_on_random_polygons(all_touched: bool) -> None:
     exact = platform.machine() in _EXACT_PARITY_MACHINES
     rng = random.Random(70_71_124)
     burned = 0
-    ties: List[str] = []
-    not_ties: List[str] = []
+    ties: list[str] = []
+    not_ties: list[str] = []
     for case in range(300):
         transform = rng.choice(_RIO_TRANSFORMS)
         a, b, c, d, e, f = transform
         h, w = rng.randint(1, 40), rng.randint(1, 40)
         shapes = []
-        pixel_shapes: List[_PixelShape] = []
+        pixel_shapes: list[_PixelShape] = []
         for _ in range(rng.randint(1, 3)):
             pixel_space = _random_pixel_rings(rng, w, h)
             rings = [

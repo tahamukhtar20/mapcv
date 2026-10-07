@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -18,18 +18,19 @@ from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
 
-import mapcv  # noqa: E402
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.splitter import SplitterConfig  # noqa: E402
-from test_multi_source import (  # noqa: E402
+from test_multi_source import (
     PATCH,
     reference_transform,
     region_inside,
     write_labels,
     write_raster,
 )
+
+import mapcv
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.splitter import SplitterConfig
 
 WIDTH, HEIGHT = 470, 400
 runner = CliRunner()
@@ -42,7 +43,7 @@ def config_file(tmp_path: Path) -> Path:
     write_raster(tmp_path / "b.tif", ref, WIDTH, HEIGHT, count=2, dtype="uint16", seed=2)
     region = region_inside(ref, WIDTH, HEIGHT, margin=0.0)
     labels = write_labels(tmp_path, region_inside(ref, WIDTH, HEIGHT))
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": region,
         # Chunks of 128 rows: a few chunks, so progress and resuming are exercised.
         "imagery": {"type": "geotiff", "path": str(tmp_path / "a.tif"), "chunk_rows": 128},
@@ -63,7 +64,7 @@ def config_file(tmp_path: Path) -> Path:
 def test_generate_reports_progress_and_prints_nothing(
     config_file: Path, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    calls: List[Tuple[int, int]] = []
+    calls: list[tuple[int, int]] = []
     result = mapcv.generate(config_file, progress=lambda done, total: calls.append((done, total)))
     total = calls[0][1]
     assert total > 1 and calls == [(done, total) for done in range(total + 1)]
@@ -101,7 +102,7 @@ def test_a_stopped_generation_resumes_to_the_same_dataset(
     assert _files(tmp_path / "again") == _files(whole.writer.staging_dir)
 
 
-def _files(root: Path) -> Dict[str, bytes]:
+def _files(root: Path) -> dict[str, bytes]:
     return {
         p.relative_to(root).as_posix(): p.read_bytes()
         for p in sorted(root.rglob("*"))

@@ -21,7 +21,6 @@ import threading
 import time
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -76,7 +75,7 @@ def decoded_tile(x: int, y: int, fmt: str) -> npt.NDArray[np.uint8]:
 
 
 _cache_lock = threading.Lock()
-_encoded: "dict[Tuple[int, int, str], bytes]" = {}
+_encoded: dict[tuple[int, int, str], bytes] = {}
 
 
 def _cached_tile(x: int, y: int, fmt: str) -> bytes:
@@ -89,7 +88,7 @@ def _cached_tile(x: int, y: int, fmt: str) -> bytes:
     return body
 
 
-def _parse(path: str) -> Optional[Tuple[int, int, int, str, int, int, float]]:
+def _parse(path: str) -> tuple[int, int, int, str, int, int, float] | None:
     """``(z, x, y, ext, fail_every, fail_status, latency_s)`` for a request path, or None."""
     parts = path.split("?")[0].strip("/").split("/")
     fail_every, fail_status, latency = 0, 500, 0.0
@@ -113,10 +112,10 @@ def _parse(path: str) -> Optional[Tuple[int, int, int, str, int, int, float]]:
 class Handler(BaseHTTPRequestHandler):
     """Serves the synthetic tiles; quiet and keep-alive free."""
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         parsed = _parse(self.path)
         if parsed is None:
             self.send_error(404)

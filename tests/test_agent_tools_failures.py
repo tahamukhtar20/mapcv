@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from threading import Event
-from typing import Callable, List, Tuple
 
 import pytest
 
@@ -156,7 +156,7 @@ def test_a_folder_is_not_generated_into_twice(
     state = _state(tmp_path, allow_write=True)
     (tmp_path / "c.yaml").write_text(CONFIG)
     job = prepare_generate(state, "c.yaml")
-    inner: List[str] = []
+    inner: list[str] = []
 
     def nested(config: object, hook: object) -> None:
         try:
@@ -245,7 +245,7 @@ def test_info_and_split_failures(tmp_path: Path) -> None:
 def test_inspect_labels_tolerates_odd_geojson(tmp_path: Path) -> None:
     state = _state(tmp_path)
     polygon = {"type": "Polygon"}
-    features: List[Tuple[object, object]] = [
+    features: list[tuple[object, object]] = [
         ({"a": None, "b": {"x": 1}}, None),
         (None, {**polygon, "coordinates": "?"}),
         ({"a": ""}, {**polygon, "coordinates": []}),

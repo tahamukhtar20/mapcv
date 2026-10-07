@@ -32,7 +32,7 @@ import json
 import posixpath
 import warnings
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -58,7 +58,7 @@ def split_csv_name(split: str) -> str:
     return f"labels_{split}.csv"
 
 
-def label_names(manifest: Manifest, options: ClassificationOptions) -> Dict[int, str]:
+def label_names(manifest: Manifest, options: ClassificationOptions) -> dict[int, str]:
     """Class ID to label name, ascending: the classes, plus ``background`` as ID 0 when
     ``classification.empty`` is ``background``."""
     names = class_names(manifest.class_map)
@@ -67,7 +67,7 @@ def label_names(manifest: Manifest, options: ClassificationOptions) -> Dict[int,
     return names
 
 
-def _csv_text(rows: List[List[str]]) -> str:
+def _csv_text(rows: list[list[str]]) -> str:
     buffer = io.StringIO()
     csv.writer(buffer, lineterminator="\n").writerows(rows)
     return buffer.getvalue()
@@ -79,14 +79,14 @@ class ClassificationWriter:
     Annotations must be the classification target's collated :class:`PatchLabels`.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({"classification"})
+    TARGET_TYPES: frozenset[str | None] = frozenset({"classification"})
 
     def __init__(self, config: WriterConfig, options: ClassificationOptions) -> None:
         self._config = config
         self._options = options
 
     @classmethod
-    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> "ClassificationWriter":
+    def from_manifest(cls, manifest: Manifest, staging_dir: Path) -> ClassificationWriter:
         """The writer of an existing classification dataset, to rebuild its split outputs."""
         options = manifest.target.options if manifest.target is not None else {}
         return cls(
@@ -97,10 +97,10 @@ class ClassificationWriter:
     def layout(self) -> str:
         return "files"
 
-    def supports(self, target_type: Optional[str]) -> bool:
+    def supports(self, target_type: str | None) -> bool:
         return target_type in self.TARGET_TYPES
 
-    def fingerprint(self) -> Dict[str, Any]:
+    def fingerprint(self) -> dict[str, Any]:
         # As the files layout records it, minus mask_format: classification writes no masks.
         block = {
             "layout": self.layout,
@@ -119,14 +119,14 @@ class ClassificationWriter:
             block["world_files"] = True
         return block
 
-    def patch_shape(self, source: RasterMetadata, patch_size: int) -> List[int]:
+    def patch_shape(self, source: RasterMetadata, patch_size: int) -> list[int]:
         return FilesWriter(self._config).patch_shape(source, patch_size)
 
     def write(
         self,
         images: npt.NDArray[np.generic],
-        annotations: List[PatchLabels],
-        metadata: List[PatchMeta],
+        annotations: list[PatchLabels],
+        metadata: list[PatchMeta],
         manifest: Manifest,
         chunk_index: int,
     ) -> None:
@@ -152,7 +152,7 @@ class ClassificationWriter:
                 empty_ratio=entry["summary"]["empty_ratio"],
             )
 
-    def finalize(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write ``patches.geojson`` (``writer.footprints``) and the label files."""
         if self._config.footprints:
             path = self._config.staging_dir / FOOTPRINTS_FILENAME
@@ -164,13 +164,13 @@ class ClassificationWriter:
                 )
         self.write_annotations(manifest, split_lists)
 
-    def write_annotations(self, manifest: Manifest, split_lists: Optional[SplitLists]) -> None:
+    def write_annotations(self, manifest: Manifest, split_lists: SplitLists | None) -> None:
         """Write ``labels.csv``, the per-split CSVs, ``classes.txt`` and ``labels.json``."""
         staging = self._config.staging_dir
         staging.mkdir(parents=True, exist_ok=True)
         names = label_names(manifest, self._options)
-        images: List[str] = []
-        labeled: List[List[str]] = []  # each image's label names
+        images: list[str] = []
+        labeled: list[list[str]] = []  # each image's label names
         for entry in manifest.patches:
             image = posixpath.basename(entry["files"]["image"])
             assigned = entry["summary"].get("labels")
@@ -182,7 +182,7 @@ class ClassificationWriter:
             images.append(image)
             labeled.append([names[cid] for cid in assigned])
 
-        split_of: Dict[str, str] = {}
+        split_of: dict[str, str] = {}
         if split_lists is not None:
             for split in SPLIT_NAMES:
                 split_of.update({name: split for name in getattr(split_lists, split)})
@@ -212,7 +212,7 @@ class ClassificationWriter:
         _write_text(staging / LABELS_JSON, _labels_json(list(names.values()), images, labeled))
 
 
-def _labels_json(classes: List[str], images: List[str], labeled: List[List[str]]) -> str:
+def _labels_json(classes: list[str], images: list[str], labeled: list[list[str]]) -> str:
     """``labels.json``: the class names, and each image's labels one per line."""
     rows = ",\n    ".join(
         f"{json.dumps(image, ensure_ascii=False)}: {json.dumps(assigned, ensure_ascii=False)}"

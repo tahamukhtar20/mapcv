@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -11,9 +11,9 @@ from shapely.geometry.base import BaseGeometry
 
 from mapcv._mapcv_rs import rasterize as _rasterize_rs
 
-Transform = Tuple[float, float, float, float, float, float]
-Ring = List[Tuple[float, float]]
-RingSet = List[Ring]
+Transform = tuple[float, float, float, float, float, float]
+Ring = list[tuple[float, float]]
+RingSet = list[Ring]
 
 
 def _ring_coords(coords: Iterable[Sequence[float]]) -> Ring:
@@ -26,7 +26,7 @@ def _polygon_to_rings(poly: Polygon) -> RingSet:
     ]
 
 
-def _flatten(geom: BaseGeometry, class_id: int) -> List[Tuple[RingSet, int]]:
+def _flatten(geom: BaseGeometry, class_id: int) -> list[tuple[RingSet, int]]:
     if isinstance(geom, Polygon):
         return [(_polygon_to_rings(geom), class_id)]
     if isinstance(geom, MultiPolygon):
@@ -35,8 +35,8 @@ def _flatten(geom: BaseGeometry, class_id: int) -> List[Tuple[RingSet, int]]:
 
 
 def rasterize(
-    geometries: Iterable[Tuple[BaseGeometry, int]],
-    out_shape: Tuple[int, int],
+    geometries: Iterable[tuple[BaseGeometry, int]],
+    out_shape: tuple[int, int],
     transform: Transform,
     all_touched: bool = False,
 ) -> npt.NDArray[np.uint8]:
@@ -53,7 +53,7 @@ def rasterize(
     ``all_touched=True``, every pixel an edge passes through is burned too.
     """
     height, width = out_shape
-    polygons: List[Tuple[RingSet, int]] = []
+    polygons: list[tuple[RingSet, int]] = []
     for geom, cid in geometries:
         cid_int = int(cid)
         if cid_int <= 0 or cid_int > 255:

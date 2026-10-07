@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -16,7 +16,7 @@ from mapcv.manifest import Manifest, SourceRecord, TargetRecord
 from mapcv.sampler import PatchMeta
 from mapcv.writer import WriterConfig, write_patches
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 MERCATOR: Transform = (2.0, 0.0, 100.0, 0.0, -2.0, 900.0)
 
 

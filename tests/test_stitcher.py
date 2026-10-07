@@ -78,7 +78,7 @@ def test_2x2_grid() -> None:
     tr = TileIndex(1, 0, 1)
     bl = TileIndex(0, 1, 1)
     br = TileIndex(1, 1, 1)
-    arr, min_x, min_y = stitch_tiles(
+    arr, _min_x, _min_y = stitch_tiles(
         [
             (tl, RED),
             (tr, GREEN),
@@ -125,7 +125,7 @@ def test_whole_world_row_with_a_missing_tile_still_stitches() -> None:
 
 def test_corrupt_png_raises() -> None:
     t = TileIndex(0, 0, 0)
-    with pytest.raises(BaseException):
+    with pytest.raises(RuntimeError, match="decode failed"):
         stitch_tiles([(t, b"not a png")])
 
 
@@ -141,7 +141,7 @@ def test_tile_transform_returns_tuple_of_six() -> None:
 
 def test_tile_transform_zero_zoom() -> None:
     """At zoom 0 there is one 256×256 tile covering the whole Web Mercator plane."""
-    a, b, c, d, e, f = tile_transform(0, 0, 0)
+    a, b, _c, d, e, _f = tile_transform(0, 0, 0)
     assert b == pytest.approx(0.0)
     assert d == pytest.approx(0.0)
     assert a > 0  # positive pixel width in metres

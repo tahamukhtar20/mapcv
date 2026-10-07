@@ -8,16 +8,17 @@ import json
 import shutil
 import threading
 import warnings
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 from PIL import Image
 
-import mapcv.pipeline as pipeline
+from mapcv import pipeline
 from mapcv.config import MapcvConfig
 from mapcv.imagery import RasterMetadata
 from mapcv.manifest import (
@@ -48,7 +49,7 @@ class _Tiles(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         z, x, y = (int(part) for part in self.path.strip("/").split(".")[0].split("/"))
         buffer = io.BytesIO()
         Image.new("RGB", (256, 256), ((x * 37) % 256, (y * 53) % 256, z * 9)).save(buffer, "PNG")
@@ -72,7 +73,7 @@ def tile_port() -> Iterator[int]:
         thread.join()
 
 
-def _copy_v2_dataset(tmp_path: Path, port: int, ignore_index: Optional[str]) -> MapcvConfig:
+def _copy_v2_dataset(tmp_path: Path, port: int, ignore_index: str | None) -> MapcvConfig:
     root = tmp_path / "v2"
     shutil.copytree(V2_DATASET, root)
     config = root / "mapcv.yaml"
@@ -83,7 +84,7 @@ def _copy_v2_dataset(tmp_path: Path, port: int, ignore_index: Optional[str]) -> 
     return MapcvConfig.from_yaml(config)
 
 
-def _tree(root: Path) -> Dict[str, str]:
+def _tree(root: Path) -> dict[str, str]:
     return {
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(root.rglob("*"))
@@ -91,7 +92,7 @@ def _tree(root: Path) -> Dict[str, str]:
     }
 
 
-def _mtimes(root: Path) -> Dict[str, int]:
+def _mtimes(root: Path) -> dict[str, int]:
     return {
         path.relative_to(root).as_posix(): path.stat().st_mtime_ns
         for path in root.rglob("*")
@@ -116,7 +117,7 @@ class _FakeSource:
 
     def read_window(
         self, row_start: int, row_stop: int, col_start: int, col_stop: int
-    ) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.bool_]]:
         window = self.image[row_start:row_stop, col_start:col_stop]
         return window, np.ones(window.shape[:2], dtype=np.bool_)
 
@@ -124,8 +125,8 @@ class _FakeSource:
         pass
 
 
-def _fake_config(tmp_path: Path, labels: Optional[Path] = None) -> MapcvConfig:
-    data: Dict[str, Any] = {
+def _fake_config(tmp_path: Path, labels: Path | None = None) -> MapcvConfig:
+    data: dict[str, Any] = {
         "region": {"west": 9.0, "south": 45.0, "east": 9.1, "north": 45.1},
         "imagery": {"type": "eopf_zarr", "path": str(tmp_path / "x.zarr"), "bands": ["b08", "b04"]},
         "sampler": {"patch_size": 3, "stride": 2, "edge_strategy": "pad"},
@@ -163,7 +164,7 @@ def _labels_over_fake_source(tmp_path: Path) -> Path:
 
 def _generate_fake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, labels: bool = True
-) -> Tuple[MapcvConfig, Manifest]:
+) -> tuple[MapcvConfig, Manifest]:
     monkeypatch.setattr(pipeline, "open_raster_source", lambda region, imagery: _FakeSource())
     config = _fake_config(tmp_path, _labels_over_fake_source(tmp_path) if labels else None)
     with warnings.catch_warnings():
@@ -223,7 +224,7 @@ def test_generated_manifest_has_the_v3_schema(
     }
     assert data["sampler"]["patch_size"] == 3
 
-    patches: List[Dict[str, Any]] = data["patches"]
+    patches: list[dict[str, Any]] = data["patches"]
     assert len(patches) == 9  # 3 x 3 anchors with stride 2 and padding
     for index, entry in enumerate(patches):
         assert set(entry) == ENTRY_KEYS

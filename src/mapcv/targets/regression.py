@@ -10,7 +10,8 @@ pixels without imagery (padding included).
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -36,7 +37,7 @@ class ValueWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> npt.NDArray[np.float32]:
         # Padding has no value whatever pad_mode does to the image: never mirror targets.
         extracted, _ = extract_array_patch(
@@ -69,11 +70,11 @@ class RegressionTarget:
 
     def __init__(self, labels: ContinuousLabelsConfig) -> None:
         self._labels = labels
-        self._sampler: Optional[ValueRasterSampler] = None
-        self._fingerprint: Optional[Dict[str, Any]] = None
+        self._sampler: ValueRasterSampler | None = None
+        self._fingerprint: dict[str, Any] | None = None
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "regression"
 
     @property
@@ -98,7 +99,7 @@ class RegressionTarget:
                 stacklevel=3,
             )
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """The target settings and a fingerprint of the raster, so a resumed run notices
         another file or other scaling."""
         if self._fingerprint is None:
@@ -119,6 +120,6 @@ class RegressionTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         return ValueWindow(self.sampler.sample(transform, height, width))

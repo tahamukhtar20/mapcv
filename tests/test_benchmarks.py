@@ -13,8 +13,9 @@ import importlib.util
 import json
 import shutil
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -24,13 +25,13 @@ from shapely.geometry import Polygon
 if importlib.util.find_spec("benchmarks") is None:
     pytest.skip("benchmarks/ is not shipped in the source distribution", allow_module_level=True)
 
-from benchmarks import baselines, checks  # noqa: E402
-from benchmarks.checks import CheckReport, check_dataset, tree_hash  # noqa: E402
-from benchmarks.cli import expand, main  # noqa: E402
-from benchmarks.measure import summarise  # noqa: E402
-from benchmarks.runner import run_suite  # noqa: E402
-from benchmarks.scenarios import SCENARIOS, make_labels, names_in_group  # noqa: E402
-from benchmarks.tileserver import is_failing  # noqa: E402
+from benchmarks import baselines, checks
+from benchmarks.checks import CheckReport, check_dataset, tree_hash
+from benchmarks.cli import expand, main
+from benchmarks.measure import summarise
+from benchmarks.runner import run_suite
+from benchmarks.scenarios import SCENARIOS, make_labels, names_in_group
+from benchmarks.tileserver import is_failing
 
 pytestmark = [
     pytest.mark.skipif(
@@ -46,7 +47,7 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def quick_run(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[Tuple[int, Dict[str, Any], Path]]:
+) -> Iterator[tuple[int, dict[str, Any], Path]]:
     """``python -m benchmarks run --quick``, once for the module: (exit code, results, workdir)."""
     base = tmp_path_factory.mktemp("bench")
     out = base / "results.json"
@@ -54,7 +55,7 @@ def quick_run(
     yield code, json.loads(out.read_text(encoding="utf-8")), base / "work"
 
 
-def test_quick_suite_passes_all_checks(quick_run: Tuple[int, Dict[str, Any], Path]) -> None:
+def test_quick_suite_passes_all_checks(quick_run: tuple[int, dict[str, Any], Path]) -> None:
     code, results, _ = quick_run
 
     assert results["problems"] == []
@@ -66,7 +67,7 @@ def test_quick_suite_passes_all_checks(quick_run: Tuple[int, Dict[str, Any], Pat
         assert entry["skipped"] == []
 
 
-def test_results_carry_machine_and_stage_info(quick_run: Tuple[int, Dict[str, Any], Path]) -> None:
+def test_results_carry_machine_and_stage_info(quick_run: tuple[int, dict[str, Any], Path]) -> None:
     _, results, _ = quick_run
 
     assert results["schema_version"] == 1
@@ -87,8 +88,8 @@ def test_results_carry_machine_and_stage_info(quick_run: Tuple[int, Dict[str, An
 
 @pytest.fixture()
 def dataset_copy(
-    quick_run: Tuple[int, Dict[str, Any], Path], tmp_path: Path
-) -> Tuple[Path, List[Tuple[Polygon, int]]]:
+    quick_run: tuple[int, dict[str, Any], Path], tmp_path: Path
+) -> tuple[Path, list[tuple[Polygon, int]]]:
     """A scratch copy of Q's dataset, safe to damage, with the label geometries."""
     _, _, work = quick_run
     shutil.copytree(work / "Q" / "dataset", tmp_path / "dataset")
@@ -97,7 +98,7 @@ def dataset_copy(
 
 
 def test_checks_pass_on_an_intact_dataset(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]],
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]],
 ) -> None:
     dataset, geometries = dataset_copy
 
@@ -108,7 +109,7 @@ def test_checks_pass_on_an_intact_dataset(
 
 
 def test_checks_catch_a_changed_pixel(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]],
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]],
 ) -> None:
     dataset, geometries = dataset_copy
     path = next((dataset / "Images").iterdir())
@@ -122,7 +123,7 @@ def test_checks_catch_a_changed_pixel(
 
 
 def test_checks_catch_a_changed_mask(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]],
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]],
 ) -> None:
     dataset, geometries = dataset_copy
     path = next((dataset / "Masks").iterdir())
@@ -136,7 +137,7 @@ def test_checks_catch_a_changed_mask(
 
 
 def test_mask_check_is_skipped_with_a_message_when_rasterio_is_missing(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]], monkeypatch: pytest.MonkeyPatch
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset, geometries = dataset_copy
     monkeypatch.setattr(checks, "HAVE_MASK_REFERENCE", False)
@@ -149,7 +150,7 @@ def test_mask_check_is_skipped_with_a_message_when_rasterio_is_missing(
 
 
 def test_checks_catch_a_patch_in_two_splits(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]],
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]],
 ) -> None:
     dataset, geometries = dataset_copy
     test_names = (dataset / "splits" / "test.txt").read_text(encoding="utf-8").splitlines()
@@ -162,7 +163,7 @@ def test_checks_catch_a_patch_in_two_splits(
 
 
 def test_tree_hash_changes_with_content(
-    dataset_copy: Tuple[Path, List[Tuple[Polygon, int]]],
+    dataset_copy: tuple[Path, list[tuple[Polygon, int]]],
 ) -> None:
     dataset, _ = dataset_copy
     before = tree_hash(dataset)
@@ -213,10 +214,10 @@ def test_baseline_hook_measures_a_registered_baseline(
         name = "noop"
         reference = False
 
-        def command(self, work: baselines.Workload) -> List[str]:
+        def command(self, work: baselines.Workload) -> list[str]:
             return [sys.executable, "-c", "pass"]
 
-        def missing(self) -> Optional[str]:
+        def missing(self) -> str | None:
             return None
 
     monkeypatch.setitem(baselines.BASELINES, "noop", Noop())
@@ -331,7 +332,7 @@ def test_missing_tools_are_named(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert "GDAL_BIN" in str(baselines.BASELINES["gdal-cli"].missing())
 
 
-def _fake_baseline(name: str, reference: bool, missing: Optional[str] = None) -> Any:
+def _fake_baseline(name: str, reference: bool, missing: str | None = None) -> Any:
     """A baseline that writes one black patch where mapcv writes many."""
     script = (
         "import sys, pathlib; from PIL import Image; out = pathlib.Path(sys.argv[1]);"
@@ -341,10 +342,10 @@ def _fake_baseline(name: str, reference: bool, missing: Optional[str] = None) ->
     )
 
     class Fake:
-        def command(self, work: baselines.Workload) -> List[str]:
+        def command(self, work: baselines.Workload) -> list[str]:
             return [sys.executable, "-c", script, str(work.output_dir)]
 
-        def missing(self) -> Optional[str]:
+        def missing(self) -> str | None:
             return missing
 
     fake = Fake()

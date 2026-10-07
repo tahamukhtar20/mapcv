@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -20,14 +20,9 @@ from shapely.geometry import LineString, box
 from shapely.ops import transform as shapely_transform
 
 pytest.importorskip("rasterio", reason="these tests compare masks with rasterio")
-import rasterio.features  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio.features
+from rasterio.transform import Affine
+from test_multi_source import (
     EPSG,
     PATCH,
     reference_transform,
@@ -35,11 +30,16 @@ from test_multi_source import (  # noqa: E402
     write_raster,
 )
 
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
+from mapcv.planning import plan
+
 WIDTH, HEIGHT = 448, 384
 TO_UTM = Transformer.from_crs("EPSG:4326", f"EPSG:{EPSG}", always_xy=True)
 
 
-def _write(path: Path, features: List[Tuple[Any, Dict[str, Any]]]) -> Path:
+def _write(path: Path, features: list[tuple[Any, dict[str, Any]]]) -> Path:
     path.write_text(
         json.dumps(
             {
@@ -55,7 +55,7 @@ def _write(path: Path, features: List[Tuple[Any, Dict[str, Any]]]) -> Path:
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "image.tif", ref, WIDTH, HEIGHT, seed=1)
     region = region_inside(ref, WIDTH, HEIGHT)
@@ -80,9 +80,9 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     return {"region": region, "files": files, "shapes": shapes}
 
 
-def _files(scene: Dict[str, Any], road_buffer: bool = True) -> List[Dict[str, Any]]:
+def _files(scene: dict[str, Any], road_buffer: bool = True) -> list[dict[str, Any]]:
     files = scene["files"]
-    road: Dict[str, Any] = {"path": str(files["roads"]), "class": "road"}
+    road: dict[str, Any] = {"path": str(files["roads"]), "class": "road"}
     if road_buffer:
         road["buffer"] = {"line": 8}
     return [
@@ -93,7 +93,7 @@ def _files(scene: Dict[str, Any], road_buffer: bool = True) -> List[Dict[str, An
 
 
 def _config(
-    tmp_path: Path, scene: Dict[str, Any], labels: Dict[str, Any], staging: str = "out"
+    tmp_path: Path, scene: dict[str, Any], labels: dict[str, Any], staging: str = "out"
 ) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
@@ -107,14 +107,14 @@ def _config(
 
 
 def _expected(
-    scene: Dict[str, Any], ids: Dict[str, int], manifest: Manifest, entry: Any
+    scene: dict[str, Any], ids: dict[str, int], manifest: Manifest, entry: Any
 ) -> npt.NDArray[np.uint8]:
     shapes = scene["shapes"]
 
     def utm(geometry: Any) -> Any:
         return shapely_transform(TO_UTM.transform, geometry)
 
-    ordered: List[Tuple[Any, int]] = []
+    ordered: list[tuple[Any, int]] = []
     # File order: fields (forest, crop), then houses, then the road; later ones win.
     for name in ("forest", "crop"):
         if name in ids:
@@ -131,7 +131,7 @@ def _expected(
     return burned
 
 
-def _check(config: MapcvConfig, scene: Dict[str, Any], ids: Dict[str, int]) -> Manifest:
+def _check(config: MapcvConfig, scene: dict[str, Any], ids: dict[str, int]) -> Manifest:
     manifest = run_generate(config).manifest
     seen = set()
     for entry in manifest.patches:
@@ -144,7 +144,7 @@ def _check(config: MapcvConfig, scene: Dict[str, Any], ids: Dict[str, int]) -> M
 
 
 def test_files_share_one_class_map_and_later_files_win(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     classes = {"building": 1, "road": 2, "forest": 3, "crop": 4}
     config = _config(tmp_path, scene, {"files": _files(scene), "classes": classes})
@@ -158,7 +158,7 @@ def test_files_share_one_class_map_and_later_files_win(
 
 
 def test_ids_follow_sorted_names_across_files_without_classes(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     config = _config(tmp_path, scene, {"files": _files(scene)})
     ids = {"building": 1, "crop": 2, "forest": 3, "road": 4}
@@ -166,14 +166,14 @@ def test_ids_follow_sorted_names_across_files_without_classes(
     assert manifest.class_map == ids
 
 
-def test_names_missing_from_classes_are_skipped(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_names_missing_from_classes_are_skipped(tmp_path: Path, scene: dict[str, Any]) -> None:
     classes = {"building": 1, "road": 2, "forest": 3}
     config = _config(tmp_path, scene, {"files": _files(scene), "classes": classes})
     with pytest.warns(UserWarning, match=r"labels.files: skipped 1 feature\(s\)"):
         _check(config, scene, classes)
 
 
-def test_editing_any_file_is_a_resume_mismatch(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_editing_any_file_is_a_resume_mismatch(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = _config(tmp_path, scene, {"files": _files(scene)})
     run_generate(config)
     houses = scene["files"]["houses"]
@@ -183,7 +183,7 @@ def test_editing_any_file_is_a_resume_mismatch(tmp_path: Path, scene: Dict[str, 
 
 
 def test_plan_counts_every_file_and_mcp_sandboxes_them(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     from mapcv.agent_tools import config_paths
 
@@ -198,7 +198,7 @@ def test_plan_counts_every_file_and_mcp_sandboxes_them(
 # ── Config ───────────────────────────────────────────────────────────────────
 
 
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite"},
     "sampler": {"patch_size": 256},
@@ -221,7 +221,7 @@ ONE = {"path": "a.geojson", "class": "a"}
         ({"files": [{**ONE, "colour": "red"}]}, "colour"),
     ],
 )
-def test_config_refuses_bad_label_files(labels: Dict[str, Any], message: str) -> None:
+def test_config_refuses_bad_label_files(labels: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate({**BASE, "labels": labels})
     assert message in str(raised.value)

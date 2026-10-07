@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Callable, Tuple
+from collections.abc import Callable
 
 import numpy as np
 import numpy.typing as npt
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 LonLat = Callable[
     [npt.NDArray[np.float64], npt.NDArray[np.float64]],
-    Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]],
+    tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]],
 ]
 
 _EPSG = re.compile(r"^\s*EPSG:(\d+)\s*$", re.IGNORECASE)
@@ -65,7 +65,7 @@ def world_file_text(transform: Transform) -> str:
 
 def _mercator_to_lonlat(
     x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
-) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     lon = np.degrees(x / _EARTH_RADIUS)
     lat = np.degrees(2.0 * np.arctan(np.exp(y / _EARTH_RADIUS)) - math.pi / 2.0)
     return lon, lat
@@ -73,7 +73,7 @@ def _mercator_to_lonlat(
 
 def _identity(
     x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
-) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     return x, y
 
 
@@ -102,7 +102,7 @@ def to_lonlat(crs: str) -> LonLat:
 
     def convert(
         x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
-    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         lon, lat = transformer.transform(x, y)
         return np.asarray(lon, dtype=np.float64), np.asarray(lat, dtype=np.float64)
 

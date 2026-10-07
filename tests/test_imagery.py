@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Any, List, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -130,9 +130,9 @@ def test_offset_transform_uses_global_pixel_origin() -> None:
 
 def test_xyz_source_fetches_lazily_per_window_and_evicts(monkeypatch: pytest.MonkeyPatch) -> None:
     grid = [TileIndex(x, y, 12) for y in range(10, 14) for x in range(5, 7)]
-    calls: List[List[Tuple[int, int]]] = []
+    calls: list[list[tuple[int, int]]] = []
 
-    def fake_fetch(requested: List[Any], *args: Any, **kwargs: Any) -> Tuple[List[Any], int, Any]:
+    def fake_fetch(requested: list[Any], *args: Any, **kwargs: Any) -> tuple[list[Any], int, Any]:
         calls.append([(t.x, t.y) for t in requested])
         return (
             [(t, _png_tile(9), None) for t in requested if (t.x, t.y) != (6, 11)],

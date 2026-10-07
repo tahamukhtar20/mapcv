@@ -1,9 +1,10 @@
 import math
-from typing import Any, Tuple
+from typing import Any
 
 import mercantile
 import pytest
-from mapcv._mapcv_rs import bounds, snap_bbox, xy, tile, tiles, xy_bounds
+
+from mapcv._mapcv_rs import bounds, snap_bbox, tile, tiles, xy, xy_bounds
 
 
 def test_xy() -> None:
@@ -132,7 +133,7 @@ def test_snap_bbox_matches_tile_bounds() -> None:
 _WORLD = (-180.0, -85.051129, 180.0, 85.051129)
 
 
-def _box(b: Any) -> Tuple[float, float, float, float]:
+def _box(b: Any) -> tuple[float, float, float, float]:
     return (b.west, b.south, b.east, b.north)
 
 
@@ -159,7 +160,7 @@ def test_point_snaps_to_the_tile_containing_it(lng: float, lat: float, zoom: int
 )
 @pytest.mark.parametrize("zoom", [1, 10, 15])
 def test_degenerate_box_never_snaps_to_the_whole_world(
-    bbox: Tuple[float, float, float, float], zoom: int
+    bbox: tuple[float, float, float, float], zoom: int
 ) -> None:
     snapped = _box(snap_bbox(*bbox, zoom))
     assert snapped != pytest.approx(_WORLD)
@@ -200,7 +201,7 @@ def test_inverted_latitudes_are_rejected(func: Any) -> None:
         (0.0, 0.0, 1.0, math.nan),
     ],
 )
-def test_nan_coordinates_are_rejected(bbox: Tuple[float, float, float, float]) -> None:
+def test_nan_coordinates_are_rejected(bbox: tuple[float, float, float, float]) -> None:
     with pytest.raises(ValueError, match="must be numbers"):
         snap_bbox(*bbox, 10)
     with pytest.raises(ValueError, match="must be numbers"):

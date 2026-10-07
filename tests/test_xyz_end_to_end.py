@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -22,15 +23,15 @@ import pytest
 from PIL import Image
 
 pytest.importorskip("rasterio", reason="masks are compared with rasterio's rasterization")
-from pyproj import Transformer  # noqa: E402
-from rasterio.features import rasterize  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-from shapely.geometry import Polygon, shape  # noqa: E402
-from shapely.ops import transform as shapely_transform  # noqa: E402
+from pyproj import Transformer
+from rasterio.features import rasterize
+from rasterio.transform import Affine
+from shapely.geometry import Polygon, shape
+from shapely.ops import transform as shapely_transform
 
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
 
 ZOOM = 17
 
@@ -43,7 +44,7 @@ def _pixels(x: int, y: int) -> npt.NDArray[np.uint8]:
 
 
 class Tiles(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - http.server's name
+    def do_GET(self) -> None:
         _, x, y = (int(part) for part in self.path.strip("/").removesuffix(".png").split("/"))
         buffer = BytesIO()
         Image.fromarray(_pixels(x, y)).save(buffer, "PNG")
@@ -70,11 +71,11 @@ def template() -> Iterator[str]:
 REGION = {"west": 4.8900, "south": 52.3700, "east": 4.8990, "north": 52.3750}
 
 
-def _labels(path: Path) -> List[Dict[str, Any]]:
+def _labels(path: Path) -> list[dict[str, Any]]:
     west, south = REGION["west"], REGION["south"]
     dx, dy = REGION["east"] - west, REGION["north"] - south
 
-    def ring(fx: float, fy: float, w: float, h: float) -> List[List[float]]:
+    def ring(fx: float, fy: float, w: float, h: float) -> list[list[float]]:
         x0, y0 = west + fx * dx, south + fy * dy
         x1, y1 = x0 + w * dx, y0 + h * dy
         return [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]

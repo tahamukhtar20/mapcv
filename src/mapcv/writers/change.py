@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Optional
-
 from mapcv.writer import WriterConfig
 from mapcv.writers.files import FilesWriter
 
@@ -22,9 +20,9 @@ class ChangeWriter(FilesWriter):
     those names, so the folders stay put when the dataset is re-split.
     """
 
-    TARGET_TYPES: FrozenSet[Optional[str]] = frozenset({"change"})
+    TARGET_TYPES: frozenset[str | None] = frozenset({"change"})
 
-    def __init__(self, config: WriterConfig, sources: List[str]) -> None:
+    def __init__(self, config: WriterConfig, sources: list[str]) -> None:
         if len(sources) != 2:
             raise ValueError("a change dataset has two imagery sources: before and after")
         super().__init__(config, sources)

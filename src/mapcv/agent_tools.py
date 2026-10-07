@@ -23,20 +23,13 @@ import tempfile
 import threading
 import warnings
 from collections import Counter
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
     Literal,
-    Optional,
-    Set,
-    Tuple,
-    Union,
     cast,
     get_args,
 )
@@ -52,14 +45,14 @@ from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url,
 from mapcv.config import (
     MULTI_SOURCE_TASKS,
     PLANNED_TASKS,
+    RASTER_LABEL_TYPES,
     SUPPORTED_TASKS,
     UNION_TAGS,
+    ContinuousLabelsConfig,
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
-    RASTER_LABEL_TYPES,
-    ContinuousLabelsConfig,
     RasterLabelsConfig,
     XYZImageryConfig,
     _resolve_relative_paths,
@@ -106,7 +99,7 @@ class ToolFailure(Exception):
     ``data`` is structured detail for the agent (for example the validation errors).
     """
 
-    def __init__(self, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, data: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.data = data or {}
@@ -121,7 +114,7 @@ class ToolResult:
     """What a tool returns: structured data and a short sentence for people."""
 
     summary: str
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Credentials ──────────────────────────────────────────────────────────────
@@ -132,10 +125,10 @@ _MIN_QUERY_SECRET = 3
 _MIN_PATH_SECRET = 6
 
 
-def _secret_tokens(url: str) -> Set[str]:
+def _secret_tokens(url: str) -> set[str]:
     """The parts of a tile URL template that may be credentials."""
     parts = urlsplit(url)
-    tokens: Set[str] = set()
+    tokens: set[str] = set()
     for value in (parts.username, parts.password, parts.fragment):
         if value:
             tokens.add(value)
@@ -158,9 +151,9 @@ class Redactor:
     """
 
     def __init__(self) -> None:
-        self._templates: Set[str] = set()
-        self._hosts: Set[str] = set()
-        self._tokens: Set[str] = set()
+        self._templates: set[str] = set()
+        self._hosts: set[str] = set()
+        self._tokens: set[str] = set()
         self._lock = threading.Lock()
 
     def learn_url(self, template: str) -> None:
@@ -196,7 +189,7 @@ class Redactor:
         for template in templates:
             text = text.replace(template, _redact_url(template))
 
-        def url(match: "re.Match[str]") -> str:
+        def url(match: re.Match[str]) -> str:
             found = match.group(0)
             parts = urlsplit(found)
             if parts.hostname in hosts or parts.username or parts.password or parts.query:
@@ -225,7 +218,7 @@ class Redactor:
 class Sandbox:
     """The folder tools may use, and whether they may write there."""
 
-    def __init__(self, root: Union[str, "os.PathLike[str]"], allow_write: bool = False) -> None:
+    def __init__(self, root: str | os.PathLike[str], allow_write: bool = False) -> None:
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"--root {root} is not a folder")
@@ -245,7 +238,7 @@ class Sandbox:
             raise ToolFailure(f"`{what}` {value!r} cannot be resolved: {exc}") from None
         return self.inside(resolved, what, value)
 
-    def inside(self, resolved: Path, what: str, shown: Optional[str] = None) -> Path:
+    def inside(self, resolved: Path, what: str, shown: str | None = None) -> Path:
         """``resolved`` (symlinks already followed) if it is inside the root, else a failure."""
         try:
             resolved.relative_to(self.root)
@@ -257,7 +250,7 @@ class Sandbox:
             ) from None
         return resolved
 
-    def rel(self, path: Union[str, Path]) -> str:
+    def rel(self, path: str | Path) -> str:
         """``path`` relative to the root with ``/`` separators; ``.`` for the root itself."""
         try:
             relative = Path(path).resolve().relative_to(self.root)
@@ -305,17 +298,17 @@ class Sandbox:
                 continue
 
 
-def _vector_label_paths(key: str, path: Path) -> List[Tuple[str, Path]]:
+def _vector_label_paths(key: str, path: Path) -> list[tuple[str, Path]]:
     """A vector label file and, for a Shapefile, its sidecar files."""
-    found: List[Tuple[str, Path]] = [(key, path)]
+    found: list[tuple[str, Path]] = [(key, path)]
     if path.suffix.lower() == ".shp" and path.is_file():
         found.extend((f"{key} (sidecar)", file) for file in shapefile_files(path)[1:])
     return found
 
 
-def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
+def config_paths(config: MapcvConfig) -> list[tuple[str, Path]]:
     """The local paths a config reads or writes, named by their config key."""
-    found: List[Tuple[str, Path]] = []
+    found: list[tuple[str, Path]] = []
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):
         local = eopf_local_path(labels.path)
@@ -356,7 +349,7 @@ _WARNINGS_LOCK = threading.Lock()
 
 
 @contextmanager
-def capture_warnings(wait: float = _WARNING_LOCK_WAIT) -> Iterator[List[warnings.WarningMessage]]:
+def capture_warnings(wait: float = _WARNING_LOCK_WAIT) -> Iterator[list[warnings.WarningMessage]]:
     """Record the warnings raised inside the block.
 
     ``warnings.catch_warnings`` changes process-wide state, so only one capture runs
@@ -379,7 +372,7 @@ class _Jobs:
     """The staging folders a generation is writing to right now."""
 
     def __init__(self) -> None:
-        self._active: Set[Path] = set()
+        self._active: set[Path] = set()
         self._lock = threading.Lock()
 
     def acquire(self, staging: Path) -> None:
@@ -405,8 +398,8 @@ class ToolState:
     jobs: _Jobs = field(default_factory=_Jobs)
 
 
-def _warning_texts(caught: List[warnings.WarningMessage]) -> List[str]:
-    texts: List[str] = []
+def _warning_texts(caught: list[warnings.WarningMessage]) -> list[str]:
+    texts: list[str] = []
     for warning in caught:
         message = str(warning.message)
         if message not in texts:
@@ -417,9 +410,9 @@ def _warning_texts(caught: List[warnings.WarningMessage]) -> List[str]:
 # ── Config loading ───────────────────────────────────────────────────────────
 
 
-def format_validation_errors(exc: ValidationError) -> List[Dict[str, str]]:
+def format_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
     """Validation problems as ``{field, message}``: the ones ``mapcv validate`` lists."""
-    errors: List[Dict[str, str]] = []
+    errors: list[dict[str, str]] = []
     for error in exc.errors():
         location = ".".join(
             str(part)
@@ -442,7 +435,7 @@ def _yaml_problem(exc: yaml.YAMLError) -> str:
 class ConfigInvalid(Exception):
     """A config that does not validate: ``errors`` are the problems, ``message`` the headline."""
 
-    def __init__(self, message: str, errors: List[Dict[str, str]]) -> None:
+    def __init__(self, message: str, errors: list[dict[str, str]]) -> None:
         super().__init__(message)
         self.message = message
         self.errors = errors
@@ -487,8 +480,8 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
 
 
 def load_config(
-    state: ToolState, config: Optional[str], yaml_text: Optional[str], arg: str = "config"
-) -> Tuple[MapcvConfig, Optional[Path]]:
+    state: ToolState, config: str | None, yaml_text: str | None, arg: str = "config"
+) -> tuple[MapcvConfig, Path | None]:
     """The config named by a path inside the root, or given as text (paths relative to the root)."""
     sandbox = state.sandbox
     if (config is None) == (yaml_text is None):
@@ -520,19 +513,19 @@ def _invalid_failure(exc: ConfigInvalid, where: str) -> ToolFailure:
 
 # ── describe_config_schema ───────────────────────────────────────────────────
 
-_SCHEMA_CACHE: Dict[str, Any] = {}
+_SCHEMA_CACHE: dict[str, Any] = {}
 
 
-def _base_config() -> Dict[str, Any]:
+def _base_config() -> dict[str, Any]:
     return {
         "region": {"west": 10.0, "south": 50.0, "east": 10.1, "north": 50.1},
-        "imagery": {"type": "xyz", "zoom": 15, "source": sorted(URL_TEMPLATES)[0]},
+        "imagery": {"type": "xyz", "zoom": 15, "source": min(URL_TEMPLATES)},
         "sampler": {"patch_size": 256},
         "writer": {"staging_dir": "dataset"},
     }
 
 
-def _probe(config: Dict[str, Any]) -> Optional[str]:
+def _probe(config: dict[str, Any]) -> str | None:
     """``None`` if the config validates, else the first message ``mapcv validate`` gives."""
     try:
         MapcvConfig.model_validate(config)
@@ -542,12 +535,12 @@ def _probe(config: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-_PROBE_IMAGERY: Dict[str, Dict[str, Any]] = {
-    "xyz": {"type": "xyz", "zoom": 15, "source": sorted(URL_TEMPLATES)[0]},
+_PROBE_IMAGERY: dict[str, dict[str, Any]] = {
+    "xyz": {"type": "xyz", "zoom": 15, "source": min(URL_TEMPLATES)},
     "eopf_zarr": {"type": "eopf_zarr", "path": "S2.zarr"},
     "geotiff": {"type": "geotiff", "path": "ortho.tif"},
 }
-_PROBE_LABELS: Dict[str, Optional[Dict[str, Any]]] = {
+_PROBE_LABELS: dict[str, dict[str, Any] | None] = {
     "none": None,
     "vector": {"type": "vector", "path": "labels.geojson"},
     "raster": {"type": "raster", "path": "landcover.tif", "classes": {1: 1}},
@@ -555,14 +548,14 @@ _PROBE_LABELS: Dict[str, Optional[Dict[str, Any]]] = {
 }
 
 
-def _probed_rules() -> Dict[str, Any]:
+def _probed_rules() -> dict[str, Any]:
     """Which combinations of task, labels, imagery and image format validate.
 
     Found by validating minimal configs with the real models, so the answer is
     whatever the validators say today and never a copy that can go stale.
     """
-    invalid: List[Dict[str, str]] = []
-    labels_per_task: Dict[str, List[str]] = {}
+    invalid: list[dict[str, str]] = []
+    labels_per_task: dict[str, list[str]] = {}
     for task in SUPPORTED_TASKS:
         labels_per_task[task] = []
         for kind, labels in _PROBE_LABELS.items():
@@ -580,7 +573,7 @@ def _probed_rules() -> Dict[str, Any]:
             else:
                 invalid.append({"task": task, "labels": kind, "error": problem})
     formats = list(get_args(WriterConfig.model_fields["image_format"].annotation))
-    formats_per_imagery: Dict[str, List[str]] = {}
+    formats_per_imagery: dict[str, list[str]] = {}
     for kind, imagery in _PROBE_IMAGERY.items():
         formats_per_imagery[kind] = []
         for image_format in formats:
@@ -609,7 +602,7 @@ def _probed_rules() -> Dict[str, Any]:
     }
 
 
-def _required_fields(schema: Dict[str, Any]) -> Dict[str, List[str]]:
+def _required_fields(schema: dict[str, Any]) -> dict[str, list[str]]:
     required = {"MapcvConfig": list(schema.get("required", []))}
     for name, definition in schema.get("$defs", {}).items():
         required[name] = list(definition.get("required", []))
@@ -641,7 +634,7 @@ def describe_config_schema(state: ToolState) -> ToolResult:
 # ── validate_config ──────────────────────────────────────────────────────────
 
 
-def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str, Any]]:
+def _labels_summary(state: ToolState, config: MapcvConfig) -> dict[str, Any] | None:
     labels = config.labels
     if labels is None:
         return None
@@ -686,7 +679,7 @@ def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str,
     }
 
 
-def config_summary(state: ToolState, config: MapcvConfig) -> Dict[str, Any]:
+def config_summary(state: ToolState, config: MapcvConfig) -> dict[str, Any]:
     """The settings of a config, with credentials left out."""
     region = config.region
     sampler = config.sampler
@@ -715,9 +708,9 @@ def config_summary(state: ToolState, config: MapcvConfig) -> Dict[str, Any]:
     }
 
 
-def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
+def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> list[str]:
     """The same missing-file warnings ``mapcv validate`` prints."""
-    messages: List[str] = []
+    messages: list[str] = []
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):
         label_file = eopf_local_path(labels.path)
@@ -727,10 +720,9 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
         for key, path in labels.keyed_files():
             if not path.exists():
                 messages.append(f"{key} not found: {state.sandbox.rel(path)}")
-    if isinstance(labels, LabelsConfig) and labels.annotated_area is not None:
-        if not labels.annotated_area.exists():
-            where = state.sandbox.rel(labels.annotated_area)
-            messages.append(f"labels.annotated_area not found: {where}")
+    area = labels.annotated_area if isinstance(labels, LabelsConfig) else None
+    if area is not None and not area.exists():
+        messages.append(f"labels.annotated_area not found: {state.sandbox.rel(area)}")
     change = config.change
     if change is not None:
         for key, label_set in (
@@ -751,7 +743,7 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> List[str]:
 
 
 def validate_config(
-    state: ToolState, path: Optional[str] = None, yaml_text: Optional[str] = None
+    state: ToolState, path: str | None = None, yaml_text: str | None = None
 ) -> ToolResult:
     """Check a config like ``mapcv validate``: no labels or imagery are read."""
     try:
@@ -783,12 +775,12 @@ _INSPECT_SUFFIXES = tuple(sorted(VECTOR_LABEL_SUFFIXES))
 @dataclass
 class _Scan:
     features: int = 0
-    geometry: "Counter[str]" = field(default_factory=Counter)
-    fields: Dict[str, "Counter[str]"] = field(default_factory=dict)
+    geometry: Counter[str] = field(default_factory=Counter)
+    fields: dict[str, Counter[str]] = field(default_factory=dict)
     with_field: Counter[str] = field(default_factory=Counter)
-    bounds: Optional[List[float]] = None
+    bounds: list[float] | None = None
 
-    def extend(self, bounds: Tuple[float, float, float, float]) -> None:
+    def extend(self, bounds: tuple[float, float, float, float]) -> None:
         if self.bounds is None:
             self.bounds = list(bounds)
         else:
@@ -815,7 +807,7 @@ def _scan_geojson(data: bytes) -> _Scan:
         raise ToolFailure(f"The file is not valid UTF-8 JSON: {exc}") from None
     kind = obj.get("type", "") if isinstance(obj, dict) else ""
     if kind == "FeatureCollection":
-        features: List[Any] = obj.get("features") or []
+        features: list[Any] = obj.get("features") or []
     elif kind == "Feature":
         features = [obj]
     else:
@@ -837,7 +829,7 @@ def _scan_geojson(data: bytes) -> _Scan:
             except (ValueError, TypeError, AttributeError, KeyError):
                 continue
             if not parsed.is_empty:
-                scan.extend(cast(Tuple[float, float, float, float], parsed.bounds))
+                scan.extend(cast(tuple[float, float, float, float], parsed.bounds))
         for key, value in (feature.get("properties") or {}).items():
             if value is None or isinstance(value, (dict, list)):
                 continue
@@ -863,7 +855,7 @@ def _scan_kml(data: bytes) -> _Scan:
         warnings.simplefilter("ignore")
         geometries, _ = parse_kml(data)
     for geometry, _ in geometries:
-        scan.extend(cast(Tuple[float, float, float, float], geometry.bounds))
+        scan.extend(cast(tuple[float, float, float, float], geometry.bounds))
     for name in names:
         labeled, _ = _parse_kml_bytes(data, name)
         counter: Counter[str] = Counter()
@@ -877,7 +869,7 @@ def _scan_kml(data: bytes) -> _Scan:
     return scan
 
 
-def _scan_table(file: Path, layer: Optional[str]) -> _Scan:
+def _scan_table(file: Path, layer: str | None) -> _Scan:
     """GeoPackage, Shapefile and GeoParquet: features in lon/lat and their attributes."""
     suffix = file.suffix.lower()
     if suffix == ".gpkg":
@@ -895,7 +887,7 @@ def _scan_table(file: Path, layer: Optional[str]) -> _Scan:
             scan.geometry["unreadable"] += 1
         else:
             scan.geometry[geometry.geom_type] += 1
-            scan.extend(cast(Tuple[float, float, float, float], geometry.bounds))
+            scan.extend(cast(tuple[float, float, float, float], geometry.bounds))
     for name, column in table.columns.items():
         counter: Counter[str] = Counter()
         for value in column:
@@ -911,7 +903,7 @@ def _scan_table(file: Path, layer: Optional[str]) -> _Scan:
 
 
 def inspect_labels(
-    state: ToolState, path: str, max_values: int = 20, layer: Optional[str] = None
+    state: ToolState, path: str, max_values: int = 20, layer: str | None = None
 ) -> ToolResult:
     """Fields, the values of each field, feature and geometry counts, and the extent."""
     sandbox = state.sandbox
@@ -954,7 +946,7 @@ def inspect_labels(
     except (ValueError, RuntimeError, OSError) as exc:
         raise ToolFailure(f"Cannot read {sandbox.rel(file)}: {exc}") from None
 
-    fields: List[Dict[str, Any]] = []
+    fields: list[dict[str, Any]] = []
     for name in sorted(scan.fields):
         counter = scan.fields[name]
         distinct = len(counter)
@@ -971,8 +963,8 @@ def inspect_labels(
             }
         )
     candidates = [f["name"] for f in fields if f["usable_as_classes"] and f["distinct"] >= 2]
-    notes: List[str] = []
-    extent: Optional[Dict[str, float]] = None
+    notes: list[str] = []
+    extent: dict[str, float] | None = None
     if scan.bounds is not None:
         west, south, east, north = scan.bounds
         extent = {"west": west, "south": south, "east": east, "north": north}
@@ -991,7 +983,7 @@ def inspect_labels(
             "Set labels.label_field to one of: " + ", ".join(candidates) + " (or omit it: every "
             "polygon is then class 1)."
         )
-    data_out: Dict[str, Any] = {
+    data_out: dict[str, Any] = {
         "path": sandbox.rel(file),
         "features": scan.features,
         "geometry_types": dict(scan.geometry),
@@ -1015,9 +1007,9 @@ def inspect_labels(
 # ── plan ─────────────────────────────────────────────────────────────────────
 
 
-def large_reason(estimate: Plan) -> Optional[str]:
+def large_reason(estimate: Plan) -> str | None:
     """Why :attr:`Plan.is_large` is true (``None`` when it is not), with the limits."""
-    reasons: List[str] = []
+    reasons: list[str] = []
     if (estimate.tiles or 0) > planning.LARGE_JOB_TILES:
         reasons.append(
             f"{estimate.tiles:,} tiles (the limit for a job without confirmation is "
@@ -1032,10 +1024,10 @@ def large_reason(estimate: Plan) -> Optional[str]:
     return "; ".join(reasons) or None
 
 
-def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> Dict[str, Any]:
+def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> dict[str, Any]:
     """A plan as structured data, with ``large`` and the reason."""
     labels = estimate.labels
-    labels_data: Optional[Dict[str, Any]] = None
+    labels_data: dict[str, Any] | None = None
     if labels is not None:
         raster = labels.raster is not None
         labels_data = {
@@ -1075,7 +1067,7 @@ def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> Dict[str
     }
 
 
-def _plan_summary(data: Dict[str, Any]) -> str:
+def _plan_summary(data: dict[str, Any]) -> str:
     tiles = f"{data['tiles']:,} tiles, " if data["tiles"] is not None else ""
     text = (
         f"Plan: {tiles}about {data['patches']:,} patch(es) of {data['patch_size']} px, "
@@ -1086,7 +1078,7 @@ def _plan_summary(data: Dict[str, Any]) -> str:
     return text
 
 
-def make_plan_for(state: ToolState, config: MapcvConfig) -> Tuple[Plan, List[str]]:
+def make_plan_for(state: ToolState, config: MapcvConfig) -> tuple[Plan, list[str]]:
     """Estimate a config; also return the Python warnings raised while planning."""
     labels = config.labels
     if isinstance(labels, LabelsConfig) and labels.osm is not None:
@@ -1106,9 +1098,7 @@ def make_plan_for(state: ToolState, config: MapcvConfig) -> Tuple[Plan, List[str
     return estimate, extra
 
 
-def plan(
-    state: ToolState, config: Optional[str] = None, yaml_text: Optional[str] = None
-) -> ToolResult:
+def plan(state: ToolState, config: str | None = None, yaml_text: str | None = None) -> ToolResult:
     """Estimate tiles, patches and sizes without downloading anything."""
     try:
         loaded, _ = load_config(state, config, yaml_text)
@@ -1174,8 +1164,8 @@ class GenerateJob:
 
     config: MapcvConfig
     config_path: Path
-    plan: Dict[str, Any]
-    extra_warnings: List[str]
+    plan: dict[str, Any]
+    extra_warnings: list[str]
 
 
 def prepare_generate(state: ToolState, config: str, confirm_large: bool = False) -> GenerateJob:
@@ -1255,7 +1245,7 @@ def execute_generate(
 
 
 def _generate_result(
-    state: ToolState, job: GenerateJob, result: GenerateResult, warns: List[str]
+    state: ToolState, job: GenerateJob, result: GenerateResult, warns: list[str]
 ) -> ToolResult:
     manifest = result.manifest
     sandbox = state.sandbox
@@ -1271,7 +1261,7 @@ def _generate_result(
     if manifest.task == "classification":
         files.extend(("labels.csv", "labels.json", "classes.txt"))
     dataset = sandbox.rel(result.staging_dir)
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "dataset": dataset,
         "task": manifest.task,
         "patches": len(manifest.patches),
@@ -1295,10 +1285,10 @@ def _generate_result(
 # ── info and split ───────────────────────────────────────────────────────────
 
 
-def _class_rows(manifest: Manifest) -> List[Dict[str, Any]]:
+def _class_rows(manifest: Manifest) -> list[dict[str, Any]]:
     """Class balance: pixels per class (segmentation), objects per class (detection and
     instance) or patches per label (classification)."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     if manifest.task == "classification":
         patches_per_label: Counter[str] = Counter()
         for entry in manifest.patches:
@@ -1352,11 +1342,11 @@ def _class_rows(manifest: Manifest) -> List[Dict[str, Any]]:
     return rows
 
 
-def _split_counts(sandbox: Sandbox, dataset: Path) -> Optional[Dict[str, int]]:
+def _split_counts(sandbox: Sandbox, dataset: Path) -> dict[str, int] | None:
     splits_dir = dataset / "splits"
     if not splits_dir.is_dir():
         return None
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for name in ("train", "val", "test"):
         path = splits_dir / f"{name}.txt"
         if path.exists():
@@ -1382,7 +1372,7 @@ def info(state: ToolState, dataset: str) -> ToolResult:
     target = manifest.target
     ignore = target.ignore_index if target is not None else None
     splits = _split_counts(sandbox, folder)
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "dataset": sandbox.rel(folder),
         "task": manifest.task,
         "image_only": target is None,
@@ -1421,11 +1411,11 @@ def split(
     dataset: str,
     test_ratio: float = 0.20,
     val_ratio: float = 0.10,
-    labeled_ratios: Optional[List[float]] = None,
+    labeled_ratios: list[float] | None = None,
     seed: int = 42,
     strategy: str = "spatial",
-    block_size: Optional[int] = None,
-    sample_limit: Optional[int] = None,
+    block_size: int | None = None,
+    sample_limit: int | None = None,
 ) -> ToolResult:
     """Re-split an existing dataset from its manifest; no images are read."""
     sandbox = state.sandbox

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import mapcv
 from mapcv import MapcvConfig
@@ -25,7 +25,7 @@ QUICKSTART = Path(__file__).resolve().parent.parent / "quickstart"
 
 def build_config(staging_dir: Path) -> MapcvConfig:
     """The quickstart config as a plain dict, validated into a MapcvConfig."""
-    raw: Dict[str, Any] = {
+    raw: dict[str, Any] = {
         "region": {"west": 4.9375, "south": 52.3725, "east": 4.9515, "north": 52.3780},
         "imagery": {"type": "xyz", "zoom": 18, "source": "esri_satellite", "max_connections": 4},
         "labels": {"path": QUICKSTART / "buildings.geojson", "label_field": "class"},

@@ -19,7 +19,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -27,22 +27,22 @@ import pytest
 
 pytest.importorskip("rasterio", reason="the label rasters are written with rasterio")
 pytest.importorskip("pyproj", reason="cross-CRS lookup projects with pyproj")
-import rasterio  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
+import rasterio
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.transform import Affine
 
-from mapcv.config import RasterLabelsConfig  # noqa: E402
-from mapcv.targets import raster_labels  # noqa: E402
-from mapcv.targets.raster_labels import LabelRasterSampler  # noqa: E402
+from mapcv.config import RasterLabelsConfig
+from mapcv.targets import raster_labels
+from mapcv.targets.raster_labels import LabelRasterSampler
 
-Window = Tuple[float, float, float, float, float, float]
+Window = tuple[float, float, float, float, float, float]
 Array = npt.NDArray[np.float64]
 
 HEIGHT, WIDTH = 288, 320  # 92,160 pixel centres: several pieces once the minimum is lowered
 
 
-def utm(lon: float, lat: float, epsg: int = 32631) -> Tuple[float, float]:
+def utm(lon: float, lat: float, epsg: int = 32631) -> tuple[float, float]:
     x, y = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform(lon, lat)
     return float(x), float(y)
 
@@ -62,7 +62,7 @@ def window_at(x: float, y: float, pixel: float) -> Window:
 # Label pixel sizes are powers of two, so label-pixel boundaries are exact in floats.
 _PARIS = utm(3.0, 48.85)
 _MERCATOR = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform(3.0, 48.85)
-_CASES: Dict[str, Tuple[str, int, Window, float]] = {
+_CASES: dict[str, tuple[str, int, Window, float]] = {
     "utm-to-wgs84": ("EPSG:32631", 4326, window_at(*_PARIS, 10.0), 2.0**-14),
     "utm-to-wgs84-rotated": (
         "EPSG:32631",
@@ -120,7 +120,7 @@ def sampler_for(path: Path, imagery_crs: str) -> LabelRasterSampler:
     return LabelRasterSampler(config, imagery_crs)
 
 
-def centres(window: Window) -> Tuple[Array, Array]:
+def centres(window: Window) -> tuple[Array, Array]:
     """Imagery CRS coordinates of every pixel centre, computed as the sampler does."""
     a, b, c, d, e, f = window
     u = np.arange(WIDTH, dtype=np.float64)[None, :] + 0.5
@@ -129,7 +129,7 @@ def centres(window: Window) -> Tuple[Array, Array]:
     return np.ascontiguousarray(x), np.ascontiguousarray(y)
 
 
-def project_point_by_point(transformer: Transformer, x: Array, y: Array) -> Tuple[Array, Array]:
+def project_point_by_point(transformer: Transformer, x: Array, y: Array) -> tuple[Array, Array]:
     """The reference: one ``Transformer.transform`` call per point."""
     lx = np.empty(x.shape, dtype=np.float64)
     ly = np.empty(y.shape, dtype=np.float64)
@@ -139,7 +139,7 @@ def project_point_by_point(transformer: Transformer, x: Array, y: Array) -> Tupl
     return lx, ly
 
 
-def fractional_pixels(sampler: LabelRasterSampler, lx: Array, ly: Array) -> Tuple[Array, Array]:
+def fractional_pixels(sampler: LabelRasterSampler, lx: Array, ly: Array) -> tuple[Array, Array]:
     """Fractional label (row, col) of projected coordinates, as the sampler computes them."""
     la, lb, lc, ld, le, lf = sampler.transform
     det = la * le - lb * ld
@@ -147,7 +147,7 @@ def fractional_pixels(sampler: LabelRasterSampler, lx: Array, ly: Array) -> Tupl
 
 
 def label_grid_with_tie(
-    lx: Array, ly: Array, pixel: float, pick: Tuple[int, int, int, int]
+    lx: Array, ly: Array, pixel: float, pick: tuple[int, int, int, int]
 ) -> Affine:
     """A north-up label grid with ``pixel`` size (a power of two, so the arithmetic is
     exact) on which the projected centre of imagery pixel ``(row, col)`` lies exactly on
@@ -269,7 +269,7 @@ def test_sampled_masks_equal_the_per_point_lookup(
 # ── interpolated lookup ──────────────────────────────────────────────────────
 
 # Windows where the projection is far from smooth, or not finite everywhere.
-_HARD_CASES: Dict[str, Tuple[str, int, Window, float]] = {
+_HARD_CASES: dict[str, tuple[str, int, Window, float]] = {
     # Longitude jumps from +180 to -180 inside the window.
     "antimeridian": ("EPSG:32660", 4326, window_at(*utm(180.0, 60.0, 32660), 30.0), 2.0**-12),
     # Longitude turns around the pole, which is inside the window.
@@ -281,7 +281,7 @@ _HARD_CASES: Dict[str, Tuple[str, int, Window, float]] = {
 
 def exact_indices(
     sampler: LabelRasterSampler, window: Window, start: int, stop: int, width: int
-) -> Tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
     u = np.arange(width, dtype=np.float64)[None, :] + 0.5
     v = np.arange(start, stop, dtype=np.float64)[:, None] + 0.5
     rows, cols = sampler._fractional(window, u, v)

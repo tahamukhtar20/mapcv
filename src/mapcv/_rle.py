@@ -16,15 +16,13 @@ independent numpy implementation. Tests check every output against pycocotools.
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 import numpy as np
 import numpy.typing as npt
 
 
 def rle_counts_at(
     part: npt.NDArray[np.bool_], x: int, y: int, height: int, width: int
-) -> List[int]:
+) -> list[int]:
     """Run lengths of a ``height`` x ``width`` mask that is ``part`` placed at ``(x, y)``.
 
     ``part`` is a boolean array whose top-left pixel is at column ``x``, row ``y`` of the
@@ -54,13 +52,13 @@ def rle_counts_at(
     counts[1::2] = ends - starts
     counts[2:-1:2] = starts[1:] - ends[:-1]
     counts[-1] = height * width - ends[-1]
-    runs: List[int] = counts.tolist()
+    runs: list[int] = counts.tolist()
     if runs[-1] == 0:  # a mask that ends with foreground has no trailing background run
         runs.pop()
     return runs
 
 
-def rle_counts(mask: npt.NDArray[np.bool_]) -> List[int]:
+def rle_counts(mask: npt.NDArray[np.bool_]) -> list[int]:
     """Run lengths of ``mask`` (``(height, width)``) in column-major order, background first."""
     if mask.ndim != 2:
         raise ValueError("an RLE mask must be a 2-D array")
@@ -71,9 +69,9 @@ def rle_counts(mask: npt.NDArray[np.bool_]) -> List[int]:
     return rle_counts_at(mask[y : y + box_height, x : x + box_width], x, y, height, width)
 
 
-def counts_to_string(counts: List[int]) -> str:
+def counts_to_string(counts: list[int]) -> str:
     """The compressed COCO string of run lengths ``counts``."""
-    out: List[str] = []
+    out: list[str] = []
     for index, count in enumerate(counts):
         value = count - counts[index - 2] if index > 2 else count
         more = True
@@ -97,7 +95,7 @@ def encode_part(part: npt.NDArray[np.bool_], x: int, y: int, height: int, width:
     return counts_to_string(rle_counts_at(part, x, y, height, width))
 
 
-def mask_bbox(mask: npt.NDArray[np.bool_]) -> Tuple[int, int, int, int]:
+def mask_bbox(mask: npt.NDArray[np.bool_]) -> tuple[int, int, int, int]:
     """Tight ``(x, y, width, height)`` box of the true pixels of ``mask``, in pixels.
 
     Raises:

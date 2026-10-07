@@ -52,7 +52,7 @@ def tile_url(config: EarthEngineImageryConfig) -> str:
     try:
         ee.Initialize(project=config.project)
         map_id = _image(ee, config).getMapId(config.vis.params())
-    except Exception as exc:  # noqa: BLE001 - ee raises its own and Google auth errors
+    except Exception as exc:
         what = config.image or config.collection
         raise RuntimeError(
             f"Earth Engine could not render {what!r}: {exc}. {_LOGIN_HINT}."

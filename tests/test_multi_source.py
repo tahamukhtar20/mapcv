@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -22,19 +22,19 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="multi-source tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-import rasterio.warp  # noqa: E402
-from pyproj import Transformer  # noqa: E402
-from rasterio.crs import CRS  # noqa: E402
-from rasterio.enums import Resampling  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
+import rasterio
+import rasterio.warp
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.imagery import AlignedSource, GridAlignment, RasterMetadata, grid_alignment  # noqa: E402
-from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.planning import plan  # noqa: E402
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.imagery import AlignedSource, GridAlignment, RasterMetadata, grid_alignment
+from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError
+from mapcv.pipeline import run_generate
+from mapcv.planning import plan
 
 runner = CliRunner()
 
@@ -46,7 +46,7 @@ PATCH = 64
 # ── Rasters on related grids ─────────────────────────────────────────────────
 
 
-def _origin() -> Tuple[float, float]:
+def _origin() -> tuple[float, float]:
     """Top-left corner of the reference grid: a whole metre near (3E, 48.85N)."""
     x, y = Transformer.from_crs("EPSG:4326", f"EPSG:{EPSG}", always_xy=True).transform(
         CENTER_LON, CENTER_LAT
@@ -96,7 +96,7 @@ def reference_transform() -> Affine:
 
 def region_inside(
     transform: Affine, width: int, height: int, margin: float = 0.1
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """A lon/lat box well inside the raster (the grid snaps outward from it)."""
     to_lonlat = Transformer.from_crs(f"EPSG:{EPSG}", "EPSG:4326", always_xy=True)
     x0, y0 = transform * (width * margin, height * (1 - margin))
@@ -106,11 +106,11 @@ def region_inside(
     return {"west": west, "south": south, "east": east, "north": north}
 
 
-def write_labels(directory: Path, region: Dict[str, float]) -> Path:
+def write_labels(directory: Path, region: dict[str, float]) -> Path:
     west, south = region["west"], region["south"]
     dx, dy = region["east"] - west, region["north"] - south
 
-    def at(fx: float, fy: float) -> List[float]:
+    def at(fx: float, fy: float) -> list[float]:
         return [west + fx * dx, south + fy * dy]
 
     ring = [at(0.2, 0.2), at(0.7, 0.25), at(0.6, 0.8), at(0.2, 0.2)]
@@ -127,14 +127,14 @@ def write_labels(directory: Path, region: Dict[str, float]) -> Path:
 def config_for(
     tmp_path: Path,
     imagery: Any,
-    region: Dict[str, float],
+    region: dict[str, float],
     *,
-    labels: Optional[Path] = None,
+    labels: Path | None = None,
     staging: str = "dataset",
     image_format: str = "png",
     **sampler: Any,
 ) -> MapcvConfig:
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "region": region,
         "imagery": imagery,
         "sampler": {"patch_size": PATCH, "mode": "grid", "edge_strategy": "drop", **sampler},
@@ -152,7 +152,7 @@ def read_png(path: Path) -> npt.NDArray[Any]:
 
 def expected_on_patch_grid(
     path: Path, manifest: Manifest, entry: ManifestEntry
-) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
     """The file's pixels on the patch's grid, by rasterio nearest-neighbour reprojection.
 
     Same CRS and pixel corners on the patch grid: nearest neighbour picks, for every
@@ -184,7 +184,7 @@ def expected_on_patch_grid(
 # ── Grid alignment ───────────────────────────────────────────────────────────
 
 
-def _meta(transform: Tuple[float, ...], crs: str = "EPSG:32631") -> RasterMetadata:
+def _meta(transform: tuple[float, ...], crs: str = "EPSG:32631") -> RasterMetadata:
     return RasterMetadata(
         source_type="geotiff",
         product_id="x",
@@ -240,7 +240,7 @@ def test_crs_spelled_differently_is_the_same_crs() -> None:
     ],
 )
 def test_grids_that_do_not_line_up_are_refused(
-    other: Tuple[float, ...], crs: Optional[str], message: str
+    other: tuple[float, ...], crs: str | None, message: str
 ) -> None:
     with pytest.raises(ValueError, match="imagery 'b'") as raised:
         grid_alignment(_meta(REF), _meta(other, crs=crs or "EPSG:32631"), "b")
@@ -263,7 +263,7 @@ class ArraySource:
             REF,
             64,
         )
-        self.reads: List[Tuple[int, int, int, int]] = []
+        self.reads: list[tuple[int, int, int, int]] = []
 
     def read_window(self, r0: int, r1: int, c0: int, c1: int) -> Any:
         assert 0 <= r0 < r1 <= self.data.shape[0] and 0 <= c0 < c1 <= self.data.shape[1]
@@ -287,7 +287,7 @@ class ArraySource:
     "window", [(0, 40, 0, 40), (10, 61, 3, 50), (-20, 5, 30, 90), (55, 90, -9, 2)]
 )
 def test_aligned_reads_repeat_coarse_pixels_exactly(
-    alignment: GridAlignment, window: Tuple[int, int, int, int]
+    alignment: GridAlignment, window: tuple[int, int, int, int]
 ) -> None:
     rng = np.random.default_rng(5)
     data = rng.integers(1, 250, size=(17, 23, 2)).astype(np.uint8)
@@ -321,7 +321,7 @@ def test_aligned_read_outside_the_source_is_empty() -> None:
 
 
 XYZ = {"type": "xyz", "zoom": 18, "source": "esri_satellite"}
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "sampler": {"patch_size": 256},
     "writer": {"staging_dir": "out"},
@@ -398,7 +398,7 @@ def test_relative_paths_of_every_source_resolve_against_the_config(tmp_path: Pat
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     """A reference raster, a co-registered one, and a 2x coarser one on a shifted grid."""
     ref = reference_transform()
     width, height = 448, 384
@@ -411,14 +411,14 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     return {"region": region, "labels": write_labels(tmp_path, region)}
 
 
-def _sources(tmp_path: Path, *names: str) -> List[Dict[str, Any]]:
+def _sources(tmp_path: Path, *names: str) -> list[dict[str, Any]]:
     return [
         {"type": "geotiff", "name": name, "path": str(tmp_path / f"{name}.tif")} for name in names
     ]
 
 
 def test_every_source_is_written_on_the_first_sources_grid(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     config = config_for(
         tmp_path, _sources(tmp_path, "a", "b", "c"), scene["region"], labels=scene["labels"]
@@ -458,7 +458,7 @@ def test_every_source_is_written_on_the_first_sources_grid(
 
 
 def test_masks_and_first_source_match_a_single_source_run(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     multi = config_for(
         tmp_path, _sources(tmp_path, "a", "b", "c"), scene["region"], labels=scene["labels"]
@@ -522,7 +522,7 @@ def test_pixels_missing_in_any_source_have_no_imagery(tmp_path: Path) -> None:
 
 
 def test_resume_reproduces_an_uninterrupted_run_and_refuses_changed_sources(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     config = config_for(tmp_path, _sources(tmp_path, "a", "c"), scene["region"])
     full = run_generate(config).manifest
@@ -577,7 +577,7 @@ def test_sources_with_other_bands_and_dtypes_write_their_own_patches(tmp_path: P
         np.testing.assert_array_equal(dem, want)
 
 
-def test_plan_and_info_name_every_source(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_plan_and_info_name_every_source(tmp_path: Path, scene: dict[str, Any]) -> None:
     config = config_for(tmp_path, _sources(tmp_path, "a", "c"), scene["region"])
     single = config_for(
         tmp_path, {"type": "geotiff", "path": str(tmp_path / "a.tif")}, scene["region"]
@@ -614,12 +614,12 @@ def test_empty_reads_learn_the_shape_once() -> None:
 
 
 def test_a_source_that_fails_to_open_closes_the_ones_before_it(
-    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from mapcv import pipeline
 
     config = config_for(tmp_path, _sources(tmp_path, "a", "b"), scene["region"])
-    closed: List[str] = []
+    closed: list[str] = []
     real_open = pipeline.open_raster_source  # type: ignore[attr-defined]
 
     def open_source(region: Any, imagery: Any, **kwargs: Any) -> Any:
@@ -635,8 +635,8 @@ def test_a_source_that_fails_to_open_closes_the_ones_before_it(
     assert closed == ["a"]
 
 
-def test_jpg_patches_and_world_files_of_every_source(tmp_path: Path, scene: Dict[str, Any]) -> None:
-    data: Dict[str, Any] = {
+def test_jpg_patches_and_world_files_of_every_source(tmp_path: Path, scene: dict[str, Any]) -> None:
+    data: dict[str, Any] = {
         "region": scene["region"],
         "imagery": _sources(tmp_path, "a", "c"),
         "sampler": {"patch_size": PATCH, "mode": "grid", "edge_strategy": "drop"},
@@ -666,16 +666,16 @@ def test_jpg_patches_and_world_files_of_every_source(tmp_path: Path, scene: Dict
 
 
 def test_writers_refuse_patches_they_cannot_store(tmp_path: Path) -> None:
+    from mapcv.config import DetectionOptions, LabelsConfig
     from mapcv.manifest import SourceRecord
+    from mapcv.targets import DetectionTarget
     from mapcv.writer import WriterConfig, write_source_images
     from mapcv.writers import FilesWriter, create_writer
-    from mapcv.targets import DetectionTarget
-    from mapcv.config import DetectionOptions, LabelsConfig
 
     config = WriterConfig(staging_dir=tmp_path / "out")
     from mapcv.sampler import PatchMeta
 
-    meta: List[PatchMeta] = [{"row": 0, "col": 0, "padded": False, "empty_ratio": 0.0}]
+    meta: list[PatchMeta] = [{"row": 0, "col": 0, "padded": False, "empty_ratio": 0.0}]
     manifest = Manifest()
     floats = np.zeros((1, 4, 4, 3), dtype=np.float32)
     assert (
@@ -699,7 +699,7 @@ def test_writers_refuse_patches_they_cannot_store(tmp_path: Path) -> None:
 
 
 def test_cli_plans_validates_and_summarizes_several_sources(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     import yaml
 

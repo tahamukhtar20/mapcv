@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -17,7 +18,7 @@ def extract_array_patch(
     patch_size: int,
     pad_mode: PadMode,
     fill: float = 0,
-) -> Tuple[npt.NDArray[Any], bool]:
+) -> tuple[npt.NDArray[Any], bool]:
     """Cut a ``patch_size`` square at ``(row, col)``, padding where it leaves ``array``.
 
     Returns the patch and whether any padding was needed.
@@ -51,7 +52,7 @@ class NullWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> None:
         return None
 
@@ -70,7 +71,7 @@ class MaskWindow:
     that value instead of a class, and padding is never mirrored into labels.
     """
 
-    def __init__(self, mask: npt.NDArray[np.uint8], ignore_index: Optional[int]) -> None:
+    def __init__(self, mask: npt.NDArray[np.uint8], ignore_index: int | None) -> None:
         self._mask = mask
         self._ignore_index = ignore_index
 
@@ -80,7 +81,7 @@ class MaskWindow:
         return self._mask
 
     @property
-    def ignore_index(self) -> Optional[int]:
+    def ignore_index(self) -> int | None:
         """The value marking pixels without imagery, or ``None``."""
         return self._ignore_index
 
@@ -90,7 +91,7 @@ class MaskWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> npt.NDArray[np.uint8]:
         ignore_index = self._ignore_index
         if ignore_index is None:

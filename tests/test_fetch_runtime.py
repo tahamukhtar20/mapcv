@@ -8,8 +8,9 @@ import io
 import multiprocessing
 import sys
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Iterator, Set
+from typing import Any
 
 import numpy as np
 import pytest
@@ -24,7 +25,7 @@ PNG = _buffer.getvalue()
 
 class Server:
     def __init__(self) -> None:
-        self.ports: Set[int] = set()
+        self.ports: set[int] = set()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -32,7 +33,7 @@ class Server:
             wbufsize = 1 << 16
             disable_nagle_algorithm = True
 
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 owner.ports.add(self.client_address[1])
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")

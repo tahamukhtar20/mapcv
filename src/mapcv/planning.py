@@ -5,30 +5,29 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import shapely
+from shapely.geometry import box
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
-    EOPFZarrImageryConfig,
-    StacCogImageryConfig,
     ContinuousLabelsConfig,
+    EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
-    area_polygons,
     RasterLabelsConfig,
+    StacCogImageryConfig,
     XYZImageryConfig,
+    area_polygons,
     eopf_local_path,
 )
 from mapcv.imagery import GeoTiffRasterSource
 from mapcv.pipeline import _max_window_width
-from shapely.geometry import box
-
-from mapcv.targets.segmentation import load_labels
 from mapcv.sampler import random_patch_capacity
+from mapcv.targets.segmentation import load_labels
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
 # 2 * pi * R * cos(lat) / (256 * 2**z) metres per pixel.
@@ -59,12 +58,12 @@ class LabelSummary:
 
     path: str
     polygons: int
-    classes: Dict[str, int]
-    warnings: List[str] = field(default_factory=list)
+    classes: dict[str, int]
+    warnings: list[str] = field(default_factory=list)
     # Features whose geometry intersects the region (each is one detection or instance object).
     in_region: int = 0
     #: What the label raster is (CRS, size, pixel size), for raster labels.
-    raster: Optional[str] = None
+    raster: str | None = None
 
 
 @dataclass
@@ -72,21 +71,21 @@ class Plan:
     """Estimated size and cost of generating a dataset from a config."""
 
     task: str
-    region_km: Tuple[float, float]
+    region_km: tuple[float, float]
     imagery: str
     resolution_m: float
-    raster_px: Tuple[int, int]
+    raster_px: tuple[int, int]
     patches: int
     patch_size: int
-    tiles: Optional[int]
-    download_bytes: Optional[int]
+    tiles: int | None
+    download_bytes: int | None
     output_bytes: int
     chunk_memory_bytes: int
-    labels: Optional[LabelSummary]
-    warnings: List[str] = field(default_factory=list)
+    labels: LabelSummary | None
+    warnings: list[str] = field(default_factory=list)
     # Detection and instance segmentation: label features in the region, each one object
     # (``None`` for other tasks).
-    objects: Optional[int] = None
+    objects: int | None = None
 
     @property
     def is_large(self) -> bool:
@@ -102,7 +101,7 @@ def ground_resolution_m(zoom: int, latitude: float) -> float:
     return float(circumference / (_TILE_PX * 2**zoom))
 
 
-def region_size_km(west: float, south: float, east: float, north: float) -> Tuple[float, float]:
+def region_size_km(west: float, south: float, east: float, north: float) -> tuple[float, float]:
     """Approximate (width, height) of a lon/lat box in kilometres."""
     mid_lat = math.radians((south + north) / 2)
     width = (east - west) * 111.320 * math.cos(mid_lat)
@@ -110,7 +109,7 @@ def region_size_km(west: float, south: float, east: float, north: float) -> Tupl
     return width, height
 
 
-def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, int, int]:
+def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> tuple[int, int, int]:
     region = config.region
     snapped = snap_bbox(region.west, region.south, region.east, region.north, imagery.zoom)
     eps = 1e-9
@@ -121,12 +120,12 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, in
     return rows * _TILE_PX, cols * _TILE_PX, rows * cols
 
 
-def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[int, int]:
+def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> tuple[int, int]:
     """Raster size in the product's UTM grid, snapped outward to whole pixels."""
     return _utm_raster(config, imagery.resolution)
 
 
-def _utm_raster(config: MapcvConfig, res: int) -> Tuple[int, int]:
+def _utm_raster(config: MapcvConfig, res: int) -> tuple[int, int]:
     """Raster size of the region on the UTM grid of ``res`` metres, snapped outward."""
     region = config.region
     try:
@@ -150,7 +149,7 @@ def _utm_raster(config: MapcvConfig, res: int) -> Tuple[int, int]:
     return max(1, rows), max(1, cols)
 
 
-def _pixel_size_m(crs: str, transform: Tuple[float, float, float, float, float, float]) -> float:
+def _pixel_size_m(crs: str, transform: tuple[float, float, float, float, float, float]) -> float:
     """Ground size of one pixel of a raster in ``crs``, in metres (at the raster's origin)."""
     from pyproj import CRS
 
@@ -163,8 +162,8 @@ def _pixel_size_m(crs: str, transform: Tuple[float, float, float, float, float, 
 
 
 def _geotiff_raster(
-    config: MapcvConfig, imagery: GeoTiffImageryConfig, warned: List[str]
-) -> Tuple[int, int, float, int, int, str]:
+    config: MapcvConfig, imagery: GeoTiffImageryConfig, warned: list[str]
+) -> tuple[int, int, float, int, int, str]:
     """Open the file's header and size the region's window: ``(height, width, metres per
     pixel, channels, bytes per value, description)``."""
     with warnings.catch_warnings(record=True) as caught:
@@ -199,7 +198,7 @@ def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
 
 
 def _summarize_label_raster(
-    config: MapcvConfig, labels: Union[RasterLabelsConfig, ContinuousLabelsConfig]
+    config: MapcvConfig, labels: RasterLabelsConfig | ContinuousLabelsConfig
 ) -> LabelSummary:
     """Open the label raster's header (no pixels are read) and check it covers the region."""
     from pyproj import Transformer
@@ -212,7 +211,7 @@ def _summarize_label_raster(
         return LabelSummary(labels.path, 0, classes, [f"label raster not found: {local}"])
     # The same checks generate makes (CRS, band, integer values for classes); the CRS
     # argument only matters for sampling, which planning does not do.
-    sampler: Union[LabelRasterSampler, ValueRasterSampler] = (
+    sampler: LabelRasterSampler | ValueRasterSampler = (
         LabelRasterSampler(labels, "EPSG:4326")
         if isinstance(labels, RasterLabelsConfig)
         else ValueRasterSampler(labels, "EPSG:4326")
@@ -226,7 +225,7 @@ def _summarize_label_raster(
         min(xs), min(ys), max(xs), max(ys), densify_pts=21
     )
     region = config.region
-    messages: List[str] = []
+    messages: list[str] = []
     if not box(west, south, east, north).intersects(
         box(region.west, region.south, region.east, region.north)
     ):
@@ -247,7 +246,7 @@ def _summarize_label_raster(
     return LabelSummary(labels.path, 0, classes, messages, raster=description)
 
 
-def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
+def summarize_labels(config: MapcvConfig) -> LabelSummary | None:
     """Parse the configured label file and summarize it, or ``None`` without labels.
 
     For ``task: change`` with ``change.before`` and ``change.after``, both sets are
@@ -325,7 +324,7 @@ class _SourceSize:
 
     height: int
     width: int
-    tiles: Optional[int]
+    tiles: int | None
     resolution: float
     channels: int
     bytes_per_value: int
@@ -333,7 +332,7 @@ class _SourceSize:
     chunk_rows: int
 
 
-def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: List[str]) -> _SourceSize:
+def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) -> _SourceSize:
     region = config.region
     if isinstance(imagery, XYZImageryConfig):
         height, width, tiles = _xyz_raster(config, imagery)
@@ -414,14 +413,14 @@ def plan(config: MapcvConfig) -> Plan:
     """
     region = config.region
     region_km = region_size_km(region.west, region.south, region.east, region.north)
-    plan_warnings: List[str] = []
+    plan_warnings: list[str] = []
     patch_size = config.sampler.patch_size
 
     sizes = [_source_size(config, imagery, plan_warnings) for imagery in config.sources]
     primary = sizes[0]
     height, width, resolution = primary.height, primary.width, primary.resolution
     tile_counts = [size.tiles for size in sizes if size.tiles is not None]
-    tiles: Optional[int] = sum(tile_counts) if tile_counts else None
+    tiles: int | None = sum(tile_counts) if tile_counts else None
     download = tiles * _XYZ_TILE_BYTES if tiles is not None else None
     if config.multi_source:
         description = "; ".join(

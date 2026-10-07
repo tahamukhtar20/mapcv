@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -12,7 +13,7 @@ from mapcv.imagery import RasterMetadata
 from mapcv.labels import ClassMap
 from mapcv.manifest import TargetRecord
 
-Transform = Tuple[float, float, float, float, float, float]
+Transform = tuple[float, float, float, float, float, float]
 
 # One patch's target (a mask patch for segmentation, a list of boxes for detection, ...),
 # and all kept patches of a chunk in the form the writer consumes. Only the target and
@@ -33,7 +34,7 @@ class WindowTarget(Protocol):
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> Annotation:
         """The target of the ``patch_size`` square whose top-left pixel is ``(row, col)``.
 
@@ -52,7 +53,7 @@ class Target(Protocol):
     """What the dataset learns: parses its inputs once, then annotates patches per window."""
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         """The manifest's ``target.type`` (``"segmentation"``), or ``None`` for no target.
 
         Known before :meth:`prepare`, so writers can be checked up front.
@@ -68,7 +69,7 @@ class Target(Protocol):
         Raises on invalid inputs and warns when they cannot match the imagery.
         """
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """The manifest's ``target`` block, or ``None``; a resumed run must reproduce it.
 
         Valid after :meth:`prepare`.
@@ -79,7 +80,7 @@ class Target(Protocol):
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         """Bind the target to a ``height`` x ``width`` window.
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 from typing import Any
+
+import pytest
+
 from mapcv._mapcv_rs import TileIndex, fetch_tiles
 
 # Minimal valid PNG signatures followed by distinct payloads; the fetcher only

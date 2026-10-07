@@ -27,8 +27,8 @@ segmentation target, vector or label raster, so there is no second rasterization
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -52,7 +52,7 @@ from mapcv.targets.segmentation import SegmentationTarget
 DEFAULT_CLASS = "object"
 
 
-def class_names(class_map: ClassMap) -> Dict[int, str]:
+def class_names(class_map: ClassMap) -> dict[int, str]:
     """Class ID to name, ascending by ID; ``{1: "object"}`` without a class map."""
     if not class_map:
         return {1: DEFAULT_CLASS}
@@ -70,8 +70,8 @@ class PatchLabels:
     patch's side (for ``sampler.min_label_ratio``).
     """
 
-    coverage: Dict[int, float]
-    labels: Tuple[int, ...]
+    coverage: dict[int, float]
+    labels: tuple[int, ...]
     labeled_pixels: int
     patch_size: int
 
@@ -86,7 +86,7 @@ class ClassificationWindow:
     def __init__(
         self,
         mask: npt.NDArray[np.uint8],
-        ignore_index: Optional[int],
+        ignore_index: int | None,
         options: ClassificationOptions,
     ) -> None:
         self._mask = mask
@@ -99,7 +99,7 @@ class ClassificationWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> PatchLabels:
         """The labels of the patch whose top-left pixel is window pixel ``(row, col)``."""
         height, width = self._mask.shape
@@ -122,7 +122,7 @@ class ClassificationWindow:
 
         options = self._options
         qualifying = [cid for cid, share in coverage.items() if share >= options.min_fraction]
-        labels: Tuple[int, ...]
+        labels: tuple[int, ...]
         if options.mode == "single":
             # ``present`` ascends, so max() keeps the lowest class ID among equal counts.
             best = max(qualifying, key=lambda cid: counts[cid], default=None)
@@ -144,7 +144,7 @@ class ClassificationWindow:
             return False
         return bool(annotation.labels)
 
-    def collate(self, annotations: Sequence[PatchLabels], patch_size: int) -> List[PatchLabels]:
+    def collate(self, annotations: Sequence[PatchLabels], patch_size: int) -> list[PatchLabels]:
         """The kept patches' annotations, in patch order."""
         return list(annotations)
 
@@ -153,18 +153,18 @@ class ClassificationTarget:
     """Patch labels from label coverage (``task: classification``); see the module docs."""
 
     def __init__(
-        self, labels: Union[LabelsConfig, RasterLabelsConfig], options: ClassificationOptions
+        self, labels: LabelsConfig | RasterLabelsConfig, options: ClassificationOptions
     ) -> None:
         self._labels = labels
         self._options = options
-        self._inner: Union[SegmentationTarget, RasterSegmentationTarget] = (
+        self._inner: SegmentationTarget | RasterSegmentationTarget = (
             RasterSegmentationTarget(labels)
             if isinstance(labels, RasterLabelsConfig)
             else SegmentationTarget(labels)
         )
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "classification"
 
     @property
@@ -182,7 +182,7 @@ class ClassificationTarget:
         if problem is not None:
             raise ValueError(problem)
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """The segmentation target's record (class map, ignore value, label settings and a
         hash or fingerprint of the label file) as a classification record with its options."""
         inner = self._inner.record()
@@ -201,7 +201,7 @@ class ClassificationTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         inner = self._inner.window(transform, height, width, valid_mask)
         if isinstance(inner, MaskWindow):
@@ -214,9 +214,9 @@ class ClassificationTarget:
 
 __all__ = [
     "BACKGROUND_LABEL",
+    "DEFAULT_CLASS",
     "ClassificationTarget",
     "ClassificationWindow",
-    "DEFAULT_CLASS",
     "PatchLabels",
     "class_names",
 ]

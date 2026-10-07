@@ -13,8 +13,9 @@ import struct
 import threading
 import time
 import zlib
+from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -59,8 +60,8 @@ def _png(
     samples: npt.NDArray[Any],
     color_type: int,
     depth: int,
-    palette: Optional[npt.NDArray[Any]] = None,
-    trns: Optional[bytes] = None,
+    palette: npt.NDArray[Any] | None = None,
+    trns: bytes | None = None,
     interlace: bool = False,
 ) -> bytes:
     """Write a PNG of any colour type and bit depth (Pillow cannot write most of them)."""
@@ -106,7 +107,7 @@ def _encode(image: Image.Image, fmt: str, **options: Any) -> bytes:
     return buffer.getvalue()
 
 
-def _png_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
+def _png_cases(kind: str) -> Iterator[tuple[str, bytes]]:
     rgb = _content(kind)
     gray, alpha = rgb[..., 0], rgb[..., 1]
     rng = np.random.default_rng(7)
@@ -136,7 +137,7 @@ def _png_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
     yield "png-pillow-p", _encode(Image.fromarray(rgb).quantize(64), "PNG")
 
 
-def _other_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
+def _other_cases(kind: str) -> Iterator[tuple[str, bytes]]:
     rgb = _content(kind)
     image = Image.fromarray(rgb)
     rgba = Image.fromarray(np.dstack([rgb, rgb[..., 1]]))
@@ -166,7 +167,7 @@ RUST_CASES = [
 ]
 
 
-def _jpeg_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
+def _jpeg_cases(kind: str) -> Iterator[tuple[str, bytes]]:
     image = Image.fromarray(_content(kind))
     for quality in (50, 75, 95):
         for subsampling in (0, 1, 2):
@@ -180,7 +181,7 @@ def _jpeg_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
     yield "jpeg-cmyk", _encode(image.convert("CMYK"), "JPEG", quality=85)
 
 
-def _pillow_only_cases(kind: str) -> Iterator[Tuple[str, bytes]]:
+def _pillow_only_cases(kind: str) -> Iterator[tuple[str, bytes]]:
     rgb = _content(kind)
     for name, color_type, channels in (
         ("l16", 0, 1),
@@ -273,11 +274,11 @@ def test_gif_frames_that_do_not_fill_the_screen_are_left_to_pillow() -> None:
 
 
 def _reference_window(
-    tiles: Dict[Tuple[int, int], bytes],
-    origin: Tuple[int, int],
-    rows: Tuple[int, int],
-    cols: Tuple[int, int],
-) -> Tuple[U8, npt.NDArray[np.bool_]]:
+    tiles: dict[tuple[int, int], bytes],
+    origin: tuple[int, int],
+    rows: tuple[int, int],
+    cols: tuple[int, int],
+) -> tuple[U8, npt.NDArray[np.bool_]]:
     """``read_window`` as it was before the Rust decoder: Pillow, one tile at a time."""
     height, width = rows[1] - rows[0], cols[1] - cols[0]
     window = np.zeros((height, width, 3), dtype=np.uint8)
@@ -297,7 +298,7 @@ def _reference_window(
 
 
 def _source(
-    monkeypatch: pytest.MonkeyPatch, grid: List[TileIndex], payloads: Dict[Tuple[int, int], bytes]
+    monkeypatch: pytest.MonkeyPatch, grid: list[TileIndex], payloads: dict[tuple[int, int], bytes]
 ) -> XYZRasterSource:
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
@@ -316,7 +317,7 @@ def _source(
     return XYZRasterSource(region, XYZImageryConfig(zoom=12, source="esri_satellite"))
 
 
-def _mixed_grid() -> Tuple[List[TileIndex], Dict[Tuple[int, int], bytes]]:
+def _mixed_grid() -> tuple[list[TileIndex], dict[tuple[int, int], bytes]]:
     """4x3 tiles at (20, 30): PNG, WebP, JPEG and 16-bit PNG, one black, one missing."""
     rng = np.random.default_rng(11)
     grid = [TileIndex(x, y, 12) for y in range(30, 33) for x in range(20, 24)]
@@ -327,7 +328,7 @@ def _mixed_grid() -> Tuple[List[TileIndex], Dict[Tuple[int, int], bytes]]:
         lambda a: _png(a.astype(np.int64) * 257, 2, 16),
         lambda a: _encode(Image.fromarray(a).quantize(32), "GIF"),
     ]
-    payloads: Dict[Tuple[int, int], bytes] = {}
+    payloads: dict[tuple[int, int], bytes] = {}
     for index, tile in enumerate(grid):
         pixels = _content("photo") if index % 2 else _content("noise")
         payloads[(tile.x, tile.y)] = makers[index % len(makers)](np.roll(pixels, index, axis=0))
@@ -352,7 +353,7 @@ def _mixed_grid() -> Tuple[List[TileIndex], Dict[Tuple[int, int], bytes]]:
     ],
 )
 def test_read_window_matches_the_pillow_implementation(
-    monkeypatch: pytest.MonkeyPatch, rows: Tuple[int, int], cols: Tuple[int, int]
+    monkeypatch: pytest.MonkeyPatch, rows: tuple[int, int], cols: tuple[int, int]
 ) -> None:
     grid, payloads = _mixed_grid()
     source = _source(monkeypatch, grid, payloads)

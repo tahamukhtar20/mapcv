@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import threading
 import urllib.parse
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any
 
 import numpy as np
 import pytest
@@ -24,25 +25,25 @@ from mapcv.config import LabelsConfig, MapcvConfig, OsmLabelsSource
 from mapcv.osm import ATTRIBUTION, features_from_overpass, osm_labels_file, overpass_query
 
 pytest.importorskip("rasterio", reason="masks are compared with rasterio")
-from test_multi_source import PATCH, reference_transform, region_inside, write_raster  # noqa: E402
+from test_multi_source import PATCH, reference_transform, region_inside, write_raster
 
 WIDTH, HEIGHT = 320, 256
 
 
-def _ll(points: List[Tuple[float, float]]) -> List[Dict[str, float]]:
+def _ll(points: list[tuple[float, float]]) -> list[dict[str, float]]:
     return [{"lon": lon, "lat": lat} for lon, lat in points]
 
 
-def _rect(west: float, south: float, east: float, north: float) -> List[Tuple[float, float]]:
+def _rect(west: float, south: float, east: float, north: float) -> list[tuple[float, float]]:
     return [(west, south), (east, south), (east, north), (west, north), (west, south)]
 
 
 class Overpass:
-    def __init__(self, region: Dict[str, float]) -> None:
+    def __init__(self, region: dict[str, float]) -> None:
         w, s = region["west"], region["south"]
         dx, dy = region["east"] - w, region["north"] - s
 
-        def at(fx: float, fy: float) -> Tuple[float, float]:
+        def at(fx: float, fy: float) -> tuple[float, float]:
             return (w + fx * dx, s + fy * dy)
 
         self.house = _rect(*at(0.1, 0.1), *at(0.3, 0.4))
@@ -91,12 +92,12 @@ class Overpass:
                 "tags": {"building": "kiosk"},
             },
         ]
-        self.queries: List[str] = []
+        self.queries: list[str] = []
         self.status = 200
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:
                 body = self.rfile.read(int(self.headers["Content-Length"])).decode()
                 owner.queries.append(urllib.parse.parse_qs(body)["data"][0])
                 if owner.status != 200:
@@ -124,12 +125,12 @@ class Overpass:
 
 
 @pytest.fixture
-def region() -> Dict[str, float]:
+def region() -> dict[str, float]:
     return region_inside(reference_transform(), WIDTH, HEIGHT, margin=0.0)
 
 
 @pytest.fixture
-def overpass(region: Dict[str, float]) -> Iterator[Overpass]:
+def overpass(region: dict[str, float]) -> Iterator[Overpass]:
     served = Overpass(region)
     yield served
     served.server.shutdown()
@@ -144,7 +145,7 @@ CLASSES = [
 
 
 def _config(
-    tmp_path: Path, region: Dict[str, float], overpass: Overpass, **labels: Any
+    tmp_path: Path, region: dict[str, float], overpass: Overpass, **labels: Any
 ) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
@@ -158,7 +159,7 @@ def _config(
 
 
 def test_query_classes_and_shapes(
-    tmp_path: Path, region: Dict[str, float], overpass: Overpass
+    tmp_path: Path, region: dict[str, float], overpass: Overpass
 ) -> None:
     labels = _config(tmp_path, region, overpass).labels
     assert isinstance(labels, LabelsConfig) and labels.osm is not None
@@ -190,7 +191,7 @@ def test_query_classes_and_shapes(
 
 
 def test_the_answer_is_cached_with_its_provenance(
-    tmp_path: Path, region: Dict[str, float], overpass: Overpass
+    tmp_path: Path, region: dict[str, float], overpass: Overpass
 ) -> None:
     labels = _config(tmp_path, region, overpass).labels
     assert isinstance(labels, LabelsConfig) and labels.osm is not None
@@ -204,7 +205,7 @@ def test_the_answer_is_cached_with_its_provenance(
     assert osm_labels_file(other) != first and len(overpass.queries) == 2
 
 
-def test_failures(tmp_path: Path, region: Dict[str, float], overpass: Overpass) -> None:
+def test_failures(tmp_path: Path, region: dict[str, float], overpass: Overpass) -> None:
     labels = _config(tmp_path, region, overpass).labels
     assert isinstance(labels, LabelsConfig) and labels.osm is not None
     overpass.status = 429
@@ -212,7 +213,7 @@ def test_failures(tmp_path: Path, region: Dict[str, float], overpass: Overpass) 
         osm_labels_file(labels.osm, tmp_path / "osm")
     overpass.status = 200
     overpass.elements = []
-    import mapcv.osm as osm
+    from mapcv import osm
 
     original = osm._fetch
     try:
@@ -224,7 +225,7 @@ def test_failures(tmp_path: Path, region: Dict[str, float], overpass: Overpass) 
 
 
 def test_a_mask_from_osm_labels(
-    tmp_path: Path, region: Dict[str, float], overpass: Overpass
+    tmp_path: Path, region: dict[str, float], overpass: Overpass
 ) -> None:
     from pyproj import Transformer
     from rasterio.features import rasterize
@@ -293,12 +294,12 @@ def test_a_mask_from_osm_labels(
         ({"osm": {"classes": CLASSES, "overpass_url": "http://overpass.example.org"}}, "https://"),
     ],
 )
-def test_config_refusals(labels: Dict[str, Any], message: str) -> None:
+def test_config_refusals(labels: dict[str, Any], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         LabelsConfig.model_validate(labels)
 
 
-def test_cli_card_and_mcp(tmp_path: Path, region: Dict[str, float], overpass: Overpass) -> None:
+def test_cli_card_and_mcp(tmp_path: Path, region: dict[str, float], overpass: Overpass) -> None:
     import yaml
     from typer.testing import CliRunner
 

@@ -8,7 +8,8 @@ first in the file).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence, Tuple, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -56,12 +57,12 @@ class AreaOfInterest:
         self._order = {name: index for index, name in reversed(list(enumerate(self._names)))}
         self._tree = shapely.STRtree(self._pixels)
 
-    def _boxes(self, anchors: Sequence[Tuple[int, int]], size: int) -> npt.NDArray[np.object_]:
+    def _boxes(self, anchors: Sequence[tuple[int, int]], size: int) -> npt.NDArray[np.object_]:
         rows = np.fromiter((row for row, _ in anchors), dtype=np.float64, count=len(anchors))
         cols = np.fromiter((col for _, col in anchors), dtype=np.float64, count=len(anchors))
         return cast(npt.NDArray[np.object_], shapely.box(cols, rows, cols + size, rows + size))
 
-    def keep(self, anchors: List[Tuple[int, int]], size: int) -> List[Tuple[int, int]]:
+    def keep(self, anchors: list[tuple[int, int]], size: int) -> list[tuple[int, int]]:
         """The anchors whose ``size`` x ``size`` patch overlaps a polygon, in order."""
         if not anchors:
             return []
@@ -74,7 +75,7 @@ class AreaOfInterest:
     def region_of(self, row: int, col: int, size: int) -> str:
         """The name of the region covering most of the patch at ``(row, col)``."""
         patch = shapely.box(col, row, col + size, row + size)
-        areas: Dict[str, float] = {}
+        areas: dict[str, float] = {}
         for index in self._tree.query(patch, predicate="intersects"):
             area = float(shapely.area(shapely.intersection(patch, self._pixels[index])))
             name = self._names[int(index)]
@@ -83,10 +84,10 @@ class AreaOfInterest:
             return ""
         return max(areas, key=lambda name: (areas[name], -self._order[name]))
 
-    def record(self) -> Dict[str, Any]:
+    def record(self) -> dict[str, Any]:
         """The manifest's ``region`` record: the file's hash and how regions are named."""
         assert self._region.path is not None
-        record: Dict[str, Any] = {"aoi_sha256": label_file_sha256(self._region.path)}
+        record: dict[str, Any] = {"aoi_sha256": label_file_sha256(self._region.path)}
         if self._region.name_field is not None:
             record["name_field"] = self._region.name_field
         if self._region.layer is not None:
@@ -94,18 +95,18 @@ class AreaOfInterest:
         return record
 
 
-def column_clusters(group: List[Tuple[int, int]], patch_size: int) -> List[List[Tuple[int, int]]]:
+def column_clusters(group: list[tuple[int, int]], patch_size: int) -> list[list[tuple[int, int]]]:
     """``group`` split where its columns leave a gap wider than two patches, so a chunk
     of far-apart polygons reads several small windows instead of one wide one. The
     anchors keep their order within each cluster; clusters go left to right."""
     columns = sorted({col for _, col in group})
-    cluster_of: Dict[int, int] = {}
+    cluster_of: dict[int, int] = {}
     cluster = 0
     for previous, column in zip([None, *columns], columns):
         if previous is not None and column - previous > 2 * patch_size:
             cluster += 1
         cluster_of[column] = cluster
-    clusters: List[List[Tuple[int, int]]] = [[] for _ in range(cluster + 1)]
+    clusters: list[list[tuple[int, int]]] = [[] for _ in range(cluster + 1)]
     for anchor in group:
         clusters[cluster_of[anchor[1]]].append(anchor)
     return clusters

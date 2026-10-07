@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 from shapely.geometry import MultiPolygon, Polygon
@@ -423,14 +423,14 @@ def test_transform_to_mercator_multipolygon() -> None:
 # Class IDs, label normalization, skipped features
 # ---------------------------------------------------------------------------
 
-_UNIT_SQUARE: List[List[List[int]]] = [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]
+_UNIT_SQUARE: list[list[list[int]]] = [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]
 
 
-def _collection(features: List[Dict[str, Any]], **extra: Any) -> bytes:
+def _collection(features: list[dict[str, Any]], **extra: Any) -> bytes:
     return json.dumps({"type": "FeatureCollection", "features": features, **extra}).encode()
 
 
-def _feature(value: Any, geometry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _feature(value: Any, geometry: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "type": "Feature",
         "properties": {"cls": value},

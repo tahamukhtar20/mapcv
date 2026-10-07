@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -21,16 +21,8 @@ from PIL import Image
 from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.data import MapcvDataset, _to_tensors, read_image, read_mask, splits_of  # noqa: E402
-from mapcv.export import export_hf_parquet, terratorch_config  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from mapcv.stats import write_stats  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio
+from test_multi_source import (
     PATCH,
     reference_transform,
     region_inside,
@@ -38,13 +30,21 @@ from test_multi_source import (  # noqa: E402
     write_raster,
 )
 
+from mapcv.cli import app
+from mapcv.config import MapcvConfig
+from mapcv.data import MapcvDataset, _to_tensors, read_image, read_mask, splits_of
+from mapcv.export import export_hf_parquet, terratorch_config
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
+from mapcv.stats import write_stats
+
 WIDTH, HEIGHT = 470, 400
 runner = CliRunner()
 ENV = {"COLUMNS": "200"}
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "multi.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=1)
     write_raster(tmp_path / "other.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=2)
@@ -53,8 +53,8 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     return {"region": region, "labels": write_labels(tmp_path, region_inside(ref, WIDTH, HEIGHT))}
 
 
-def _generate(tmp_path: Path, scene: Dict[str, Any], name: str, **changes: Any) -> Path:
-    data: Dict[str, Any] = {
+def _generate(tmp_path: Path, scene: dict[str, Any], name: str, **changes: Any) -> Path:
+    data: dict[str, Any] = {
         "region": scene["region"],
         "imagery": {"type": "geotiff", "path": str(tmp_path / "multi.tif")},
         "labels": {"path": str(scene["labels"]), "label_field": "kind", "classes": {"a": 1}},
@@ -83,7 +83,7 @@ def _rasterio(path: Path) -> npt.NDArray[Any]:
     return data
 
 
-def _split(root: Path, split: str) -> List[str]:
+def _split(root: Path, split: str) -> list[str]:
     return (root / "splits" / f"{split}.txt").read_text().split()
 
 
@@ -94,7 +94,7 @@ def _split(root: Path, split: str) -> List[str]:
     ("image_format", "mask_format"), [("tif", "tif"), ("png", "png"), ("npy", "npy")]
 )
 def test_items_match_the_files(
-    tmp_path: Path, scene: Dict[str, Any], image_format: str, mask_format: str
+    tmp_path: Path, scene: dict[str, Any], image_format: str, mask_format: str
 ) -> None:
     imagery = {"path": str(tmp_path / ("rgb.tif" if image_format == "png" else "multi.tif"))}
     root = _generate(
@@ -132,7 +132,7 @@ def test_items_match_the_files(
         assert "images" not in item and "labels" not in item
 
 
-def test_normalisation_uses_the_train_statistics(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_normalisation_uses_the_train_statistics(tmp_path: Path, scene: dict[str, Any]) -> None:
     root = _generate(tmp_path, scene, "d")
     raw = MapcvDataset(root, "test", as_tensors=False)
     computed = MapcvDataset(root, "test", normalize=True, as_tensors=False)  # no stats.json yet
@@ -147,7 +147,7 @@ def test_normalisation_uses_the_train_statistics(tmp_path: Path, scene: Dict[str
         assert stored[index]["image"].dtype == np.float32
 
 
-def test_splits_subsets_and_missing_lists(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_splits_subsets_and_missing_lists(tmp_path: Path, scene: dict[str, Any]) -> None:
     root = _generate(tmp_path, scene, "d")
     total = len(Manifest.load(root / "manifest.json").patches)
     assert len(MapcvDataset(root, "all", as_tensors=False)) == total
@@ -164,7 +164,7 @@ def test_splits_subsets_and_missing_lists(tmp_path: Path, scene: Dict[str, Any])
         MapcvDataset(plain, "train")
 
 
-def test_several_sources_and_stacks(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_several_sources_and_stacks(tmp_path: Path, scene: dict[str, Any]) -> None:
     sources = [
         {"type": "geotiff", "name": "t1", "path": str(tmp_path / "multi.tif")},
         {"type": "geotiff", "name": "t2", "path": str(tmp_path / "other.tif")},
@@ -197,7 +197,7 @@ def test_several_sources_and_stacks(tmp_path: Path, scene: Dict[str, Any]) -> No
     np.testing.assert_allclose(norm_b["image"][1], norm_a["images"]["t2"], rtol=1e-6)
 
 
-def test_classification_labels_and_detection_boxes(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_classification_labels_and_detection_boxes(tmp_path: Path, scene: dict[str, Any]) -> None:
     rgb = {"type": "geotiff", "path": str(tmp_path / "rgb.tif")}
     classes = _generate(
         tmp_path,
@@ -233,7 +233,7 @@ def test_classification_labels_and_detection_boxes(tmp_path: Path, scene: Dict[s
         labels=small,
         writer={"image_format": "png"},
     )
-    coco: Dict[str, List[Dict[str, Any]]] = {}
+    coco: dict[str, list[dict[str, Any]]] = {}
     for path in (boxes / "annotations").glob("instances_*.json"):
         doc = json.loads(path.read_text())
         files = {image["id"]: image["file_name"] for image in doc["images"]}
@@ -254,11 +254,11 @@ def test_classification_labels_and_detection_boxes(tmp_path: Path, scene: Dict[s
 
 
 def test_tensors_and_transforms(
-    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _generate(tmp_path, scene, "d")
     fake = SimpleNamespace(from_numpy=lambda array: ("tensor", array.dtype, array.shape))
-    seen: List[bool] = []
+    seen: list[bool] = []
     record = SimpleNamespace(from_numpy=lambda array: seen.append(array.flags.writeable))
     monkeypatch.setitem(sys.modules, "torch", record)
     read_only = np.zeros(3)
@@ -303,7 +303,7 @@ def test_read_helpers(tmp_path: Path) -> None:
 # ── Exports ──────────────────────────────────────────────────────────────────
 
 
-def test_hf_parquet_export(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_hf_parquet_export(tmp_path: Path, scene: dict[str, Any]) -> None:
     pq = pytest.importorskip("pyarrow.parquet")
     root = _generate(
         tmp_path,
@@ -338,7 +338,7 @@ def test_hf_parquet_export(tmp_path: Path, scene: Dict[str, Any]) -> None:
 
 
 def test_hf_parquet_classification_and_binary_columns(
-    tmp_path: Path, scene: Dict[str, Any]
+    tmp_path: Path, scene: dict[str, Any]
 ) -> None:
     pq = pytest.importorskip("pyarrow.parquet")
     root = _generate(
@@ -361,7 +361,7 @@ def test_hf_parquet_classification_and_binary_columns(
 
 
 def test_hf_parquet_needs_pyarrow(
-    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _generate(tmp_path, scene, "d")
     monkeypatch.setitem(sys.modules, "pyarrow", None)
@@ -369,7 +369,7 @@ def test_hf_parquet_needs_pyarrow(
         export_hf_parquet(root, tmp_path / "hf")
 
 
-def test_terratorch_config(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_terratorch_config(tmp_path: Path, scene: dict[str, Any]) -> None:
     root = _generate(tmp_path, scene, "d")
     _, stats = write_stats(root, "train")
     text = terratorch_config(root)
@@ -413,7 +413,7 @@ def test_terratorch_config(tmp_path: Path, scene: Dict[str, Any]) -> None:
         )
 
 
-def test_export_cli(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_export_cli(tmp_path: Path, scene: dict[str, Any]) -> None:
     root = _generate(tmp_path, scene, "d")
     result = runner.invoke(app, ["export", str(root), "--format", "terratorch"], env=ENV)
     assert result.exit_code == 0, result.output

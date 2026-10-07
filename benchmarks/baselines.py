@@ -54,7 +54,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class Workload:
     scenario: str
     tile_url: str  # XYZ template with {z}, {x}, {y}, served by the local tile server
     zoom: int
-    region: Tuple[float, float, float, float]  # west, south, east, north in degrees
+    region: tuple[float, float, float, float]  # west, south, east, north in degrees
     labels: Path  # GeoJSON, property "class" holds the class name
     patch_size: int
     stride: int
@@ -79,16 +79,16 @@ class Baseline(Protocol):
     # Data that differs from a reference baseline's is a mapcv problem.
     reference: bool
 
-    def command(self, work: Workload) -> List[str]:
+    def command(self, work: Workload) -> list[str]:
         """The command line to run (cwd is ``work.output_dir``'s parent)."""
         ...
 
-    def missing(self) -> Optional[str]:
+    def missing(self) -> str | None:
         """Why the baseline cannot run here (its tool is not installed), or ``None``."""
         ...
 
 
-BASELINES: Dict[str, Baseline] = {}
+BASELINES: dict[str, Baseline] = {}
 
 
 def register(baseline: Baseline) -> None:
@@ -99,7 +99,7 @@ def register(baseline: Baseline) -> None:
 _SCRIPTS = Path(__file__).resolve().parent / "baseline_scripts"
 
 
-def _arguments(work: Workload) -> List[str]:
+def _arguments(work: Workload) -> list[str]:
     """The arguments every baseline script takes, in order."""
     west, south, east, north = work.region
     return [
@@ -117,12 +117,15 @@ def _arguments(work: Workload) -> List[str]:
     ]
 
 
-def _missing_modules(python: str, modules: List[str]) -> Optional[str]:
+def _missing_modules(python: str, modules: list[str]) -> str | None:
     """Why ``python`` cannot import ``modules``, or ``None``."""
     if shutil.which(python) is None and not os.path.exists(python):
         return f"{python} not found"
     probe = subprocess.run(
-        [python, "-c", "import " + ", ".join(modules)], capture_output=True, text=True
+        [python, "-c", "import " + ", ".join(modules)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if probe.returncode != 0:
         lines = probe.stderr.strip().splitlines()
@@ -135,7 +138,7 @@ class _PythonScript:
 
     name = ""
     script = ""
-    modules: List[str] = []
+    modules: list[str] = []
     python_variable = ""
     reference = False
 
@@ -143,10 +146,10 @@ class _PythonScript:
     def python(self) -> str:
         return os.environ.get(self.python_variable, sys.executable)
 
-    def command(self, work: Workload) -> List[str]:
+    def command(self, work: Workload) -> list[str]:
         return [self.python, str(_SCRIPTS / self.script), *_arguments(work)]
 
-    def missing(self) -> Optional[str]:
+    def missing(self) -> str | None:
         return _missing_modules(self.python, self.modules)
 
 
@@ -166,7 +169,7 @@ class GdalCli(_PythonScript):
     script = "gdal_cli.py"
     reference = True
 
-    def missing(self) -> Optional[str]:
+    def missing(self) -> str | None:
         folder = os.environ.get("GDAL_BIN")
         for program in ("gdal_translate", "gdal_rasterize", "ogr2ogr"):
             if (shutil.which(program, path=folder) if folder else shutil.which(program)) is None:

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence, Tuple
-
-from typing_extensions import NotRequired, TypedDict
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import NotRequired, TypedDict
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
 from mapcv._patching import MaskWindow, NullWindow, extract_array_patch
@@ -35,7 +35,7 @@ class SamplerConfig(BaseModel):
     random_count: int = Field(default=100, ge=0)
 
     @model_validator(mode="after")
-    def _default_stride(self) -> "SamplerConfig":
+    def _default_stride(self) -> SamplerConfig:
         # stride=0 is the sentinel for "use patch_size" (non-overlapping grid).
         if self.stride == 0:
             self.stride = self.patch_size
@@ -51,14 +51,14 @@ class PatchMeta(TypedDict):
     empty_ratio: NotRequired[float]
 
 
-def random_anchors_for(height: int, width: int, config: SamplerConfig) -> List[Tuple[int, int]]:
+def random_anchors_for(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
     """Distinct random anchors for ``config``, warning when fewer than requested exist.
 
     Anchors are sampled without replacement, so ``random_count`` is capped at
     the number of distinct positions on the raster; asking for more returns
     all of them and emits a ``UserWarning`` saying so.
     """
-    anchors: List[Tuple[int, int]] = list(
+    anchors: list[tuple[int, int]] = list(
         random_sample_anchors(
             height,
             width,
@@ -89,9 +89,9 @@ def random_patch_capacity(height: int, width: int, config: SamplerConfig) -> int
 
 def sample_patches(
     image: npt.NDArray[Any],
-    mask: Optional[npt.NDArray[np.uint8]],
+    mask: npt.NDArray[np.uint8] | None,
     config: SamplerConfig,
-) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[np.uint8] | None, list[PatchMeta]]:
     """Sample fixed-size patches from an in-memory image.
 
     Anchors follow ``config`` (grid or random) over the whole image; emptiness
@@ -102,7 +102,7 @@ def sample_patches(
     height, width = image.shape[:2]
     ps = config.patch_size
     if config.mode == "random":
-        anchors: List[Tuple[int, int]] = random_anchors_for(height, width, config)
+        anchors: list[tuple[int, int]] = random_anchors_for(height, width, config)
     else:
         anchors = list(grid_sample_anchors(height, width, ps, config.stride, config.edge_strategy))
     return sample_patches_at_anchors(image, mask, anchors, config)
@@ -110,14 +110,14 @@ def sample_patches(
 
 def sample_annotated_patches(
     image: npt.NDArray[Any],
-    anchors: Sequence[Tuple[int, int]],
+    anchors: Sequence[tuple[int, int]],
     config: SamplerConfig,
     window: WindowTarget,
     *,
     row_offset: int = 0,
     col_offset: int = 0,
-    valid_mask: Optional[npt.NDArray[np.bool_]] = None,
-) -> Tuple[npt.NDArray[Any], List[Annotation], List[PatchMeta]]:
+    valid_mask: npt.NDArray[np.bool_] | None = None,
+) -> tuple[npt.NDArray[Any], list[Annotation], list[PatchMeta]]:
     """Extract configured patches at explicit local anchors, with their annotations.
 
     Each kept patch gets ``window.annotate(...)``; ``sampler.max_empty_ratio`` and
@@ -129,14 +129,14 @@ def sample_annotated_patches(
     offsets. When ``valid_mask`` is provided, its false pixels define imagery
     emptiness instead of treating numeric zero as NoData.
     """
-    image_patches: List[npt.NDArray[Any]] = []
-    annotations: List[Annotation] = []
-    metadata: List[PatchMeta] = []
+    image_patches: list[npt.NDArray[Any]] = []
+    annotations: list[Annotation] = []
+    metadata: list[PatchMeta] = []
     patch_size = config.patch_size
 
     for row, col in anchors:
         image_patch, padded = extract_array_patch(image, row, col, patch_size, config.pad_mode)
-        valid_patch: Optional[npt.NDArray[np.bool_]] = None
+        valid_patch: npt.NDArray[np.bool_] | None = None
         if valid_mask is not None:
             valid_patch, _ = extract_array_patch(valid_mask, row, col, patch_size, "zero")
 
@@ -175,15 +175,15 @@ def sample_annotated_patches(
 
 def sample_patches_at_anchors(
     image: npt.NDArray[Any],
-    mask: Optional[npt.NDArray[np.uint8]],
-    anchors: Sequence[Tuple[int, int]],
+    mask: npt.NDArray[np.uint8] | None,
+    anchors: Sequence[tuple[int, int]],
     config: SamplerConfig,
     *,
     row_offset: int = 0,
     col_offset: int = 0,
-    valid_mask: Optional[npt.NDArray[np.bool_]] = None,
-    ignore_index: Optional[int] = None,
-) -> Tuple[npt.NDArray[Any], Optional[npt.NDArray[np.uint8]], List[PatchMeta]]:
+    valid_mask: npt.NDArray[np.bool_] | None = None,
+    ignore_index: int | None = None,
+) -> tuple[npt.NDArray[Any], npt.NDArray[np.uint8] | None, list[PatchMeta]]:
     """Extract configured patches at explicit local anchors.
 
     Metadata coordinates are translated to the global raster using the supplied

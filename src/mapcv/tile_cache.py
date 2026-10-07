@@ -26,10 +26,10 @@ import struct
 import sys
 import time
 import warnings
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Tuple
 
 CACHE_ENV = "MAPCV_CACHE_DIR"
 DEFAULT_TTL = 7 * 24 * 3600.0
@@ -38,7 +38,7 @@ _HEADER = struct.Struct(">dQ")  # expiry (Unix seconds), payload length
 _SUFFIX = ".tile"
 
 # ``(cache_control, expires, date, age)`` of a tile response, each ``None`` when absent.
-CacheHeaders = Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]
+CacheHeaders = tuple[str | None, str | None, str | None, str | None]
 
 
 def cache_dir() -> Path:
@@ -60,7 +60,7 @@ def tiles_dir() -> Path:
     return cache_dir() / "tiles"
 
 
-def _http_time(value: Optional[str]) -> Optional[float]:
+def _http_time(value: str | None) -> float | None:
     if not value:
         return None
     try:
@@ -72,7 +72,7 @@ def _http_time(value: Optional[str]) -> Optional[float]:
     return parsed.timestamp()
 
 
-def freshness_lifetime(headers: CacheHeaders, now: float) -> Optional[float]:
+def freshness_lifetime(headers: CacheHeaders, now: float) -> float | None:
     """Seconds a response stays fresh from ``now``; ``None`` if it must not be cached.
 
     Without ``Cache-Control: max-age`` or ``Expires``, :data:`DEFAULT_TTL`.
@@ -89,7 +89,7 @@ def freshness_lifetime(headers: CacheHeaders, now: float) -> Optional[float]:
         current_age = max(0.0, float(age)) if age else 0.0
     except ValueError:
         current_age = 0.0
-    lifetime: Optional[float] = None
+    lifetime: float | None = None
     if "max-age" in directives:
         try:
             lifetime = float(int(directives["max-age"]))
@@ -120,7 +120,7 @@ def _tile_files(root: Path) -> Iterator[Path]:
         yield from (path for path in root.rglob(f"*{_SUFFIX}") if path.is_file())
 
 
-def _expiry(path: Path) -> Optional[float]:
+def _expiry(path: Path) -> float | None:
     try:
         with path.open("rb") as handle:
             head = handle.read(len(_MAGIC) + _HEADER.size)
@@ -132,7 +132,7 @@ def _expiry(path: Path) -> Optional[float]:
     return float(expiry)
 
 
-def usage(now: Optional[float] = None) -> CacheUsage:
+def usage(now: float | None = None) -> CacheUsage:
     """Count the cached tiles, the expired ones among them and their size on disk."""
     now = time.time() if now is None else now
     found = CacheUsage(tiles_dir())
@@ -148,7 +148,7 @@ def usage(now: Optional[float] = None) -> CacheUsage:
     return found
 
 
-def clear(expired_only: bool = False, now: Optional[float] = None) -> int:
+def clear(expired_only: bool = False, now: float | None = None) -> int:
     """Delete cached tiles (only the expired ones with ``expired_only``); returns how many."""
     now = time.time() if now is None else now
     root = tiles_dir()
@@ -179,8 +179,8 @@ class TileCache:
     def __init__(
         self,
         url_template: str,
-        root: Optional[Path] = None,
-        clock: Optional[Callable[[], float]] = None,
+        root: Path | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         key = hashlib.sha256(url_template.encode("utf-8")).hexdigest()[:24]
         self.folder = (root if root is not None else tiles_dir()) / key
@@ -190,7 +190,7 @@ class TileCache:
     def _path(self, x: int, y: int, z: int) -> Path:
         return self.folder / str(z) / str(x) / f"{y}{_SUFFIX}"
 
-    def get(self, x: int, y: int, z: int) -> Optional[bytes]:
+    def get(self, x: int, y: int, z: int) -> bytes | None:
         """The tile's bytes if it is cached and still fresh, else ``None``."""
         try:
             data = self._path(x, y, z).read_bytes()

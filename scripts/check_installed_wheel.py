@@ -8,7 +8,6 @@ import sys
 import zipfile
 from importlib import metadata
 from pathlib import Path
-from typing import Optional
 
 
 def record_hash(data: bytes) -> str:
@@ -17,7 +16,7 @@ def record_hash(data: bytes) -> str:
     return "sha256=" + digest.decode()
 
 
-def find_wheel(wheel_dir: Path, path: str, digest: str) -> Optional[Path]:
+def find_wheel(wheel_dir: Path, path: str, digest: str) -> Path | None:
     """Return the wheel in ``wheel_dir`` whose RECORD lists ``path`` with ``digest``."""
     for wheel in sorted(wheel_dir.glob("mapcv-*.whl")):
         with zipfile.ZipFile(wheel) as zf:

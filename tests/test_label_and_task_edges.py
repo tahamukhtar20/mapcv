@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pytest
@@ -17,11 +17,16 @@ from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write rasters with rasterio")
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.config import ContinuousLabelsConfig, LabelsConfig, MapcvConfig, RegionConfig  # noqa: E402
-from mapcv.labels import load_vector_labels  # noqa: E402
-from mapcv.targets import create_target  # noqa: E402
-from mapcv.targets.regression import RegressionTarget, ValueWindow  # noqa: E402
+from mapcv.cli import app
+from mapcv.config import (
+    ContinuousLabelsConfig,
+    LabelsConfig,
+    MapcvConfig,
+    RegionConfig,
+)
+from mapcv.labels import load_vector_labels
+from mapcv.targets import create_target
+from mapcv.targets.regression import RegressionTarget, ValueWindow
 
 runner = CliRunner()
 ENV = {"COLUMNS": "220"}
@@ -29,7 +34,7 @@ XYZ = {"type": "xyz", "zoom": 15, "source": "esri_satellite"}
 REGION = {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31}
 
 
-def _geojson(path: Path, *geometries: Any, props: Dict[str, Any] | None = None) -> Path:
+def _geojson(path: Path, *geometries: Any, props: dict[str, Any] | None = None) -> Path:
     features = [
         {"type": "Feature", "properties": dict(props or {}), "geometry": g.__geo_interface__}
         for g in geometries
@@ -38,7 +43,7 @@ def _geojson(path: Path, *geometries: Any, props: Dict[str, Any] | None = None) 
     return path
 
 
-def _base(tmp_path: Path, **extra: Any) -> Dict[str, Any]:
+def _base(tmp_path: Path, **extra: Any) -> dict[str, Any]:
     return {
         "region": REGION,
         "imagery": XYZ,
@@ -142,7 +147,7 @@ def test_values_below_valid_min_and_nan_nodata_have_no_target(tmp_path: Path) ->
         ({"files": [{"path": "a.geojson", "class": "  "}]}, "non-empty name"),
     ],
 )
-def test_more_config_refusals(tmp_path: Path, labels: Dict[str, Any], message: str) -> None:
+def test_more_config_refusals(tmp_path: Path, labels: dict[str, Any], message: str) -> None:
     task = "regression" if labels.get("type") == "continuous" else "segmentation"
     with pytest.raises(ValidationError) as raised:
         MapcvConfig.model_validate(_base(tmp_path, task=task, labels=labels))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -38,7 +38,7 @@ writer:
 """
 
 
-def _write_config(tmp_path: Path, staging: Optional[Path] = None) -> Path:
+def _write_config(tmp_path: Path, staging: Path | None = None) -> Path:
     staging = staging or tmp_path / "output"
     p = tmp_path / "config.yaml"
     p.write_text(_VALID_CONFIG.format(staging_dir=staging))

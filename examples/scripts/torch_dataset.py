@@ -37,8 +37,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -52,7 +53,7 @@ else:
     except ImportError:  # torch is optional
         _Base = object
 
-Sample = Dict[str, Any]
+Sample = dict[str, Any]
 Transform = Callable[[Sample], Sample]
 
 
@@ -69,16 +70,16 @@ class MapcvDataset(_Base):
 
     def __init__(
         self,
-        root: Union[str, Path],
-        split: Optional[str] = "train",
-        transform: Optional[Transform] = None,
+        root: str | Path,
+        split: str | None = "train",
+        transform: Transform | None = None,
     ) -> None:
         self.root = Path(root)
         self.transform = transform
         manifest_path = self.root / "manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(f"{manifest_path} not found; run `mapcv generate` first")
-        self.manifest: Dict[str, Any] = json.loads(manifest_path.read_text())
+        self.manifest: dict[str, Any] = json.loads(manifest_path.read_text())
         version = self.manifest.get("version", 1)
         if version != 3:
             raise ValueError(
@@ -87,15 +88,15 @@ class MapcvDataset(_Base):
                 "mapcv.Manifest.load(path).save(path)"
             )
 
-        target: Dict[str, Any] = self.manifest.get("target") or {}
-        class_map: Dict[str, int] = target.get("class_map") or {}
+        target: dict[str, Any] = self.manifest.get("target") or {}
+        class_map: dict[str, int] = target.get("class_map") or {}
         # Mask value of pixels without imagery; pass it to the loss as ignore_index.
-        self.ignore_index: Optional[int] = target.get("ignore_index")
-        patches: List[Dict[str, Any]] = self.manifest["patches"]
+        self.ignore_index: int | None = target.get("ignore_index")
+        patches: list[dict[str, Any]] = self.manifest["patches"]
         # Without labels.label_field every polygon is class 1 and class_map is empty.
         if not class_map and self.manifest.get("target"):
             class_map = {"foreground": 1}
-        self.class_names: Dict[int, str] = {0: "background"}
+        self.class_names: dict[int, str] = {0: "background"}
         self.class_names.update({class_id: name for name, class_id in class_map.items()})
         self.num_classes = max(self.class_names) + 1
 
@@ -114,7 +115,7 @@ class MapcvDataset(_Base):
         return len(self.patches)
 
     def __getitem__(self, index: int) -> Sample:
-        files: Dict[str, str] = self.patches[index]["files"]
+        files: dict[str, str] = self.patches[index]["files"]
         sample: Sample = {
             "image": self.load_image(files["image"]),
             "filename": Path(files["image"]).name,
@@ -140,9 +141,9 @@ class MapcvDataset(_Base):
         with Image.open(self.root / path_in_dataset) as mask:
             return np.asarray(mask, dtype=np.int64)
 
-    def class_pixel_counts(self) -> Dict[str, int]:
+    def class_pixel_counts(self) -> dict[str, int]:
         """Pixels per class name in this split, from the manifest (no images read)."""
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for patch in self.patches:
             for class_id, pixels in patch["summary"].get("class_pixels", {}).items():
                 if int(class_id) == self.ignore_index:

@@ -18,9 +18,10 @@ import hashlib
 import json
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -60,9 +61,9 @@ SPLIT_NAMES = ("train", "val", "test")
 class CheckReport:
     """Outcome of :func:`check_dataset`."""
 
-    stats: Dict[str, Any] = field(default_factory=dict)
-    problems: List[str] = field(default_factory=list)
-    skipped: List[str] = field(default_factory=list)
+    stats: dict[str, Any] = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
 
 
 def tree_hash(dataset: Path) -> str:
@@ -74,7 +75,7 @@ def tree_hash(dataset: Path) -> str:
     digest = hashlib.sha256()
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
     digest.update(json.dumps(manifest, sort_keys=True).encode())
-    files: List[Path] = []
+    files: list[Path] = []
     for sub in ("Images", "Masks", "splits"):
         files.extend(sorted(path for path in (dataset / sub).rglob("*") if path.is_file()))
     for path in files:
@@ -111,7 +112,7 @@ def _load_array(path: Path) -> npt.NDArray[Any]:
         return np.asarray(image)
 
 
-def _expected_transform() -> Tuple[float, float, float]:
+def _expected_transform() -> tuple[float, float, float]:
     """(pixel size, west, north) in EPSG:3857 of the raster whose first tile is (X0, Y0)."""
     pixel = 2 * ORIGIN / (TILE * 2**ZOOM)
     return pixel, -ORIGIN + X0 * TILE * pixel, ORIGIN - Y0 * TILE * pixel
@@ -120,7 +121,7 @@ def _expected_transform() -> Tuple[float, float, float]:
 class _MaskReference:
     """Reference masks: labels reprojected with pyproj, burned with rasterio."""
 
-    def __init__(self, geometries: Sequence[Tuple[Polygon, int]]) -> None:
+    def __init__(self, geometries: Sequence[tuple[Polygon, int]]) -> None:
         import shapely
 
         to_mercator = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
@@ -157,13 +158,13 @@ class _MaskReference:
 def check_dataset(
     scenario: Scenario,
     dataset: Path,
-    geometries: Sequence[Tuple[Polygon, int]],
+    geometries: Sequence[tuple[Polygon, int]],
 ) -> CheckReport:
     """Validate ``dataset`` against everything the scenario lets us derive independently."""
     report = CheckReport()
     problems = report.problems
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
-    entries: List[Dict[str, Any]] = manifest["patches"]
+    entries: list[dict[str, Any]] = manifest["patches"]
 
     if scenario.fail_every:
         failing = sum(
@@ -178,7 +179,7 @@ def check_dataset(
     if problems:
         return report  # later checks index into the files the manifest promised
 
-    reference: Optional[_MaskReference] = None
+    reference: _MaskReference | None = None
     if HAVE_MASK_REFERENCE:
         reference = _MaskReference(geometries)
     else:
@@ -254,8 +255,8 @@ def check_dataset(
 def _check_manifest(
     scenario: Scenario,
     dataset: Path,
-    manifest: Dict[str, Any],
-    entries: List[Dict[str, Any]],
+    manifest: dict[str, Any],
+    entries: list[dict[str, Any]],
     report: CheckReport,
 ) -> None:
     problems = report.problems
@@ -309,7 +310,7 @@ def _check_manifest(
 
 
 def _overlapping(
-    patch: Tuple[int, int], held: Dict[Tuple[int, int], List[Tuple[int, int]]]
+    patch: tuple[int, int], held: dict[tuple[int, int], list[tuple[int, int]]]
 ) -> bool:
     """Whether ``patch`` shares a pixel with any patch in the bucketed ``held`` set."""
     row, col = patch
@@ -321,15 +322,15 @@ def _overlapping(
     return False
 
 
-def _bucket(positions: Sequence[Tuple[int, int]]) -> Dict[Tuple[int, int], List[Tuple[int, int]]]:
-    buckets: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+def _bucket(positions: Sequence[tuple[int, int]]) -> dict[tuple[int, int], list[tuple[int, int]]]:
+    buckets: dict[tuple[int, int], list[tuple[int, int]]] = {}
     for row, col in positions:
         buckets.setdefault((row // PATCH, col // PATCH), []).append((row, col))
     return buckets
 
 
 def _check_splits(
-    scenario: Scenario, dataset: Path, entries: List[Dict[str, Any]], report: CheckReport
+    scenario: Scenario, dataset: Path, entries: list[dict[str, Any]], report: CheckReport
 ) -> None:
     problems = report.problems
     # Split lists name a patch by its image's file name.
@@ -337,7 +338,7 @@ def _check_splits(
         entry["files"]["image"].rsplit("/", 1)[-1]: (entry["row"], entry["col"])
         for entry in entries
     }
-    lists: Dict[str, List[str]] = {}
+    lists: dict[str, list[str]] = {}
     for name in SPLIT_NAMES:
         text = (dataset / "splits" / f"{name}.txt").read_text(encoding="utf-8")
         if text and not text.endswith("\n"):
@@ -348,7 +349,7 @@ def _check_splits(
             problems.append(f"{name}.txt names {len(unknown)} files that are not in the manifest")
         if len(set(lists[name])) != len(lists[name]):
             problems.append(f"{name}.txt lists a patch twice")
-    sets: Dict[str, Set[str]] = {name: set(lines) for name, lines in lists.items()}
+    sets: dict[str, set[str]] = {name: set(lines) for name, lines in lists.items()}
     for first, second in (("train", "val"), ("train", "test"), ("val", "test")):
         shared = sets[first] & sets[second]
         if shared:
@@ -375,7 +376,7 @@ def _check_splits(
 
 def compare_with_mapcv(
     dataset: Path, baseline: Path, compare_images: bool = True
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compare a baseline's ``images/r<row>_c<col>.png`` and ``masks/...`` with mapcv's
     patches at the same place. Images must match exactly (``compare_images=False`` for
     lossy mapcv output, such as JPEG patches); masks may differ on a few edge pixels,
@@ -422,7 +423,7 @@ def compare_with_mapcv(
     }
 
 
-def _libjpeg_error(pixels: npt.NDArray[np.uint8], settings: Dict[str, int]) -> float:
+def _libjpeg_error(pixels: npt.NDArray[np.uint8], settings: dict[str, int]) -> float:
     """Mean absolute error of libjpeg (Pillow) encoding ``pixels`` with ``settings``."""
     import io
 

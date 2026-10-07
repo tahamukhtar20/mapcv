@@ -12,7 +12,7 @@ import json
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
@@ -20,18 +20,24 @@ from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
 
-from mapcv.cli import app  # noqa: E402
-from mapcv.data import MapcvDataset  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.shards import export_webdataset, export_zarr  # noqa: E402
-from test_data_and_export import HEIGHT, WIDTH, _generate  # noqa: E402
-from test_multi_source import reference_transform, region_inside, write_labels, write_raster  # noqa: E402
+from test_data_and_export import HEIGHT, WIDTH, _generate
+from test_multi_source import (
+    reference_transform,
+    region_inside,
+    write_labels,
+    write_raster,
+)
+
+from mapcv.cli import app
+from mapcv.data import MapcvDataset
+from mapcv.manifest import Manifest
+from mapcv.shards import export_webdataset, export_zarr
 
 runner = CliRunner()
 
 
 @pytest.fixture
-def scene(tmp_path: Path) -> Dict[str, Any]:
+def scene(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     write_raster(tmp_path / "multi.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=1)
     write_raster(tmp_path / "other.tif", ref, WIDTH, HEIGHT, count=4, dtype="uint16", seed=2)
@@ -40,8 +46,8 @@ def scene(tmp_path: Path) -> Dict[str, Any]:
     return {"region": region, "labels": write_labels(tmp_path, region_inside(ref, WIDTH, HEIGHT))}
 
 
-def _tar_samples(path: Path) -> Dict[str, Dict[str, bytes]]:
-    samples: Dict[str, Dict[str, bytes]] = {}
+def _tar_samples(path: Path) -> dict[str, dict[str, bytes]]:
+    samples: dict[str, dict[str, bytes]] = {}
     with tarfile.open(path) as tar:
         names = tar.getnames()
         for member in tar.getmembers():
@@ -59,7 +65,7 @@ def _tar_samples(path: Path) -> Dict[str, Dict[str, bytes]]:
     return samples
 
 
-def test_webdataset_shards(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_webdataset_shards(tmp_path: Path, scene: dict[str, Any]) -> None:
     rgb = {"type": "geotiff", "path": str(tmp_path / "rgb.tif")}
     root = _generate(
         tmp_path, scene, "d", imagery=rgb, writer={"image_format": "png", "mask_format": "png"}
@@ -72,7 +78,7 @@ def test_webdataset_shards(tmp_path: Path, scene: Dict[str, Any]) -> None:
     assert len(index["splits"]["train"]) > 1  # the limit forces several shards
     by_name = {Path(manifest.patch_name(e)).stem: e for e in manifest.patches}
     for split, listed in index["splits"].items():
-        stems: List[str] = []
+        stems: list[str] = []
         for shard in listed:
             path = tmp_path / "wds" / shard["file"]
             samples = _tar_samples(path)
@@ -103,7 +109,7 @@ def test_webdataset_shards(tmp_path: Path, scene: Dict[str, Any]) -> None:
     assert len(export_webdataset(root, tmp_path / "one")) == 3  # one shard per split by default
 
 
-def test_webdataset_sources_and_boxes(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_webdataset_sources_and_boxes(tmp_path: Path, scene: dict[str, Any]) -> None:
     sources = [
         {"type": "geotiff", "name": "t1", "path": str(tmp_path / "multi.tif")},
         {"type": "geotiff", "name": "t2", "path": str(tmp_path / "other.tif")},
@@ -136,7 +142,7 @@ def test_webdataset_sources_and_boxes(tmp_path: Path, scene: Dict[str, Any]) -> 
     }
     found = 0
     for shard in sorted((tmp_path / "boxes-wds").glob("*.tar")):
-        for stem, fields in _tar_samples(shard).items():
+        for fields in _tar_samples(shard).values():
             record = json.loads(fields["json"])
             assert record["annotations"] == expected[record["name"]]
             found += len(record["annotations"])
@@ -145,7 +151,7 @@ def test_webdataset_sources_and_boxes(tmp_path: Path, scene: Dict[str, Any]) -> 
 
 @pytest.mark.parametrize("image_format", ["tif", "npy"])
 def test_zarr_store_reads_like_the_folder(
-    tmp_path: Path, scene: Dict[str, Any], image_format: str
+    tmp_path: Path, scene: dict[str, Any], image_format: str
 ) -> None:
     zarr = pytest.importorskip("zarr")
     root = _generate(
@@ -175,7 +181,7 @@ def test_zarr_store_reads_like_the_folder(
 
 
 def test_zarr_boxes_and_refusals(
-    tmp_path: Path, scene: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pytest.importorskip("zarr")
     from test_dataset_tools import _small_boxes
@@ -212,7 +218,7 @@ def test_zarr_boxes_and_refusals(
         export_zarr(boxes, tmp_path / "again.zarr")
 
 
-def test_export_cli_for_shards(tmp_path: Path, scene: Dict[str, Any]) -> None:
+def test_export_cli_for_shards(tmp_path: Path, scene: dict[str, Any]) -> None:
     root = _generate(tmp_path, scene, "d")
     env = {"COLUMNS": "200"}
     result = runner.invoke(

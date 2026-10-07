@@ -6,8 +6,9 @@ import math
 import os
 import re
 import unicodedata
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Annotated, Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import Annotated, Any, Literal
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -29,8 +30,7 @@ from mapcv.sampler import SamplerConfig
 from mapcv.splitter import SplitterConfig
 from mapcv.writer import WriterConfig
 
-
-DEFAULT_SENTINEL2_L2A_BANDS: List[str] = [
+DEFAULT_SENTINEL2_L2A_BANDS: list[str] = [
     "b01",
     "b02",
     "b03",
@@ -49,7 +49,7 @@ DEFAULT_SENTINEL2_L2A_BANDS: List[str] = [
 _RASTER_LABEL_SUFFIXES = frozenset({".tif", ".tiff"})
 
 
-def eopf_local_path(path: str) -> Optional[Path]:
+def eopf_local_path(path: str) -> Path | None:
     """Return the filesystem path of a local EOPF product, or ``None`` for a remote URL."""
     parsed = urlsplit(path)
     if parsed.scheme == "" or (len(parsed.scheme) == 1 and parsed.scheme.isalpha()):
@@ -121,7 +121,7 @@ _REMOVED_SOURCES = {
 }
 
 
-def _validate_tile_source(source: Optional[str]) -> Optional[str]:
+def _validate_tile_source(source: str | None) -> str | None:
     if source is None or source in URL_TEMPLATES:
         return source
     if source in _REMOVED_SOURCES:
@@ -137,7 +137,7 @@ def _validate_tile_source(source: Optional[str]) -> Optional[str]:
 _TEMPLATE_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
 
-def _validate_url_template(template: Optional[str]) -> Optional[str]:
+def _validate_url_template(template: str | None) -> str | None:
     if template is None:
         return None
     if urlsplit(template).scheme not in ("http", "https"):
@@ -167,8 +167,8 @@ def _join(base: Path, value: object) -> object:
 
 
 def area_polygons(
-    path: Path, name_field: Optional[str] = None, layer: Optional[str] = None
-) -> List[Tuple[Any, str]]:
+    path: Path, name_field: str | None = None, layer: str | None = None
+) -> list[tuple[Any, str]]:
     """The polygons of an area-of-interest file in WGS-84 lon/lat, with their region names:
     the ``name_field`` value, or the polygon's number (1, 2, ...) in file order."""
     from mapcv.labels import load_vector_labels
@@ -188,7 +188,7 @@ def area_polygons(
     return [(geometry, by_id[class_id]) for geometry, class_id in raw]
 
 
-def _resolve_relative_paths(data: Dict[str, Any], base: Path) -> None:
+def _resolve_relative_paths(data: dict[str, Any], base: Path) -> None:
     region = data.get("region")
     if isinstance(region, dict) and isinstance(region.get("path"), str):
         region["path"] = _join(base, region["path"])
@@ -226,7 +226,7 @@ _SOURCE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _RESERVED_SOURCE_NAMES = frozenset({"mask"})
 
 
-def _validate_source_name(name: Optional[str]) -> Optional[str]:
+def _validate_source_name(name: str | None) -> str | None:
     if name is None:
         return name
     if not _SOURCE_NAME.fullmatch(name):
@@ -271,9 +271,9 @@ class RegionConfig(BaseModel):
     south: float
     east: float
     north: float
-    path: Optional[Path] = None
-    name_field: Optional[str] = None
-    layer: Optional[str] = None
+    path: Path | None = None
+    name_field: str | None = None
+    layer: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -310,15 +310,15 @@ class RegionConfig(BaseModel):
         return {**raw, "west": west, "south": south, "east": east, "north": north}
 
     @model_serializer(mode="wrap")
-    def _omit_unset_area(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
-        data: Dict[str, Any] = handler(self)
+    def _omit_unset_area(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
         for key in ("path", "name_field", "layer"):
             if data.get(key, 0) is None:
                 del data[key]
         return data
 
     @model_validator(mode="after")
-    def _validate_bounds(self) -> "RegionConfig":
+    def _validate_bounds(self) -> RegionConfig:
         for name in ("west", "east"):
             value = getattr(self, name)
             if not -180.0 <= value <= 180.0:
@@ -344,29 +344,29 @@ class EarthEngineVis(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    bands: List[str] = Field(min_length=1, max_length=3)
-    min: Union[float, List[float]] = 0.0
-    max: Union[float, List[float]] = 1.0
-    gamma: Optional[Union[float, List[float]]] = None
+    bands: list[str] = Field(min_length=1, max_length=3)
+    min: float | list[float] = 0.0
+    max: float | list[float] = 1.0
+    gamma: float | list[float] | None = None
     # Colours for a one-band image, from min to max (hex like "ff0000" or names).
-    palette: Optional[List[str]] = None
+    palette: list[str] | None = None
 
     @model_validator(mode="after")
-    def _check_bands(self) -> "EarthEngineVis":
+    def _check_bands(self) -> EarthEngineVis:
         if len(self.bands) == 2:
             raise ValueError("imagery.earth_engine.vis.bands takes 1 or 3 bands")
         if self.palette is not None and len(self.bands) != 1:
             raise ValueError("imagery.earth_engine.vis.palette needs exactly one band")
         return self
 
-    def params(self) -> Dict[str, Any]:
+    def params(self) -> dict[str, Any]:
         """The visualization parameters Earth Engine's ``getMapId`` takes."""
 
-        def text(value: Union[float, List[float]]) -> str:
+        def text(value: float | list[float]) -> str:
             values = value if isinstance(value, list) else [value]
             return ",".join(repr(float(v)) for v in values)
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "bands": ",".join(self.bands),
             "min": text(self.min),
             "max": text(self.max),
@@ -389,17 +389,17 @@ class EarthEngineImageryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # An ee.Image asset ID, or an ee.ImageCollection reduced to one image.
-    image: Optional[str] = None
-    collection: Optional[str] = None
-    start: Optional[str] = None
-    end: Optional[str] = None
+    image: str | None = None
+    collection: str | None = None
+    start: str | None = None
+    end: str | None = None
     reducer: Literal["median", "mean", "mosaic", "min", "max"] = "median"
     vis: EarthEngineVis
     # The Google Cloud project the requests are made (and counted) for.
-    project: Optional[str] = None
+    project: str | None = None
 
     @model_validator(mode="after")
-    def _one_image(self) -> "EarthEngineImageryConfig":
+    def _one_image(self) -> EarthEngineImageryConfig:
         if (self.image is None) == (self.collection is None):
             raise ValueError("imagery.earth_engine: set 'image' or 'collection', not both")
         if self.image is not None and (self.start is not None or self.end is not None):
@@ -421,12 +421,12 @@ class XYZImageryConfig(BaseModel):
 
     type: Literal["xyz"] = "xyz"
     # Required when imagery is a list of sources: the folder Images/<name>/.
-    name: Optional[str] = None
+    name: str | None = None
     zoom: int = Field(ge=1, le=22)
-    source: Optional[str] = None
-    url_template: Optional[str] = None
+    source: str | None = None
+    url_template: str | None = None
     # Tiles rendered by Google Earth Engine (needs mapcv[gee] and an Earth Engine login).
-    earth_engine: Optional[EarthEngineImageryConfig] = None
+    earth_engine: EarthEngineImageryConfig | None = None
     max_connections: int = Field(default=16, ge=1)
     policy: Literal["strict", "lenient", "ignore"] = "lenient"
     max_failed_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
@@ -440,7 +440,7 @@ class XYZImageryConfig(BaseModel):
     _check_template = field_validator("url_template")(_validate_url_template)
 
     @model_validator(mode="after")
-    def _require_source_or_template(self) -> "XYZImageryConfig":
+    def _require_source_or_template(self) -> XYZImageryConfig:
         given = [
             name
             for name in ("source", "url_template", "earth_engine")
@@ -518,7 +518,7 @@ class CogSearchConfig(StacSearchBase):
     catalog: str = "https://earth-search.aws.element84.com/v1"
 
 
-def _check_scl_mask(value: Optional[List[int]]) -> Optional[List[int]]:
+def _check_scl_mask(value: list[int] | None) -> list[int] | None:
     if value is None:
         return None
     if not value or any(not 0 <= code <= 11 for code in value):
@@ -537,28 +537,28 @@ class EOPFZarrImageryConfig(BaseModel):
 
     type: Literal["eopf_zarr"] = "eopf_zarr"
     # Required when imagery is a list of sources: the folder Images/<name>/.
-    name: Optional[str] = None
+    name: str | None = None
     # The product, or ``search`` to find it in a STAC catalog: exactly one of the two.
-    path: Optional[str] = None
-    search: Optional[StacSearchConfig] = None
+    path: str | None = None
+    search: StacSearchConfig | None = None
     resolution: Literal[10, 20, 60] = 10
-    bands: List[str] = Field(default_factory=lambda: list(DEFAULT_SENTINEL2_L2A_BANDS))
+    bands: list[str] = Field(default_factory=lambda: list(DEFAULT_SENTINEL2_L2A_BANDS))
     chunk_rows: int = Field(default=1024, ge=1)
     # Scene classification (SCL) classes whose pixels count as having no imagery, such
     # as clouds (8, 9), cirrus (10) and cloud shadows (3).
-    scl_mask: Optional[List[int]] = None
+    scl_mask: list[int] | None = None
 
     _check_name = field_validator("name")(_validate_source_name)
 
     @field_validator("path")
     @classmethod
-    def _check_path(cls, value: Optional[str]) -> Optional[str]:
+    def _check_path(cls, value: str | None) -> str | None:
         return _validate_eopf_path(value) if value is not None else None
 
     _check_scl = field_validator("scl_mask")(_check_scl_mask)
 
     @model_validator(mode="after")
-    def _validate_bands(self) -> "EOPFZarrImageryConfig":
+    def _validate_bands(self) -> EOPFZarrImageryConfig:
         if (self.path is None) == (self.search is None):
             raise ValueError(
                 "imagery: set exactly one of 'path' (the product) and 'search' (find it)"
@@ -585,10 +585,10 @@ class StacCogImageryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["stac_cog"] = "stac_cog"
-    name: Optional[str] = None
+    name: str | None = None
     search: CogSearchConfig
-    bands: List[str] = Field(default_factory=lambda: ["red", "green", "blue", "nir"])
-    scl_mask: Optional[List[int]] = None
+    bands: list[str] = Field(default_factory=lambda: ["red", "green", "blue", "nir"])
+    scl_mask: list[int] | None = None
     scl_asset: str = "scl"
     chunk_rows: int = Field(default=1024, ge=1)
 
@@ -597,7 +597,7 @@ class StacCogImageryConfig(BaseModel):
 
     @field_validator("bands")
     @classmethod
-    def _check_bands(cls, bands: List[str]) -> List[str]:
+    def _check_bands(cls, bands: list[str]) -> list[str]:
         if not bands or any(not band.strip() for band in bands):
             raise ValueError(
                 "imagery.bands lists the item's band assets, such as [red, green, blue]"
@@ -621,11 +621,11 @@ class GeoTiffImageryConfig(BaseModel):
 
     type: Literal["geotiff"] = "geotiff"
     # Required when imagery is a list of sources: the folder Images/<name>/.
-    name: Optional[str] = None
+    name: str | None = None
     path: str
-    bands: Optional[List[int]] = None
+    bands: list[int] | None = None
     overview: int = Field(default=0, ge=0)
-    nodata: Optional[float] = None
+    nodata: float | None = None
     chunk_rows: int = Field(default=1024, ge=1)
 
     _check_path = field_validator("path")(_validate_geotiff_path)
@@ -633,13 +633,13 @@ class GeoTiffImageryConfig(BaseModel):
 
     @field_validator("nodata")
     @classmethod
-    def _finite_or_nan_nodata(cls, value: Optional[float]) -> Optional[float]:
+    def _finite_or_nan_nodata(cls, value: float | None) -> float | None:
         if value is not None and value in (float("inf"), float("-inf")):
             raise ValueError("imagery.nodata must be a number or .nan")
         return value
 
     @model_validator(mode="after")
-    def _validate_bands(self) -> "GeoTiffImageryConfig":
+    def _validate_bands(self) -> GeoTiffImageryConfig:
         if self.bands is None:
             return self
         if not self.bands:
@@ -652,7 +652,7 @@ class GeoTiffImageryConfig(BaseModel):
 
 
 ImageryConfig = Annotated[
-    Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig],
+    XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig | StacCogImageryConfig,
     Field(discriminator="type"),
 ]
 
@@ -665,10 +665,8 @@ def _imagery_form(value: Any) -> str:
 # mistake is reported for that form only. Error locations carry the tag
 # ("single-source", "source-list"); messages leave it out, as they leave out "xyz".
 AnyImageryConfig = Annotated[
-    Union[
-        Annotated[ImageryConfig, Tag("single-source")],
-        Annotated[List[ImageryConfig], Tag("source-list")],
-    ],
+    Annotated[ImageryConfig, Tag("single-source")]
+    | Annotated[list[ImageryConfig], Tag("source-list")],
     Discriminator(_imagery_form),
 ]
 
@@ -682,11 +680,11 @@ class BufferConfig(BaseModel):
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")
 
-    line: Optional[float] = Field(default=None, gt=0)
-    point: Optional[float] = Field(default=None, gt=0)
+    line: float | None = Field(default=None, gt=0)
+    point: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
-    def _one_distance(self) -> "BufferConfig":
+    def _one_distance(self) -> BufferConfig:
         if self.line is None and self.point is None:
             raise ValueError("labels.buffer needs a line or point distance in metres")
         for name in ("line", "point"):
@@ -723,7 +721,7 @@ class OsmClass(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    tags: Dict[str, Union[str, List[str]]]
+    tags: dict[str, str | list[str]]
 
     @field_validator("name")
     @classmethod
@@ -734,9 +732,7 @@ class OsmClass(BaseModel):
 
     @field_validator("tags")
     @classmethod
-    def _check_tags(
-        cls, tags: Dict[str, Union[str, List[str]]]
-    ) -> Dict[str, Union[str, List[str]]]:
+    def _check_tags(cls, tags: dict[str, str | list[str]]) -> dict[str, str | list[str]]:
         if not tags:
             raise ValueError("labels.osm.classes: each class needs tags, such as {building: '*'}")
         for key, value in tags.items():
@@ -758,11 +754,11 @@ class OsmLabelsSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    classes: List[OsmClass] = Field(min_length=1)
+    classes: list[OsmClass] = Field(min_length=1)
     overpass_url: str = "https://overpass-api.de/api/interpreter"
     timeout: int = Field(default=180, ge=1, le=3600)
     # (west, south, east, north) to query; the region's box unless given.
-    bbox: Optional[Tuple[float, float, float, float]] = None
+    bbox: tuple[float, float, float, float] | None = None
 
     @field_validator("overpass_url")
     @classmethod
@@ -776,7 +772,7 @@ class OsmLabelsSource(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _unique_names(self) -> "OsmLabelsSource":
+    def _unique_names(self) -> OsmLabelsSource:
         names = [entry.name for entry in self.classes]
         if len(names) != len(set(names)):
             raise ValueError("labels.osm.classes: class names must be unique")
@@ -795,14 +791,14 @@ class LabelFile(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     path: Path
-    layer: Optional[str] = None
-    label_field: Optional[str] = None
-    class_name: Optional[str] = Field(default=None, alias="class")
-    buffer: Optional[BufferConfig] = None
+    layer: str | None = None
+    label_field: str | None = None
+    class_name: str | None = Field(default=None, alias="class")
+    buffer: BufferConfig | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
-        data: Dict[str, Any] = handler(self)
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
         return {key: value for key, value in data.items() if value is not None}
 
     @field_validator("path")
@@ -812,7 +808,7 @@ class LabelFile(BaseModel):
 
     @field_validator("class_name")
     @classmethod
-    def _normalize_class(cls, value: Optional[str]) -> Optional[str]:
+    def _normalize_class(cls, value: str | None) -> str | None:
         if value is None:
             return value
         name = _normalize_label(value)
@@ -821,7 +817,7 @@ class LabelFile(BaseModel):
         return name
 
     @model_validator(mode="after")
-    def _one_class_source(self) -> "LabelFile":
+    def _one_class_source(self) -> LabelFile:
         if (self.label_field is None) == (self.class_name is None):
             raise ValueError(
                 f"labels.files entry '{self.path.name}' needs exactly one of label_field (the "
@@ -857,24 +853,24 @@ class LabelsConfig(BaseModel):
 
     type: Literal["vector"] = "vector"
     # One label file, or several in ``files`` (later files win where features overlap).
-    path: Optional[Path] = None
-    files: Optional[List[LabelFile]] = None
-    label_field: Optional[str] = None
-    classes: Optional[Dict[str, int]] = None
+    path: Path | None = None
+    files: list[LabelFile] | None = None
+    label_field: str | None = None
+    classes: dict[str, int] | None = None
     all_touched: bool = False
-    ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
-    layer: Optional[str] = None
+    ignore_index: int | None = Field(default=255, ge=1, le=255)
+    layer: str | None = None
     # Lines and points become polygons this many metres wide (lines) or across (points).
-    buffer: Optional[BufferConfig] = None
+    buffer: BufferConfig | None = None
     # Polygons of the area that was labeled; mask pixels outside it get ignore_index.
-    annotated_area: Optional[Path] = None
+    annotated_area: Path | None = None
     # Labels from OpenStreetMap instead of a file (``mapcv.osm``).
-    osm: Optional[OsmLabelsSource] = None
+    osm: OsmLabelsSource | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
+    def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         # Records and manifests written before these options existed have no such keys.
-        data: Dict[str, Any] = handler(self)
+        data: dict[str, Any] = handler(self)
         for key in ("layer", "buffer", "annotated_area", "files", "osm"):
             if key in data and data[key] is None:
                 del data[key]
@@ -883,7 +879,7 @@ class LabelsConfig(BaseModel):
         return data
 
     @property
-    def label_files(self) -> List[LabelFile]:
+    def label_files(self) -> list[LabelFile]:
         """Every label file in order: ``files``, or one entry made from ``path`` (none for
         OpenStreetMap labels)."""
         if self.osm is not None:
@@ -902,7 +898,7 @@ class LabelsConfig(BaseModel):
             )
         ]
 
-    def keyed_files(self, prefix: str = "labels") -> List[Tuple[str, Path]]:
+    def keyed_files(self, prefix: str = "labels") -> list[tuple[str, Path]]:
         """Each label file's path with its config key (``labels.path``, ``labels.files[1].path``)."""
         if self.osm is not None:
             return []
@@ -914,7 +910,7 @@ class LabelsConfig(BaseModel):
         ]
 
     @property
-    def first_path(self) -> Optional[Path]:
+    def first_path(self) -> Path | None:
         """``path``, or the first of ``files`` (for messages that name one file); ``None``
         for OpenStreetMap labels."""
         files = self.label_files
@@ -922,7 +918,7 @@ class LabelsConfig(BaseModel):
 
     @field_validator("annotated_area")
     @classmethod
-    def _check_area_suffix(cls, path: Optional[Path]) -> Optional[Path]:
+    def _check_area_suffix(cls, path: Path | None) -> Path | None:
         if path is not None and path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
             raise ValueError(
                 "labels.annotated_area must be a polygon file (.geojson, .json, .kml, .gpkg, "
@@ -932,12 +928,12 @@ class LabelsConfig(BaseModel):
 
     @field_validator("path")
     @classmethod
-    def _check_suffix(cls, path: Optional[Path]) -> Optional[Path]:
+    def _check_suffix(cls, path: Path | None) -> Path | None:
         return None if path is None else _check_vector_suffix(path, "labels.path")
 
     @field_validator("layer")
     @classmethod
-    def _check_layer_name(cls, layer: Optional[str]) -> Optional[str]:
+    def _check_layer_name(cls, layer: str | None) -> str | None:
         if layer is not None and not layer.strip():
             raise ValueError("labels.layer must not be empty; omit it to use the only layer")
         return layer
@@ -947,7 +943,7 @@ class LabelsConfig(BaseModel):
     def _normalize_classes(cls, classes: Any) -> Any:
         if not isinstance(classes, dict):
             return classes
-        normalized: Dict[str, int] = {}
+        normalized: dict[str, int] = {}
         for key, value in classes.items():
             name = _normalize_label(key)
             if name is None:
@@ -958,7 +954,7 @@ class LabelsConfig(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def _classes_need_field(self) -> "LabelsConfig":
+    def _classes_need_field(self) -> LabelsConfig:
         sources = sum(value is not None for value in (self.path, self.files, self.osm))
         if sources != 1:
             raise ValueError(
@@ -1015,7 +1011,7 @@ class RasterClass(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: int = Field(ge=0, le=255)
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class RasterLabelsConfig(BaseModel):
@@ -1039,12 +1035,12 @@ class RasterLabelsConfig(BaseModel):
     type: Literal["raster"]
     path: str
     band: int = Field(default=1, ge=1)
-    classes: Dict[int, RasterClass]
-    nodata: Optional[int] = None
-    ignore_values: List[int] = Field(default_factory=list)
+    classes: dict[int, RasterClass]
+    nodata: int | None = None
+    ignore_values: list[int] = Field(default_factory=list)
     unmapped: Literal["background", "ignore"] = "background"
     resampling: Literal["nearest"] = "nearest"
-    ignore_index: Optional[int] = Field(default=255, ge=1, le=255)
+    ignore_index: int | None = Field(default=255, ge=1, le=255)
 
     _check_path = field_validator("path")(_validate_label_raster_path)
 
@@ -1053,7 +1049,7 @@ class RasterLabelsConfig(BaseModel):
     def _expand_short_classes(cls, classes: Any) -> Any:
         if not isinstance(classes, dict):
             return classes
-        expanded: Dict[Any, Any] = {}
+        expanded: dict[Any, Any] = {}
         for value, target in classes.items():
             if isinstance(value, bool) or isinstance(target, bool):
                 raise ValueError("labels.classes maps integer raster values to integer IDs")
@@ -1069,13 +1065,13 @@ class RasterLabelsConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_classes(self) -> "RasterLabelsConfig":
+    def _validate_classes(self) -> RasterLabelsConfig:
         if not self.classes:
             raise ValueError(
                 "labels.classes must map at least one raster value to a mask ID, "
                 "e.g. {10: {id: 1, name: tree_cover}}"
             )
-        names: Dict[int, str] = {}
+        names: dict[int, str] = {}
         for value, target in sorted(self.classes.items()):
             if target.id == 0:
                 if target.name is not None:
@@ -1099,14 +1095,14 @@ class RasterLabelsConfig(BaseModel):
                         f"labels.classes gives ID {target.id} two names, "
                         f"'{names[target.id]}' and '{name}'"
                     )
-        by_id: Dict[int, List[int]] = {}
+        by_id: dict[int, list[int]] = {}
         for value, target in sorted(self.classes.items()):
             if target.id:
                 by_id.setdefault(target.id, []).append(value)
-        resolved: Dict[int, str] = {}
+        resolved: dict[int, str] = {}
         for class_id, values in by_id.items():
             resolved[class_id] = names.get(class_id) or "value_" + "_".join(map(str, values))
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for class_id, name in sorted(resolved.items()):
             if seen.setdefault(name, class_id) != class_id:
                 raise ValueError(
@@ -1132,7 +1128,7 @@ class RasterLabelsConfig(BaseModel):
             )
         return self
 
-    def class_map(self) -> Dict[str, int]:
+    def class_map(self) -> dict[str, int]:
         """Class name to mask ID, in ID order (background is not a class)."""
         pairs = {target.name: target.id for target in self.classes.values() if target.id}
         return {
@@ -1160,16 +1156,16 @@ class ContinuousLabelsConfig(BaseModel):
     type: Literal["continuous"]
     path: str
     band: int = Field(default=1, ge=1)
-    nodata: Optional[float] = None
+    nodata: float | None = None
     scale: float = 1.0
     offset: float = 0.0
-    valid_min: Optional[float] = None
-    valid_max: Optional[float] = None
+    valid_min: float | None = None
+    valid_max: float | None = None
 
     _check_path = field_validator("path")(_validate_label_raster_path)
 
     @model_validator(mode="after")
-    def _validate_values(self) -> "ContinuousLabelsConfig":
+    def _validate_values(self) -> ContinuousLabelsConfig:
         if not math.isfinite(self.scale) or self.scale == 0.0:
             raise ValueError("labels.scale must be a finite number other than 0")
         if not math.isfinite(self.offset):
@@ -1188,7 +1184,7 @@ class ContinuousLabelsConfig(BaseModel):
 
 
 AnyLabelsConfig = Annotated[
-    Union[LabelsConfig, RasterLabelsConfig, ContinuousLabelsConfig],
+    LabelsConfig | RasterLabelsConfig | ContinuousLabelsConfig,
     Field(discriminator="type"),
 ]
 
@@ -1196,7 +1192,7 @@ AnyLabelsConfig = Annotated[
 RASTER_LABEL_TYPES = (RasterLabelsConfig, ContinuousLabelsConfig)
 
 
-SUPPORTED_TASKS: Tuple[str, ...] = (
+SUPPORTED_TASKS: tuple[str, ...] = (
     "segmentation",
     "detection",
     "instance",
@@ -1205,15 +1201,15 @@ SUPPORTED_TASKS: Tuple[str, ...] = (
     "regression",
 )
 # Tasks on the roadmap, named in the error so a config written for them fails clearly.
-PLANNED_TASKS: Tuple[str, ...] = ()
+PLANNED_TASKS: tuple[str, ...] = ()
 # Tasks whose datasets can hold several imagery sources (``imagery`` as a list).
-MULTI_SOURCE_TASKS: Tuple[str, ...] = ("segmentation", "change", "regression")
+MULTI_SOURCE_TASKS: tuple[str, ...] = ("segmentation", "change", "regression")
 
 DetectionFormat = Literal["coco", "yolo"]
-DETECTION_FORMATS: Tuple[DetectionFormat, ...] = ("coco", "yolo")
+DETECTION_FORMATS: tuple[DetectionFormat, ...] = ("coco", "yolo")
 
 
-def _all_formats() -> List[DetectionFormat]:
+def _all_formats() -> list[DetectionFormat]:
     return list(DETECTION_FORMATS)
 
 
@@ -1234,14 +1230,14 @@ class DetectionOptions(BaseModel):
     # Drop boxes narrower or shorter than this many pixels (slivers at patch edges).
     min_box_pixels: float = Field(default=2.0, ge=0.0)
     # Output formats, written in this order; both by default.
-    formats: List[DetectionFormat] = Field(default_factory=lambda: _all_formats())
+    formats: list[DetectionFormat] = Field(default_factory=lambda: _all_formats())
     # Side in pixels of the square box drawn around each point feature (not KML:
     # points are not read there). Unset: point features are skipped with a warning.
-    point_box_size: Optional[float] = Field(default=None, gt=0.0)
+    point_box_size: float | None = Field(default=None, gt=0.0)
 
     @field_validator("formats")
     @classmethod
-    def _check_formats(cls, formats: List[DetectionFormat]) -> List[DetectionFormat]:
+    def _check_formats(cls, formats: list[DetectionFormat]) -> list[DetectionFormat]:
         if not formats:
             raise ValueError("detection.formats needs at least one of: coco, yolo")
         if len(formats) != len(set(formats)):
@@ -1311,8 +1307,8 @@ class ChangeOptions(BaseModel):
 
     # The mask value of changed pixels: 1, or 255 for loaders that expect 0/255 masks.
     change_value: int = Field(default=1, ge=1, le=255)
-    before: Optional[LabelsConfig] = None
-    after: Optional[LabelsConfig] = None
+    before: LabelsConfig | None = None
+    after: LabelsConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1337,9 +1333,7 @@ class ChangeOptions(BaseModel):
 BACKGROUND_LABEL = "background"
 
 
-def classification_name_problem(
-    names: Iterable[str], options: ClassificationOptions
-) -> Optional[str]:
+def classification_name_problem(names: Iterable[str], options: ClassificationOptions) -> str | None:
     """Why a class name cannot be a classification label, or ``None`` when all can.
 
     Labels go to CSV and text files one per field or line, and a multi-label patch's
@@ -1391,18 +1385,18 @@ class MapcvConfig(BaseModel):
     region: RegionConfig
     # One source, or a list of named sources sampled on the first one's grid.
     imagery: AnyImageryConfig
-    labels: Optional[AnyLabelsConfig] = None
+    labels: AnyLabelsConfig | None = None
     sampler: SamplerConfig
     writer: WriterConfig
-    split: Optional[SplitterConfig] = None
+    split: SplitterConfig | None = None
     # Options of task: detection; defaults apply when the block is omitted.
-    detection: Optional[DetectionOptions] = None
+    detection: DetectionOptions | None = None
     # Options of task: instance; defaults apply when the block is omitted.
-    instance: Optional[InstanceOptions] = None
+    instance: InstanceOptions | None = None
     # Options of task: classification; defaults apply when the block is omitted.
-    classification: Optional[ClassificationOptions] = None
+    classification: ClassificationOptions | None = None
     # Options of task: change; defaults apply when the block is omitted.
-    change: Optional[ChangeOptions] = None
+    change: ChangeOptions | None = None
 
     _check_task = field_validator("task", mode="before")(_validate_task)
 
@@ -1424,7 +1418,7 @@ class MapcvConfig(BaseModel):
         return raw
 
     @model_validator(mode="after")
-    def _osm_bbox_from_region(self) -> "MapcvConfig":
+    def _osm_bbox_from_region(self) -> MapcvConfig:
         labels = self.labels
         if isinstance(labels, LabelsConfig) and labels.osm is not None and labels.osm.bbox is None:
             region = self.region
@@ -1432,7 +1426,7 @@ class MapcvConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_sources(self) -> "MapcvConfig":
+    def _validate_sources(self) -> MapcvConfig:
         if not isinstance(self.imagery, list):
             if self.imagery.name is not None:
                 raise ValueError(
@@ -1442,7 +1436,7 @@ class MapcvConfig(BaseModel):
             return self
         if not self.imagery:
             raise ValueError("imagery is an empty list; give at least one source")
-        names: List[str] = []
+        names: list[str] = []
         for index, source in enumerate(self.imagery):
             if source.name is None:
                 raise ValueError(
@@ -1460,7 +1454,7 @@ class MapcvConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_stacking(self) -> "MapcvConfig":
+    def _validate_stacking(self) -> MapcvConfig:
         if not self.writer.stack_sources:
             return self
         if not self.multi_source or len(self.sources) < 2:
@@ -1481,7 +1475,7 @@ class MapcvConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_source_writer_pair(self) -> "MapcvConfig":
+    def _validate_source_writer_pair(self) -> MapcvConfig:
         for source in self.sources:
             # Messages name the source when there are several.
             where = f"imagery '{source.name}'" if self.multi_source else "imagery"
@@ -1528,8 +1522,8 @@ class MapcvConfig(BaseModel):
     @property
     def sources(
         self,
-    ) -> List[
-        Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig]
+    ) -> list[
+        XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig | StacCogImageryConfig
     ]:
         """The imagery sources in order: a list of one for a single ``imagery`` block."""
         return list(self.imagery) if isinstance(self.imagery, list) else [self.imagery]
@@ -1537,19 +1531,19 @@ class MapcvConfig(BaseModel):
     @property
     def primary_imagery(
         self,
-    ) -> Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig]:
+    ) -> XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig | StacCogImageryConfig:
         """The first imagery source: its grid is the dataset's grid."""
         return self.sources[0]
 
     @property
-    def source_names(self) -> List[str]:
+    def source_names(self) -> list[str]:
         """Names of the sources: ``["image"]`` for a single ``imagery`` block."""
         if not isinstance(self.imagery, list):
             return ["image"]
         return [source.name or "" for source in self.imagery]
 
     @model_validator(mode="after")
-    def _validate_label_options(self) -> "MapcvConfig":
+    def _validate_label_options(self) -> MapcvConfig:
         labels = self.labels
         if not isinstance(labels, LabelsConfig):
             return self
@@ -1583,7 +1577,7 @@ class MapcvConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_task_settings(self) -> "MapcvConfig":
+    def _validate_task_settings(self) -> MapcvConfig:
         if isinstance(self.labels, ContinuousLabelsConfig) and self.task != "regression":
             raise ValueError(
                 "labels.type: continuous holds values to predict, a regression target; set "
@@ -1829,7 +1823,7 @@ class MapcvConfig(BaseModel):
         return self.classification if self.classification is not None else ClassificationOptions()
 
     @classmethod
-    def from_yaml(cls, path: Union[str, "os.PathLike[str]"]) -> "MapcvConfig":
+    def from_yaml(cls, path: str | os.PathLike[str]) -> MapcvConfig:
         """Load and validate a mapcv YAML file.
 
         Relative paths in the file (``labels.path``, ``writer.staging_dir`` and a

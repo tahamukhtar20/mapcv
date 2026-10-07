@@ -8,20 +8,16 @@ dataset written as separate files.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
 pytest.importorskip("rasterio", reason="stack tests write their rasters with rasterio")
-import rasterio  # noqa: E402
-from rasterio.transform import Affine  # noqa: E402
-
-from mapcv.config import MapcvConfig  # noqa: E402
-from mapcv.manifest import Manifest  # noqa: E402
-from mapcv.pipeline import run_generate  # noqa: E402
-from test_multi_source import (  # noqa: E402
+import rasterio
+from rasterio.transform import Affine
+from test_multi_source import (
     PATCH,
     expected_on_patch_grid,
     reference_transform,
@@ -30,12 +26,16 @@ from test_multi_source import (  # noqa: E402
     write_raster,
 )
 
+from mapcv.config import MapcvConfig
+from mapcv.manifest import Manifest
+from mapcv.pipeline import run_generate
+
 WIDTH, HEIGHT = 448, 384
 DATES = ["d1", "d2", "d3"]
 
 
 @pytest.fixture
-def dates(tmp_path: Path) -> Dict[str, Any]:
+def dates(tmp_path: Path) -> dict[str, Any]:
     ref = reference_transform()
     for seed, name in enumerate(DATES[:2], start=1):
         write_raster(
@@ -58,13 +58,13 @@ def dates(tmp_path: Path) -> Dict[str, Any]:
 
 def stack_config(
     tmp_path: Path,
-    region: Dict[str, float],
+    region: dict[str, float],
     labels: Path,
     image_format: str,
     *,
     stack: bool = True,
     staging: str = "stack",
-    names: List[str] = DATES,
+    names: list[str] = DATES,
 ) -> MapcvConfig:
     return MapcvConfig.model_validate(
         {
@@ -91,7 +91,7 @@ def _expected_stack(tmp_path: Path, manifest: Manifest, entry: Any) -> np.ndarra
     )
 
 
-def test_npy_stacks_are_time_channel_height_width(tmp_path: Path, dates: Dict[str, Any]) -> None:
+def test_npy_stacks_are_time_channel_height_width(tmp_path: Path, dates: dict[str, Any]) -> None:
     config = stack_config(tmp_path, dates["region"], dates["labels"], "npy")
     manifest = run_generate(config).manifest
     assert manifest.writer is not None and manifest.writer["stack_sources"] is True
@@ -108,7 +108,7 @@ def test_npy_stacks_are_time_channel_height_width(tmp_path: Path, dates: Dict[st
     )
 
 
-def test_geotiff_stacks_name_every_band(tmp_path: Path, dates: Dict[str, Any]) -> None:
+def test_geotiff_stacks_name_every_band(tmp_path: Path, dates: dict[str, Any]) -> None:
     config = stack_config(tmp_path, dates["region"], dates["labels"], "tif")
     manifest = run_generate(config).manifest
     staging = config.writer.staging_dir
@@ -124,7 +124,7 @@ def test_geotiff_stacks_name_every_band(tmp_path: Path, dates: Dict[str, Any]) -
 
 
 def test_stacked_and_separate_datasets_have_the_same_masks(
-    tmp_path: Path, dates: Dict[str, Any]
+    tmp_path: Path, dates: dict[str, Any]
 ) -> None:
     stacked = run_generate(stack_config(tmp_path, dates["region"], dates["labels"], "npy")).manifest
     separate_config = stack_config(
@@ -145,7 +145,7 @@ def test_stacked_and_separate_datasets_have_the_same_masks(
 
 
 def test_sources_that_cannot_share_an_array_are_refused(
-    tmp_path: Path, dates: Dict[str, Any]
+    tmp_path: Path, dates: dict[str, Any]
 ) -> None:
     write_raster(
         tmp_path / "rgb.tif", reference_transform(), WIDTH, HEIGHT, count=3, dtype="uint8", seed=9
@@ -158,7 +158,7 @@ def test_sources_that_cannot_share_an_array_are_refused(
     assert not list((tmp_path / "bad").rglob("*.npy"))
 
 
-def test_resume_reproduces_the_stacks(tmp_path: Path, dates: Dict[str, Any]) -> None:
+def test_resume_reproduces_the_stacks(tmp_path: Path, dates: dict[str, Any]) -> None:
     config = stack_config(tmp_path, dates["region"], dates["labels"], "npy")
     full = run_generate(config).manifest
     staging = config.writer.staging_dir
@@ -173,7 +173,7 @@ def test_resume_reproduces_the_stacks(tmp_path: Path, dates: Dict[str, Any]) -> 
 
 
 XYZ = {"type": "xyz", "zoom": 18, "source": "esri_satellite"}
-BASE: Dict[str, Any] = {
+BASE: dict[str, Any] = {
     "region": {"west": 4.9, "south": 52.3, "east": 4.91, "north": 52.31},
     "sampler": {"patch_size": 256},
 }
@@ -211,7 +211,7 @@ BASE: Dict[str, Any] = {
         ),
     ],
 )
-def test_config_refuses_stacking_it_cannot_do(changes: Dict[str, Any], message: str) -> None:
+def test_config_refuses_stacking_it_cannot_do(changes: dict[str, Any], message: str) -> None:
     data = {**BASE, **changes}
     data["writer"] = {**data["writer"], "stack_sources": True}
     with pytest.raises(ValidationError) as raised:

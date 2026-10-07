@@ -15,13 +15,15 @@ import warnings
 from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 import numpy as np
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -31,30 +33,28 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from rich.status import Status
-from rich.markup import escape
-from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
+from rich.status import Status
 from rich.table import Table
 
 import mapcv
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
-    EOPFZarrImageryConfig,
-    StacCogImageryConfig,
-    GeoTiffImageryConfig,
-    LabelsConfig,
-    MapcvConfig,
     RASTER_LABEL_TYPES,
     UNION_TAGS,
     ContinuousLabelsConfig,
+    EOPFZarrImageryConfig,
+    GeoTiffImageryConfig,
+    LabelsConfig,
+    MapcvConfig,
     RasterLabelsConfig,
+    StacCogImageryConfig,
     eopf_local_path,
 )
 from mapcv.labels import (
     MAX_CLASS_ID,
-    _normalize_label,
     VECTOR_LABEL_SUFFIXES,
+    _normalize_label,
     load_vector_labels,
     vector_attributes,
     vector_layers,
@@ -118,12 +118,12 @@ class _GenerateFeedback(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__(logging.INFO)
-        self._status: Optional[Status] = None
-        self._progress: Optional[Progress] = None
-        self._task: Optional[Any] = None
+        self._status: Status | None = None
+        self._progress: Progress | None = None
+        self._task: Any | None = None
         self._level = logging.NOTSET
 
-    def __enter__(self) -> "_GenerateFeedback":
+    def __enter__(self) -> _GenerateFeedback:
         logger = logging.getLogger("mapcv")
         self._level = logger.level
         logger.setLevel(logging.INFO)
@@ -133,7 +133,7 @@ class _GenerateFeedback(logging.Handler):
             self._status.start()
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self._stop_status()
         if self._progress is not None:
             self._progress.stop()
@@ -211,7 +211,7 @@ def _main(
     _console.no_color = no_color or _NO_COLOR_FROM_ENV
 
 
-def _format_validation_error(exc: ValidationError) -> List[str]:
+def _format_validation_error(exc: ValidationError) -> list[str]:
     lines = []
     for error in exc.errors():
         location = ".".join(
@@ -242,7 +242,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
                 "[bold]mapcv init[/bold].[/dim]"
             )
             raise typer.Exit(code=1)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any other config failure is a user error
             _console.print(f"[red]Config error:[/red] {exc}")
             raise typer.Exit(code=1)
     for warning in caught:
@@ -250,7 +250,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
     return config
 
 
-def _show_warnings(caught: List[warnings.WarningMessage], shown: Set[str]) -> None:
+def _show_warnings(caught: list[warnings.WarningMessage], shown: set[str]) -> None:
     """Print captured warnings once each, in mapcv's style (also under --quiet)."""
     for warning in caught:
         message = str(warning.message)
@@ -516,7 +516,7 @@ def _raster_labels(manifest: Manifest) -> bool:
     return target is not None and (target.labels or {}).get("type") == "raster"
 
 
-def _class_names(manifest: Manifest) -> Dict[str, str]:
+def _class_names(manifest: Manifest) -> dict[str, str]:
     names = {str(cid): name for name, cid in manifest.class_map.items()}
     names.setdefault("0", "background")
     ignore = manifest.ignore_index
@@ -530,7 +530,7 @@ def _class_names(manifest: Manifest) -> Dict[str, str]:
     return names
 
 
-def _object_table(manifest: Manifest) -> Optional[Table]:
+def _object_table(manifest: Manifest) -> Table | None:
     """Objects and patches with objects per class, for detection and instance datasets."""
     objects: Counter[str] = Counter()
     patches: Counter[str] = Counter()
@@ -559,7 +559,7 @@ def _object_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
-def _label_table(manifest: Manifest) -> Optional[Table]:
+def _label_table(manifest: Manifest) -> Table | None:
     """Patches per label, for classification datasets (a multi-label patch counts for each)."""
     patches: Counter[str] = Counter()
     for entry in manifest.patches:
@@ -584,7 +584,7 @@ def _label_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
-def _value_table(manifest: Manifest) -> Optional[Table]:
+def _value_table(manifest: Manifest) -> Table | None:
     """Target values over all patches, for regression datasets."""
     valid = 0
     total = 0.0
@@ -612,7 +612,7 @@ def _value_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
-def _class_table(manifest: Manifest) -> Optional[Table]:
+def _class_table(manifest: Manifest) -> Table | None:
     if manifest.task in ("detection", "instance"):
         return _object_table(manifest)
     if manifest.task == "classification":
@@ -635,7 +635,7 @@ def _class_table(manifest: Manifest) -> Optional[Table]:
     return table
 
 
-def _split_line(counts: Dict[str, int]) -> str:
+def _split_line(counts: dict[str, int]) -> str:
     total = counts["train"] + counts["val"] + counts["test"]
     parts = [
         f"{name} {counts[name]:,} ({counts[name] / total:.0%})" if total else f"{name} 0"
@@ -821,11 +821,11 @@ split:
 )
 
 _GEOTIFF_TEMPLATE = (
-    """\
-# mapcv config - docs: {docs}/reference/configuration/
+    f"""\
+# mapcv config - docs: {_DOCS_URL}/reference/configuration/
 # Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
 # Your own GeoTIFF or Cloud Optimized GeoTIFF: you are responsible for its license.
-""".format(docs=_DOCS_URL)
+"""
     + """
 region:                      # WGS-84 lon/lat bounding box inside the file
   west: 2.30
@@ -1115,7 +1115,7 @@ def _yaml_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _ask_layer(path: Path) -> Optional[str]:
+def _ask_layer(path: Path) -> str | None:
     """For a GeoPackage with several layers, ask which one holds the features."""
     try:
         names = vector_layers(path)
@@ -1128,8 +1128,8 @@ def _ask_layer(path: Path) -> Optional[str]:
 
 
 def _ask_bbox_or_file(
-    default_bbox: Optional[Tuple[float, float, float, float]] = None,
-) -> Tuple[Tuple[float, float, float, float], Optional[Path], Optional[str]]:
+    default_bbox: tuple[float, float, float, float] | None = None,
+) -> tuple[tuple[float, float, float, float], Path | None, str | None]:
     default = ",".join(f"{value:.6f}" for value in default_bbox) if default_bbox else None
     while True:
         prompt = (
@@ -1181,11 +1181,9 @@ def _ask_bbox_or_file(
         return (west, south, east, north), None, None
 
 
-def label_fields(
-    path: Path, max_values: int = 5, layer: Optional[str] = None
-) -> Dict[str, List[str]]:
+def label_fields(path: Path, max_values: int = 5, layer: str | None = None) -> dict[str, list[str]]:
     """Return candidate label fields of a vector label file with example values."""
-    values: Dict[str, Counter[str]] = {}
+    values: dict[str, Counter[str]] = {}
     suffix = path.suffix.lower()
     if suffix == ".kml":
         data = path.read_bytes()
@@ -1221,7 +1219,7 @@ def label_fields(
     }
 
 
-def _ask_label_field(path: Path, layer: Optional[str] = None) -> Optional[str]:
+def _ask_label_field(path: Path, layer: str | None = None) -> str | None:
     try:
         fields = label_fields(path, layer=layer)
     except (ValueError, OSError) as exc:
@@ -1251,16 +1249,16 @@ class _GeoTiffAnswer:
 
     def __init__(
         self,
-        imagery_lines: List[str],
+        imagery_lines: list[str],
         image_format: str,
-        extent: Optional[Tuple[float, float, float, float]],
+        extent: tuple[float, float, float, float] | None,
     ) -> None:
         self.imagery_lines = imagery_lines
         self.image_format = image_format
         self.extent = extent
 
 
-def _geotiff_wgs84_extent(tif: Any) -> Optional[Tuple[float, float, float, float]]:
+def _geotiff_wgs84_extent(tif: Any) -> tuple[float, float, float, float] | None:
     """A lon/lat box (``west, south, east, north``) that lies inside the file, or ``None``.
 
     The file's own bounding box, projected to lon/lat, reaches a little outside the file
@@ -1372,8 +1370,8 @@ _WIZARD_SAMPLE_PIXELS = 4_000_000
 
 
 def _sample_label_values(
-    tif: Any, bbox: Tuple[float, float, float, float]
-) -> Tuple[Dict[int, int], bool]:
+    tif: Any, bbox: tuple[float, float, float, float]
+) -> tuple[dict[int, int], bool]:
     """Pixel count per value of the label raster under ``bbox`` (lon/lat), and whether
     the values come from a reduced sample (an overview or a crop)."""
     from mapcv.config import RegionConfig
@@ -1405,7 +1403,7 @@ def _sample_label_values(
     return {int(value): int(count) for value, count in zip(values, counts)}, sampled
 
 
-def _ask_label_raster(path_text: str, bbox: Tuple[float, float, float, float]) -> List[str]:
+def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -> list[str]:
     """Describe a label raster, list its values and write ``labels`` lines that map them."""
     from mapcv.geotiff import GeoTiff
     from mapcv.imagery import geotiff_location
@@ -1511,7 +1509,7 @@ def _wizard() -> str:
         console=_console,
     )
 
-    geotiff: Optional[_GeoTiffAnswer] = _ask_geotiff() if kind == "geotiff" else None
+    geotiff: _GeoTiffAnswer | None = _ask_geotiff() if kind == "geotiff" else None
 
     _console.print("\n[bold cyan]2/4 Area[/bold cyan]")
     (west, south, east, north), area_file, area_layer = _ask_bbox_or_file(
@@ -1519,7 +1517,7 @@ def _wizard() -> str:
     )
     latitude = (south + north) / 2
 
-    imagery_lines: List[str]
+    imagery_lines: list[str]
     if geotiff is not None:
         imagery_lines = geotiff.imagery_lines
         patch_default, image_format, edge = 256, geotiff.image_format, "drop"
@@ -1564,9 +1562,9 @@ def _wizard() -> str:
         patch_default, image_format, edge = 256, "png", "pad"
 
     _console.print("\n[bold cyan]3/4 Labels[/bold cyan]")
-    labels_path: Optional[Path] = None
-    labels_layer: Optional[str] = None
-    raster_lines: List[str] = []
+    labels_path: Path | None = None
+    labels_layer: str | None = None
+    raster_lines: list[str] = []
     if area_file is not None and Confirm.ask(
         f"Use {area_file.name} as the labels too?", default=True, console=_console
     ):
@@ -1588,9 +1586,9 @@ def _wizard() -> str:
             if labels_path.exists():
                 labels_layer = _ask_layer(labels_path)
     # A label raster makes masks, so the task question is only asked for vector labels.
-    label_lines: List[str] = raster_lines
-    task_lines: List[str] = []
-    detection_lines: List[str] = []
+    label_lines: list[str] = raster_lines
+    task_lines: list[str] = []
+    detection_lines: list[str] = []
     if labels_path is not None:
         field = _ask_label_field(labels_path, labels_layer) if labels_path.exists() else None
         label_lines = ["labels:", f"  path: {_yaml_str(str(labels_path))}"]
@@ -1710,10 +1708,10 @@ def init(
     output: Path = typer.Argument(
         Path("mapcv.yaml"), metavar="OUTPUT", help="Where to write the config."
     ),
-    template: Optional[Template] = typer.Option(
+    template: Template | None = typer.Option(
         None, "--template", "-t", help="Write a ready-made example instead of asking."
     ),
-    interactive: Optional[bool] = typer.Option(
+    interactive: bool | None = typer.Option(
         None,
         "--interactive/--no-interactive",
         help="Ask questions (default: when run in a terminal without --template).",
@@ -1735,13 +1733,16 @@ def init(
         _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
         raise typer.Exit(code=1)
     text = _wizard() if guided else _TEMPLATES[template or Template.xyz]
-    if target.exists() and not force:
-        if not (
+    if (
+        target.exists()
+        and not force
+        and not (
             guided
             and Confirm.ask(f"{target} exists. Overwrite it?", default=False, console=_console)
-        ):
-            _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
-            raise typer.Exit(code=1)
+        )
+    ):
+        _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
+        raise typer.Exit(code=1)
     target.write_text(text, encoding="utf-8")
     try:
         MapcvConfig.from_yaml(target)
@@ -1930,7 +1931,7 @@ def split(
     ),
     test_ratio: float = typer.Option(0.20, help="Fraction of patches held out for testing."),
     val_ratio: float = typer.Option(0.10, help="Fraction of the remaining patches for validation."),
-    labeled_ratios: Optional[List[float]] = typer.Option(
+    labeled_ratios: list[float] | None = typer.Option(
         None,
         help="Labeled fractions of train for semi-supervised lists (repeatable). "
         "Default: 0.1 0.2 0.3.",
@@ -1941,10 +1942,10 @@ def split(
         help="spatial (leakage-safe blocks) | stratified | random | region (whole regions "
         "of an area of interest).",
     ),
-    block_size: Optional[int] = typer.Option(
+    block_size: int | None = typer.Option(
         None, help="Spatial block size in pixels (default: 4 × patch size)."
     ),
-    sample_limit: Optional[int] = typer.Option(None, help="Use at most this many patches."),
+    sample_limit: int | None = typer.Option(None, help="Use at most this many patches."),
 ) -> None:
     """Re-split an existing dataset from its manifest; no images are read."""
     if not staging_dir.is_dir():
@@ -2113,10 +2114,9 @@ def validate(
         for key, path in labels.keyed_files():
             if not path.exists():
                 _console.print(f"[yellow]Warning:[/yellow] {key} not found: {path}")
-    if isinstance(labels, LabelsConfig) and labels.annotated_area is not None:
-        if not labels.annotated_area.exists():
-            area = labels.annotated_area
-            _console.print(f"[yellow]Warning:[/yellow] labels.annotated_area not found: {area}")
+    area = labels.annotated_area if isinstance(labels, LabelsConfig) else None
+    if area is not None and not area.exists():
+        _console.print(f"[yellow]Warning:[/yellow] labels.annotated_area not found: {area}")
     change = config.change
     if change is not None:
         for key, label_set in (
@@ -2154,7 +2154,7 @@ def export(
         help="hf-parquet (Hugging Face), webdataset (tar shards), zarr (one store) or "
         "terratorch (a data config).",
     ),
-    out: Optional[Path] = typer.Option(
+    out: Path | None = typer.Option(
         None,
         "--out",
         "-o",

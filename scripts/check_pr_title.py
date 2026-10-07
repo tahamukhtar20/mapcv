@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import sys
 
-
 TITLE_PATTERN = re.compile(
     r"^(?:feat|fix|perf|refactor|docs|ci|chore|test)"
     r"(?:\([a-z0-9][a-z0-9._/-]*\))?!?: .+"

@@ -26,8 +26,9 @@ Conventions (shared with the COCO writer):
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, cast
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -67,7 +68,7 @@ class Instance:
     """
 
     category_id: int
-    bbox: Tuple[int, int, int, int]
+    bbox: tuple[int, int, int, int]
     area: int
     truncated: bool
     counts: str
@@ -83,15 +84,15 @@ class PatchInstances:
     stores it next to the image.
     """
 
-    instances: Tuple[Instance, ...]
+    instances: tuple[Instance, ...]
     patch_size: int
     covered: int = 0
-    id_mask: Optional[npt.NDArray[np.uint16]] = None
+    id_mask: npt.NDArray[np.uint16] | None = None
 
     @property
-    def class_counts(self) -> Dict[str, int]:
+    def class_counts(self) -> dict[str, int]:
         """Instances per class ID (string keys, ascending), as in the manifest summary."""
-        counts: Dict[int, int] = {}
+        counts: dict[int, int] = {}
         for item in self.instances:
             counts[item.category_id] = counts.get(item.category_id, 0) + 1
         return {str(cid): counts[cid] for cid in sorted(counts)}
@@ -146,7 +147,7 @@ class InstanceWindow:
         col: int,
         patch_size: int,
         pad_mode: PadMode,
-        valid_patch: Optional[npt.NDArray[np.bool_]],
+        valid_patch: npt.NDArray[np.bool_] | None,
     ) -> PatchInstances:
         """The instances visible in the patch at window pixel ``(row, col)``."""
         options = self._options
@@ -164,7 +165,7 @@ class InstanceWindow:
             return empty
         hit, clipped = candidates
         visible_areas = shapely.area(clipped)
-        instances: List[Instance] = []
+        instances: list[Instance] = []
         covered = np.zeros((patch_size, patch_size), dtype=np.bool_)
         for position, index in enumerate(hit):
             area = float(visible_areas[position])
@@ -222,7 +223,7 @@ class InstanceWindow:
 
     def collate(
         self, annotations: Sequence[PatchInstances], patch_size: int
-    ) -> List[PatchInstances]:
+    ) -> list[PatchInstances]:
         """The kept patches' annotations, in patch order."""
         return list(annotations)
 
@@ -237,11 +238,11 @@ class InstanceTarget:
         self._geometries: npt.NDArray[np.object_] = np.empty(0, dtype=object)
         self._class_ids: npt.NDArray[np.int64] = np.empty(0, dtype=np.int64)
         self._bounds: npt.NDArray[np.float64] = np.empty((0, 4), dtype=np.float64)
-        self._class_map: Optional[ClassMap] = None
-        self._sha256: Optional[str] = None
+        self._class_map: ClassMap | None = None
+        self._sha256: str | None = None
 
     @property
-    def type(self) -> Optional[str]:
+    def type(self) -> str | None:
         return "instance"
 
     @property
@@ -258,7 +259,7 @@ class InstanceTarget:
     def prepare(self, source: RasterMetadata) -> None:
         self._sha256 = labels_sha256(self._labels)
         parsed, self._class_map = _parse_labels(self._labels, source.crs)
-        features: List[GeomWithClass] = [
+        features: list[GeomWithClass] = [
             (_polygonal(geometry), class_id) for geometry, class_id in parsed
         ]
         features = [(geometry, cid) for geometry, cid in features if not geometry.is_empty]
@@ -297,7 +298,7 @@ class InstanceTarget:
                 stacklevel=3,
             )
 
-    def record(self) -> Optional[TargetRecord]:
+    def record(self) -> TargetRecord | None:
         """Class map, the label settings with a hash of the label file, and the options."""
         if self._sha256 is None:
             raise RuntimeError("InstanceTarget.prepare() must run first")
@@ -318,7 +319,7 @@ class InstanceTarget:
         transform: Transform,
         height: int,
         width: int,
-        valid_mask: Optional[npt.NDArray[np.bool_]],
+        valid_mask: npt.NDArray[np.bool_] | None,
     ) -> WindowTarget:
         nearby = self._nearby(transform, height, width)
         world = self._geometries[nearby]

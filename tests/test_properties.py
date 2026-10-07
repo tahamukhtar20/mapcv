@@ -8,7 +8,6 @@ Examples are derandomized (see conftest.py), so CI runs are reproducible; run wi
 from __future__ import annotations
 
 import math
-from typing import List, Set, Tuple
 
 import numpy as np
 import pytest
@@ -16,12 +15,12 @@ import pytest
 pytest.importorskip("hypothesis", reason="property tests need hypothesis (test group)")
 mercantile = pytest.importorskip("mercantile")
 
-from hypothesis import assume, given, settings  # noqa: E402
-from hypothesis import strategies as st  # noqa: E402
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
-from mapcv import _mapcv_rs  # noqa: E402
-from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord  # noqa: E402
-from mapcv.splitter import SplitterConfig, split_manifest  # noqa: E402
+from mapcv import _mapcv_rs
+from mapcv.manifest import Manifest, ManifestEntry, PatchSummary, TargetRecord
+from mapcv.splitter import SplitterConfig, split_manifest
 
 LAT_LIMIT = 85.0511287798066
 lngs = st.floats(-180.0, 180.0, allow_nan=False, exclude_max=True)
@@ -102,7 +101,7 @@ def test_tiles_match_mercantile(
 
 
 @st.composite
-def star_polygons(draw: st.DrawFn, height: int, width: int) -> List[Tuple[float, float]]:
+def star_polygons(draw: st.DrawFn, height: int, width: int) -> list[tuple[float, float]]:
     """A simple (star-shaped) polygon in pixel coordinates, possibly past the edges."""
     cx = draw(st.floats(-0.25 * width, 1.25 * width))
     cy = draw(st.floats(-0.25 * height, 1.25 * height))
@@ -186,7 +185,7 @@ def test_grid_anchors(height: int, width: int, patch: int, stride: int, edge: st
         assert len(anchors) == len(rows) * len(cols)
 
 
-def _covered(starts: Set[int], patch: int, size: int) -> bool:
+def _covered(starts: set[int], patch: int, size: int) -> bool:
     covered = np.zeros(size, dtype=bool)
     for start in starts:
         covered[start : start + patch] = True
@@ -216,7 +215,7 @@ def test_random_anchors(
 # ── Splitter invariants ──────────────────────────────────────────────────────
 
 
-def _manifest(positions: List[Tuple[int, int]], patch: int, stride: int) -> Manifest:
+def _manifest(positions: list[tuple[int, int]], patch: int, stride: int) -> Manifest:
     manifest = Manifest(
         target=TargetRecord(type="segmentation", class_map={"a": 1}),
         sampler={"patch_size": patch, "stride": stride},

@@ -338,6 +338,13 @@ def config_paths(config: MapcvConfig) -> list[tuple[str, Path]]:
             if local is not None:
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 found.append((where, local))
+                if isinstance(imagery, GeoTiffImageryConfig) and imagery.is_pattern:
+                    # A mosaic reads every file its pattern matches, links included.
+                    try:
+                        matches = imagery.files()
+                    except FileNotFoundError:
+                        matches = []
+                    found.extend((where, Path(match)) for match in matches)
     if config.region.path is not None:
         found.extend(_vector_label_paths("region.path", config.region.path))
     found.append(("writer.staging_dir", config.writer.staging_dir))
@@ -540,6 +547,7 @@ _PROBE_IMAGERY: dict[str, dict[str, Any]] = {
     "xyz": {"type": "xyz", "zoom": 15, "source": min(URL_TEMPLATES)},
     "eopf_zarr": {"type": "eopf_zarr", "path": "S2.zarr"},
     "geotiff": {"type": "geotiff", "path": "ortho.tif"},
+    "stac_cog": {"type": "stac_cog", "search": {"datetime": "2025-06-01/2025-06-30"}},
 }
 _PROBE_LABELS: dict[str, dict[str, Any] | None] = {
     "none": None,
@@ -737,7 +745,7 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> list[str]:
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
-            if glob.has_magic(imagery.path):
+            if imagery.is_pattern:
                 # A mosaic pattern: missing only when it matches no file.
                 local = None if glob.glob(str(local), recursive=True) else local
             if local is not None and not local.exists():

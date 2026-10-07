@@ -194,7 +194,7 @@ The licence is `other` until you change it: mapcv can't know what the imagery pr
 
 Checks a dataset against its manifest: every listed file exists and is not empty, and the split lists name only patches of the manifest. `--deep` also decodes every image and compares its shape with the source's `patch_shape`. Files in the patch folders that the manifest doesn't list (left by an interrupted run, or added by hand) are reported as a note, not a failure.
 
-`--write-checksums` writes `SHA256SUMS` (the `sha256sum` format) over the patch files, `manifest.json` and `splits/`, after a successful check. When `SHA256SUMS` exists, `verify` checks every hash, so a copied, uploaded or downloaded dataset can be proven complete and unchanged; `sha256sum -c SHA256SUMS` in the folder checks the same thing without mapcv.
+`--write-checksums` writes `SHA256SUMS` (the `sha256sum` format) over every file in the dataset folder (patches, `manifest.json`, `splits/`, annotations and label tables, `patches.geojson`, ...), after a successful check. When `SHA256SUMS` exists, `verify` checks every hash, so a copied, uploaded or downloaded dataset can be proven complete and unchanged; `sha256sum -c SHA256SUMS` in the folder checks the same thing without mapcv.
 
 ```console
 $ mapcv verify dataset --write-checksums

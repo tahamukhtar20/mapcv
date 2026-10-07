@@ -237,12 +237,18 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
             return ["image"]
         return [record.name if record.name in entry["files"] else "image" for record in sources]
 
+    def read(rel: str) -> tuple[npt.NDArray[Any], float | None]:
+        try:
+            return _read_array(staging_dir / rel)
+        except (OSError, ValueError) as exc:  # missing, truncated or not an image
+            raise ValueError(
+                f"{rel} cannot be read ({exc}); check the dataset with mapcv verify --deep"
+            ) from exc
+
     def load(entry: ManifestEntry) -> dict[str, Any]:
-        loaded: dict[str, Any] = {
-            key: _read_array(staging_dir / entry["files"][key]) for key in keys_for(entry)
-        }
+        loaded: dict[str, Any] = {key: read(entry["files"][key]) for key in keys_for(entry)}
         if "mask" in entry["files"]:
-            loaded["mask"] = _read_array(staging_dir / entry["files"]["mask"])
+            loaded["mask"] = read(entry["files"]["mask"])
         return loaded
 
     with ThreadPoolExecutor(max_workers=_READ_THREADS) as pool:

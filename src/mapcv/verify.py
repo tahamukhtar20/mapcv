@@ -5,7 +5,7 @@ checks that each listed file exists and is not empty, that split lists only name
 patches of the manifest, and reports files in the patch folders that no patch lists
 (left by an interrupted run). With ``deep`` it also decodes each image and checks its
 shape against the source's ``patch_shape``. ``SHA256SUMS`` (written by
-:func:`write_checksums`) pins every file's contents; when it exists, ``verify`` checks
+:func:`write_checksums`) pins the contents of every file in the dataset folder; when it exists, ``verify`` checks
 each hash, so a copied or downloaded dataset can be proven complete and unchanged.
 """
 
@@ -54,14 +54,21 @@ def _listed_files(manifest: Manifest) -> list[str]:
 
 
 def _dataset_files(staging_dir: Path, manifest: Manifest) -> list[str]:
-    """The files a checksum list covers: patches, the manifest and the split lists."""
-    extra = ["manifest.json"]
-    splits = staging_dir / "splits"
-    if splits.is_dir():
-        extra += sorted(
-            path.relative_to(staging_dir).as_posix() for path in splits.rglob("*") if path.is_file()
-        )
-    return _listed_files(manifest) + extra
+    """The files a checksum list covers: every file of the dataset folder, the patches in
+    manifest order first, then the rest (manifest, split lists, annotations, label tables,
+    footprints, ...) sorted. Unfinished ``.tmp`` files and the checksum list itself are left
+    out."""
+    listed = _listed_files(manifest)
+    known = set(listed)
+    rest = sorted(
+        rel
+        for path in staging_dir.rglob("*")
+        if path.is_file()
+        and path.suffix != ".tmp"
+        and (rel := path.relative_to(staging_dir).as_posix()) != CHECKSUMS_FILENAME
+        and rel not in known
+    )
+    return listed + rest
 
 
 def write_checksums(staging_dir: Path) -> Path:

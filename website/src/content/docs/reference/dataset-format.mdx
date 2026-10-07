@@ -503,7 +503,7 @@ Each list has one name per line and ends with a newline, so `wc -l` counts patch
 | --- | --- | --- |
 | `stats.json` | [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats) | Per-band statistics of each source and the class balance, over one split |
 | `README.md` | [`mapcv card`](/mapcv/reference/cli/#mapcv-card) | A dataset card with Hugging Face YAML metadata |
-| `SHA256SUMS` | [`mapcv verify --write-checksums`](/mapcv/reference/cli/#mapcv-verify) | `<sha256>  <path>` per line (the `sha256sum` format) for every patch file, `manifest.json` and `splits/` |
+| `SHA256SUMS` | [`mapcv verify --write-checksums`](/mapcv/reference/cli/#mapcv-verify) | `<sha256>  <path>` per line (the `sha256sum` format) for every file in the dataset folder |
 
 ```json title="dataset/stats.json (abridged)"
 {

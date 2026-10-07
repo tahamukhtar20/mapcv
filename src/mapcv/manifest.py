@@ -18,7 +18,15 @@ from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_serializer, with_config
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    model_serializer,
+    with_config,
+)
 from pydantic_core import to_json
 from typing_extensions import TypedDict
 
@@ -259,19 +267,25 @@ class Manifest(BaseModel):
         run added patches.
 
         Raises:
-            ManifestMismatchError: The manifest was written by a newer mapcv.
+            ManifestMismatchError: The manifest was written by a newer mapcv, or is not
+                a readable mapcv manifest (truncated, edited, or another file).
         """
-        text = path.read_text(encoding="utf-8")
-        if _CURRENT_VERSION_FIRST.match(text):
-            # What mapcv writes: validate straight from JSON, the fast path for big manifests.
-            return cls.model_validate_json(text)
-        data = json.loads(text)
+        try:
+            text = path.read_text(encoding="utf-8")
+            if _CURRENT_VERSION_FIRST.match(text):
+                # What mapcv writes: validate straight from JSON, the fast path for big manifests.
+                return cls.model_validate_json(text)
+            data = json.loads(text)
+        except ValueError as exc:  # invalid UTF-8 or JSON, or a pydantic ValidationError
+            raise ManifestMismatchError(_unreadable(path, exc)) from exc
         if not isinstance(data, dict):
             raise ManifestMismatchError(f"{path} is not a mapcv manifest")
         try:
             return cls.from_dict(data)
         except ManifestMismatchError as exc:
             raise ManifestMismatchError(f"{path}: {exc}") from None
+        except (ValueError, KeyError, TypeError) as exc:  # fields missing or of the wrong type
+            raise ManifestMismatchError(_unreadable(path, exc)) from exc
 
     def to_json(self) -> str:
         """The manifest as JSON: indented header, one line per patch."""
@@ -288,6 +302,24 @@ class Manifest(BaseModel):
         tmp_path = path.with_name(path.name + ".tmp")
         tmp_path.write_text(self.to_json(), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
+
+
+def _unreadable(path: Path, exc: Exception) -> str:
+    """A message for a manifest that cannot be read, naming the first problem."""
+    if isinstance(exc, ValidationError):
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"])
+        reason = f"{where}: {first['msg']}" if where else first["msg"]
+    elif isinstance(exc, json.JSONDecodeError):
+        reason = f"invalid JSON at line {exc.lineno}, column {exc.colno}"
+    elif isinstance(exc, KeyError):
+        reason = f"missing {exc}"
+    else:
+        reason = str(exc)
+    return (
+        f"{path} cannot be read ({reason}). It may be incomplete or edited by hand: restore "
+        "it, or generate the dataset again into a new folder"
+    )
 
 
 # ── upgrading versions 1 and 2 ───────────────────────────────────────────────

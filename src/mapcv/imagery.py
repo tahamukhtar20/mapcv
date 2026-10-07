@@ -21,9 +21,9 @@ from urllib.parse import quote, urlsplit
 
 import numpy as np
 import numpy.typing as npt
+import shapely
 from PIL import Image
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform as shapely_transform
 
 from mapcv._mapcv_rs import (
     TileIndex,
@@ -263,8 +263,15 @@ def _wgs84_transformer(destination_crs: str) -> Any:
 
 
 def transform_geometry_to_crs(geometry: BaseGeometry, destination_crs: str) -> BaseGeometry:
-    """Transform a WGS-84 geometry into ``destination_crs``."""
-    return shapely_transform(_wgs84_transformer(destination_crs).transform, geometry)
+    """Transform a WGS-84 geometry into ``destination_crs`` (Z is dropped)."""
+    transformer = _wgs84_transformer(destination_crs)
+
+    def apply(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        x, y = transformer.transform(coords[:, 0], coords[:, 1])
+        return np.column_stack((x, y))
+
+    result: BaseGeometry = shapely.transform(geometry, apply)
+    return result
 
 
 def region_bounds_in_crs(region: RegionConfig, crs: str) -> tuple[float, float, float, float]:
@@ -999,6 +1006,39 @@ def _extent_text(transform: Transform, height: int, width: int) -> str:
     return f"{min(xs):.2f}, {min(ys):.2f} to {max(xs):.2f}, {max(ys):.2f}"
 
 
+def _region_miss_hint(
+    region: RegionConfig, crs: str, transform: Transform, height: int, width: int
+) -> str:
+    """Where the raster is in lon/lat, and whether the region has its axes swapped."""
+    a, b, c, d, e, f = transform
+    xs = [c + a * col + b * row for col in (0, width) for row in (0, height)]
+    ys = [f + d * col + e * row for col in (0, width) for row in (0, height)]
+    try:
+        from pyproj import Transformer
+
+        to_lonlat = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        west, south, east, north = to_lonlat.transform_bounds(
+            min(xs), min(ys), max(xs), max(ys), densify_pts=21
+        )
+    except Exception:  # noqa: BLE001 - the CRS units are shown instead
+        return ""
+    hint = f"; the file covers lon {west:.4f} to {east:.4f}, lat {south:.4f} to {north:.4f}"
+    swapped = (region.south, region.west, region.north, region.east)  # as lon, lat, lon, lat
+    if (
+        -90.0 <= region.west <= 90.0
+        and -90.0 <= region.east <= 90.0
+        and swapped[0] < east
+        and swapped[2] > west
+        and swapped[1] < north
+        and swapped[3] > south
+    ):
+        hint += (
+            ". The region looks like it has latitude and longitude swapped: west and east "
+            "are longitudes, south and north latitudes"
+        )
+    return hint
+
+
 class GeoTiffRasterSource:
     """Windowed reader over one GeoTIFF or COG, on the file's own pixel grid.
 
@@ -1072,6 +1112,7 @@ class GeoTiffRasterSource:
             raise ValueError(
                 f"requested region does not intersect the GeoTIFF '{name}' "
                 f"(file extent in {crs}: {_extent_text(file_transform, level_height, level_width)})"
+                + _region_miss_hint(region, crs, file_transform, level_height, level_width)
             )
         if extends:
             warnings.warn(
@@ -1274,6 +1315,7 @@ class GeoTiffMosaicSource:
             raise ValueError(
                 f"requested region does not intersect the {len(files)} GeoTIFFs of {pattern} "
                 f"(mosaic extent in {crs}: {_extent_text(mosaic_transform, height, width)})"
+                + _region_miss_hint(region, crs, mosaic_transform, height, width)
             )
         if extends:
             warnings.warn(

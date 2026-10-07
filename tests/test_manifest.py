@@ -579,6 +579,23 @@ def test_mapcv_0_2_dataset_needs_ignore_index_null_to_resume(
     assert "labels.ignore_index: null" in str(caught.value)
 
 
+def test_mapcv_0_2_jpeg_dataset_names_both_settings_it_needs(tmp_path: Path) -> None:
+    raw = json.loads((V2_DATASET / "dataset" / "manifest.json").read_text())
+    raw["writer"]["image_format"] = "jpg"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw))
+    # A 0.3 config without the two settings MIGRATION.md asks for.
+    expected = Manifest.from_dict(dict(raw, patches=[]))
+    assert expected.writer is not None and expected.target is not None
+    expected.writer["jpg_subsampling"] = "4:2:0"
+    expected.target.ignore_index = 255
+    with pytest.raises(ManifestMismatchError) as caught:
+        load_or_create_manifest(path, expected)
+    message = str(caught.value)
+    assert "labels.ignore_index: null" in message
+    assert 'writer.jpg_subsampling: "4:4:4"' in message
+
+
 def test_mapcv_0_2_random_sample_is_not_resumed(tmp_path: Path) -> None:
     raw = json.loads((V2_DATASET / "dataset" / "manifest.json").read_text())
     raw["sampler"]["mode"] = "random"

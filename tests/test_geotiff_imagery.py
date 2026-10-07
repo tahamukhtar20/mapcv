@@ -798,7 +798,9 @@ def test_plan_sizes_the_window_on_the_files_grid(tmp_path: Path) -> None:
     estimate = plan(config)
     source = GeoTiffRasterSource(config.region, config.imagery)  # type: ignore[arg-type]
     assert estimate.raster_px == (source.metadata.width, source.metadata.height)
-    assert estimate.resolution_m == pytest.approx(1.0)
+    # 1 m UTM pixels are 1 m on the map; on the ground UTM's scale factor (0.9996 at the
+    # central meridian) makes them a little larger.
+    assert estimate.resolution_m == pytest.approx(1.0, rel=1e-3)
     assert estimate.patches == (source.metadata.width // 64) * (source.metadata.height // 64)
     assert estimate.output_bytes == estimate.patches * 4 * 64 * 64 * 2
     assert "scene.tif" in estimate.imagery and "EPSG:32631" in estimate.imagery

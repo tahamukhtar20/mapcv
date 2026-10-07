@@ -19,6 +19,7 @@ from mapcv.config import (
     RasterClass,
     RasterLabelsConfig,
     RegionConfig,
+    StacCogImageryConfig,
     XYZImageryConfig,
 )
 from mapcv.downloader import (
@@ -89,6 +90,7 @@ __all__ = [
     "RasterLabelsConfig",
     "ImageryConfig",
     "XYZImageryConfig",
+    "StacCogImageryConfig",
     "EOPFZarrImageryConfig",
     "GeoTiffImageryConfig",
     "DEFAULT_SENTINEL2_L2A_BANDS",

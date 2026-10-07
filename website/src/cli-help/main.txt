@@ -9,6 +9,7 @@
 │ --version             -V        Show the mapcv version and exit.                     │
 │ --quiet               -q        Hide progress output; still show errors and          │
 │                                 summaries.                                           │
+│ --no-color                      Print without colours, as NO_COLOR=1 does.           │
 │ --install-completion            Install completion for the current shell.            │
 │ --show-completion               Show completion for the current shell, to copy it or │
 │                                 customize the installation.                          │

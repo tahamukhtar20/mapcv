@@ -230,7 +230,7 @@ This tutorial builds an **object detection** dataset from the [quickstart](/mapc
            optimizer.zero_grad()
            loss.backward()
            optimizer.step()
-       print(epoch, float(loss))
+       print(epoch, loss.item())
    ```
 
    For COCO-style mAP on the test split, run the model on `instances_test.json`'s images and score the results with `pycocotools.cocoeval.COCOeval`; the `area` of each annotation is the building's visible area, which COCO uses for its small/medium/large breakdown.

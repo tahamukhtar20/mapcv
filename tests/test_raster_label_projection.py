@@ -266,6 +266,125 @@ def test_sampled_masks_equal_the_per_point_lookup(
     assert np.array_equal(sampler.sample(window, HEIGHT, WIDTH), expected)
 
 
+# ── interpolated lookup ──────────────────────────────────────────────────────
+
+# Windows where the projection is far from smooth, or not finite everywhere.
+_HARD_CASES: Dict[str, Tuple[str, int, Window, float]] = {
+    # Longitude jumps from +180 to -180 inside the window.
+    "antimeridian": ("EPSG:32660", 4326, window_at(*utm(180.0, 60.0, 32660), 30.0), 2.0**-12),
+    # Longitude turns around the pole, which is inside the window.
+    "south-pole": ("EPSG:3031", 4326, window_at(0.0, 0.0, 50.0), 2.0**-8),
+    # Far outside UTM zone 31: points PROJ cannot project come back as inf.
+    "outside-utm": ("EPSG:4326", 32631, (0.25, 0.0, 60.0, 0.0, -0.25, 40.0), 4096.0),
+}
+
+
+def exact_indices(
+    sampler: LabelRasterSampler, window: Window, start: int, stop: int, width: int
+) -> Tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    u = np.arange(width, dtype=np.float64)[None, :] + 0.5
+    v = np.arange(start, stop, dtype=np.float64)[:, None] + 0.5
+    rows, cols = sampler._fractional(window, u, v)
+    return sampler._indices(rows, sampler.info.height), sampler._indices(cols, sampler.info.width)
+
+
+def big_label_raster(path: Path, epsg: int, transform: Affine, size: int) -> Path:
+    """A label raster of ``size`` x ``size`` pixels, written as a single sparse tile."""
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="uint8",
+        crs=CRS.from_epsg(epsg),
+        transform=transform,
+        tiled=True,
+        blockxsize=1024,
+        blockysize=1024,
+        sparse_ok=True,
+    ):
+        pass
+    return path
+
+
+@pytest.mark.parametrize("name", list(_CASES) + list(_HARD_CASES))
+@pytest.mark.parametrize("finer", [1, 64])
+def test_interpolated_label_pixels_equal_the_exact_ones(
+    name: str, finer: int, tmp_path: Path
+) -> None:
+    """Every centre gets the label pixel the exact projection gives, on grids as coarse
+    as the imagery and 64 times finer, with centres exactly on label-pixel corners."""
+    imagery_crs, label_epsg, window, pixel = {**_CASES, **_HARD_CASES}[name]
+    x, y = centres(window)
+    transformer = Transformer.from_crs(imagery_crs, f"EPSG:{label_epsg}", always_xy=True)
+    lx, ly = transformer.transform(x, y)
+    pick = (144, 160, 1 << 14, 1 << 14)
+    if not (np.isfinite(lx[144, 160]) and np.isfinite(ly[144, 160])):
+        pick = (0, 0, 1 << 14, 1 << 14)
+    transform = label_grid_with_tie(lx, ly, pixel / finer, pick)
+    size = 1 << 15
+    sampler = sampler_for(
+        big_label_raster(tmp_path / "labels.tif", label_epsg, transform, size), imagery_crs
+    )
+    for start, stop, width in ((0, HEIGHT, WIDTH), (5, 38, 33), (17, 19, WIDTH), (0, HEIGHT, 2)):
+        rows, cols = sampler._interpolated_pixels(window, start, stop, width)
+        ref_rows, ref_cols = exact_indices(sampler, window, start, stop, width)
+        assert np.array_equal(rows, ref_rows), (start, stop, width)
+        assert np.array_equal(cols, ref_cols), (start, stop, width)
+
+
+def test_centres_on_label_pixel_boundaries_are_projected_exactly(tmp_path: Path) -> None:
+    """A label grid on which a whole row of centres lies on boundaries: the tie rule
+    holds for each, as the exact projection gives it."""
+    imagery_crs, label_epsg, window, pixel = _CASES["utm-to-mercator"]
+    x, y = centres(window)
+    lx, ly = Transformer.from_crs(imagery_crs, f"EPSG:{label_epsg}", always_xy=True).transform(x, y)
+    size = 1 << 15
+    for pick in [(r, c, 1 << 14, 1 << 14) for r in (0, 16, 31, HEIGHT - 1) for c in (0, 16, 77)]:
+        transform = label_grid_with_tie(lx, ly, pixel / 64, pick)
+        path = big_label_raster(
+            tmp_path / f"labels-{pick[0]}-{pick[1]}.tif", label_epsg, transform, size
+        )
+        sampler = sampler_for(path, imagery_crs)
+        rows, cols = sampler._interpolated_pixels(window, 0, HEIGHT, WIDTH)
+        assert (rows[pick[0], pick[1]], cols[pick[0], pick[1]]) == (1 << 14, 1 << 14)
+        ref_rows, ref_cols = exact_indices(sampler, window, 0, HEIGHT, WIDTH)
+        assert np.array_equal(rows, ref_rows) and np.array_equal(cols, ref_cols)
+
+
+@pytest.mark.parametrize(
+    ("name", "most"), [("utm-to-wgs84", 0.05), ("utm-to-lambert93", 0.05), ("antimeridian", 1.0)]
+)
+def test_smooth_projections_project_few_centres(
+    name: str, most: float, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imagery_crs, label_epsg, window, pixel = {**_CASES, **_HARD_CASES}[name]
+    transform = Affine(pixel, 0.0, 0.0, 0.0, -pixel, 0.0)
+    sampler = sampler_for(label_raster(tmp_path / "labels.tif", label_epsg, transform), imagery_crs)
+    projected = []
+    fractional = sampler._fractional
+
+    def count(*args: Any) -> Any:
+        projected.append(np.broadcast(*args[1:]).size)
+        return fractional(*args)
+
+    monkeypatch.setattr(sampler, "_fractional", count)
+    sampler._interpolated_pixels(window, 0, HEIGHT, WIDTH)
+    assert sum(projected) <= most * HEIGHT * WIDTH
+    # The antimeridian cells are projected whole, the others interpolated.
+    assert sum(projected) > 0.01 * HEIGHT * WIDTH or name != "antimeridian"
+
+
+def test_operations_picked_per_point_are_never_interpolated(tmp_path: Path) -> None:
+    imagery_crs, label_epsg, _, pixel = _CASES["nad27-to-wgs84"]
+    transform = Affine(pixel, 0.0, 0.0, 0.0, -pixel, 0.0)
+    path = label_raster(tmp_path / "labels.tif", label_epsg, transform)
+    assert not sampler_for(path, imagery_crs)._interpolate
+    assert sampler_for(path, "EPSG:32631")._interpolate
+
+
 def test_small_arrays_are_projected_on_the_calling_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

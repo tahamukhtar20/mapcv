@@ -66,6 +66,8 @@ Python API changes: `Manifest` has `task`, `sources`, `target` (`SourceRecord`, 
 
 `mapcv generate` resumes a 0.2 dataset when the imagery, labels, sampler and writer settings match, with one addition: **set `labels.ignore_index: null`**. mapcv 0.2 wrote background (`0`) where there was no imagery; 0.3 writes `labels.ignore_index` (default `255`) there, and a resumed run must keep the dataset consistent. Without it, generation stops with a message that says so. A finished 0.2 dataset resumes as a no-op and is left as it is; one that gains patches is saved as version 3. New masks come from 0.3's rasterizer, which follows GDAL's rules exactly, so pixels on polygon edges can differ slightly from masks 0.2 wrote.
 
+JPEG patches are encoded with 4:2:0 chroma subsampling by default (`writer.jpg_subsampling: "4:2:0"`), as Pillow and libjpeg do, which makes them up to half the size of 0.2's 4:4:4 patches at the same quality. A 0.2 dataset written as JPEG resumes only with **`writer.jpg_subsampling: "4:4:4"`**, so that old and new patches match; without it, generation stops and names the `writer` settings. New datasets need no change.
+
 Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1 datasets (as in 0.2), and 0.2 datasets made with `sampler.mode: random`, because 0.3 draws random positions without repeats and would mix two different samples. Both can still be split and inspected.
 
 ### The `task` setting
@@ -75,6 +77,10 @@ Configs take an optional top-level `task`: `segmentation` (the default, so exist
 ### Library output
 
 `run_generate` no longer draws a progress bar or prints resume messages, and `download_region`/`stitch_region` no longer print: the library writes nothing to stdout. Messages go to the `mapcv` logger (`logging.basicConfig(level=logging.INFO)` shows them), and progress is reported through `progress(done, total)` callbacks (`on_chunk` for `run_generate`). The CLI shows its spinner and progress bars as before. New: `mapcv.generate`, `mapcv.split` and `mapcv.iter_patches`, which yields the patches a config describes without writing them ([Python API](/mapcv/reference/python-api/)).
+
+### Saving progress
+
+`mapcv generate` saves `manifest.json` every 10 seconds and whenever a run stops (Ctrl-C, an error, a progress callback that raises) instead of after every chunk, which cost more than the chunk itself on large datasets. An interrupted run still resumes after its last finished chunk. A process killed outright (`kill -9`, a power cut) can lose up to the last 10 seconds of chunks; the next run writes them again, and the dataset ends up byte for byte the same.
 
 ## Migrating to 0.2
 

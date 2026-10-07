@@ -36,6 +36,7 @@ from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
     RegionConfig,
+    StacCogImageryConfig,
     XYZImageryConfig,
     _LOOPBACK_HOSTS,
     _validate_eopf_path,
@@ -1069,9 +1070,128 @@ class GeoTiffRasterSource:
         """Nothing to release: the reader holds no open handles between reads."""
 
 
+class StacCogRasterSource:
+    """Sentinel-2 bands as separate COGs of a STAC item, stacked on the finest band's grid.
+
+    The item is found with :func:`mapcv.stac.find_item`. Each band asset is read with
+    :class:`GeoTiffRasterSource` (mapcv's own reader, range requests over https); bands
+    of coarser resolution, and the scene classification for ``scl_mask``, are placed on
+    the finest band's grid by :class:`AlignedSource` (pixels repeated, exact). A pixel
+    has imagery when every band has it and, with ``scl_mask``, its scene class is not
+    masked (values outside 0-11 count as no data).
+    """
+
+    def __init__(self, region: RegionConfig, config: StacCogImageryConfig) -> None:
+        from mapcv.stac import find_item
+
+        bbox = (region.west, region.south, region.east, region.north)
+        item, _ = find_item(config.search, bbox)
+        item_id = str(item.get("id", ""))
+        assets = item.get("assets", {})
+        loopback = (urlsplit(config.search.catalog).hostname or "") in _LOOPBACK_HOSTS
+        wanted = list(config.bands) + ([config.scl_asset] if config.scl_mask is not None else [])
+
+        def href(key: str) -> str:
+            asset = assets.get(key)
+            if not asset or not asset.get("href"):
+                available = ", ".join(sorted(assets))
+                raise ValueError(f"STAC item {item_id} has no '{key}' asset; it has: {available}")
+            location = str(asset["href"])
+            if eopf_local_path(location) is not None and not loopback:
+                raise ValueError(
+                    f"STAC item {item_id} points to a local file ({location}); a catalog may "
+                    "only point to https:// or s3:// files"
+                )
+            return location
+
+        locations = {key: href(key) for key in wanted}
+        opened: Dict[str, WindowedRasterSource] = {}
+        try:
+            for key, location in locations.items():
+                opened[key] = GeoTiffRasterSource(
+                    region,
+                    GeoTiffImageryConfig(
+                        type="geotiff", path=location, bands=[1], chunk_rows=config.chunk_rows
+                    ),
+                    image_format="npy",
+                )
+            # The finest band's grid is the source's grid.
+            reference_key = min(
+                config.bands, key=lambda key: abs(opened[key].metadata.transform[0])
+            )
+            reference = opened[reference_key]
+            dtypes = {opened[key].metadata.dtype for key in config.bands}
+            if len(dtypes) != 1:
+                raise ValueError(
+                    f"imagery.bands of STAC item {item_id} have different data types "
+                    f"({', '.join(sorted(str(d) for d in dtypes))}); select bands of one type"
+                )
+            self._aligned = {
+                key: AlignedSource(source, grid_alignment(reference.metadata, source.metadata, key))
+                for key, source in opened.items()
+            }
+        except BaseException:
+            for source in opened.values():
+                source.close()
+            raise
+        self._opened = opened
+        self._bands = list(config.bands)
+        self._scl = (
+            (self._aligned[config.scl_asset], list(config.scl_mask))
+            if config.scl_mask is not None
+            else None
+        )
+        fingerprint: Dict[str, Any] = {
+            "stac": {
+                "catalog": config.search.catalog,
+                "collection": config.search.collection,
+                "item": item_id,
+            }
+        }
+        if config.scl_mask is not None:
+            fingerprint["scl_mask"] = list(config.scl_mask)
+        meta = reference.metadata
+        self.metadata = RasterMetadata(
+            source_type="stac_cog",
+            product_id=item_id,
+            width=meta.width,
+            height=meta.height,
+            bands=list(config.bands),
+            dtype=meta.dtype,
+            crs=meta.crs,
+            transform=meta.transform,
+            chunk_rows=config.chunk_rows,
+            fingerprint=fingerprint,
+        )
+
+    def read_window(
+        self, row_start: int, row_stop: int, col_start: int, col_stop: int
+    ) -> Tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+        layers = []
+        valid: Optional[npt.NDArray[np.bool_]] = None
+        for key in self._bands:
+            data, band_valid = self._aligned[key].read_window(
+                row_start, row_stop, col_start, col_stop
+            )
+            layers.append(data[:, :, 0])
+            valid = band_valid if valid is None else valid & band_valid
+        assert valid is not None
+        if self._scl is not None:
+            scl_source, masked_classes = self._scl
+            classes, scl_valid = scl_source.read_window(row_start, row_stop, col_start, col_stop)
+            classes = classes[:, :, 0]
+            valid = valid & scl_valid & ~(np.isin(classes, masked_classes) | (classes > 11))
+        image = np.stack(layers, axis=-1)
+        return image, valid
+
+    def close(self) -> None:
+        for source in self._opened.values():
+            source.close()
+
+
 def open_raster_source(
     region: RegionConfig,
-    imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig,
+    imagery: XYZImageryConfig | EOPFZarrImageryConfig | GeoTiffImageryConfig | StacCogImageryConfig,
     *,
     image_format: Optional[str] = None,
 ) -> WindowedRasterSource:
@@ -1084,4 +1204,6 @@ def open_raster_source(
         return XYZRasterSource(region, imagery)
     if isinstance(imagery, GeoTiffImageryConfig):
         return GeoTiffRasterSource(region, imagery, image_format=image_format)
+    if isinstance(imagery, StacCogImageryConfig):
+        return StacCogRasterSource(region, imagery)
     return EOPFZarrRasterSource(region, imagery)

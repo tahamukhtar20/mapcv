@@ -548,7 +548,8 @@ def test_checksums_without_split_lists_and_with_blank_lines(tmp_path: Path) -> N
     assert not (staging / "splits").exists()
     sums = write_checksums(staging)
     listed = sums.read_text(encoding="utf-8").splitlines()
-    assert listed[-1].endswith("  manifest.json")
+    names = {line.split("  ", 1)[1] for line in listed}
+    assert {"manifest.json", "patches.geojson"} <= names
     sums.write_text("\n".join(listed) + "\n\n\n", encoding="utf-8")
     report = verify_dataset(staging)
     assert report.ok and report.checked_hashes == len(listed)

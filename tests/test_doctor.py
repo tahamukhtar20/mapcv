@@ -128,9 +128,12 @@ def test_json_is_plain_text_with_unix_line_endings() -> None:
 
 
 def test_doctor_is_listed_among_the_utilities() -> None:
-    result = runner.invoke(app, ["--help"], terminal_width=100)
-    assert re.search(r"3\. Utilities.*\n(?:.*\n)*?.*\bdoctor\b", result.output)
-    assert "mapcv doctor" in runner.invoke(app, ["doctor", "--help"]).output
+    # Typer forces colour on GitHub Actions, so ask for none and strip what remains.
+    env = {"COLUMNS": "100", "NO_COLOR": "1", "GITHUB_ACTIONS": "", "FORCE_COLOR": ""}
+    result = runner.invoke(app, ["--help"], env=env)
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert re.search(r"3\. Utilities.*\n(?:.*\n)*?.*\bdoctor\b", plain), plain
+    assert "mapcv doctor" in runner.invoke(app, ["doctor", "--help"], env=env).output
 
 
 def test_the_core_dependency_list_matches_pyproject() -> None:

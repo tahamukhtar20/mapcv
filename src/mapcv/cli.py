@@ -2111,6 +2111,56 @@ def validate(
 
 
 @app.command(
+    rich_help_panel="2. Use a dataset",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv export dataset/ --format hf-parquet --out dataset-hf/[/cyan]\n\n"
+        "  [cyan]mapcv export dataset/ --format terratorch[/cyan]   writes dataset/terratorch.yaml"
+    ),
+)
+def export(
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
+    format_: str = typer.Option(
+        ..., "--format", "-f", help="hf-parquet (Hugging Face) or terratorch (a data config)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="hf-parquet: a new folder (required). terratorch: the YAML file "
+        "(default STAGING_DIR/terratorch.yaml).",
+    ),
+) -> None:
+    """Export a dataset for another tool: Hugging Face Parquet or a TerraTorch data config."""
+    from mapcv.export import FORMATS, export_hf_parquet, export_terratorch
+
+    if format_ not in FORMATS:
+        _console.print(f"[red]--format must be one of: {', '.join(FORMATS)}[/red]")
+        raise typer.Exit(code=1)
+    try:
+        if format_ == "hf-parquet":
+            if out is None:
+                _console.print("[red]--out is required for hf-parquet[/red]")
+                raise typer.Exit(code=1)
+            written = export_hf_parquet(staging_dir, out)
+            _console.print(
+                f"[green]✓[/green] {len(written)} Parquet file(s) and a dataset card in "
+                f'[bold]{out}[/bold]. Load them with datasets.load_dataset("{out}").'
+            )
+        else:
+            path = export_terratorch(staging_dir, out)
+            _console.print(
+                f"[green]✓[/green] TerraTorch data config written to [bold]{path}[/bold]; "
+                "paste it into your training config."
+            )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        _console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command(
     "cache",
     rich_help_panel="3. Utilities",
     epilog=(

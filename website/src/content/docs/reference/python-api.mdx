@@ -238,6 +238,49 @@ def predict_raster(
 
 Predicts every pixel of the config's region (first imagery source, `sampler.patch_size`) and writes one GeoTIFF on the imagery's grid. `fn` gets `(N, C, P, P)` patches as read (the source's dtype; normalise inside it) and returns `(N, K, P, P)` scores or `(N, P, P)` values. Patches overlap by `overlap` (0 to < 1) and their predictions are averaged with Hann (cosine) weights, `sin²` at pixel centres, so every pixel keeps some weight. `"argmax"` writes the best class as `uint8` with 255 (the file's NoData) where there is no imagery; `"scores"` writes the blended scores as `float32` bands with `NaN` there. `progress(done, total)` counts strips of rows. Raises `ValueError` for a bad `overlap`, `output`, `batch_size`, a prediction of the wrong shape, more than 255 classes for `"argmax"`, or imagery without a CRS.
 
+## Reading a dataset
+
+### `MapcvDataset`
+
+```python
+from mapcv.data import MapcvDataset   # also mapcv.MapcvDataset
+
+class MapcvDataset:
+    def __init__(self, root: str | os.PathLike, split: str = "train", *,
+                 normalize: bool = False,
+                 transform: Callable[[dict], Any] | None = None,
+                 as_tensors: bool | None = None) -> None
+    def __len__(self) -> int
+    def __getitem__(self, index: int) -> dict   # or what transform returns
+    classes: dict[int, str]          # property: class ID to name
+    ignore_index: int | None         # property: the mask value to leave out of the loss
+```
+
+One split (`train`, `val`, `test`, `10/labeled`, ..., or `all`) of a dataset, as a map-style dataset that `torch.utils.data.DataLoader` takes directly. Items are dicts:
+
+| Key | Present | Value |
+| --- | --- | --- |
+| `image` | always | `(C, H, W)` (`(T, C, H, W)` for stacked sources), as stored or, with `normalize`, standardised `float32` |
+| `images` | several sources | Every source's image by name |
+| `mask` | segmentation, change, regression | `(H, W)` class IDs or `float32` values |
+| `labels` | classification | The patch's class IDs, `int64` |
+| `boxes`, `categories`, `annotations` | detection, instance | `(N, 4)` `[x, y, width, height]` boxes in pixels, their class IDs, and the COCO records (from the split's COCO files) |
+| `name`, `row`, `col`, `transform`, `crs` | always | The patch's file name, top-left pixel, affine transform and CRS |
+
+`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones).
+
+### `export_hf_parquet`, `terratorch_config`
+
+```python
+from mapcv.export import export_hf_parquet, export_terratorch, terratorch_config
+
+def export_hf_parquet(root: Path, out: Path) -> list[Path]
+def terratorch_config(root: Path, batch_size: int = 8, num_workers: int = 4) -> str
+def export_terratorch(root: Path, out: Path | None = None) -> Path
+```
+
+The functions behind [`mapcv export`](/mapcv/reference/cli/#mapcv-export).
+
 ## Manifests
 
 ### `Manifest`

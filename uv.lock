@@ -2039,6 +2039,9 @@ docs = [
     { name = "ipywidgets" },
     { name = "matplotlib" },
 ]
+export = [
+    { name = "pyarrow" },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -2106,6 +2109,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pyarrow", marker = "extra == 'export'", specifier = ">=14" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14" },
     { name = "pydantic", specifier = ">=2.5" },
     { name = "pyproj", specifier = ">=3.6" },
@@ -2127,7 +2131,7 @@ requires-dist = [
     { name = "xarray-eopf", marker = "python_full_version < '3.11' and extra == 'zarr'", specifier = "==0.2.5" },
     { name = "zarr", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
-provides-extras = ["dev", "parquet", "docs", "zarr", "mcp"]
+provides-extras = ["dev", "parquet", "export", "docs", "zarr", "mcp"]
 
 [package.metadata.requires-dev]
 bench = [

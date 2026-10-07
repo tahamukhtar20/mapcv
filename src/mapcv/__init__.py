@@ -28,6 +28,7 @@ from mapcv.downloader import (
     stitch_region,
 )
 from mapcv.infer import predict_raster
+from mapcv.data import MapcvDataset
 from mapcv.labels import (
     ClassMap,
     GeomWithClass,
@@ -69,6 +70,7 @@ except PackageNotFoundError:  # running from a source tree without installing
 __all__ = [
     "__version__",
     "GenerateResult",
+    "MapcvDataset",
     "Patch",
     "Plan",
     "generate",

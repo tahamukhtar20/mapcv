@@ -46,8 +46,10 @@ def _image(
         return ee.Image(config.image)
     collection = ee.ImageCollection(config.collection)
     if bounds is not None:
-        # Only scenes over the region: the same pixels there, far less work for Earth Engine.
-        collection = collection.filterBounds(ee.Geometry.Rectangle(list(bounds)))
+        # Only scenes over the tiles: the same pixels there, far less work for Earth Engine.
+        # BBox is a plain lon/lat box like the tiles' edges; a Rectangle of numbers would
+        # be geodesic, its east-west edges bowing away from the tiles' parallels.
+        collection = collection.filterBounds(ee.Geometry.BBox(*bounds))
     if config.start is not None or config.end is not None:
         collection = collection.filterDate(config.start or "1970-01-01", config.end or "2100-01-01")
     if config.max_cloud is not None:
@@ -68,7 +70,8 @@ def tile_url(
     """An XYZ ``{z}/{x}/{y}`` URL template for ``config``'s image, freshly created.
 
     ``bounds`` (west, south, east, north in degrees) limits a collection to the scenes
-    over the region, which changes nothing there but saves Earth Engine work.
+    over that box, which changes nothing inside it but saves Earth Engine work; pixels
+    outside it may miss scenes, so it must cover every tile that will be read.
 
     Raises:
         RuntimeError: The ``gee`` extra is missing, or Earth Engine refused (not logged

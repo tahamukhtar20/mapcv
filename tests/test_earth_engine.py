@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import sys
 import threading
+import zlib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -39,8 +40,10 @@ class Tiles(BaseHTTPRequestHandler):
             self.end_headers()
             return
         z, x, y = (int(part) for part in parts[-3:])
+        # The map ID stands for the rendered image: another one gives other pixels.
+        rendering = zlib.crc32(parts[-5].encode()) % 200
         buffer = BytesIO()
-        Image.new("RGB", (256, 256), (x % 251, y % 241, z)).save(buffer, "PNG")
+        Image.new("RGB", (256, 256), (x % 251, y % 241, z + rendering)).save(buffer, "PNG")
         body = buffer.getvalue()
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
@@ -64,8 +67,17 @@ def server() -> Iterator[str]:
 class FakeEE:
     """The parts of ``ee`` mapcv uses, recording the calls."""
 
-    def __init__(self, base: str, map_id: str = MAP_ID, fail: str | None = None) -> None:
+    def __init__(
+        self,
+        base: str,
+        map_id: str = MAP_ID,
+        fail: str | None = None,
+        *,
+        per_image: bool = False,
+    ) -> None:
         self.base, self.map_id, self.fail = base, map_id, fail
+        # Like Earth Engine, give each image (its scenes and steps) a map ID of its own.
+        self.per_image = per_image
         self.calls: list[Any] = []
 
     def Initialize(self, project: str | None = None) -> None:
@@ -79,7 +91,10 @@ class FakeEE:
         class Image:
             def getMapId(self, vis: dict[str, Any]) -> dict[str, Any]:
                 fake.calls.append(("getMapId", description, vis))
-                url = f"{fake.base}/v1/projects/p/maps/{fake.map_id}/tiles/{{z}}/{{x}}/{{y}}"
+                map_id = fake.map_id
+                if fake.per_image:
+                    map_id += f"-{zlib.crc32(repr(description).encode()):08x}"
+                url = f"{fake.base}/v1/projects/p/maps/{map_id}/tiles/{{z}}/{{x}}/{{y}}"
                 return {"tile_fetcher": SimpleNamespace(url_format=url)}
 
         return Image()
@@ -87,7 +102,9 @@ class FakeEE:
     def Image(self, asset: str) -> Any:
         return self._image(("Image", asset))
 
-    Geometry = SimpleNamespace(Rectangle=lambda coords: ("Rectangle", tuple(coords)))
+    Geometry = SimpleNamespace(
+        BBox=lambda west, south, east, north: ("BBox", west, south, east, north)
+    )
     Filter = SimpleNamespace(lte=lambda name, value: ("lte", name, value))
 
     def ImageCollection(self, asset: str) -> Any:
@@ -251,7 +268,7 @@ def test_clouds_are_filtered_and_masked_over_the_region(monkeypatch: pytest.Monk
     assert steps == (
         "ImageCollection",
         "COPERNICUS/S2_SR_HARMONIZED",
-        ("filterBounds", ("Rectangle", (4.9, 52.3, 5.0, 52.4))),
+        ("filterBounds", ("BBox", 4.9, 52.3, 5.0, 52.4)),
         ("filterDate", "2024-06-01", "2024-09-01"),
         ("filter", ("lte", "CLOUDY_PIXEL_PERCENTAGE", 40.0)),
         ("linkCollection", [], ["cs_cdf"]),
@@ -423,3 +440,75 @@ def test_the_plan_and_card_name_the_asset(
     card = runner.invoke(app, ["card", str(tmp_path / "d")])
     assert card.exit_code == 0, card.output
     assert "Google Earth Engine" in (tmp_path / "d" / "README.md").read_text(encoding="utf-8")
+
+
+# ── scenes over the tiles, and the tile cache ────────────────────────────────
+
+COLLECTION = {"image": None, "collection": "COPERNICUS/S2_SR_HARMONIZED", "reducer": "median"}
+
+
+def _collection_config(tmp_path: Path, region: dict[str, float], staging: str) -> MapcvConfig:
+    return MapcvConfig.model_validate(
+        {
+            "region": region,
+            "imagery": {"type": "xyz", "zoom": 16, "earth_engine": _engine(**COLLECTION)},
+            "sampler": {"patch_size": 256, "edge_strategy": "drop"},
+            "writer": {"staging_dir": str(tmp_path / staging)},
+        }
+    )
+
+
+def _lonlat_bounds(source: Any) -> tuple[float, float, float, float]:
+    """The raster's outer edges in degrees, from its EPSG:3857 grid (pyproj)."""
+    from pyproj import Transformer
+
+    meta = source.metadata
+    a, _, c, _, e, f = meta.transform
+    to_lonlat = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+    west, north = to_lonlat.transform(c, f)
+    east, south = to_lonlat.transform(c + a * meta.width, f + e * meta.height)
+    return west, south, east, north
+
+
+def test_scenes_are_filtered_on_the_tiles_not_the_region(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The raster covers whole tiles, beyond the region: a scene that covers only the
+    # tiles' margin must still be in the composite there, so the filter is the tile area
+    # (a plain lon/lat box: tile edges are meridians and parallels).
+    from mapcv.imagery import XYZRasterSource
+
+    fake = FakeEE("http://x")
+    monkeypatch.setitem(sys.modules, "ee", fake)
+    config = _collection_config(tmp_path, REGION, "d")
+    source = XYZRasterSource(config.region, config.primary_imagery)  # type: ignore[arg-type]
+    step = fake.calls[1][1][2]
+    assert step[0] == "filterBounds" and step[1][0] == "BBox"
+    got, want = step[1][1:], _lonlat_bounds(source)
+    assert got == pytest.approx(want, abs=1e-9)
+    region = (REGION["west"], REGION["south"], REGION["east"], REGION["north"])
+    assert got[0] < region[0] and got[1] < region[1] and got[2] > region[2] and got[3] > region[3]
+
+
+def _images(staging: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in sorted((staging / "Images").rglob("*.png"))}
+
+
+def test_cached_tiles_do_not_depend_on_an_earlier_region(
+    tmp_path: Path, server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two overlapping regions filter the collection on different areas, so Earth Engine
+    # renders different images. A dataset must not depend on which region ran first.
+    from mapcv.tile_cache import CACHE_ENV
+
+    monkeypatch.setitem(sys.modules, "ee", FakeEE(server, per_image=True))
+    shifted = {**REGION, "west": REGION["west"] + 0.006, "east": REGION["east"] + 0.006}
+    run_generate(_collection_config(tmp_path, REGION, "first"))
+    after_first = _collection_config(tmp_path, shifted, "second")
+    run_generate(after_first)
+
+    monkeypatch.setenv(CACHE_ENV, str(tmp_path / "fresh-cache"))
+    alone = _collection_config(tmp_path, shifted, "alone")
+    run_generate(alone)
+    images = _images(alone.writer.staging_dir)
+    assert images and _images(after_first.writer.staging_dir) == images

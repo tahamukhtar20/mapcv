@@ -329,8 +329,11 @@ def config_paths(config: MapcvConfig) -> list[tuple[str, Path]]:
             ("change.after.path", change.after),
         ):
             if label_set is not None:
-                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                prefix = key.rsplit(".", 1)[0]
+                for file_key, path in label_set.keyed_files(prefix):
                     found.extend(_vector_label_paths(file_key, path))
+                if label_set.annotated_area is not None:
+                    found.append((f"{prefix}.annotated_area", label_set.annotated_area))
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
             # A searched product is found at run time, in a remote catalog.
@@ -1084,8 +1087,9 @@ def _plan_summary(data: dict[str, Any]) -> str:
 
 def make_plan_for(state: ToolState, config: MapcvConfig) -> tuple[Plan, list[str]]:
     """Estimate a config; also return the Python warnings raised while planning."""
-    labels = config.labels
-    if isinstance(labels, LabelsConfig) and labels.osm is not None:
+    change = config.change
+    label_sets = [config.labels] + ([change.before, change.after] if change is not None else [])
+    if any(isinstance(labels, LabelsConfig) and labels.osm is not None for labels in label_sets):
         # Plan and generate fetch them, caching the answer outside the server's root.
         raise ToolFailure(
             "labels.osm downloads OpenStreetMap labels and caches them outside this server's "

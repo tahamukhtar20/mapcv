@@ -195,27 +195,32 @@ def area_polygons(
     return [(geometry, by_id[class_id]) for geometry, class_id in raw]
 
 
-def _resolve_relative_paths(data: dict[str, Any], base: Path) -> None:
-    region = data.get("region")
-    if isinstance(region, dict) and isinstance(region.get("path"), str):
-        region["path"] = _join(base, region["path"])
-    labels = data.get("labels")
-    if isinstance(labels, dict) and "path" in labels:
+def _resolve_label_paths(labels: object, base: Path) -> None:
+    """Resolve the files of a ``labels`` block (or a change label set) against ``base``."""
+    if not isinstance(labels, dict):
+        return
+    if "path" in labels:
         path = labels["path"]
         # A label raster may be a URL, which is not a path to resolve.
         if not isinstance(path, str) or urlsplit(path).scheme == "":
             labels["path"] = _join(base, path)
-    if isinstance(labels, dict) and "annotated_area" in labels:
+    if "annotated_area" in labels:
         labels["annotated_area"] = _join(base, labels["annotated_area"])
-    for file in labels.get("files") or [] if isinstance(labels, dict) else []:
+    files = labels.get("files")
+    for file in files if isinstance(files, list) else []:
         if isinstance(file, dict) and "path" in file:
             file["path"] = _join(base, file["path"])
+
+
+def _resolve_relative_paths(data: dict[str, Any], base: Path) -> None:
+    region = data.get("region")
+    if isinstance(region, dict) and isinstance(region.get("path"), str):
+        region["path"] = _join(base, region["path"])
+    _resolve_label_paths(data.get("labels"), base)
     change = data.get("change")
     if isinstance(change, dict):
         for key in ("before", "after"):
-            label_set = change.get(key)
-            if isinstance(label_set, dict) and "path" in label_set:
-                label_set["path"] = _join(base, label_set["path"])
+            _resolve_label_paths(change.get(key), base)
     writer = data.get("writer")
     if isinstance(writer, dict) and "staging_dir" in writer:
         writer["staging_dir"] = _join(base, writer["staging_dir"])
@@ -1358,7 +1363,8 @@ class ChangeOptions(BaseModel):
     ``before`` and ``after``: a pixel changed where they differ (an object appeared or
     disappeared there or, when both sets map ``label_field`` with the same
     ``classes``, changed class). Changed pixels get ``change_value``, others 0, and
-    pixels without imagery in either image the ignore value.
+    pixels without imagery in either image, or outside either set's
+    ``annotated_area`` (where nothing is known), the ignore value.
     """
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -1480,10 +1486,19 @@ class MapcvConfig(BaseModel):
 
     @model_validator(mode="after")
     def _osm_bbox_from_region(self) -> MapcvConfig:
-        labels = self.labels
-        if isinstance(labels, LabelsConfig) and labels.osm is not None and labels.osm.bbox is None:
-            region = self.region
-            labels.osm.bbox = (region.west, region.south, region.east, region.north)
+        # Every vector label set may come from OpenStreetMap: change.before/after too.
+        change = self.change
+        label_sets = [self.labels]
+        if change is not None:
+            label_sets += [change.before, change.after]
+        region = self.region
+        for labels in label_sets:
+            if (
+                isinstance(labels, LabelsConfig)
+                and labels.osm is not None
+                and labels.osm.bbox is None
+            ):
+                labels.osm.bbox = (region.west, region.south, region.east, region.north)
         return self
 
     @model_validator(mode="after")
@@ -1724,6 +1739,14 @@ class MapcvConfig(BaseModel):
                     "change.before and change.after need the same ignore_index (the mask "
                     "value of pixels without imagery)"
                 )
+            for key, label_set in (("before", before), ("after", after)):
+                if label_set.annotated_area is not None and label_set.ignore_index is None:
+                    raise ValueError(
+                        f"change.{key}.annotated_area needs an ignore_index: outside the area "
+                        "nothing is known, so the change mask gets the ignore value there "
+                        "(255 by default); remove ignore_index: null from change.before and "
+                        "change.after, or remove the annotated_area"
+                    )
             ignore = before.ignore_index
         elif self.labels is None:
             raise ValueError(
@@ -1887,9 +1910,10 @@ class MapcvConfig(BaseModel):
     def from_yaml(cls, path: str | os.PathLike[str]) -> MapcvConfig:
         """Load and validate a mapcv YAML file.
 
-        Relative paths in the file (``labels.path``, ``writer.staging_dir`` and a
-        local ``imagery.path``) are resolved against the file's folder, so a
-        config works from any working directory.
+        Relative paths in the file (``region.path``; ``path``, ``files[].path`` and
+        ``annotated_area`` of ``labels`` and of ``change.before``/``change.after``;
+        ``writer.staging_dir`` and a local ``imagery.path``) are resolved against the
+        file's folder, so a config works from any working directory.
         """
         path = Path(path)
         data = yaml.safe_load(path.read_text(encoding="utf-8"))

@@ -63,7 +63,12 @@ def _regex_escape(value: str) -> str:
 
 def overpass_query(source: OsmLabelsSource) -> str:
     """The Overpass QL query for every class in the box."""
-    assert source.bbox is not None  # MapcvConfig fills it from the region
+    if source.bbox is None:
+        # MapcvConfig fills it from the region; a source made on its own needs one.
+        raise ValueError(
+            "labels.osm.bbox is not set: give (west, south, east, north), or load the labels "
+            "through a MapcvConfig, which takes the region's box"
+        )
     west, south, east, north = source.bbox
     box = f"({south!r},{west!r},{north!r},{east!r})"
     statements = "".join(f"  nwr{_selector(entry.tags)}{box};\n" for entry in source.classes)

@@ -1,15 +1,16 @@
- Usage: mapcv init [OPTIONS] [output]
+ Usage: mapcv init [OPTIONS] [OUTPUT]
 
  Create a config: answer a few questions, or start from a template.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
-│   output      <path>  Where to write the config. [default: mapcv.yaml]               │
+│   OUTPUT      <path>  Where to write the config. [default: mapcv.yaml]               │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
-│                                        f|detection|instance|  example instead of     │
-│                                        classification|change  asking.                │
-│                                        |regression>                                  │
+│                                        f|earth-engine|detect  example instead of     │
+│                                        ion|instance|classifi  asking.                │
+│                                        cation|change|regress                         │
+│                                        ion>                                          │
 │ --interactive      --no-interactive                           Ask questions          │
 │                                                               (default: when run in  │
 │                                                               a terminal without     │
@@ -29,6 +30,8 @@
  mapcv init --template xyz --stdout   print a template
 
  mapcv init my.yaml --template sentinel2   a ready-made example
+
+ mapcv init gee.yaml --template earth-engine   cloud-free Sentinel-2 from Earth Engine
 
  mapcv init boxes.yaml --template detection   boxes for COCO and YOLO
 

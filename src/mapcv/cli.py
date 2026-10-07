@@ -7,6 +7,7 @@ what it will cost), ``mapcv generate`` (build the dataset) and ``mapcv info``
 
 from __future__ import annotations
 
+import datetime
 import glob
 import json
 import logging
@@ -783,6 +784,7 @@ class Template(str, Enum):
     xyz = "xyz"
     sentinel2 = "sentinel2"
     geotiff = "geotiff"
+    earth_engine = "earth-engine"
     detection = "detection"
     instance = "instance"
     classification = "classification"
@@ -930,6 +932,60 @@ sampler:
 writer:
   staging_dir: ./dataset
   image_format: png          # png | jpg for 8-bit 1- or 3-band files; npy keeps any bands and dtype
+
+split:
+  strategy: spatial
+  test_ratio: 0.20
+  val_ratio: 0.10
+"""
+)
+
+_EARTH_ENGINE_TEMPLATE = (
+    _HEADER
+    + """
+# Google Earth Engine: pip install "mapcv[gee]", then log in once with
+#   earthengine authenticate
+# Requests run on your Earth Engine account and Cloud project; its terms, quotas and any
+# billing are yours.
+region:                      # WGS-84 lon/lat bounding box
+  west: 4.9375
+  south: 52.3725
+  east: 4.9515
+  north: 52.3780
+
+imagery:
+  type: xyz
+  zoom: 15                   # ~ 3 m/px here; Earth Engine renders any zoom
+  max_connections: 4
+  earth_engine:
+    # A cloud-free Sentinel-2 summer composite (10 m, worldwide since 2017):
+    collection: COPERNICUS/S2_SR_HARMONIZED
+    start: "2024-06-01"
+    end: "2024-09-01"
+    max_cloud: 40            # skip scenes with more than 40 % cloud
+    cloud_score_plus: 0.6    # mask the cloudy pixels left (Sentinel-2 only)
+    reducer: median          # median | mean | mosaic | min | max
+    vis: {bands: [B4, B3, B2], min: 0, max: 3000, gamma: 1.2}
+    project: YOUR-CLOUD-PROJECT
+    # Landsat 8 (30 m, since 2013):
+    #   collection: LANDSAT/LC08/C02/T1_L2, max_cloud: 20, no cloud_score_plus,
+    #   vis: {bands: [SR_B4, SR_B3, SR_B2], min: 7300, max: 18000, gamma: 1.2}
+    # NAIP (about 0.6 m, United States only):
+    #   collection: USDA/NAIP/DOQQ, reducer: mosaic, no cloud settings,
+    #   vis: {bands: [R, G, B], min: 0, max: 255}
+    # One image instead of a collection: image: <asset id> (no start/end/cloud settings)
+
+# labels:                    # omit for an image-only dataset
+#   path: buildings.geojson
+#   label_field: null
+
+sampler:
+  patch_size: 256
+  edge_strategy: pad
+
+writer:
+  staging_dir: ./dataset
+  image_format: png
 
 split:
   strategy: spatial
@@ -1166,6 +1222,7 @@ _TEMPLATES = {
     Template.xyz: _XYZ_TEMPLATE,
     Template.sentinel2: _SENTINEL2_TEMPLATE,
     Template.geotiff: _GEOTIFF_TEMPLATE,
+    Template.earth_engine: _EARTH_ENGINE_TEMPLATE,
     Template.detection: _DETECTION_TEMPLATE,
     Template.instance: _INSTANCE_TEMPLATE,
     Template.classification: _CLASSIFICATION_TEMPLATE,
@@ -1553,6 +1610,135 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
     return lines
 
 
+# Earth Engine datasets the wizard offers, with colours that render them well.
+_EE_PRESETS: dict[str, dict[str, Any]] = {
+    "sentinel2": {
+        "about": "Sentinel-2 surface reflectance, 10 m, worldwide since 2017",
+        "collection": "COPERNICUS/S2_SR_HARMONIZED",
+        "vis": "{bands: [B4, B3, B2], min: 0, max: 3000, gamma: 1.2}",
+        "metres": 10.0,
+        "max_cloud": 40,
+        "cloud_score_plus": True,
+        "reducer": "median",
+    },
+    "landsat": {
+        "about": "Landsat 8 surface reflectance, 30 m, worldwide since 2013",
+        "collection": "LANDSAT/LC08/C02/T1_L2",
+        "vis": "{bands: [SR_B4, SR_B3, SR_B2], min: 7300, max: 18000, gamma: 1.2}",
+        "metres": 30.0,
+        "max_cloud": 20,
+        "cloud_score_plus": False,
+        "reducer": "median",
+    },
+    "naip": {
+        "about": "NAIP aerial photos, about 0.6 m, United States only",
+        "collection": "USDA/NAIP/DOQQ",
+        "vis": "{bands: [R, G, B], min: 0, max: 255}",
+        "metres": 0.6,
+        "max_cloud": None,
+        "cloud_score_plus": False,
+        "reducer": "mosaic",
+    },
+}
+
+
+def _zoom_for(metres: float, latitude: float) -> int:
+    """The first zoom whose pixels are at least as fine as ``metres``."""
+    for zoom in range(1, 23):
+        if ground_resolution_m(zoom, latitude) <= metres:
+            return zoom
+    return 22
+
+
+def _ask_earth_engine(latitude: float) -> list[str]:
+    """Earth Engine questions: a dataset (or any asset), dates, clouds, project, zoom."""
+    _console.print(
+        '  [dim]Needs pip install "mapcv\\[gee]" and a one-time `earthengine authenticate`.'
+        " Requests run on your Earth Engine account and Cloud project.[/dim]"
+    )
+    for name, preset in _EE_PRESETS.items():
+        _console.print(f"  [bold]{name:<10}[/bold] {preset['about']}")
+    _console.print(
+        "  [bold]custom[/bold]     any image or collection from the Earth Engine catalog"
+    )
+    dataset = Prompt.ask(
+        "Dataset", choices=[*_EE_PRESETS, "custom"], default="sentinel2", console=_console
+    )
+    last_year = datetime.datetime.now(tz=datetime.timezone.utc).year - 1
+    lines = ["  type: xyz", "ZOOM", "  max_connections: 4", "  earth_engine:"]
+    metres = 10.0
+    if dataset == "custom":
+        kind = Prompt.ask(
+            "Is it one image or a collection of scenes?",
+            choices=["image", "collection"],
+            default="collection",
+            console=_console,
+        )
+        asset = Prompt.ask(
+            "Asset ID [dim](e.g. COPERNICUS/S2_SR_HARMONIZED)[/dim]", console=_console
+        )
+        lines.append(f"    {kind}: {_yaml_str(asset.strip())}")
+        if kind == "collection":
+            lines.append(
+                f'    start: "{Prompt.ask("Start date", default=f"{last_year}-06-01", console=_console)}"'
+            )
+            lines.append(
+                f'    end: "{Prompt.ask("End date", default=f"{last_year}-09-01", console=_console)}"'
+            )
+            reducer = Prompt.ask(
+                "Combine the scenes with",
+                choices=["median", "mosaic", "mean", "min", "max"],
+                default="median",
+                console=_console,
+            )
+            lines.append(f"    reducer: {reducer}")
+        bands = Prompt.ask("Bands to show [dim](1 or 3, comma-separated)[/dim]", console=_console)
+        low = Prompt.ask("Value shown as black", default="0", console=_console)
+        high = Prompt.ask("Value shown as white", default="3000", console=_console)
+        band_list = ", ".join(b.strip() for b in bands.split(",") if b.strip())
+        lines.append(f"    vis: {{bands: [{band_list}], min: {low}, max: {high}}}")
+        metres = float(Prompt.ask("Its pixel size in metres", default="10", console=_console))
+    else:
+        preset = _EE_PRESETS[dataset]
+        metres = preset["metres"]
+        lines.append(f"    collection: {preset['collection']}")
+        if dataset == "naip":
+            start = Prompt.ask("From", default=f"{last_year - 2}-01-01", console=_console)
+            end = Prompt.ask("To", default=f"{last_year + 1}-01-01", console=_console)
+        else:
+            start = Prompt.ask("Start date", default=f"{last_year}-06-01", console=_console)
+            end = Prompt.ask("End date", default=f"{last_year}-09-01", console=_console)
+        lines += [f'    start: "{start}"', f'    end: "{end}"']
+        if preset["max_cloud"] is not None:
+            cloud = IntPrompt.ask(
+                "Skip scenes with more cloud than (%)",
+                default=preset["max_cloud"],
+                console=_console,
+            )
+            lines.append(f"    max_cloud: {cloud}")
+        if preset["cloud_score_plus"]:
+            lines.append("    cloud_score_plus: 0.6    # mask the cloudy pixels left")
+        lines += [f"    reducer: {preset['reducer']}", f"    vis: {preset['vis']}"]
+    project = Prompt.ask(
+        "Cloud project with Earth Engine enabled [dim](Enter to fill in later)[/dim]",
+        default="",
+        show_default=False,
+        console=_console,
+    ).strip()
+    lines.append(f"    project: {_yaml_str(project) if project else 'YOUR-CLOUD-PROJECT'}")
+    table = Table(box=None, padding=(0, 2), show_edge=False)
+    table.add_column("zoom", justify="right")
+    table.add_column("pixel size")
+    suggested = _zoom_for(metres, latitude)
+    for zoom in range(max(1, suggested - 2), min(22, suggested + 2) + 1):
+        table.add_row(str(zoom), f"{ground_resolution_m(zoom, latitude):.2f} m")
+    _console.print(table)
+    zoom = IntPrompt.ask(
+        f"Zoom [dim](the data is {metres:g} m)[/dim]", default=suggested, console=_console
+    )
+    return [f"  zoom: {zoom}" if line == "ZOOM" else line for line in lines]
+
+
 def _wizard() -> str:
     _console.print(
         Panel(
@@ -1571,9 +1757,12 @@ def _wizard() -> str:
     _console.print("  [bold]sentinel2[/bold]  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)")
     _console.print("  [bold]custom[/bold]     your own XYZ tile URL")
     _console.print("  [bold]geotiff[/bold]    your own GeoTIFF / COG file or URL")
+    _console.print(
+        "  [bold]gee[/bold]        Google Earth Engine — Sentinel-2, Landsat, NAIP or any asset"
+    )
     kind = Prompt.ask(
         "Imagery",
-        choices=["esri", "sentinel2", "custom", "geotiff"],
+        choices=["esri", "sentinel2", "custom", "geotiff", "gee"],
         default="esri",
         console=_console,
     )
@@ -1590,6 +1779,9 @@ def _wizard() -> str:
     if geotiff is not None:
         imagery_lines = geotiff.imagery_lines
         patch_default, image_format, edge = 256, geotiff.image_format, "drop"
+    elif kind == "gee":
+        imagery_lines = _ask_earth_engine(latitude)
+        patch_default, image_format, edge = 256, "png", "pad"
     elif kind == "sentinel2":
         product = Prompt.ask(
             "Product path or URL [dim](local .zarr, https:// or s3://)[/dim]", console=_console
@@ -1766,6 +1958,8 @@ def _wizard() -> str:
         "  [cyan]mapcv init[/cyan]                         guided, writes mapcv.yaml\n\n"
         "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
         "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
+        "  [cyan]mapcv init gee.yaml --template earth-engine[/cyan]   cloud-free Sentinel-2 from "
+        "Earth Engine\n\n"
         "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
         "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)\n\n"
         "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)\n\n"

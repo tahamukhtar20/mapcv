@@ -145,6 +145,8 @@ module = [
     "yaml",
     "xarray",
     "xarray.*",
+    "zarr",
+    "zarr.*",
     "pyproj",
     "pyproj.*",
     "shapefile",

@@ -217,6 +217,27 @@ class SplitterConfig(BaseModel):
 
 See [Splits without leakage](/mapcv/guides/splits-without-leakage/).
 
+## Inference
+
+### `predict_raster`
+
+```python
+from mapcv.infer import predict_raster   # also mapcv.predict_raster
+
+def predict_raster(
+    config: MapcvConfig | str | os.PathLike,
+    fn: Callable[[np.ndarray], np.ndarray],
+    out: str | os.PathLike,
+    *,
+    overlap: float = 0.5,
+    batch_size: int = 16,
+    output: Literal["argmax", "scores"] = "argmax",
+    progress: Callable[[int, int], None] | None = None,
+) -> Path
+```
+
+Predicts every pixel of the config's region (first imagery source, `sampler.patch_size`) and writes one GeoTIFF on the imagery's grid. `fn` gets `(N, C, P, P)` patches as read (the source's dtype; normalise inside it) and returns `(N, K, P, P)` scores or `(N, P, P)` values. Patches overlap by `overlap` (0 to < 1) and their predictions are averaged with Hann (cosine) weights, `sin²` at pixel centres, so every pixel keeps some weight. `"argmax"` writes the best class as `uint8` with 255 (the file's NoData) where there is no imagery; `"scores"` writes the blended scores as `float32` bands with `NaN` there. `progress(done, total)` counts strips of rows. Raises `ValueError` for a bad `overlap`, `output`, `batch_size`, a prediction of the wrong shape, more than 255 classes for `"argmax"`, or imagery without a CRS.
+
 ## Manifests
 
 ### `Manifest`

@@ -27,6 +27,7 @@ from mapcv.downloader import (
     resolve_url_template,
     stitch_region,
 )
+from mapcv.infer import predict_raster
 from mapcv.labels import (
     ClassMap,
     GeomWithClass,
@@ -73,6 +74,7 @@ __all__ = [
     "generate",
     "iter_patches",
     "plan",
+    "predict_raster",
     "split",
     "run_generate",
     "run_split",

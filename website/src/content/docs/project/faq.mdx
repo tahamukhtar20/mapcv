@@ -17,15 +17,15 @@ mapcv has no presets for them, because Google and the OpenStreetMap Foundation a
 
 ### Can I use my own GeoTIFF or drone orthomosaic?
 
-Not directly: mapcv reads XYZ tiles and Sentinel-2 EOPF Zarr products. If you can serve your raster as standard 256 px XYZ tiles (for example with a local tile server), `url_template` works with `http://localhost/...`.
+Yes. Set `imagery.type: geotiff` with a local path, an `https://` URL or an anonymous `s3://` URL. Patches keep the file's CRS, pixel grid, bands and data type. A glob pattern such as `tiles/*.tif` reads a folder of tiles as one mosaic. See [Use your own GeoTIFF](/mapcv/guides/use-your-own-geotiff/).
 
 ### Can I make an image-only dataset?
 
 Yes. Leave out the `labels` block. You get `Images/`, a manifest and splits, but no `Masks/`.
 
-### Can I make an object-detection, instance-segmentation or classification dataset?
+### Can I make an object-detection, instance-segmentation, classification, change or regression dataset?
 
-Yes. Set `task: detection` for a box per object (COCO JSON and YOLO labels), or `task: instance` for a mask per object (COCO JSON with RLE masks and, optionally, an instance-ID PNG per patch). Each label feature is one object. See [Object detection datasets](/mapcv/tutorials/object-detection/) and [Instance segmentation datasets](/mapcv/tutorials/instance-segmentation/). For one label per patch, or a set of labels, set `task: classification`: patches are labeled by how much of each class they cover, and a `labels.csv` and `labels.json` replace the masks (see [Patch classification datasets](/mapcv/tutorials/classification/)). Change detection and regression datasets are planned.
+Yes. Set `task: detection` for a box per object (COCO JSON and YOLO labels), or `task: instance` for a mask per object (COCO JSON with RLE masks and, optionally, an instance-ID PNG per patch). Each label feature is one object. See [Object detection datasets](/mapcv/tutorials/object-detection/) and [Instance segmentation datasets](/mapcv/tutorials/instance-segmentation/). For one label per patch, or a set of labels, set `task: classification`: patches are labeled by how much of each class they cover, and a `labels.csv` and `labels.json` replace the masks (see [Patch classification datasets](/mapcv/tutorials/classification/)). For change detection, set `task: change` with two imagery sources (before and after): each patch is an image pair with a change mask ([`change`](/mapcv/reference/configuration/#change)). For regression, set `task: regression` with a raster of values such as canopy height ([continuous values](/mapcv/reference/configuration/#continuous-values-type-continuous)).
 
 ### How do I get several classes?
 
@@ -33,9 +33,9 @@ Put the class in a property of each feature and set `labels.label_field` to its 
 
 ### What value marks "ignore" in the masks?
 
-None. Masks use `0` for background, including padded and NoData pixels. Derive an ignore mask from the image (black RGB or `NaN` bands) in your loader ([how](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels)).
+`255` by default. Pixels without imagery (padding, failed tiles, NoData) get `labels.ignore_index`, so pass the same value to your loss (`CrossEntropyLoss(ignore_index=255)`). `labels.ignore_index: null` writes background (`0`) there instead. See [NoData and ignore pixels](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
 
-### Why are my split percentages not exactly 70/10/20?
+### Why are my split percentages not exactly 72/8/20?
 
 The default `spatial` split moves whole blocks of the map, and drops train/val patches that overlap test patches. On small datasets that shifts the shares. Smaller `block_size` or another `seed` gets closer ([guide](/mapcv/guides/splits-without-leakage/#choosing-block_size)).
 
@@ -53,11 +53,11 @@ Only if the new config produces the same raster grid, sampler and class map; oth
 
 ### Can I use several Sentinel-2 products, or a time series?
 
-One product per run. Generate one dataset per product (each in its own `staging_dir`) and combine them yourself. mapcv does not mosaic scenes or mask clouds.
+An `eopf_zarr` or `stac_cog` source reads one product, which mapcv can find for you with a STAC search (`imagery.search`) and whose clouds it can mask (`scl_mask`). For a time series, list several sources on the same grid, for example the same tile on different dates; [`writer.stack_sources`](/mapcv/reference/configuration/#writer) writes them into one array per patch. mapcv does not mosaic several Sentinel-2 scenes into one; for a composite over a period, use [Google Earth Engine](/mapcv/reference/configuration/#google-earth-engine-imageryearth_engine).
 
 ### Can I read private S3 buckets or signed URLs?
 
-No. EOPF paths must be local files or anonymous public `https://`/`s3://` URLs; credentials and query strings are rejected. Download the product first if it is private.
+No. Remote GeoTIFF, label raster, STAC and EOPF URLs must be anonymous public `https://` or `s3://` URLs; credentials and query strings are rejected. Download the file first if it is private.
 
 ### Where are the docs for mapcv 0.1?
 

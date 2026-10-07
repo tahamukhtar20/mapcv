@@ -72,7 +72,10 @@ Peak memory therefore grows with the **width** of the region and the chunk heigh
 - `lenient` (default) leaves it black and carries on, unless more than `max_failed_ratio` (5 %) of a chunk's tiles fail. Then the run stops:
 
   ```text
-  Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold)
+  Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold): 2 x HTTP 503 (e.g.
+  HTTP 503 for URL: https://tiles.example.com/…/18/134567/86123). If the provider is busy or
+  rate-limiting, try again later or lower imagery.max_connections; raise imagery.max_failed_ratio to
+  accept gaps.
   Fix the cause and run the same command again: finished chunks are kept and the run resumes.
   ```
 
@@ -109,16 +112,21 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | Recorded field (named in the error) | Changes when you edit… |
 | --- | --- |
 | `task` | `task` |
+| `target type`, `mask dtype` | `task`, `labels.type` |
+| `task options` | the `detection`, `instance`, `classification` or `change` block |
 | `class_map` | `labels.label_field`, `labels.classes`, or the set of label values |
 | `ignore_index` | `labels.ignore_index` |
 | `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
+| `imagery file or read settings` | the imagery file itself (a GeoTIFF's size and a hash of its first and last 64 KiB, or a remote file's `ETag`, size and first 64 KiB; every file of a mosaic), `overview`, `nodata`, the STAC item, `scl_mask`, or the Earth Engine image and rendering |
+| `sources` | the names of the imagery sources, or their number |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY/TIF and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
+| `region` | the polygons of `region.path` (a hash of the file is recorded), `region.name_field` or `region.layer` |
 | `sampler` | any `sampler` field |
-| `writer` | `image_format` (including `png` ↔ `jpg`), `mask_format`, `world_files`, `jpg_quality` or `jpg_subsampling` (`footprints` may change) |
+| `writer` | `image_format` (including `png` ↔ `jpg`), `mask_format`, `world_files`, `stack_sources`, `jpg_quality` or `jpg_subsampling` (`footprints` may change) |
 
-In the [manifest](/mapcv/reference/dataset-format/#manifestjson) these are `task`, the `target` block, the `sources` block, `sampler` and `writer`.
+In the [manifest](/mapcv/reference/dataset-format/#manifestjson) these are `task`, the `target` block, the `sources` block, `region`, `sampler` and `writer`. With several sources, a source's fields are named after it (`before: dtype`).
 
 Moving the label file is fine as long as its contents stay the same. A refused resume looks like this, here after a single byte was added to the label file:
 
@@ -140,7 +148,7 @@ dataset/manifest.json is a version-1 manifest from mapcv 0.1.x and cannot be res
 generate into a new writer.staging_dir ('mapcv split' still reads it)
 ```
 
-`mapcv split` and `mapcv info` still work on them. See [Migrating to 0.2](/mapcv/project/migration/#migrating-to-02).
+`mapcv split` and `mapcv info` still work on them. See [Migrating](/mapcv/project/migration/#migrating-to-02).
 
 ### Datasets from mapcv 0.2
 

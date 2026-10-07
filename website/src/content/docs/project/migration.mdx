@@ -14,14 +14,14 @@ The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/m
 <Steps>
 
 1. Update code that reads `manifest.json` directly to [manifest version 3](#manifest-version-3): `files`, `summary`, `sources[0]` and `target`. Code that uses `mapcv.Manifest.load` keeps working for old and new datasets.
-2. To resume a dataset made by 0.2, add `labels.ignore_index: null` to its config ([why](#datasets-made-by-mapcv-02)).
+2. To resume a dataset made by 0.2, add `labels.ignore_index: null` to its config, and for JPEG patches also `writer.jpg_subsampling: "4:4:4"` ([why](#datasets-made-by-mapcv-02)).
 3. Nothing to do for `task`: it defaults to `segmentation`.
 
 </Steps>
 
 ### Manifest version 3
 
-New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that every task (segmentation, detection, instance, classification, change, regression) and output layout fits one format. Images, masks and split lists are byte-for-byte what 0.2 wrote for the same config; only `manifest.json` changes.
+New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that every task (segmentation, detection, instance, classification, change, regression) and output layout fits one format. The folder layout and the split lists' format are unchanged. What changed in images and masks is listed under [Datasets made by mapcv 0.2](#datasets-made-by-mapcv-02) and [Pixels without imagery](#pixels-without-imagery).
 
 | Version 2 (mapcv 0.2) | Version 3 (mapcv 0.3) |
 | --- | --- |
@@ -33,7 +33,7 @@ New datasets are written with manifest version 3. It records what the dataset is
 | `class_map` | `target.class_map` |
 | `labels` (settings and `sha256`) | `target.labels`; `labels.ignore_index` is now `target.ignore_index` |
 | `source_type`, `product_id`, `bands`, `dtype`, `crs`, `transform`, `patch_shape` | the same keys in `sources[0]` (named `"image"`) |
-| `writer` | `writer`, plus `layout: files` and `mask_format: png` |
+| `writer` | `writer`, plus `layout: files`, `mask_format: png` and `jpg_subsampling` |
 | (none) | `task`, `mapcv_version`, `target.type`, `target.dtype`, `target.options` |
 
 An image-only dataset has `"target": null`. Split lists are unchanged: one image file name per line. Each patch is one line of `manifest.json`, which makes large manifests about a third smaller. The full schema is in the [dataset format reference](/mapcv/reference/dataset-format/).
@@ -77,6 +77,10 @@ Masks now mark pixels without imagery (padding, failed tiles, NoData, the area o
 ### Removed 0.1 config keys
 
 `tiles:` and `region.zoom`, deprecated in 0.2, are no longer accepted: a config that still has them fails validation and says what to change. Move them into the `imagery` block as described under [Imagery configuration](#imagery-configuration) below.
+
+### Patch footprints
+
+Every dataset now also gets `patches.geojson`: one WGS-84 footprint polygon per patch with its file name, split, row and column, to open in QGIS. It is rewritten by `mapcv split`. Set `writer.footprints: false` to leave it out.
 
 ### The `task` setting
 

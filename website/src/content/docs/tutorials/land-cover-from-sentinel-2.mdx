@@ -19,11 +19,11 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    pip install "mapcv[zarr]"
    ```
 
-   This adds xarray-eopf, xarray, Dask, zarr 2, pyproj and s3fs. On Python 3.14 the extra installs nothing (see [Installation](/mapcv/installation/#optional-extras)).
+   This adds xarray-eopf, xarray, Dask, zarr 2, numba, pyproj, s3fs and pystac-client. On Python 3.14 the extra installs nothing (see [Installation](/mapcv/installation/#optional-extras)).
 
 2. ### Pick a product
 
-   mapcv reads one Sentinel-2 L2A product in ESA's EOPF Zarr format per run. Find one in the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) (collection *sentinel-2-l2a*): filter by your area and date, sort by cloud cover, and copy the product's `.zarr` link. This tutorial uses an almost cloud-free scene from 13 May 2025 (tile 31UFT, 0.03 % cloud):
+   An `eopf_zarr` source reads one Sentinel-2 L2A product in ESA's EOPF Zarr format ([`imagery.search`](/mapcv/reference/configuration/#find-the-product-imagerysearch) can also find the least cloudy one for you). Find one in the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) (collection *sentinel-2-l2a*): filter by your area and date, sort by cloud cover, and copy the product's `.zarr` link. This tutorial uses an almost cloud-free scene from 13 May 2025 (tile 31UFT, 0.03 % cloud):
 
    ```text
    https://objectstore.eodc.eu:2222/e05ab01a9d56408d82ac32d69a5aae2a:202505-s02msil2a/13/products/cpm_v256/S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716.zarr
@@ -86,7 +86,7 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
 
    - **`imagery.bands`** sets both which bands are read and their order in every array. Omit it for all 12 L2A bands.
    - **`resolution`** is the output grid; bands with a coarser native resolution are resampled onto it.
-   - **`image_format: npy`** is required: reflectance is `float32` with `NaN` for no data, which PNG can't store.
+   - **`image_format: npy`** (or `tif`, for georeferenced GeoTIFF patches) is required: reflectance is `float32` with `NaN` for no data, which PNG can't store.
    - **`edge_strategy: drop`** and **`max_empty_ratio: 0.2`** avoid zero-padded and mostly-`NaN` patches at the edges.
 
 5. ### Plan
@@ -115,6 +115,8 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
      Reading imagery and writing patches ━━━━━━━━━━━━━━━ 1/1 chunks • 0:01:11 • eta 0:00:00
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
    │ Patches  25                                                                          │
+   │ Source   eopf_zarr ·                                                                 │
+   │          S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716.zarr           │
    │ Shape    4×128×128 float32                                                           │
    │ Splits   train 18 (72%) · val 2 (8%) · test 5 (20%)                                  │
    │ Time     1m 47s                                                                      │
@@ -131,7 +133,7 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    <Aside type="note" title="Be patient after the plan">
    mapcv first opens the remote product to find its CRS and pixel grid, then crops it to your region; an "Opening imagery…" spinner shows meanwhile. That can take a minute or more. A local copy of the product is much faster.
 
-   Remote reads can time out (`Generation failed: 408, message='Request Time-out', …`). Run the same command again: finished chunks are kept, and a chunk with a failed band read is never written.
+   Remote reads that fail (a time-out, for example) are retried; after four failures the run stops (`Generation failed: reading rows … failed 4 times; last error: …`). Run the same command again: finished chunks are kept, and a chunk with a failed band read is never written.
    </Aside>
 
    About a quarter of the pixels are background: land that none of the four classes covers.

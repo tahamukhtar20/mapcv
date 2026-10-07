@@ -33,7 +33,7 @@ export default defineConfig({
     starlight({
       title: 'mapcv',
       description:
-        'Turn a region and polygon labels into a ready-to-train semantic-segmentation dataset.',
+        'Turn a region, imagery and labels into a ready-to-train remote-sensing dataset.',
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
       logo: {
@@ -52,12 +52,13 @@ export default defineConfig({
           projectName: 'mapcv',
           description:
             'mapcv turns a region, imagery and labels into ready-to-train remote-sensing datasets: ' +
-            'semantic segmentation, object detection (COCO, YOLO) and instance segmentation (COCO RLE). ' +
+            'semantic segmentation, object detection (COCO, YOLO), instance segmentation (COCO RLE), ' +
+            'patch classification, change detection and regression. ' +
             'It is a GDAL-free Python and Rust library and CLI.',
           details: [
             '- Install with `pip install mapcv`; the CLI journey is `mapcv init`, `plan`, `generate`, `info`.',
-            '- Imagery: XYZ tiles, your own GeoTIFF/COG (one file or a mosaic), Sentinel-2 L2A (EOPF Zarr, or COGs from a STAC catalog) and Google Earth Engine. Labels: GeoJSON, KML, GeoPackage, Shapefile or GeoParquet polygons, or a label raster.',
-            '- Always run `mapcv plan` before `mapcv generate`; it downloads nothing.',
+            '- Imagery: XYZ tiles, your own GeoTIFF/COG (one file or a mosaic), Sentinel-2 L2A (EOPF Zarr, or COGs from a STAC catalog) and Google Earth Engine. Labels: GeoJSON, KML, GeoPackage, Shapefile or GeoParquet features, OpenStreetMap, a label raster, or a raster of values for regression.',
+            '- Always run `mapcv plan` before `mapcv generate`; it downloads no imagery.',
             '- AI agents can drive mapcv through its MCP server (`mapcv mcp`); see the page "Use mapcv with AI agents".',
           ].join('\n'),
           optionalLinks: [

@@ -104,6 +104,7 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
    $ mapcv generate mapcv.yaml
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────╮
    │ Patches  77                                                                  │
+   │ Source   xyz · esri_satellite                                                │
    │ Shape    256×256×3 uint8                                                     │
    │ Tiles    77 fetched · 0 failed                                               │
    │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                        │
@@ -127,6 +128,7 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
        - objects/ mapcv's own record of the instances, used to resume and re-split
      - manifest.json
      - splits/ the split as patch names, as for segmentation
+     - patches.geojson footprints of the patches, to open in QGIS
    </FileTree>
 
 5. ### Look at the masks

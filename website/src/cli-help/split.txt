@@ -14,7 +14,8 @@
 │                                    lists (repeatable). Default: 0.1 0.2 0.3.         │
 │ --seed                    <int>    Random seed. [default: 42]                        │
 │ --strategy                <str>    spatial (leakage-safe blocks) | stratified |      │
-│                                    random.                                           │
+│                                    random | region (whole regions of an area of      │
+│                                    interest).                                        │
 │                                    [default: spatial]                                │
 │ --block-size              <int>    Spatial block size in pixels (default: 4 × patch  │
 │                                    size).                                            │

@@ -10,7 +10,7 @@ runs in minutes on a laptop and uses openly licensed labels from OpenStreetMap.
 | [`notebooks/01-explore-a-dataset.ipynb`](notebooks/01-explore-a-dataset.ipynb) | Read `manifest.json` and the split lists; plot the spatial split, class balance and image/mask overlays | `matplotlib` | seconds |
 | [`notebooks/02-train-a-segmentation-model.ipynb`](notebooks/02-train-a-segmentation-model.ipynb) | Train a tiny U-Net in PyTorch for two epochs and report test mIoU | `torch` (optional, not a mapcv dependency) | ~1 min on CPU |
 | [`scripts/python_api.py`](scripts/python_api.py) | The quickstart from Python: `MapcvConfig.model_validate`, `mapcv.plan`, `mapcv.generate` and the `GenerateResult` | `pip install mapcv` | < 1 min |
-| [`scripts/torch_dataset.py`](scripts/torch_dataset.py) | A copy-paste `MapcvDataset(root, split, transform)` that reads PNG/JPG/NPY patches, masks, `splits/*.txt` and `manifest.json` | numpy, Pillow; PyTorch optional | — |
+| [`scripts/torch_dataset.py`](scripts/torch_dataset.py) | A minimal, copy-paste dataset class that reads PNG/JPG/NPY patches, masks, `splits/*.txt` and `manifest.json`. mapcv itself ships a complete one, [`mapcv.data.MapcvDataset`](https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/#a-pytorch-dataset), that reads every task and format | numpy, Pillow; PyTorch optional | — |
 | [`scripts/fetch_osm_labels.py`](scripts/fetch_osm_labels.py) | How the label files were made: one Overpass query each, converted to compact GeoJSON | network | seconds |
 
 ## Run them

@@ -73,8 +73,8 @@ from mapcv.writers.detection import categories
 app = typer.Typer(
     name="mapcv",
     help=(
-        "Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or "
-        "classification dataset.\n\n"
+        "Turn a region, imagery and labels into a ready-to-train segmentation, detection, "
+        "instance segmentation, classification, change detection or regression dataset.\n\n"
         "Start with [bold]mapcv init[/bold], check the cost with [bold]mapcv plan[/bold], "
         "then build with [bold]mapcv generate[/bold]."
     ),
@@ -267,8 +267,8 @@ def _main(
         None, "--debug-log", metavar="FILE", help="Also write the debug log to FILE."
     ),
 ) -> None:
-    """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
-    classification dataset."""
+    """Turn a region, imagery and labels into a ready-to-train segmentation, detection, instance
+    segmentation, classification, change detection or regression dataset."""
     global _quiet
     _quiet = quiet
     _console.no_color = no_color or _NO_COLOR_FROM_ENV
@@ -1051,7 +1051,7 @@ imagery:
   max_connections: 4         # keep requests modest; respect the provider's limits
 
 labels:
-  path: buildings.geojson    # .geojson or .kml, in lon/lat; one instance per feature
+  path: buildings.geojson    # any vector label format; one instance per feature
   label_field: null          # property holding the class; null = every feature is class 1
 
 instance:

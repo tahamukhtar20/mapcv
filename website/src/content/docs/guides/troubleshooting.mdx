@@ -5,10 +5,10 @@ description: Common mapcv errors and warnings, what they mean, and how to fix th
 
 import { Aside } from '@astrojs/starlight/components';
 
-Messages below are quoted from mapcv 0.2.0. Use your browser's find (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd>) with a few words of your error.
+Messages below are quoted from mapcv. Use your browser's find (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd>) with a few words of your error.
 
 <Aside type="tip">
-Most problems show up in `mapcv plan`, which downloads nothing. Run it after every config change.
+Most problems show up in `mapcv plan`, which downloads no imagery (it only reads a remote GeoTIFF's header, and fetches `labels.osm`). Run it after every config change.
 </Aside>
 
 <Aside type="tip">
@@ -32,26 +32,29 @@ Fix the fields above, or start from a working config with mapcv init.
 | Message | Fix |
 | --- | --- |
 | `Config file not found: …` | Check the path, or create one with `mapcv init` |
-| `imagery.type is required: 'xyz' or 'eopf_zarr'` | Add `type:` to the `imagery` block |
+| `imagery.type is required: 'xyz', 'geotiff', 'eopf_zarr' or 'stac_cog'` | Add `type:` to the `imagery` block |
 | `region.west must be less than region.east` (or south/north) | Coordinates are swapped. The order is west, south, east, north in degrees |
 | `the built-in 'google_satellite' source was removed …` | Google's terms do not allow it. Choose another source ([Migrating to 0.2](/mapcv/project/migration/#google-imagery-preset)) |
 | `the built-in 'osm' source was removed …` | OSM's tile servers forbid bulk downloads. Use a commercial or self-hosted OSM tile service via `url_template`, or use OSM *data* as labels ([Prepare labels](/mapcv/guides/prepare-labels/#use-openstreetmap-data-as-labels)) |
 | `unknown tile source '…'; built-in sources: …` | Typo in `source`, or use `url_template` |
-| `imagery: provide either 'source' or 'url_template'` | Add one of them |
+| `imagery: provide either 'source', 'url_template' or 'earth_engine'` | Add one of them |
 | `imagery: set 'source' or 'url_template', not both` | Keep only one of them |
 | `sampler.stide: Extra inputs are not permitted` | An unknown key, usually a typo (here `stride`) or an option from a different mapcv version. Fix or remove the field named before the colon |
 | `url_template must contain {x}, {y} and {z}; missing …` | Add the placeholders |
 | `url_template has unsupported placeholder(s) {s} (replace {s} with one subdomain, e.g. 'a')` | Write e.g. `https://a.tile.example.com/{z}/{x}/{y}.png` |
 | `EOPF Zarr imagery requires writer.image_format='npy' (or 'tif')` | Set `writer.image_format: npy` (or `tif` for georeferenced GeoTIFF patches) |
-| `XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'` | `npy` is only for Sentinel-2 |
+| `XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'` | `npy` is for Sentinel-2 and GeoTIFF imagery |
 | `labels.classes requires labels.label_field` | Name the property that holds the class |
 | `labels.classes['…'] must be an integer in 1..255` | IDs are mask values; 0 is background |
 | `imagery.path must not contain credentials, query strings, or fragments; …` | Only local or anonymous public products are supported. Download private products first |
 | `` `tiles:` was replaced by `imagery:` in mapcv 0.2 and removed in 0.3; … `` | Move the old `tiles` block under `imagery: {type: xyz, zoom: …, source: …}` and delete `region.zoom` |
 | `` `region.zoom` was moved to `imagery.zoom` in mapcv 0.2 and removed in 0.3; … `` | Delete `region.zoom` and set `imagery.zoom` |
-| `Input should be 'spatial', 'stratified' or 'random'` | Typo in `split.strategy` or `--strategy` |
+| `Input should be 'spatial', 'stratified', 'random' or 'region'` | Typo in `split.strategy` or `--strategy` |
+| `split.strategy: region holds out whole areas of interest, which come from region.path; …` | Set `region.path` to a file of area polygons, or use another strategy |
+| `imagery.path … is a folder; to read the GeoTIFFs in it as one mosaic, use a pattern such as …/*.tif` | Give a glob pattern, not the folder |
+| `writer.world_files adds .pgw/.jgw files to PNG and JPG patches and …, so with image_format '…' it would write none; remove it` | Remove `world_files`: GeoTIFF patches carry their georeferencing |
 
-The `tiles:` and `region.zoom` errors mean a 0.1 config: both layouts were removed in 0.3.0. See [Migrating to 0.2](/mapcv/project/migration/).
+The `tiles:` and `region.zoom` errors mean a 0.1 config: both layouts were removed in 0.3.0. See [Migrating](/mapcv/project/migration/).
 
 Unknown keys are errors, reported with their full path:
 
@@ -82,7 +85,7 @@ Fix the fields above, or start from a working config with mapcv init.
 
 ## Tile downloads (XYZ)
 
-**`Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold)`** More than `max_failed_ratio` of a chunk's tiles failed under `policy: lenient`. Look at one tile URL in a browser. Check the zoom (many servers have no tiles above 19), your key and quota, and `max_connections`. Then re-run: finished chunks are kept.
+**`Generation failed: Too many failed tiles: 2/2 (100.0% exceeds 5.0% threshold): 2 x HTTP 503 (e.g. …). If the provider is busy or rate-limiting, try again later or lower imagery.max_connections; raise imagery.max_failed_ratio to accept gaps.`** More than `max_failed_ratio` of a chunk's tiles failed under `policy: lenient`. Look at one tile URL in a browser. Check the zoom (many servers have no tiles above 19), your key and quota, and `max_connections`. Then re-run: finished chunks are kept.
 
 **`HTTP 404 Not Found for URL: …`** (with `policy: strict`) The server has no tile there: wrong zoom, wrong `{x}`/`{y}` order in `url_template`, or the area is outside its coverage. 403/401 mean a missing or invalid key.
 
@@ -100,9 +103,11 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Cannot resume: … was generated with a different configuration (labels); use a new writer.staging_dir or remove the old dataset`** The folder already holds a dataset built with other settings (the fields in brackets): for example `labels` after editing the label file, `writer` after switching between `png` and `jpg`, `patch_shape, sampler` after changing the patch size. Point `writer.staging_dir` at a new folder or undo the change. Details: [What must stay the same](/mapcv/guides/large-regions-and-resuming/#what-must-stay-the-same).
 
-**`… is a version-1 manifest from mapcv 0.1.x and cannot be resumed`** Generate into a new folder. `mapcv split` and `mapcv info` still read the old one.
+**`… is a version-1 manifest from mapcv 0.1.x and cannot be resumed`** Generate into a new folder. `mapcv split` and `mapcv info` still read the old one. A dataset made by mapcv 0.2 with `sampler.mode: random` cannot be resumed either, and a 0.2 dataset resumes only with `labels.ignore_index: null` (and, for JPEG patches, `writer.jpg_subsampling: "4:4:4"`); the message says which. See [Datasets made by mapcv 0.2](/mapcv/project/migration/#datasets-made-by-mapcv-02).
 
-**`… was written by a newer mapcv (manifest version N); upgrade mapcv to read it`** The dataset was made with a newer release. Upgrade with `pip install -U mapcv`.
+**`… manifest version N was written by a newer mapcv; upgrade mapcv to read it`** The dataset was made with a newer release. Upgrade with `pip install -U mapcv`.
+
+**`… manifest.json cannot be read (…). It may be incomplete or edited by hand: restore it, or generate the dataset again into a new folder`** The manifest is truncated or was edited. Restore it from a copy, or generate again into a new folder.
 
 **`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles or 5 GB without a terminal. Read the plan, then pass `--yes`.
 
@@ -128,7 +133,7 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Unable to open anonymous EOPF product '…': open_group() got an unexpected keyword argument 'zarr_format'`** The environment has xarray 2026.9 or newer, which needs zarr 3, next to the zarr 2 that xarray-eopf requires. `pip install "mapcv[zarr]"` keeps xarray below 2026.9; in an existing environment run `pip install "xarray<2026.9"`.
 
-**`Generation failed: 408, message='Request Time-out', url='…/measurements/reflectance/r10m/b02/1.3'`** A read from the remote product timed out. Run the same command again: finished chunks are kept.
+**`Generation failed: reading rows 0-1024 failed 4 times; last error: …`** A read from the remote product failed (for example a time-out) four times in a row. Run the same command again: finished chunks are kept.
 
 **`band b02 returned no data for rows … while other bands did; the read probably failed (e.g. a network timeout).`** A band came back empty where the other bands have data, which usually means a failed remote read. mapcv stops instead of writing broken patches; run the same command again to resume from that chunk.
 
@@ -142,6 +147,6 @@ Fix the fields above, or start from a working config with mapcv init.
 
 ## Still stuck?
 
-Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, retries and why a resume was refused. `--debug-log run.log` writes the same to a file.
+Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, failed tiles and their causes, and why a resume was refused. `--debug-log run.log` writes the same to a file.
 
 Then open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv doctor` (or `mapcv doctor --json`; it prints no secrets), `mapcv validate <config>` (it hides URLs and keys) and the `--debug` output or log file. Tile URLs show only their host there; remove any other API keys from anything you paste.

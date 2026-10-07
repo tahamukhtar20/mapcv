@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from shapely.geometry import Polygon
 
 from benchmarks import baselines as baseline_registry
-from benchmarks.checks import CheckReport, check_dataset, tree_hash
+from benchmarks.checks import CheckReport, check_dataset, compare_with_mapcv, tree_hash
 from benchmarks.machine import load_average, machine_info, mapcv_info, timestamp
 from benchmarks.measure import (
     ProcessResult,
@@ -234,6 +234,12 @@ def _run_baselines(
     out: Dict[str, Any] = {}
     problems: List[str] = []
     for name in ctx.baselines:
+        baseline = baseline_registry.BASELINES[name]
+        reason = baseline.missing()
+        if reason is not None:
+            out[name] = {"skipped": reason}
+            ctx.log(f"    baseline {name}: skipped ({reason})")
+            continue
         results: List[ProcessResult] = []
         for repeat in range(ctx.repeat):
             output = run_dir / f"baseline-{name}"
@@ -250,7 +256,7 @@ def _run_baselines(
                 max_connections=16,
                 output_dir=output,
             )
-            command = baseline_registry.BASELINES[name].command(work)
+            command = baseline.command(work)
             result = run_process(command, run_dir, run_dir / f"baseline-{name}-{repeat}.log")
             results.append(result)
             if result.exit_code != 0:
@@ -259,6 +265,27 @@ def _run_baselines(
             "runs": [r.to_json() for r in results],
             "summary": _timing_summary(results, scenario.tiles, None),
         }
+        dataset = run_dir / "dataset"
+        output = run_dir / f"baseline-{name}"
+        # Compared when the baseline writes the comparable layout (images/r<row>_c<col>.png);
+        # otherwise its data is reported as unchecked.
+        if (
+            results
+            and results[-1].exit_code == 0
+            and (dataset / "manifest.json").exists()
+            and (output / "images").is_dir()
+        ):
+            comparison = compare_with_mapcv(
+                dataset, output, compare_images=scenario.image_format != "jpg"
+            )
+            out[name]["comparison"] = comparison
+            if not comparison["same_data"]:
+                message = f"baseline {name} produced different data than mapcv: {comparison}"
+                if baseline.reference:
+                    # A reference burns labels with GDAL's rules: mapcv must match it.
+                    problems.append(f"{message} (its time is not comparable)")
+                else:
+                    out[name]["finding"] = f"{message}; its time is not comparable"
     return out, problems
 
 
@@ -395,7 +422,7 @@ def run_suite(
         raise ValueError(f"unknown baseline(s) {missing}; available: {registered}")
 
     temporary = workdir is None
-    root = Path(tempfile.mkdtemp(prefix="mapcv-bench-")) if workdir is None else workdir
+    root = Path(tempfile.mkdtemp(prefix="mapcv-bench-")) if workdir is None else workdir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     document: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

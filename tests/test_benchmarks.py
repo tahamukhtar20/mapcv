@@ -14,7 +14,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -211,9 +211,13 @@ def test_baseline_hook_measures_a_registered_baseline(
 ) -> None:
     class Noop:
         name = "noop"
+        reference = False
 
         def command(self, work: baselines.Workload) -> List[str]:
             return [sys.executable, "-c", "pass"]
+
+        def missing(self) -> Optional[str]:
+            return None
 
     monkeypatch.setitem(baselines.BASELINES, "noop", Noop())
 
@@ -252,3 +256,126 @@ def test_failure_injection_is_deterministic_and_about_the_requested_rate() -> No
     assert failing == [is_failing(x, 5, 50) for x in range(10_000)]
     assert 100 < sum(failing) < 300
     assert not is_failing(1, 1, 0)
+
+
+def test_the_rasterio_script_makes_mapcvs_data(tmp_path: Path) -> None:
+    """The registered baseline writes the same patches as mapcv on a quick scenario, and a
+    broken copy of its output is reported as different data."""
+    results = run_suite(["Q"], repeat=1, baselines=["rasterio-script"], workdir=tmp_path)
+    assert results["ok"], results["problems"]
+    comparison = results["scenarios"]["Q"]["baselines"]["rasterio-script"]["comparison"]
+    assert comparison["same_data"] and comparison["images_differing"] == 0
+    assert comparison["patches_mapcv"] == comparison["patches_baseline"] > 0
+
+    run_dir = tmp_path / "Q"
+    images = sorted((run_dir / "baseline-rasterio-script" / "images").glob("*.png"))
+    pixels = np.asarray(Image.open(images[0])).copy()
+    pixels[0, 0] ^= 1
+    Image.fromarray(pixels).save(images[0])
+    images[1].unlink()
+    broken = checks.compare_with_mapcv(run_dir / "dataset", run_dir / "baseline-rasterio-script")
+    assert broken["images_differing"] == 1 and broken["only_mapcv"] == 1
+    assert not broken["same_data"]
+
+
+def test_compare_table_marks_baselines_with_other_data() -> None:
+    from benchmarks.cli import compare_table
+
+    timing = {"wall_s": {"median": 2.0}, "peak_rss_mb": {"median": 100}}
+    document = {
+        "scenarios": {
+            "M": {
+                "summary": timing,
+                "baselines": {
+                    "same": {
+                        "summary": {"wall_s": {"median": 3.0}, "peak_rss_mb": {"median": 50}},
+                        "comparison": {"same_data": True},
+                    },
+                    "other": {
+                        "summary": {"wall_s": {"median": 1.0}, "peak_rss_mb": {"median": 50}},
+                        "comparison": {"same_data": False},
+                    },
+                },
+            }
+        }
+    }
+    text = compare_table(document)
+    assert "1.50×" in text and "not comparable" in text
+    markdown = compare_table(document, markdown=True)
+    assert (
+        markdown.splitlines()[0].startswith("| scenario | tool |")
+        and "| M | other | 1.00 s | 50 MB | not comparable | no |" in markdown
+    )
+
+
+def test_every_baseline_is_registered() -> None:
+    assert {"rasterio-script", "gdal-cli", "torchgeo", "leafmap"} <= set(baselines.BASELINES)
+    assert baselines.BASELINES["rasterio-script"].reference
+    assert baselines.BASELINES["gdal-cli"].reference
+    assert not baselines.BASELINES["torchgeo"].reference
+
+
+def test_missing_tools_are_named(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class NeedsNothing(baselines._PythonScript):
+        modules = ["json"]
+
+    class NeedsMissing(baselines._PythonScript):
+        modules = ["json", "surely_not_installed_mapcv"]
+        python_variable = "MAPCV_BENCH_TEST_PYTHON"
+
+    assert NeedsNothing().missing() is None
+    assert "surely_not_installed_mapcv" in str(NeedsMissing().missing())
+    monkeypatch.setenv("MAPCV_BENCH_TEST_PYTHON", str(tmp_path / "no-python"))
+    assert "not found" in str(NeedsMissing().missing())
+    monkeypatch.setenv("GDAL_BIN", str(tmp_path))
+    assert "GDAL_BIN" in str(baselines.BASELINES["gdal-cli"].missing())
+
+
+def _fake_baseline(name: str, reference: bool, missing: Optional[str] = None) -> Any:
+    """A baseline that writes one black patch where mapcv writes many."""
+    script = (
+        "import sys, pathlib; from PIL import Image; out = pathlib.Path(sys.argv[1]);"
+        "[(out / d).mkdir() for d in ('images', 'masks')];"
+        "Image.new('RGB', (256, 256)).save(out / 'images' / 'r0_c0.png');"
+        "Image.new('L', (256, 256)).save(out / 'masks' / 'r0_c0.png')"
+    )
+
+    class Fake:
+        def command(self, work: baselines.Workload) -> List[str]:
+            return [sys.executable, "-c", script, str(work.output_dir)]
+
+        def missing(self) -> Optional[str]:
+            return missing
+
+    fake = Fake()
+    fake.name = name  # type: ignore[attr-defined]
+    fake.reference = reference  # type: ignore[attr-defined]
+    return fake
+
+
+def test_other_data_fails_only_against_a_reference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setitem(baselines.BASELINES, "tool", _fake_baseline("tool", reference=False))
+    monkeypatch.setitem(baselines.BASELINES, "ref", _fake_baseline("ref", reference=True))
+    monkeypatch.setitem(baselines.BASELINES, "absent", _fake_baseline("absent", False, "no x"))
+
+    results = run_suite(["Q"], repeat=1, baselines=["tool", "absent"], workdir=tmp_path / "a")
+    assert results["ok"], results["problems"]
+    tool = results["scenarios"]["Q"]["baselines"]["tool"]
+    assert tool["comparison"]["same_data"] is False and "not comparable" in tool["finding"]
+    assert results["scenarios"]["Q"]["baselines"]["absent"] == {"skipped": "no x"}
+
+    results = run_suite(["Q"], repeat=1, baselines=["ref"], workdir=tmp_path / "b")
+    assert not results["ok"]
+    assert any("baseline ref produced different data" in p for p in results["problems"])
+
+
+def test_compare_table_shows_skipped_baselines() -> None:
+    from benchmarks.cli import compare_table
+
+    timing = {"wall_s": {"median": 2.0}, "peak_rss_mb": {"median": 100}}
+    document = {
+        "scenarios": {"M": {"summary": timing, "baselines": {"gone": {"skipped": "no GDAL"}}}}
+    }
+    assert "| M | gone | skipped | — | — | — |" in compare_table(document, markdown=True)

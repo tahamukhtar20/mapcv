@@ -74,7 +74,7 @@ CI runs every target for a minute on pull requests that touch a parser, and for 
 A crash is saved under `fuzz/artifacts/<target>/`; fix the parser (return an error, never panic or allocate by a size the file claims) and add a regression test with the minimized input.
 The parsers build without PyO3 for this: `cargo test --no-default-features` runs their unit tests without a Python toolchain.
 
-**Docs figures:** the images in the docs (`website/src/assets/figures/`) are real mapcv datasets over openly licensed data (Dutch national aerial photos, CC BY 4.0; Copernicus Sentinel-2; OpenStreetMap labels). Rebuild them after a change that alters outputs (needs network, a few minutes):
+**Docs figures:** the images in the docs (`website/src/assets/figures/`) are real mapcv datasets over openly licensed data (Dutch national aerial photos, CC BY 4.0; Copernicus Sentinel-2; OpenStreetMap labels). They share one clean style (Lato, a muted palette, white background, a left-aligned title stating what the figure shows). Rebuild them after a change that alters outputs (needs network and `pip install "mapcv[docs]"` for matplotlib; a few minutes):
 ```bash
 python website/scripts/figures.py .figures-work    # datasets go to .figures-work/; delete it afterwards
 ```

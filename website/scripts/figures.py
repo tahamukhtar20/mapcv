@@ -13,20 +13,30 @@ Usage (needs network; takes a few minutes):
     python website/scripts/figures.py WORKDIR
 
 WORKDIR holds the generated datasets (inside your checkout, deleted when you like); the
-figures are written to website/src/assets/figures/ as WebP.
+figures are written to website/src/assets/figures/ as WebP. They share one clean style:
+the Lato font (downloaded once, SIL Open Font License; DejaVu Sans if offline), a muted
+palette, white background, a short left-aligned title stating what the figure shows, and
+the data credit in grey. Needs matplotlib (``pip install "mapcv[docs]"``).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import matplotlib
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch, Rectangle
+from PIL import Image
 
 import mapcv
 
@@ -42,22 +52,157 @@ EOPF_PRODUCT = (
 CREDIT_NL = "Imagery: Beeldmateriaal Nederland (CC BY 4.0) · Labels: © OpenStreetMap contributors"
 CREDIT_S2 = "Contains modified Copernicus Sentinel data 2025 · Labels: © OpenStreetMap contributors"
 
-BACKGROUND = (24, 27, 33)
-TEXT = (230, 232, 236)
-GAP = 8
-# One colour per class or split, readable on imagery.
-PALETTE = [
-    (255, 196, 0),
-    (0, 200, 255),
-    (255, 64, 129),
-    (118, 255, 3),
-    (179, 136, 255),
-    (255, 145, 0),
-]
+# The muted seaborn "deep" palette, written out so the script needs no seaborn.
+DEEP = {
+    "blue": "#4c72b0",
+    "orange": "#dd8452",
+    "green": "#55a868",
+    "red": "#c44e52",
+    "purple": "#8172b3",
+    "brown": "#937860",
+    "pink": "#da8bc3",
+    "grey": "#8c8c8c",
+    "olive": "#ccb974",
+    "cyan": "#64b5cd",
+}
+INK = "#1a1a1a"
+MUTED = "#6b7280"
+LATO = "https://raw.githubusercontent.com/google/fonts/main/ofl/lato/Lato-{}.ttf"
 
 
-def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    return ImageFont.load_default(size=size)
+def rgb_of(color: str) -> tuple[int, int, int]:
+    value = color.lstrip("#")
+    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
+def apply_clean_style() -> str:
+    """Lato (fetched once into the user cache), white background, muted palette."""
+    from matplotlib import font_manager
+
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "mapcv-figures"
+    cache.mkdir(parents=True, exist_ok=True)
+    family = "DejaVu Sans"
+    for weight in ("Regular", "Bold", "Italic"):
+        path = cache / f"Lato-{weight}.ttf"
+        try:
+            if not path.exists():
+                urllib.request.urlretrieve(LATO.format(weight), path)
+            font_manager.fontManager.addfont(str(path))
+            family = "Lato"
+        except OSError:
+            pass  # offline: keep DejaVu Sans
+    matplotlib.rcParams.update(
+        {
+            "font.family": family,
+            "font.size": 9,
+            "figure.titlesize": 11,
+            "figure.titleweight": "bold",
+            "axes.titlesize": 8.5,
+            "axes.titleweight": "regular",
+            "text.color": INK,
+            "legend.fontsize": 8,
+            "legend.frameon": False,
+            "figure.facecolor": "white",
+            "savefig.facecolor": "white",
+        }
+    )
+    return family
+
+
+def panels(
+    tiles: Sequence[Image.Image],
+    columns: int,
+    title: str,
+    credit: str,
+    labels: Sequence[str] | None = None,
+    row_labels: Sequence[str] | None = None,
+    legend: Sequence[tuple[str, str]] | None = None,
+    boxes: Sequence[Sequence[tuple[float, float, float, float, str]]] | None = None,
+    width: float = 7.2,
+) -> plt.Figure:
+    """``tiles`` in ``columns``: a left-aligned title, optional per-tile captions, row
+    labels, (x, y, w, h, colour) boxes per tile, a legend and the credit line."""
+    rows = -(-len(tiles) // columns)
+    tile_w = (width - (0.32 if row_labels else 0.05)) / columns
+    aspect = tiles[0].height / tiles[0].width
+    tile_h = tile_w * aspect + (0.2 if labels else 0.0)
+    top, bottom = 0.42 + (0.1 if labels else 0.0), 0.24 + (0.28 if legend else 0.0)
+    height = rows * tile_h + top + bottom
+    fig, axes = plt.subplots(rows, columns, figsize=(width, height), squeeze=False)
+    fig.subplots_adjust(
+        left=(0.32 if row_labels else 0.02) / width,
+        right=1 - 0.02 / width,
+        top=1 - top / height,
+        bottom=bottom / height,
+        wspace=0.04,
+        hspace=0.18 if labels else 0.04,
+    )
+    for index, ax in enumerate(axes.flat):
+        ax.set_axis_off()
+        if index >= len(tiles):
+            continue
+        ax.imshow(np.asarray(tiles[index]), interpolation="nearest")
+        if labels:
+            ax.set_title(labels[index], loc="left", pad=3)
+        for x, y, w, h, color in boxes[index] if boxes else ():
+            ax.add_patch(
+                Rectangle((x - 0.5, y - 0.5), w, h, fill=False, edgecolor=color, linewidth=0.9)
+            )
+    for r, name in enumerate(row_labels or ()):
+        axes[r, 0].text(
+            -0.05,
+            0.5,
+            name,
+            transform=axes[r, 0].transAxes,
+            rotation=90,
+            ha="right",
+            va="center",
+            color=MUTED,
+            fontsize=8.5,
+        )
+    fig.suptitle(title, x=0.02 / width, y=1 - 0.12 / height, ha="left", va="top")
+    if legend:
+        fig.legend(
+            handles=[
+                Patch(facecolor=color, edgecolor="none", label=name) for name, color in legend
+            ],
+            loc="lower left",
+            bbox_to_anchor=(0.0, 0.2 / height),
+            ncol=len(legend),
+            handlelength=1.2,
+            columnspacing=1.6,
+        )
+    fig.text(0.02 / width, 0.06 / height, credit, color=MUTED, fontsize=7, ha="left", va="bottom")
+    return fig
+
+
+def tint(
+    image: Image.Image, mask: np.ndarray, colors: dict[int, str], alpha: float = 0.42
+) -> Image.Image:
+    """Colour each class (or instance) of ``mask`` over ``image``, with a 1 px outline."""
+    pixels = np.asarray(image, dtype=np.float32).copy()
+    for value, color in colors.items():
+        inside = mask == value
+        if not inside.any():
+            continue
+        rgb = np.array(rgb_of(color), dtype=np.float32)
+        pixels[inside] = (1 - alpha) * pixels[inside] + alpha * rgb
+        edge = inside & ~(
+            np.roll(inside, 1, 0)
+            & np.roll(inside, -1, 0)
+            & np.roll(inside, 1, 1)
+            & np.roll(inside, -1, 1)
+        )
+        pixels[edge] = rgb
+    return Image.fromarray(pixels.astype(np.uint8))
+
+
+def save(fig: plt.Figure, name: str) -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / f"{name}.webp"
+    fig.savefig(path, dpi=200, pil_kwargs={"quality": 85, "method": 6})
+    plt.close(fig)
+    print(f"wrote {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)")
 
 
 def pdok(layer: str = "Actueel_orthoHR") -> dict[str, Any]:
@@ -94,69 +239,6 @@ def rgb(dataset: Path, entry: dict[str, Any]) -> Image.Image:
     return Image.open(path).convert("RGB")
 
 
-def tint(
-    image: Image.Image, mask: np.ndarray, colors: dict[int, tuple[int, int, int]]
-) -> Image.Image:
-    """Colour each class (or instance) of ``mask`` over ``image``, with an outline."""
-    pixels = np.asarray(image, dtype=np.float32).copy()
-    for value, color in colors.items():
-        inside = mask == value
-        if not inside.any():
-            continue
-        pixels[inside] = 0.55 * pixels[inside] + 0.45 * np.array(color, dtype=np.float32)
-        edge = inside & ~(
-            np.roll(inside, 1, 0)
-            & np.roll(inside, -1, 0)
-            & np.roll(inside, 1, 1)
-            & np.roll(inside, -1, 1)
-        )
-        pixels[edge] = color
-    return Image.fromarray(pixels.astype(np.uint8))
-
-
-def grid(
-    tiles: Sequence[Image.Image],
-    columns: int,
-    caption: str,
-    labels: Sequence[str] | None = None,
-    legend: Sequence[tuple[str, tuple[int, int, int]]] | None = None,
-    size: int = 256,
-    height: int | None = None,
-) -> Image.Image:
-    """Tiles ``size`` wide (and ``height`` high, default square) in ``columns``."""
-    tile_h = height or size
-    rows = -(-len(tiles) // columns)
-    label_h = 26 if labels else 0
-    legend_h = 34 if legend else 0
-    width = columns * size + (columns + 1) * GAP
-    total_h = rows * (tile_h + label_h) + (rows + 1) * GAP + legend_h + 30
-    canvas = Image.new("RGB", (width, total_h), BACKGROUND)
-    draw = ImageDraw.Draw(canvas)
-    for index, tile in enumerate(tiles):
-        r, c = divmod(index, columns)
-        x, y = GAP + c * (size + GAP), GAP + r * (tile_h + label_h + GAP)
-        canvas.paste(tile.resize((size, tile_h), Image.Resampling.NEAREST), (x, y))
-        if labels:
-            draw.text((x + 4, y + tile_h + 4), labels[index], fill=TEXT, font=font(16))
-    y = GAP + rows * (tile_h + label_h + GAP)
-    if legend:
-        x = GAP
-        for name, color in legend:
-            draw.rectangle((x, y + 6, x + 18, y + 24), fill=color)
-            draw.text((x + 26, y + 6), name, fill=TEXT, font=font(16))
-            x += 40 + int(draw.textlength(name, font=font(16)))
-        y += legend_h
-    draw.text((GAP, y + 4), caption, fill=(160, 165, 175), font=font(13))
-    return canvas
-
-
-def save(image: Image.Image, name: str) -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / f"{name}.webp"
-    image.save(path, "WEBP", quality=82, method=6)
-    print(f"wrote {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)")
-
-
 def busiest(entries: list[dict[str, Any]], count: int, score: Any) -> list[dict[str, Any]]:
     """``count`` patches with the highest ``score``, spread over the dataset (stable)."""
     ranked = sorted(entries, key=lambda e: (-score(e), e["row"], e["col"]))
@@ -185,14 +267,19 @@ def segmentation(workdir: Path, labels: Path) -> None:
     )
     meta = manifest(dataset)
     picked = busiest(meta["patches"], 4, lambda e: e["summary"].get("class_pixels", {}).get("1", 0))
-    tiles: list[Image.Image] = []
-    for entry in picked:
-        tiles.append(rgb(dataset, entry))
+    tiles: list[Image.Image] = [rgb(dataset, entry) for entry in picked]
     for entry in picked:
         mask = np.asarray(Image.open(dataset / entry["files"]["mask"]))
-        tiles.append(tint(rgb(dataset, entry), mask, {1: PALETTE[0]}))
+        tiles.append(tint(rgb(dataset, entry), mask, {1: DEEP["orange"]}))
     save(
-        grid(tiles, 4, CREDIT_NL, legend=[("building (mask value 1)", PALETTE[0])]),
+        panels(
+            tiles,
+            4,
+            "Building masks on exactly the imagery's pixel grid",
+            CREDIT_NL,
+            row_labels=["image", "mask"],
+            legend=[("building (mask value 1)", DEEP["orange"])],
+        ),
         "segmentation-patches",
     )
 
@@ -220,21 +307,25 @@ def detection(workdir: Path, labels: Path) -> None:
     picked = busiest(
         meta["patches"], 4, lambda e: len(boxes.get(Path(e["files"]["image"]).name, []))
     )
-    tiles = []
-    for entry in picked:
-        image = rgb(dataset, entry)
-        draw = ImageDraw.Draw(image)
-        for ann in boxes.get(Path(entry["files"]["image"]).name, []):
-            x, y, w, h = ann["bbox"]
-            color = PALETTE[1] if ann.get("truncated") else PALETTE[0]
-            draw.rectangle((x, y, x + w, y + h), outline=color, width=2)
-        tiles.append(image)
+    tiles = [rgb(dataset, entry) for entry in picked]
+    drawn = [
+        [
+            (*ann["bbox"], DEEP["cyan"] if ann.get("truncated") else DEEP["orange"])
+            for ann in boxes.get(Path(entry["files"]["image"]).name, [])
+        ]
+        for entry in picked
+    ]
     save(
-        grid(
+        panels(
             tiles,
             4,
+            "One box per building, from the polygons clipped to each patch",
             CREDIT_NL,
-            legend=[("building", PALETTE[0]), ("building cut by the patch edge", PALETTE[1])],
+            legend=[
+                ("building", DEEP["orange"]),
+                ("building cut by the patch edge (truncated)", DEEP["cyan"]),
+            ],
+            boxes=drawn,
         ),
         "detection-boxes",
     )
@@ -260,15 +351,21 @@ def instance(workdir: Path, labels: Path) -> None:
         return len(np.unique(ids)) - 1
 
     picked = busiest(meta["patches"], 4, count)
-    rng = np.random.default_rng(3)
+    cycle = list(DEEP.values())
     tiles = []
     for entry in picked:
         ids = np.asarray(Image.open(dataset / entry["files"]["mask"])).astype(np.int64)
-        colors = {
-            int(v): tuple(int(c) for c in rng.integers(60, 256, 3)) for v in np.unique(ids) if v
-        }
-        tiles.append(tint(rgb(dataset, entry), ids, colors))  # type: ignore[arg-type]
-    save(grid(tiles, 4, CREDIT_NL + " · one colour per building"), "instance-masks")
+        colors = {int(v): cycle[int(v) % len(cycle)] for v in np.unique(ids) if v}
+        tiles.append(tint(rgb(dataset, entry), ids, colors, alpha=0.5))
+    save(
+        panels(
+            tiles,
+            4,
+            "Every building is its own instance, even where buildings touch",
+            CREDIT_NL + " · one colour per instance",
+        ),
+        "instance-masks",
+    )
 
 
 def classification(workdir: Path, labels: Path) -> None:
@@ -299,7 +396,16 @@ def classification(workdir: Path, labels: Path) -> None:
         for entry in busiest(by_class[cid], 3, coverage):
             tiles.append(rgb(dataset, entry))
             captions.append(names.get(cid, str(cid)).replace("_", " "))
-    save(grid(tiles, 6, CREDIT_NL, labels=captions, size=160), "classification-patches")
+    save(
+        panels(
+            tiles,
+            6,
+            "Each patch gets the class that covers at least half of it",
+            CREDIT_NL,
+            labels=captions,
+        ),
+        "classification-patches",
+    )
 
 
 def land_cover(workdir: Path, labels: Path) -> None:
@@ -326,18 +432,18 @@ def land_cover(workdir: Path, labels: Path) -> None:
         return sum(1 for v in entry["summary"].get("class_pixels", {}).values() if v > 400)
 
     picked = busiest(meta["patches"], 3, variety)
-    colors = {cid: PALETTE[i] for i, cid in enumerate(classes.values())}
-    tiles = []
-    for entry in picked:
-        tiles.append(rgb(dataset, entry))
+    colors = {1: DEEP["red"], 2: DEEP["olive"], 3: DEEP["green"], 4: DEEP["blue"]}
+    tiles = [rgb(dataset, entry) for entry in picked]
     for entry in picked:
         mask = np.asarray(Image.open(dataset / entry["files"]["mask"]))
         tiles.append(tint(rgb(dataset, entry), mask, colors))
     save(
-        grid(
+        panels(
             tiles,
             3,
+            "Sentinel-2 patches at 10 m with four land-cover classes",
             CREDIT_S2,
+            row_labels=["true colour", "mask"],
             legend=[(name.replace("_", " "), colors[cid]) for name, cid in classes.items()],
         ),
         "land-cover-patches",
@@ -354,31 +460,25 @@ def spatial_split(workdir: Path) -> None:
             split_of[line] = name
     rows = max(e["row"] for e in meta["patches"]) + 256
     cols = max(e["col"] for e in meta["patches"]) + 256
-    mosaic = Image.new("RGB", (cols, rows), BACKGROUND)
+    mosaic = Image.new("RGB", (cols, rows), "white")
     for entry in meta["patches"]:
         mosaic.paste(rgb(dataset, entry), (entry["col"], entry["row"]))
-    colors = {"train": PALETTE[3], "val": PALETTE[0], "test": PALETTE[2]}
-    scale = 1024 / cols
-    mosaic = mosaic.resize((1024, round(rows * scale)), Image.Resampling.LANCZOS)
-    overlay = Image.new("RGBA", mosaic.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    for entry in meta["patches"]:
-        split = split_of.get(Path(entry["files"]["image"]).name, "train")
-        x, y = entry["col"] * scale, entry["row"] * scale
-        box = (x + 2, y + 2, x + 256 * scale - 3, y + 256 * scale - 3)
-        draw.rectangle(box, fill=(*colors[split], 60), outline=(*colors[split], 255), width=3)
-    mosaic = Image.alpha_composite(mosaic.convert("RGBA"), overlay).convert("RGB")
-    save(
-        grid(
-            [mosaic],
-            1,
-            CREDIT_NL + " · each square is one 256 px patch",
-            legend=list(colors.items()),
-            size=1024,
-            height=mosaic.height,
-        ),
-        "spatial-split",
+    colors = {"train": DEEP["blue"], "val": DEEP["orange"], "test": DEEP["red"]}
+    fig = panels(
+        [mosaic],
+        1,
+        "Spatial split: val and test come in whole blocks, away from train",
+        CREDIT_NL + " · each square is one 256 px patch",
+        legend=list(colors.items()),
     )
+    ax = fig.axes[0]
+    for entry in meta["patches"]:
+        color = colors[split_of.get(Path(entry["files"]["image"]).name, "train")]
+        x, y = entry["col"] + 6, entry["row"] + 6
+        fill = 0.06 if color == colors["train"] else 0.28  # the held-out blocks stand out
+        ax.add_patch(Rectangle((x, y), 244, 244, facecolor=color, alpha=fill, edgecolor="none"))
+        ax.add_patch(Rectangle((x, y), 244, 244, fill=False, edgecolor=color, linewidth=1.4))
+    save(fig, "spatial-split")
 
 
 def change(workdir: Path) -> None:
@@ -418,7 +518,13 @@ def change(workdir: Path) -> None:
         tiles += [rgb(before, a[place]), rgb(after, b[place])]
         captions += ["2016", "2026"]
     save(
-        grid(tiles, 6, "Imagery: Beeldmateriaal Nederland (CC BY 4.0)", labels=captions, size=180),
+        panels(
+            tiles,
+            6,
+            "Before/after pairs on one grid: open water in 2016, a new island in 2026",
+            "Imagery: Beeldmateriaal Nederland (CC BY 4.0) · Strandeiland, IJburg, Amsterdam",
+            labels=captions,
+        ),
         "change-pairs",
     )
 
@@ -427,6 +533,7 @@ def main(argv: Sequence[str]) -> int:
     if len(argv) != 1:
         print(__doc__)
         return 2
+    apply_clean_style()
     workdir = Path(argv[0]).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     buildings = ROOT / "examples" / "quickstart" / "buildings.geojson"

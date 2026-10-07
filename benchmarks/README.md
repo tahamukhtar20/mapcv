@@ -132,16 +132,22 @@ A baseline does the same job as `mapcv generate` another way: same tile server, 
 
 | Baseline | What it is |
 | --- | --- |
-| `rasterio-script` | [`baseline_scripts/rasterio_script.py`](baseline_scripts/rasterio_script.py): the hand-rolled pipeline a careful user writes: mercantile for the tiles, a thread pool fetching them with the same concurrency, Pillow to decode and stitch, pyproj to reproject the labels, `rasterio.features.rasterize`, numpy windows, Pillow PNGs |
+| `rasterio-script` | [`baseline_scripts/rasterio_script.py`](baseline_scripts/rasterio_script.py): the hand-rolled pipeline a careful user writes: mercantile for the tiles, a thread pool fetching them with the same concurrency, Pillow to decode and stitch, pyproj to reproject the labels, `rasterio.features.rasterize`, numpy windows, Pillow PNGs. A reference. |
+| `gdal-cli` | [`baseline_scripts/gdal_cli.py`](baseline_scripts/gdal_cli.py): GDAL's programs: `gdal_translate` reads the tiles through the TMS driver (same connections), `ogr2ogr` reprojects and numbers the labels, `gdal_rasterize` burns the mask, `gdal_translate -srcwin` cuts each patch (one process per file, on every core). A reference. Needs GDAL's programs on `PATH` or in `GDAL_BIN`. |
+| `torchgeo` | [`baseline_scripts/torchgeo_script.py`](baseline_scripts/torchgeo_script.py): the tiles stitched into a GeoTIFF (TorchGeo fetches no tiles), then `RasterDataset & VectorDataset` sampled by `GridGeoSampler` through a `DataLoader` with a worker per core. Runs with the Python in `MAPCV_BENCH_TORCHGEO_PYTHON`. |
+| `leafmap` | [`baseline_scripts/leafmap_script.py`](baseline_scripts/leafmap_script.py): `leafmap.map_tiles_to_geotiff` downloads the tiles, then rasterio burns the labels and cuts the windows (leafmap has no chipping step). Runs with the Python in `MAPCV_BENCH_LEAFMAP_PYTHON`, which needs GDAL's `osgeo` bindings (conda-forge `gdal leafmap rasterio mercantile`). |
 
 ```bash
-python -m benchmarks run --scenarios S M L --baselines rasterio-script --out results.json
+GDAL_BIN=/path/to/gdal/bin MAPCV_BENCH_TORCHGEO_PYTHON=/path/to/torch-env/bin/python \
+MAPCV_BENCH_LEAFMAP_PYTHON=/path/to/gdal-env/bin/python \
+python -m benchmarks run --scenarios S M L \
+    --baselines rasterio-script gdal-cli torchgeo leafmap --out results.json
 python -m benchmarks compare results.json             # a table; --markdown for the docs
 ```
 
-**Same output first, then time.** After the runs, each baseline's patches are compared with mapcv's patch by patch, at the same raster position (`compare_with_mapcv` in `checks.py`): every patch must exist on both sides, images must be identical (unless mapcv wrote JPEG), and masks may disagree on at most 0.1 % of pixels (two projections of a polygon edge can round differently). A baseline whose data differs is reported as a problem and shown as "not comparable" by `compare`: a faster tool that writes different data has not done the same job. Add a baseline by registering an object with a `name` and a `command(workload)` method in `baselines.py`; scripts that write `images/r<row>_c<col>.png` and `masks/r<row>_c<col>.png` get the comparison for free.
+**Same output first, then time.** After the runs, each baseline's patches are compared with mapcv's patch by patch, at the same raster position (`compare_with_mapcv` in `checks.py`): every patch must exist on both sides, images must be identical (unless mapcv wrote JPEG), and masks may disagree on at most 0.1 % of pixels (two projections of a polygon edge can round differently). A baseline whose data differs is shown as "not comparable" by `compare`: a faster tool that writes different data has not done the same job. For a *reference* baseline (`rasterio-script`, `gdal-cli`, which burn labels with GDAL's rules) that is a mapcv problem and fails the run; for the other tools it is recorded as a `finding` next to their time. A baseline whose tool is not installed is skipped with the reason (`missing()`). Add a baseline by registering an object with a `name`, `reference`, `command(workload)` and `missing()` in `baselines.py`; scripts that write `images/r<row>_c<col>.png` and `masks/r<row>_c<col>.png` get the comparison for free.
 
-Not included: TorchGeo, leafmap or samgeo chipping, raster-vision and a GDAL CLI pipeline. Each needs a heavy install (PyTorch, GDAL binaries) and its own fair, reviewed script; they can be added through the same hook.
+Not included: raster-vision. Its chip export needs a full pipeline configuration and pins its own PyTorch and GDAL stack; it can be added through the same hook.
 
 ## Tests and CI
 

@@ -5,7 +5,7 @@ description: Build remote-sensing training datasets with mapcv from a region, im
 
 # mapcv: datasets from imagery and labels
 
-mapcv is a GDAL-free Python and Rust library and CLI. It turns a **region**, **imagery** and optional **labels** into patches with a manifest and leakage-safe train/val/test splits. Docs: https://tahamukhtar20.github.io/mapcv/
+mapcv is a fast Python and Rust library and CLI. It turns a **region**, **imagery** and optional **labels** into patches with a manifest and leakage-safe train/val/test splits. Docs: https://tahamukhtar20.github.io/mapcv/
 
 ## Ground rules
 

@@ -5,7 +5,7 @@ description: Build a dataset from a GeoTIFF or Cloud Optimized GeoTIFF you alrea
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Drone and aerial orthophotos, commercial imagery and national mapping rasters usually come as GeoTIFF files. mapcv reads them directly, local or remote, without GDAL: patches are cut from the file's own pixels, in the file's CRS, at the file's resolution. Nothing is resampled. This page walks through a local file and a public Cloud Optimized GeoTIFF (COG) URL.
+Drone and aerial orthophotos, commercial imagery and national mapping rasters usually come as GeoTIFF files. mapcv reads them directly, local or remote: patches are cut from the file's own pixels, in the file's CRS, at the file's resolution. Nothing is resampled. This page walks through a local file and a public Cloud Optimized GeoTIFF (COG) URL.
 
 No extra install is needed: `pip install mapcv` is enough.
 

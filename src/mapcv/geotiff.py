@@ -1,4 +1,4 @@
-"""Read GeoTIFF and Cloud Optimized GeoTIFF rasters without GDAL.
+"""Read GeoTIFF and Cloud Optimized GeoTIFF rasters with mapcv's own Rust reader.
 
 A thin typed wrapper over the Rust reader in ``mapcv._mapcv_rs``. It opens
 local files, ``http(s)://`` URLs and public ``s3://bucket/key`` objects (read

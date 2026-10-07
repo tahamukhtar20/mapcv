@@ -204,7 +204,9 @@ def card_text(staging_dir: Path) -> str:
             digest = fingerprint.get("sha256_head_tail") or fingerprint.get("sha256_head")
             body.append(f"- Imagery `{record.name}` fingerprint: `{digest}`.")
     credits = sorted({line for line in map(_attribution, manifest.sources) if line})
-    if labels.get("osm"):
+    # Change detection records its two label sets under before and after.
+    label_sets = [labels, labels.get("before"), labels.get("after")]
+    if any(isinstance(entry, dict) and entry.get("osm") for entry in label_sets):
         # The masks are a database adapted from OpenStreetMap: ODbL share-alike applies.
         credits.append(
             "Labels © OpenStreetMap contributors, under the Open Database License (ODbL); "

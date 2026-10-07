@@ -299,6 +299,91 @@ def test_config_refusals(labels: dict[str, Any], message: str) -> None:
         LabelsConfig.model_validate(labels)
 
 
+def test_osm_labels_as_the_after_set_of_change_detection(
+    tmp_path: Path, region: dict[str, float], overpass: Overpass
+) -> None:
+    # Hand labels from before (the house only) against today's OpenStreetMap (the house
+    # and the lake, buildings ID 1 and water ID 2): the lake is the change.
+    from pyproj import Transformer
+    from rasterio.features import rasterize
+    from rasterio.transform import Affine
+    from shapely.ops import transform as reproject
+
+    from mapcv.agent_tools import Sandbox, ToolFailure, ToolState, make_plan_for
+    from mapcv.card import card_text
+    from mapcv.manifest import Manifest
+    from mapcv.pipeline import run_generate
+
+    write_raster(tmp_path / "image.tif", reference_transform(), WIDTH, HEIGHT, seed=4)
+    before = tmp_path / "before.geojson"
+    before.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {},
+                        "geometry": {"type": "Polygon", "coordinates": [overpass.house]},
+                    }
+                ],
+            }
+        )
+    )
+    osm_classes = CLASSES[:2]
+    config = MapcvConfig.model_validate(
+        {
+            "task": "change",
+            "region": region,
+            "imagery": [
+                {"type": "geotiff", "name": "before", "path": str(tmp_path / "image.tif")},
+                {"type": "geotiff", "name": "after", "path": str(tmp_path / "image.tif")},
+            ],
+            "change": {
+                "before": {"path": str(before)},
+                "after": {"osm": {"classes": osm_classes, "overpass_url": overpass.url}},
+            },
+            "sampler": {"patch_size": PATCH, "edge_strategy": "drop"},
+            "writer": {"staging_dir": str(tmp_path / "dataset")},
+        }
+    )
+    after = config.change_options.after
+    assert after is not None and after.osm is not None
+    assert after.osm.bbox == (region["west"], region["south"], region["east"], region["north"])
+    with pytest.raises(ToolFailure, match="labels.osm downloads OpenStreetMap labels"):
+        make_plan_for(ToolState(Sandbox(tmp_path)), config)
+
+    with pytest.warns(UserWarning):  # the kiosk node needs labels.buffer
+        run_generate(config)
+    manifest = Manifest.load(tmp_path / "dataset" / "manifest.json")
+    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32631", always_xy=True).transform
+    lake = reproject(to_utm, overpass.lake)
+    changed = 0
+    for entry in manifest.patches:
+        mask = np.asarray(
+            __import__("PIL.Image", fromlist=["Image"]).open(
+                tmp_path / "dataset" / entry["files"]["mask"]
+            )
+        )
+        expected = rasterize(
+            [(lake, 1)],
+            out_shape=(PATCH, PATCH),
+            transform=Affine(*manifest.patch_transform(entry)),
+            fill=0,
+            dtype="uint8",
+        )
+        np.testing.assert_array_equal(mask, expected)
+        changed += int(expected.any())
+    assert changed > 0
+    assert "Open Database License (ODbL)" in card_text(tmp_path / "dataset")
+
+
+def test_an_osm_query_needs_a_box() -> None:
+    source = OsmLabelsSource.model_validate({"classes": CLASSES})
+    with pytest.raises(ValueError, match="labels.osm.bbox"):
+        overpass_query(source)
+
+
 def test_cli_card_and_mcp(tmp_path: Path, region: dict[str, float], overpass: Overpass) -> None:
     import yaml
     from typer.testing import CliRunner

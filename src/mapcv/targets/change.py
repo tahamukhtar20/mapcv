@@ -4,7 +4,8 @@ The mask comes from labels that mark what changed (vector features or a label
 raster: every labeled pixel is change) or from two vector label sets, before and
 after: a pixel changed where their masks differ. Changed pixels get
 ``change.change_value``, unchanged ones 0, and pixels without imagery in either
-image (or, for a label raster, without a label) the ignore value. The masks are
+image (or, for a label raster, without a label, or outside either label set's
+``annotated_area``) the ignore value. The masks are
 cut out of each window like segmentation masks (:class:`~mapcv._patching.MaskWindow`),
 on the grid of the first (before) image.
 """
@@ -57,10 +58,15 @@ class ChangeTarget:
         self._changed: _LabelTarget | None = None
         self._before: SegmentationTarget | None = None
         self._after: SegmentationTarget | None = None
+        self._annotated_areas = False
         if options.before is not None and options.after is not None:
             self._before = SegmentationTarget(options.before)
             self._after = SegmentationTarget(options.after)
             self._ignore_index = options.before.ignore_index
+            self._annotated_areas = (
+                options.before.annotated_area is not None
+                or options.after.annotated_area is not None
+            )
         elif isinstance(labels, RasterLabelsConfig):
             self._changed = RasterSegmentationTarget(labels)
             self._ignore_index = labels.ignore_index
@@ -131,4 +137,8 @@ class ChangeTarget:
             before = _window_mask(self._before, transform, height, width, valid_mask)
             after = _window_mask(self._after, transform, height, width, valid_mask)
             change = np.where(before != after, value, 0).astype(np.uint8)
+            if ignore is not None and self._annotated_areas:
+                # Outside a set's annotated_area nothing was labeled (its mask holds the
+                # ignore value there), so whether the pixel changed is unknown.
+                change[(before == ignore) | (after == ignore)] = ignore
         return MaskWindow(change, ignore)

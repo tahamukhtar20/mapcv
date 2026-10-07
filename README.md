@@ -147,7 +147,7 @@ Contributions are welcome. Please review the [Contributing Guide](https://github
 
 ## Citation
 
-*(Citation information will be added after publication.)*
+Every release is archived on Zenodo: [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) resolves to the latest version and lists the DOI of each one. GitHub's "Cite this repository" button gives APA and BibTeX from [`CITATION.cff`](CITATION.cff); see [Citing mapcv](https://tahamukhtar20.github.io/mapcv/project/citing/) for crediting the data sources too.
 
 ## Author
 

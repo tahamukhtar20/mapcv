@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use mapcv to build a dataset for published work, please cite the version you used (mapcv --version)."
+title: "mapcv: computer-vision datasets from map imagery and geospatial labels"
+type: software
+authors:
+  - family-names: Mukhtar
+    given-names: Muhammad Taha
+version: 0.2.0
+date-released: "2026-10-05"
+doi: 10.5281/zenodo.23149438
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23149438
+    description: Every version of mapcv (resolves to the latest release)
+  - type: doi
+    value: 10.5281/zenodo.23149439
+    description: mapcv 0.2.0
+license: MIT
+repository-code: "https://github.com/tahamukhtar20/mapcv"
+url: "https://tahamukhtar20.github.io/mapcv/"
+abstract: >-
+  mapcv turns map imagery (XYZ tiles, GeoTIFF/COG and Sentinel-2 EOPF Zarr) and
+  geospatial labels into training datasets for semantic and instance segmentation,
+  object detection, classification, change detection and regression, with
+  georeferenced patches, a manifest and leakage-safe spatial splits.
+keywords:
+  - remote sensing
+  - earth observation
+  - computer vision
+  - dataset generation
+  - geospatial

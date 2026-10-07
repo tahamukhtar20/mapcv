@@ -87,6 +87,9 @@ class FakeEE:
     def Image(self, asset: str) -> Any:
         return self._image(("Image", asset))
 
+    Geometry = SimpleNamespace(Rectangle=lambda coords: ("Rectangle", tuple(coords)))
+    Filter = SimpleNamespace(lte=lambda name, value: ("lte", name, value))
+
     def ImageCollection(self, asset: str) -> Any:
         fake = self
 
@@ -97,10 +100,32 @@ class FakeEE:
             def filterDate(self, start: str, end: str) -> Any:
                 return Collection([*self.steps, ("filterDate", start, end)])
 
+            def filterBounds(self, geometry: Any) -> Any:
+                return Collection([*self.steps, ("filterBounds", geometry)])
+
+            def filter(self, condition: Any) -> Any:
+                return Collection([*self.steps, ("filter", condition)])
+
+            def linkCollection(self, other: Any, bands: list[str]) -> Any:
+                return Collection([*self.steps, ("linkCollection", other.steps, bands)])
+
+            def map(self, function: Any) -> Any:
+                return Collection([*self.steps, ("map", function(_FakePixels()))])
+
             def __getattr__(self, reducer: str) -> Any:
                 return lambda: fake._image(("ImageCollection", asset, *self.steps, reducer))
 
         return Collection([])
+
+
+class _FakePixels:
+    """An image inside ``collection.map``: records what is done with its bands."""
+
+    def select(self, band: str) -> Any:
+        return SimpleNamespace(gte=lambda value: ("gte", band, value))
+
+    def updateMask(self, mask: Any) -> Any:
+        return ("updateMask", mask)
 
 
 def _engine(**changes: Any) -> dict[str, Any]:
@@ -206,6 +231,108 @@ def test_an_image_and_a_reduced_collection(monkeypatch: pytest.MonkeyPatch) -> N
         "mosaic",
     )
     assert earth_engine.product_id(config) == "earth-engine:COPERNICUS/S2_SR_HARMONIZED"
+
+
+def test_clouds_are_filtered_and_masked_over_the_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeEE("http://x")
+    monkeypatch.setitem(sys.modules, "ee", fake)
+    config = EarthEngineImageryConfig.model_validate(
+        _engine(
+            image=None,
+            collection="COPERNICUS/S2_SR_HARMONIZED",
+            start="2024-06-01",
+            end="2024-09-01",
+            max_cloud=40,
+            cloud_score_plus=0.6,
+        )
+    )
+    earth_engine.tile_url(config, (4.9, 52.3, 5.0, 52.4))
+    steps = fake.calls[1][1]
+    assert steps == (
+        "ImageCollection",
+        "COPERNICUS/S2_SR_HARMONIZED",
+        ("filterBounds", ("Rectangle", (4.9, 52.3, 5.0, 52.4))),
+        ("filterDate", "2024-06-01", "2024-09-01"),
+        ("filter", ("lte", "CLOUDY_PIXEL_PERCENTAGE", 40.0)),
+        ("linkCollection", [], ["cs_cdf"]),
+        ("map", ("updateMask", ("gte", "cs_cdf", 0.6))),
+        "median",
+    )
+
+
+@pytest.mark.parametrize(
+    ("collection", "expected"),
+    [
+        ("COPERNICUS/S2_SR_HARMONIZED", "CLOUDY_PIXEL_PERCENTAGE"),
+        ("LANDSAT/LC08/C02/T1_L2", "CLOUD_COVER"),
+    ],
+)
+def test_the_cloud_property_is_detected(collection: str, expected: str) -> None:
+    config = EarthEngineImageryConfig.model_validate(
+        _engine(image=None, collection=collection, max_cloud=20)
+    )
+    assert config.cloud_filter_property == expected
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"max_cloud": 20}, "filter a 'collection'"),
+        ({"image": None, "collection": "MY/COLLECTION", "max_cloud": 20}, "set cloud_property"),
+        (
+            {"image": None, "collection": "LANDSAT/LC08/C02/T1_L2", "cloud_score_plus": 0.6},
+            "Sentinel-2 collections",
+        ),
+        ({"image": None, "collection": "COPERNICUS/S2", "cloud_score_plus": 1.5}, "less than 1"),
+    ],
+)
+def test_cloud_settings_are_checked(change: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        EarthEngineImageryConfig.model_validate(_engine(**change))
+    custom = _engine(image=None, collection="MY/COLLECTION", max_cloud=5, cloud_property="CLOUDS")
+    assert EarthEngineImageryConfig.model_validate(custom).cloud_filter_property == "CLOUDS"
+
+
+def test_the_template_is_valid_and_the_wizard_writes_each_preset(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from mapcv.config import MapcvConfig
+
+    runner = CliRunner()
+    out = tmp_path / "template.yaml"
+    assert runner.invoke(app, ["init", str(out), "--template", "earth-engine"]).exit_code == 0
+    engine = MapcvConfig.from_yaml(out).primary_imagery.earth_engine  # type: ignore[union-attr]
+    assert engine is not None and engine.max_cloud == 40 and engine.cloud_score_plus == 0.6
+
+    bbox = "4.9375,52.3725,4.9515,52.3780"
+    for dataset, collection in (
+        ("sentinel2", "COPERNICUS/S2_SR_HARMONIZED"),
+        ("landsat", "LANDSAT/LC08/C02/T1_L2"),
+        ("naip", "USDA/NAIP/DOQQ"),
+    ):
+        answers = ["gee", bbox, dataset, "", ""]
+        if dataset != "naip":
+            answers.append("")  # max_cloud
+        answers += ["my-project", "", "", "", "256", "./ds", "y"]
+        out = tmp_path / f"{dataset}.yaml"
+        result = runner.invoke(
+            app, ["init", str(out), "--interactive"], input="\n".join(answers) + "\n"
+        )
+        assert result.exit_code == 0, result.output
+        imagery = MapcvConfig.from_yaml(out).primary_imagery
+        assert imagery.earth_engine is not None  # type: ignore[union-attr]
+        assert imagery.earth_engine.collection == collection  # type: ignore[union-attr]
+        assert imagery.earth_engine.project == "my-project"  # type: ignore[union-attr]
+
+    custom = ["gee", bbox, "custom", "image", "USGS/SRTMGL1_003", "elevation", "0", "500", "30"]
+    custom += ["", "", "", "", "256", "./ds", "y"]
+    out = tmp_path / "custom.yaml"
+    result = runner.invoke(app, ["init", str(out), "--interactive"], input="\n".join(custom) + "\n")
+    assert result.exit_code == 0, result.output
+    engine = MapcvConfig.from_yaml(out).primary_imagery.earth_engine  # type: ignore[union-attr]
+    assert engine is not None and engine.image == "USGS/SRTMGL1_003"
+    assert engine.vis.bands == ["elevation"]
+    assert engine.project == "YOUR-CLOUD-PROJECT"  # left blank: a placeholder to fill in
 
 
 def test_a_refusal_says_how_to_log_in(monkeypatch: pytest.MonkeyPatch) -> None:

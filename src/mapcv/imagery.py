@@ -341,7 +341,9 @@ class XYZRasterSource:
 
             # A fresh map URL each time; it holds a short-lived map ID, so the cache and
             # the manifest key on the image and its rendering instead.
-            self._template = earth_engine.tile_url(engine)
+            self._template = earth_engine.tile_url(
+                engine, (region.west, region.south, region.east, region.north)
+            )
             cache_key = "earth-engine:" + engine.model_dump_json(exclude={"project"})
             product_id = earth_engine.product_id(engine)
             fingerprint = {"earth_engine": engine.model_dump(mode="json", exclude={"project"})}

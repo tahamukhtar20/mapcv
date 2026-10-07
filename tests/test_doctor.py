@@ -273,7 +273,7 @@ def test_an_unwritable_cache_fails_and_exits_one(
     folder = _by_name(document, "Folder")
     assert code == 1 and document["ok"] is False and folder["status"] == "fail"
     assert "MAPCV_CACHE_DIR" in folder["hint"] and "can't be written" in folder["detail"]
-    assert "FAIL" in result.output and "1 check(s) failed" in result.output
+    assert "FAIL" in result.output and "1 check failed" in result.output
     assert blocker.read_text(encoding="utf-8") == "x"
 
 
@@ -323,7 +323,7 @@ def test_the_cache_contents_are_counted(tmp_path: Path, monkeypatch: pytest.Monk
     cache = TileCache("https://tiles.example.com/{z}/{x}/{y}.png")
     cache.put(1, 2, 3, b"x" * 1000, (None, None, None, None))
     check = next(c for c in doctor.cache_checks() if c.name == "Contents")
-    assert check.detail.startswith("1 tile(s)")
+    assert check.detail == "1 tile, 1.0 KB"
 
 
 # --- the terminal ------------------------------------------------------------------------

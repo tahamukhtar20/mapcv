@@ -1087,12 +1087,12 @@ def test_validate_and_plan_accept_the_new_formats(pq: Any, tmp_path: Path) -> No
         assert runner.invoke(app, ["validate", str(config)]).exit_code == 0, name
         result = runner.invoke(app, ["plan", str(config)])
         assert result.exit_code == 0, (name, result.output)
-        assert "polygon(s)" in flat(result.output)
+        assert "polygons" in flat(result.output)
     shp = write_config(tmp_path, {"path": str(DATA / "polygons.shp"), "label_field": "class"})
     result = runner.invoke(app, ["plan", str(shp)])
     # The table wraps lines at the terminal's width: drop its borders and spaces first.
     text = re.sub(r"[│╭╮╰╯─\s]", "", result.output)
-    assert result.exit_code == 0 and re.search(r"(?<!\d)4polygon\(s\)", text), result.output
+    assert result.exit_code == 0 and re.search(r"(?<!\d)4polygons", text), result.output
 
 
 def test_validate_shows_the_layer(tmp_path: Path) -> None:

@@ -227,9 +227,9 @@ def test_export_cli_for_shards(tmp_path: Path, scene: dict[str, Any]) -> None:
         env=env,
     )
     assert result.exit_code == 0, result.output
-    assert "tar shard(s) and shards.json" in result.output
+    assert "tar shards and shards.json" in result.output
     result = runner.invoke(app, ["export", str(root), "-f", "zarr"], env=env)
-    assert result.exit_code == 1 and "--out is required for zarr" in result.output
+    assert result.exit_code == 2 and "required with --format zarr" in result.output
     pytest.importorskip("zarr")
     result = runner.invoke(
         app, ["export", str(root), "-f", "zarr", "-o", str(tmp_path / "z.zarr")], env=env

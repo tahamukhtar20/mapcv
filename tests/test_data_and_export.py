@@ -430,9 +430,9 @@ def test_export_cli(tmp_path: Path, scene: dict[str, Any]) -> None:
     )
     assert out.exists()
     result = runner.invoke(app, ["export", str(root), "--format", "coco"], env=ENV)
-    assert result.exit_code == 1 and "hf-parquet, terratorch" in result.output
+    assert result.exit_code == 2 and "hf-parquet, terratorch" in result.output
     result = runner.invoke(app, ["export", str(root), "--format", "hf-parquet"], env=ENV)
-    assert result.exit_code == 1 and "--out is required" in result.output
+    assert result.exit_code == 2 and "required with --format hf-parquet" in result.output
     result = runner.invoke(app, ["export", str(tmp_path / "nowhere"), "-f", "terratorch"], env=ENV)
     assert result.exit_code == 1 and "No manifest" in result.output
     pytest.importorskip("pyarrow")
@@ -440,4 +440,4 @@ def test_export_cli(tmp_path: Path, scene: dict[str, Any]) -> None:
         app, ["export", str(root), "-f", "hf-parquet", "-o", str(tmp_path / "hf")], env=ENV
     )
     assert result.exit_code == 0, result.output
-    assert "3 Parquet file(s)" in result.output and (tmp_path / "hf" / "README.md").exists()
+    assert "3 Parquet files" in result.output and (tmp_path / "hf" / "README.md").exists()

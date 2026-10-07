@@ -924,7 +924,7 @@ def test_init_wizard_geotiff_shows_the_file_and_writes_a_config(tmp_path: Path) 
     result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers)
     assert result.exit_code == 0, result.output
     assert flat("EPSG:32631") in flat(result.output) and flat("640 × 512 px") in flat(result.output)
-    assert flat("4 band(s) · uint8") in flat(result.output)
+    assert flat("4 bands · uint8") in flat(result.output)
     config = MapcvConfig.from_yaml(out)
     assert isinstance(config.imagery, GeoTiffImageryConfig)
     assert config.imagery.bands == [1, 2, 3]

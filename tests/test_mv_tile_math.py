@@ -6,16 +6,15 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-import pytest
 
 from mapcv._mapcv_rs import bounds, tile, tiles, xy, xy_bounds
 
 _GOLDEN = Path(__file__).parent / "golden" / "tile_math_golden.json"
 
+# The fixtures are committed: a missing one is an error, never a skipped test.
 if not _GOLDEN.exists():
-    pytest.skip(
-        "tile_math_golden.json not found - run tests/generate_golden.py first",
-        allow_module_level=True,
+    raise FileNotFoundError(
+        "tile_math_golden.json not found - regenerate with: uv run --group golden python tests/generate_golden.py"
     )
 
 

@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from typer.testing import CliRunner
@@ -378,8 +379,9 @@ def test_the_default_endpoints_come_from_the_code_that_uses_them() -> None:
     assert endpoints["Esri World Imagery tiles"] == URL_TEMPLATES["esri_satellite"].format(
         z=0, x=0, y=0
     )
-    assert endpoints["EOPF STAC catalog"].startswith("https://stac.core.eopf")
-    assert endpoints["Earth Search STAC"].startswith("https://earth-search")
+    hosts = {name: urlsplit(url).hostname or "" for name, url in endpoints.items()}
+    assert hosts["EOPF STAC catalog"].startswith("stac.core.eopf")
+    assert hosts["Earth Search STAC"].startswith("earth-search")
     assert ("Earth Engine" in endpoints) == (importlib.util.find_spec("ee") is not None)
 
 

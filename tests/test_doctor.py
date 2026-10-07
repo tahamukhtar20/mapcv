@@ -397,9 +397,7 @@ def test_reachable_and_refused_endpoints(monkeypatch: pytest.MonkeyPatch, httpse
         Endpoint("Not found is not", httpserver.url_for("/root-404")),
         Endpoint("Server error", httpserver.url_for("/broken")),
     )
-    started = time.perf_counter()
     code, document = _json([])
-    elapsed = time.perf_counter() - started
     assert code == 0 and document["ok"] is True  # an unreachable provider is not a failure
     up = _by_name(document, "Up")
     assert up["status"] == "ok" and "HTTP 200 in" in up["detail"] and " ms" in up["detail"]
@@ -409,7 +407,12 @@ def test_reachable_and_refused_endpoints(monkeypatch: pytest.MonkeyPatch, httpse
     assert _by_name(document, "Not found is fine")["status"] == "ok"
     assert _by_name(document, "Not found is not")["status"] == "warn"
     assert _by_name(document, "Server error")["status"] == "warn"
-    assert elapsed < 5  # the probes run at once, and nothing waits for a timeout
+    # The probes run at once and none waits for a timeout. Timed on their own: the whole
+    # report also imports the extras, which takes seconds on a cold Windows runner, and a
+    # refused connection itself takes about 2 s on Windows.
+    started = time.perf_counter()
+    doctor.network_checks()
+    assert time.perf_counter() - started < doctor.NETWORK_TIMEOUT_S
 
 
 def test_a_silent_server_is_a_warning_after_the_timeout() -> None:

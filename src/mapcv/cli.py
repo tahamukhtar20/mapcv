@@ -2803,7 +2803,7 @@ def mcp_server(
 ) -> None:
     """Run an MCP server over stdio so AI agents can build datasets with mapcv."""
     if not root.is_dir():
-        raise typer.BadParameter(f"{root} is not a folder.", param_hint="'--root'")
+        raise typer.BadParameter(f"not a folder: {root}", param_hint="'--root'")
     try:
         from mapcv.mcp_server import serve
     except ImportError as exc:

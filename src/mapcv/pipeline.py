@@ -565,9 +565,9 @@ def run_generate(
             )
         elif failed and config.sampler.max_empty_ratio >= 1.0:
             warnings.warn(
-                f"{_tiles(failed)} failed and were filled with black; patches that include them "
-                "were kept, with labels over black pixels. Set sampler.max_empty_ratio below 1 "
-                f"(for example 0.5) to drop such patches.{why}",
+                f"{_tiles(failed)} failed and {'was' if failed == 1 else 'were'} filled with "
+                "black; patches that include them were kept, with labels over black pixels. "
+                f"Set sampler.max_empty_ratio below 1 (for example 0.5) to drop such patches.{why}",
                 UserWarning,
                 stacklevel=2,
             )

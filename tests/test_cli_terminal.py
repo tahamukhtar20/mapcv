@@ -161,7 +161,7 @@ def test_next_steps_quote_a_path_with_spaces(
         (["cache", "--expired"], "only applies with --clear"),
         (["split", "{data}", "--test-ratio", "2"], "Invalid value for '--test-ratio'"),
         (["split", "{data}", "--strategy", "nope"], "Invalid value for '--strategy'"),
-        (["mcp", "--root", "{data}/nope"], "is not a folder"),
+        (["mcp", "--root", "{data}/nope"], "not a folder: "),
         (["plan"], "Missing argument"),
         (["nope"], "No such command"),
     ],

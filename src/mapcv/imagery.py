@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import os
 import sys
@@ -61,6 +62,9 @@ def _pillow_executor() -> ThreadPoolExecutor:
             max_workers=_PILLOW_THREADS, thread_name_prefix="mapcv-pillow"
         )
     return _pillow_pool
+
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -482,7 +486,9 @@ class XYZRasterSource:
                 cached = cache.get(x, y, self._zoom)
                 if cached is not None:
                     self._tiles[(x, y)] = cached
-            self.tiles_cached += sum(1 for key in missing if key in self._tiles)
+            hits = sum(1 for key in missing if key in self._tiles)
+            self.tiles_cached += hits
+            _log.debug("tile cache: %d of %d tile(s) found", hits, len(missing))
             missing = [key for key in missing if key not in self._tiles]
             if not missing:
                 return
@@ -497,6 +503,13 @@ class XYZRasterSource:
         )
         self.tiles_requested += len(missing)
         self.tiles_failed += failed
+        _log.debug(
+            "fetched %d tile(s) at zoom %d, %d failed%s",
+            len(missing),
+            self._zoom,
+            failed,
+            f" ({', '.join(f'{n} x {kind}' for kind, n in causes)})" if failed else "",
+        )
         self.failure_causes.update(dict(causes))
         if example and self.failure_example is None:
             self.failure_example = example
@@ -1075,6 +1088,15 @@ class GeoTiffRasterSource:
             self._col0 + col_stop,
             bands=self._bands,
             overview=self._overview,
+        )
+        _log.debug(
+            "GeoTIFF window rows %d:%d, cols %d:%d (%.1f MB, %d%% inside the file)",
+            self._row0 + row_start,
+            self._row0 + row_stop,
+            self._col0 + col_start,
+            self._col0 + col_stop,
+            data.nbytes / 2**20,
+            round(100 * float(inside.mean())) if inside.size else 0,
         )
         valid = inside & ~_nodata_mask(data, self._nodata)
         if self._expand_gray:

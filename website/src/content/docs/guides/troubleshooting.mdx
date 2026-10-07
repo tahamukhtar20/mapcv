@@ -138,4 +138,6 @@ Fix the fields above, or start from a working config with mapcv init.
 
 ## Still stuck?
 
-Open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv --version`, `mapcv validate <config>` (it hides URLs and keys) and the full error. Remove API keys from anything you paste.
+Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, retries and why a resume was refused. `--debug-log run.log` writes the same to a file.
+
+Then open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv --version`, `mapcv validate <config>` (it hides URLs and keys) and the `--debug` output or log file. Tile URLs show only their host there; remove any other API keys from anything you paste.

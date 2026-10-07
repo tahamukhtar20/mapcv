@@ -455,6 +455,19 @@ def run_generate(
             if remaining:
                 chunks.append((chunk_index, remaining))
         to_go = sum(len(group) for _, group in chunks)
+        _log.debug(
+            "%d chunk(s) of %d to process (%d anchors); source %s %s, %dx%d px, %s; "
+            "window budget %d MB",
+            len(chunks),
+            len(groups),
+            to_go,
+            source.metadata.source_type,
+            source.metadata.product_id,
+            source.metadata.width,
+            source.metadata.height,
+            source.metadata.crs,
+            _WINDOW_BYTES // 2**20,
+        )
         if resumed_patches and not chunks:
             _log.info("Nothing left to do: all %d patch(es) are already written.", resumed_patches)
         elif resumed_patches:
@@ -465,9 +478,11 @@ def run_generate(
         complete = len(manifest.patches)  # entries of fully finished chunks
         try:
             for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
+                chunk_started = time.perf_counter()
                 images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
                     source, chunk_anchors, config.sampler, target, others
                 )
+                read_s = time.perf_counter() - chunk_started
                 annotations = window.collate(per_patch, patch_size)
                 if other_patches:
                     if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
@@ -483,17 +498,32 @@ def run_generate(
                             entry["row"], entry["col"], patch_size
                         )
                 complete = len(manifest.patches)
+                _log.debug(
+                    "chunk %d: %d anchor(s), %d patch(es) kept; read and annotate %.2f s, "
+                    "write %.2f s",
+                    chunk_index,
+                    len(chunk_anchors),
+                    len(metadata),
+                    read_s,
+                    time.perf_counter() - chunk_started - read_s,
+                )
                 # Persist every few seconds (rewriting a large manifest after every chunk
                 # costs more than the chunk), and below whenever the run stops early.
                 if time.monotonic() - saved >= _SAVE_EVERY_S:
                     manifest.save(manifest_path)
                     saved = time.monotonic()
+                    _log.debug("manifest saved: %d patch(es)", len(manifest.patches))
                 if on_chunk is not None:
                     on_chunk(done, len(chunks))
         except BaseException:
             # Interrupted (Ctrl-C, a failed chunk, a cancelling callback): keep the
             # finished chunks, so the same call resumes after them. A chunk stopped
             # part way is dropped; a resumed run writes it again over its files.
+            _log.debug(
+                "stopped: keeping %d patch(es) of finished chunks, dropping %d",
+                complete,
+                len(manifest.patches) - complete,
+            )
             del manifest.patches[complete:]
             manifest.save(manifest_path)
             raise

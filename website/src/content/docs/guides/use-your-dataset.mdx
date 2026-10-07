@@ -111,65 +111,31 @@ num_classes = max(names) + 1          # IDs need not be contiguous if you pinned
 
 ## A PyTorch `Dataset`
 
-This class covers both sources, turns NoData into an ignore index, and also works for image-only datasets. The repository has a maintained copy in [`examples/scripts/torch_dataset.py`](https://github.com/tahamukhtar20/mapcv/tree/main/examples/scripts).
-
-```python title="mapcv_dataset.py"
-import json
-from pathlib import Path
-
-import numpy as np
-import torch
-from PIL import Image
-from torch.utils.data import Dataset
-
-IGNORE_INDEX = 255  # mapcv's default labels.ignore_index; pass it to your loss
-
-
-class MapcvDataset(Dataset):
-    """Image/mask pairs from one split of a mapcv dataset."""
-
-    def __init__(self, root, split="train"):
-        self.root = Path(root)
-        manifest = json.loads((self.root / "manifest.json").read_text())
-        files_of = {Path(p["files"]["image"]).name: p["files"] for p in manifest["patches"]}
-        names = (self.root / "splits" / f"{split}.txt").read_text().split()
-        self.items = [files_of[name] for name in names]     # {"image": ..., "mask": ...}
-        target = manifest["target"] or {}                     # null for image-only datasets
-        self.class_map = target.get("class_map", {})
-        self.bands = manifest["sources"][0]["bands"]
-        # Mask value for pixels without imagery (None if generated with ignore_index: null).
-        self.ignore_index = target.get("ignore_index")
-
-    def __len__(self):
-        return len(self.items)
-
-    def __getitem__(self, index):
-        files = self.items[index]
-        path = self.root / files["image"]
-        if path.suffix == ".npy":
-            image = np.load(path)                          # (bands, H, W) float32
-            image = np.nan_to_num(image, nan=0.0)          # NaN = no data (255 in the mask)
-        else:
-            rgb = np.asarray(Image.open(path).convert("RGB"))  # (H, W, 3) uint8
-            image = rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
-        image = torch.from_numpy(np.ascontiguousarray(image))
-
-        if "mask" not in files:                            # image-only dataset
-            return image
-        mask = np.asarray(Image.open(self.root / files["mask"]), dtype=np.int64)
-        return image, torch.from_numpy(mask)
-```
+`mapcv.data.MapcvDataset` reads one split of any mapcv dataset: every image and mask format, several sources and stacks, and each task's targets. It is a map-style dataset (`len` and indexing), so `DataLoader` takes it directly, and it needs no torch itself: items are torch tensors when torch is installed, numpy arrays otherwise.
 
 ```python
 from torch.utils.data import DataLoader
 
-train = MapcvDataset("dataset", split="train")
-val = MapcvDataset("dataset", split="val")
+from mapcv.data import MapcvDataset
+
+train = MapcvDataset("dataset", split="train", normalize=True)
+val = MapcvDataset("dataset", split="val", normalize=True)
+item = train[0]              # {"image": (C, H, W), "mask": (H, W), "name": ..., "row": ..., ...}
 loader = DataLoader(train, batch_size=8, shuffle=True, num_workers=2)
-images, masks = next(iter(loader))   # (8, C, H, W) float32, (8, H, W) int64
+batch = next(iter(loader))   # batch["image"]: (8, C, H, W), batch["mask"]: (8, H, W)
+print(train.ignore_index, train.classes)   # 255, {1: "building"}: pass the first to your loss
 ```
 
-Run against the [Buildings tutorial](/mapcv/tutorials/buildings-from-aerial-imagery/) dataset, `train[0]` gives a `(3, 256, 256)` image and a `(256, 256)` mask with values `{0, 1}`; against the [Sentinel-2 tutorial](/mapcv/tutorials/land-cover-from-sentinel-2/), a `(4, 128, 128)` image and values `{0, 1, 2, 3, 4}`. For a full training loop, see [Train a model on your dataset](/mapcv/tutorials/train-a-model/).
+Detection and instance items hold a different number of boxes each, so give `DataLoader` a `collate_fn` that keeps them as lists (for example `collate_fn=lambda items: items`).
+
+- `split` is `train`, `val`, `test`, a labeled subset such as `10/labeled`, or `all`.
+- `normalize=True` standardises each band with the train split's mean and standard deviation from `stats.json` (computed if the file is missing; see [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats)); pixels without data become 0.
+- Items also hold `images` (every source by name) for several sources, `labels` (class IDs) for classification, and `boxes` (`[x, y, width, height]` in pixels), `categories` and the COCO `annotations` for detection and instance segmentation.
+- `transform=` takes a callable applied to each item dict, for augmentation.
+
+The repository keeps a hand-written version of such a class, to adapt freely, in [`examples/scripts/torch_dataset.py`](https://github.com/tahamukhtar20/mapcv/tree/main/examples/scripts).
+
+Run against the [Buildings tutorial](/mapcv/tutorials/buildings-from-aerial-imagery/) dataset, `train[0]["image"]` is `(3, 256, 256)` and its mask `(256, 256)` with values `{0, 1}`; against the [Sentinel-2 tutorial](/mapcv/tutorials/land-cover-from-sentinel-2/), `(4, 128, 128)` and values `{0, 1, 2, 3, 4}`. For a full training loop, see [Train a model on your dataset](/mapcv/tutorials/train-a-model/).
 
 ## NoData and ignore pixels
 
@@ -246,6 +212,30 @@ with rasterio.open("prediction_0000000.tif", "w", **profile) as dst:
 
 For PNG or NPY patches take `rasterio.transform.Affine(*manifest.patch_transform(entry))` and the manifest's `crs` instead.
 
+### Predict a whole region
+
+To map a trained model over a whole region, not just the dataset's patches, `mapcv.infer.predict_raster` reads the config's imagery patch by patch, calls your model on batches and blends the overlapping predictions into one georeferenced GeoTIFF:
+
+```python
+import numpy as np
+import torch
+
+from mapcv.infer import predict_raster
+
+model.eval()
+
+
+def predict(batch: np.ndarray) -> np.ndarray:          # (N, C, P, P) as read
+    with torch.no_grad():
+        x = torch.from_numpy(batch.astype(np.float32) / 255.0)
+        return model(x).softmax(dim=1).numpy()         # (N, K, P, P)
+
+
+predict_raster("mapcv.yaml", predict, "prediction.tif", overlap=0.5)   # uint8 classes, 255 = no imagery
+```
+
+It uses the config's first imagery source, `region` and `sampler.patch_size`. Neighbouring patches overlap by `overlap` and are blended with a cosine window, so the borders of a patch, where models are least sure, count least and there are no seams. `output="scores"` writes the blended scores as `float32` bands instead of the class; a model that returns `(N, P, P)` values (regression) gives one `float32` band. Only one strip of rows is held at a time besides the output itself. See the [Python API](/mapcv/reference/python-api/#predict_raster).
+
 <Aside type="tip">
 Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.
 </Aside>
@@ -261,3 +251,16 @@ $ mapcv verify dataset --deep --write-checksums
 ```
 
 Edit the card's `license` (it starts as `other`) to what the imagery provider's terms allow, and add anything the provider asks you to credit. Whoever receives the folder runs `mapcv verify dataset` (or `sha256sum -c SHA256SUMS`) to check that every file arrived unchanged.
+
+## Hand it to Hugging Face or TerraTorch
+
+`mapcv export` writes a dataset in the form other tools read:
+
+```console
+$ mapcv export dataset --format hf-parquet --out dataset-hf    # pip install "mapcv[export]"
+$ mapcv export dataset --format terratorch                      # dataset/terratorch.yaml
+```
+
+For large datasets, `--format webdataset` packs the patches into tar shards per split (for streaming with the webdataset library) and `--format zarr` into one Zarr store that `MapcvDataset` reads directly; both turn hundreds of thousands of small files into a handful.
+
+`hf-parquet` writes one Parquet file per split and a dataset card, ready for `datasets.load_dataset("dataset-hf")` or `huggingface-cli upload`. `terratorch` writes the `data:` section of a TerraTorch training config (the generic segmentation or regression datamodule) pointing at the dataset's folders and split lists, with the train split's band means and standard deviations; generate the dataset with `writer.image_format: tif` and `writer.mask_format: tif` for it. See [`mapcv export`](/mapcv/reference/cli/#mapcv-export).

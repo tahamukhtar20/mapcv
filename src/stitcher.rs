@@ -39,8 +39,8 @@ impl std::fmt::Display for StitchError {
 /// or a tile does not decode to `TILE_PX x TILE_PX` pixels, and
 /// [`StitchError::Failed`] if a tile's bytes cannot be decoded or the canvas
 /// would be too large.
-pub fn stitch_tiles(
-    tiles: &[(u32, u32, u8, Vec<u8>)],
+pub fn stitch_tiles<B: AsRef<[u8]> + Sync>(
+    tiles: &[(u32, u32, u8, B)],
 ) -> Result<(Vec<u8>, u32, u32, usize, usize), StitchError> {
     let Some(&(first_x, first_y, _, _)) = tiles.first() else {
         return Ok((Vec::new(), 0, 0, 0, 0));
@@ -88,7 +88,7 @@ pub fn stitch_tiles(
     let decoded: Vec<(u32, u32, Vec<u8>)> = tiles
         .par_iter()
         .map(|(tx, ty, tz, data)| {
-            let reader = ImageReader::new(Cursor::new(data))
+            let reader = ImageReader::new(Cursor::new(data.as_ref()))
                 .with_guessed_format()
                 .map_err(|e| StitchError::Failed(format!("tile format detection failed: {e}")))?;
             let image = reader

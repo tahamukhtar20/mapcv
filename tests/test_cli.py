@@ -466,7 +466,7 @@ def test_info_refuses_a_manifest_from_a_newer_mapcv(tmp_path: Path) -> None:
     assert not isinstance(result.exception, ManifestMismatchError)
 
 
-@pytest.mark.parametrize("template", ["xyz", "sentinel2", "detection"])
+@pytest.mark.parametrize("template", ["xyz", "sentinel2", "detection", "earth-engine"])
 def test_init_templates_write_parseable_configs(tmp_path: Path, template: str) -> None:
     out = tmp_path / f"{template}.yaml"
     result = runner.invoke(app, ["init", str(out), "--template", template])

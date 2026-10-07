@@ -77,11 +77,13 @@ imagery:
     collection: COPERNICUS/S2_SR_HARMONIZED
     start: "2024-06-01"
     end: "2024-09-01"
-    vis: {bands: [B4, B3, B2], min: 0, max: 3000}
+    max_cloud: 40            # skip cloudy scenes
+    cloud_score_plus: 0.6    # mask the cloudy pixels left
+    vis: {bands: [B4, B3, B2], min: 0, max: 3000, gamma: 1.2}
     project: my-cloud-project
 ```
 
-The tiles are 8-bit RGB renderings (`vis`), not the raw band values; for reflectance values use [Sentinel-2 L2A](#sentinel-2-l2a). Requests count against your own Earth Engine quota and project, under Earth Engine's terms. All fields: [configuration reference](/mapcv/reference/configuration/#google-earth-engine-imageryearth_engine).
+Or answer the questions of `mapcv init` (choose `gee`) or start from `mapcv init --template earth-engine`; both pick a dataset (Sentinel-2, Landsat 8, NAIP or any asset) with colours that suit it. Without the two cloud settings, a summer median over a cloudy region is mostly cloud. The tiles are 8-bit RGB renderings (`vis`), not the raw band values; for reflectance values use [Sentinel-2 L2A](#sentinel-2-l2a). Requests count against your own Earth Engine quota and project, under Earth Engine's terms. All fields: [configuration reference](/mapcv/reference/configuration/#google-earth-engine-imageryearth_engine).
 
 ### Keep API keys out of YAML
 

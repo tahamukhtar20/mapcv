@@ -341,7 +341,9 @@ class XYZRasterSource:
 
             # A fresh map URL each time; it holds a short-lived map ID, so the cache and
             # the manifest key on the image and its rendering instead.
-            self._template = earth_engine.tile_url(engine)
+            self._template = earth_engine.tile_url(
+                engine, (region.west, region.south, region.east, region.north)
+            )
             cache_key = "earth-engine:" + engine.model_dump_json(exclude={"project"})
             product_id = earth_engine.product_id(engine)
             fingerprint = {"earth_engine": engine.model_dump(mode="json", exclude={"project"})}
@@ -1107,6 +1109,248 @@ class GeoTiffRasterSource:
         """Nothing to release: the reader holds no open handles between reads."""
 
 
+# Mosaic files must share their pixel size to this relative tolerance, and their grids
+# must line up to this fraction of a pixel.
+_MOSAIC_SCALE_TOLERANCE = 1e-9
+_MOSAIC_ALIGN_TOLERANCE_PX = 1e-6
+
+
+class GeoTiffMosaicSource:
+    """Windowed reader over several GeoTIFFs that together cover an area, as one raster.
+
+    The files must share a CRS, data type, band count, NoData value (unless
+    ``imagery.nodata`` sets one), north-up pixel size and pixel grid; their extents may
+    leave gaps (read as no imagery) or overlap (the first file in sorted order wins, as in
+    ``rasterio.merge``). Only headers are read up front; each window reads just the files
+    it overlaps, so memory does not grow with the number of files.
+    """
+
+    def __init__(
+        self,
+        region: RegionConfig,
+        config: GeoTiffImageryConfig,
+        files: list[str],
+        *,
+        image_format: str | None = None,
+    ) -> None:
+        pattern = _safe_product_id(config.path)
+        self._tifs = [GeoTiff(geotiff_location(path)) for path in files]
+        names = [Path(path).name for path in files]
+        reference = self._tifs[0].info
+        for tif, name in zip(self._tifs, names):
+            info = tif.info
+            if info.epsg is None:
+                raise ValueError(
+                    f"GeoTIFF '{name}' has no usable CRS: "
+                    f"{info.crs_error or 'no CRS in the file'}. mapcv reads files whose CRS is "
+                    "an EPSG code; re-project or re-tag the file."
+                )
+            if info.transform is None:
+                raise ValueError(f"GeoTIFF '{name}' has no georeferencing")
+            if config.overview > len(info.overviews):
+                raise ValueError(
+                    f"imagery.overview is {config.overview}, but '{name}' has "
+                    f"{len(info.overviews)} overview level(s) (0 is the full resolution)"
+                )
+            for what, mine, theirs in (
+                ("CRS", info.epsg, reference.epsg),
+                ("data type", info.dtype, reference.dtype),
+                ("band count", info.count, reference.count),
+            ):
+                if mine != theirs:
+                    raise ValueError(
+                        f"imagery.path: '{name}' has {what} {mine} but '{names[0]}' has "
+                        f"{theirs}; the files of a mosaic must match"
+                    )
+            if config.nodata is None and _json_nodata(info.nodata) != _json_nodata(
+                reference.nodata
+            ):
+                raise ValueError(
+                    f"imagery.path: '{name}' has NoData {info.nodata} but '{names[0]}' has "
+                    f"{reference.nodata}; set imagery.nodata to the value to use for all files"
+                )
+
+        transforms = []
+        sizes = []
+        for tif in self._tifs:
+            transform = tif.info.overview_transform(config.overview)
+            assert transform is not None
+            transforms.append(transform)
+            sizes.append(
+                (tif.info.height, tif.info.width)
+                if config.overview == 0
+                else tif.info.overviews[config.overview - 1]
+            )
+        a, b, c, d, e, f = transforms[0]
+        offsets = []
+        for (ta, tb, tc, td, te, tf), name in zip(transforms, names):
+            if tb or td or b or d:
+                raise ValueError(
+                    f"imagery.path: '{name}' is rotated; a mosaic needs north-up files"
+                )
+            if abs(ta - a) > _MOSAIC_SCALE_TOLERANCE * abs(a) or abs(te - e) > (
+                _MOSAIC_SCALE_TOLERANCE * abs(e)
+            ):
+                raise ValueError(
+                    f"imagery.path: '{name}' has pixel size {ta} x {-te} but '{names[0]}' has "
+                    f"{a} x {-e}; resample the files to one pixel size first"
+                )
+            col, row = (tc - c) / a, (tf - f) / e
+            if (
+                abs(col - round(col)) > _MOSAIC_ALIGN_TOLERANCE_PX
+                or abs(row - round(row)) > _MOSAIC_ALIGN_TOLERANCE_PX
+            ):
+                raise ValueError(
+                    f"imagery.path: '{name}' is not on the same pixel grid as '{names[0]}' "
+                    f"(offset by {col - round(col):+.3f}, {row - round(row):+.3f} pixel); "
+                    "align the files first (for example gdalwarp -tap)"
+                )
+            offsets.append((round(row), round(col)))
+        top = min(row for row, _ in offsets)
+        left = min(col for _, col in offsets)
+        bottom = max(row + h for (row, _), (h, _) in zip(offsets, sizes))
+        right = max(col + w for (_, col), (_, w) in zip(offsets, sizes))
+        # Each file's place in the mosaic, as (row0, row1, col0, col1).
+        self._places = [
+            (row - top, row - top + h, col - left, col - left + w)
+            for (row, col), (h, w) in zip(offsets, sizes)
+        ]
+        mosaic_transform: Transform = (a, 0.0, c + left * a, 0.0, e, f + top * e)
+        height, width = bottom - top, right - left
+
+        selected = (
+            list(config.bands) if config.bands is not None else list(range(1, reference.count + 1))
+        )
+        if max(selected) > reference.count:
+            raise ValueError(
+                f"imagery.bands asks for band {max(selected)}, but the files have "
+                f"{reference.count} band(s)"
+            )
+        self._bands = [band - 1 for band in selected]
+        self._expand_gray = False
+        if image_format is not None and image_format not in ("npy", "tif"):
+            if reference.dtype != np.uint8 or len(selected) not in (1, 3):
+                raise ValueError(
+                    f"the files have {len(selected)} selected band(s) of {reference.dtype}; "
+                    f"writer.image_format '{image_format}' writes 1 or 3 bands of uint8. "
+                    "Use writer.image_format: npy or tif (keep band count and dtype), or select "
+                    "1 or 3 bands of uint8 files with imagery.bands"
+                )
+            self._expand_gray = len(selected) == 1
+        band_names = [f"b{band}" for band in selected]
+        if self._expand_gray:
+            band_names = band_names * 3
+
+        crs = f"EPSG:{reference.epsg}"
+        bounds = region_bounds_in_crs(region, crs)
+        row0, row1, col0, col1, extends = region_pixel_window(
+            bounds, mosaic_transform, height, width
+        )
+        if row0 >= row1 or col0 >= col1:
+            raise ValueError(
+                f"requested region does not intersect the {len(files)} GeoTIFFs of {pattern} "
+                f"(mosaic extent in {crs}: {_extent_text(mosaic_transform, height, width)})"
+            )
+        if extends:
+            warnings.warn(
+                f"the region extends beyond the {len(files)} GeoTIFFs of {pattern}; only the "
+                "part they cover is used (patches at its edge are padded or dropped by "
+                "sampler.edge_strategy)",
+                UserWarning,
+                stacklevel=3,
+            )
+        self._overview = config.overview
+        self._row0, self._col0 = row0, col0
+        self._nodata = config.nodata if config.nodata is not None else reference.nodata
+        self._file_nodata = [
+            config.nodata if config.nodata is not None else tif.info.nodata for tif in self._tifs
+        ]
+        self._dtype = np.dtype(reference.dtype)
+        _log.debug("GeoTIFF mosaic of %d file(s), %dx%d px in %s", len(files), width, height, crs)
+        self.metadata = RasterMetadata(
+            source_type="geotiff",
+            product_id=f"{pattern} ({len(files)} files)",
+            width=col1 - col0,
+            height=row1 - row0,
+            bands=band_names,
+            dtype=str(reference.dtype),
+            crs=crs,
+            transform=offset_transform(mosaic_transform, row0, col0),
+            chunk_rows=config.chunk_rows,
+            fingerprint={
+                "kind": "mosaic",
+                "files": [
+                    {"name": name, **geotiff_fingerprint(geotiff_location(path))}
+                    for name, path in zip(names, files)
+                ],
+                "overview": config.overview,
+                "bands": selected,
+                "nodata": _json_nodata(self._nodata),
+            },
+        )
+
+    def _fill_value(self) -> Any:
+        nodata = self._nodata
+        if nodata is None:
+            return 0
+        if np.issubdtype(self._dtype, np.integer):
+            info = np.iinfo(self._dtype)
+            if math.isnan(nodata) or nodata != int(nodata) or not info.min <= nodata <= info.max:
+                return 0
+        return nodata
+
+    def read_window(
+        self, row_start: int, row_stop: int, col_start: int, col_stop: int
+    ) -> tuple[npt.NDArray[Any], npt.NDArray[np.bool_]]:
+        r0, r1 = self._row0 + row_start, self._row0 + row_stop
+        c0, c1 = self._col0 + col_start, self._col0 + col_stop
+        height, width = max(0, r1 - r0), max(0, c1 - c0)
+        data = np.full((height, width, len(self._bands)), self._fill_value(), dtype=self._dtype)
+        valid = np.zeros((height, width), dtype=np.bool_)
+        read = 0
+        for tif, nodata, (f_r0, f_r1, f_c0, f_c1) in zip(
+            self._tifs, self._file_nodata, self._places
+        ):
+            top, bottom = max(r0, f_r0), min(r1, f_r1)
+            left, right = max(c0, f_c0), min(c1, f_c1)
+            if top >= bottom or left >= right:
+                continue
+            part, inside = tif.read_window(
+                top - f_r0,
+                bottom - f_r0,
+                left - f_c0,
+                right - f_c0,
+                bands=self._bands,
+                overview=self._overview,
+            )
+            read += 1
+            usable = inside & ~_nodata_mask(part, nodata)
+            target = (slice(top - r0, bottom - r0), slice(left - c0, right - c0))
+            # The first file with data wins where files overlap.
+            fresh = usable & ~valid[target]
+            data[target][fresh] = part[fresh]
+            valid[target] |= fresh
+        _log.debug(
+            "GeoTIFF mosaic window rows %d:%d, cols %d:%d from %d file(s)", r0, r1, c0, c1, read
+        )
+        if self._expand_gray:
+            data = np.repeat(data, 3, axis=-1)
+        return data, valid
+
+    def close(self) -> None:
+        """Nothing to release: the readers hold no open handles between reads."""
+
+
+def open_geotiff_source(
+    region: RegionConfig, config: GeoTiffImageryConfig, *, image_format: str | None = None
+) -> GeoTiffRasterSource | GeoTiffMosaicSource:
+    """A GeoTIFF source: one file as it is, or several (a glob pattern) as a mosaic."""
+    files = config.files()
+    if len(files) == 1 and files[0] == config.path:
+        return GeoTiffRasterSource(region, config, image_format=image_format)
+    return GeoTiffMosaicSource(region, config, files, image_format=image_format)
+
+
 class StacCogRasterSource:
     """Sentinel-2 bands as separate COGs of a STAC item, stacked on the finest band's grid.
 
@@ -1240,7 +1484,7 @@ def open_raster_source(
     if isinstance(imagery, XYZImageryConfig):
         return XYZRasterSource(region, imagery)
     if isinstance(imagery, GeoTiffImageryConfig):
-        return GeoTiffRasterSource(region, imagery, image_format=image_format)
+        return open_geotiff_source(region, imagery, image_format=image_format)
     if isinstance(imagery, StacCogImageryConfig):
         return StacCogRasterSource(region, imagery)
     return EOPFZarrRasterSource(region, imagery)

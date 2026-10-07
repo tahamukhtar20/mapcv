@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import math
 import os
 import re
@@ -105,7 +106,13 @@ def _check_geotiff_location(path: str, field: str) -> str:
 
 
 def _validate_geotiff_path(path: str) -> str:
-    return _check_geotiff_location(path, "imagery.path")
+    _check_geotiff_location(path, "imagery.path")
+    if glob.has_magic(path) and eopf_local_path(path) is None:
+        raise ValueError(
+            "imagery.path: glob patterns (*, ?, [...]) work for local files only; "
+            "a remote GeoTIFF is one URL"
+        )
+    return path
 
 
 def _validate_label_raster_path(path: str) -> str:
@@ -394,9 +401,27 @@ class EarthEngineImageryConfig(BaseModel):
     start: str | None = None
     end: str | None = None
     reducer: Literal["median", "mean", "mosaic", "min", "max"] = "median"
+    # Keep only scenes whose cloud percentage (cloud_property) is at most this.
+    max_cloud: float | None = Field(default=None, ge=0, le=100)
+    # The scene property holding the cloud percentage; detected for Sentinel-2 and Landsat.
+    cloud_property: str | None = None
+    # Sentinel-2 only: mask pixels whose Cloud Score+ clear score (cs_cdf) is below this.
+    cloud_score_plus: float | None = Field(default=None, gt=0, lt=1)
     vis: EarthEngineVis
     # The Google Cloud project the requests are made (and counted) for.
     project: str | None = None
+
+    @property
+    def cloud_filter_property(self) -> str | None:
+        """The scene property ``max_cloud`` filters on, or ``None`` without one."""
+        if self.cloud_property is not None:
+            return self.cloud_property
+        name = (self.collection or "").upper()
+        if name.startswith("COPERNICUS/S2"):
+            return "CLOUDY_PIXEL_PERCENTAGE"
+        if name.startswith("LANDSAT/"):
+            return "CLOUD_COVER"
+        return None
 
     @model_validator(mode="after")
     def _one_image(self) -> EarthEngineImageryConfig:
@@ -404,6 +429,24 @@ class EarthEngineImageryConfig(BaseModel):
             raise ValueError("imagery.earth_engine: set 'image' or 'collection', not both")
         if self.image is not None and (self.start is not None or self.end is not None):
             raise ValueError("imagery.earth_engine: 'start'/'end' filter a 'collection'")
+        if self.image is not None and (
+            self.max_cloud is not None or self.cloud_score_plus is not None
+        ):
+            raise ValueError(
+                "imagery.earth_engine: 'max_cloud' and 'cloud_score_plus' filter a 'collection'"
+            )
+        if self.max_cloud is not None and self.cloud_filter_property is None:
+            raise ValueError(
+                "imagery.earth_engine.max_cloud: set cloud_property to the collection's "
+                "cloud-percentage property (it is detected only for Sentinel-2 and Landsat)"
+            )
+        if self.cloud_score_plus is not None and not (self.collection or "").upper().startswith(
+            "COPERNICUS/S2"
+        ):
+            raise ValueError(
+                "imagery.earth_engine.cloud_score_plus works with Sentinel-2 collections "
+                "(COPERNICUS/S2...) only; use max_cloud for others"
+            )
         for name in ("start", "end"):
             value = getattr(self, name)
             if value is not None and not _STAC_TIME.fullmatch(value):
@@ -608,7 +651,9 @@ class StacCogImageryConfig(BaseModel):
 
 
 class GeoTiffImageryConfig(BaseModel):
-    """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling).
+    """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling),
+    or a mosaic of local GeoTIFFs: a glob pattern such as ``survey/*.tif`` (``**`` matches
+    folders too) whose files share one CRS, pixel size and pixel grid.
 
     ``bands`` are 1-based band numbers in the order they should be written
     (default: every band). ``overview`` is the overview level to read (0 = full
@@ -630,6 +675,20 @@ class GeoTiffImageryConfig(BaseModel):
 
     _check_path = field_validator("path")(_validate_geotiff_path)
     _check_name = field_validator("name")(_validate_source_name)
+
+    def files(self) -> list[str]:
+        """The GeoTIFFs this source reads: ``path``, or the sorted local files its glob
+        pattern matches (none is an error)."""
+        if not glob.has_magic(self.path):
+            return [self.path]
+        local = eopf_local_path(self.path)
+        assert local is not None  # remote patterns are refused by validation
+        matches = sorted(
+            found for found in glob.glob(str(local), recursive=True) if Path(found).is_file()
+        )
+        if not matches:
+            raise FileNotFoundError(f"imagery.path: no files match {self.path}")
+        return matches
 
     @field_validator("nodata")
     @classmethod
@@ -1410,7 +1469,9 @@ class MapcvConfig(BaseModel):
         imagery = raw.get("imagery")
         for source in imagery if isinstance(imagery, list) else [imagery]:
             if isinstance(source, dict) and "type" not in source:
-                raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
+                raise ValueError(
+                    "imagery.type is required: 'xyz', 'geotiff', 'eopf_zarr' or 'stac_cog'"
+                )
         labels = raw.get("labels")
         if isinstance(labels, dict) and "type" not in labels:
             # Polygon labels predate labels.type; configs without it keep working.

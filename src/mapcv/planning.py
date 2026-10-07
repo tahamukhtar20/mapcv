@@ -24,7 +24,7 @@ from mapcv.config import (
     area_polygons,
     eopf_local_path,
 )
-from mapcv.imagery import GeoTiffRasterSource
+from mapcv.imagery import open_geotiff_source
 from mapcv.pipeline import _max_window_width
 from mapcv.sampler import random_patch_capacity
 from mapcv.targets.segmentation import load_labels
@@ -168,7 +168,7 @@ def _geotiff_raster(
     pixel, channels, bytes per value, description)``."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
-        source = GeoTiffRasterSource(
+        source = open_geotiff_source(
             config.region, imagery, image_format=config.writer.image_format
         )
     warned.extend(str(warning.message) for warning in caught)

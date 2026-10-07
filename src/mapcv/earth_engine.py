@@ -32,17 +32,43 @@ def _ee() -> Any:
         raise RuntimeError(_INSTALL_HINT) from exc
 
 
-def _image(ee: Any, config: EarthEngineImageryConfig) -> Any:
+# Google's per-pixel cloud scores for Sentinel-2 (cs_cdf: 1 = clear, 0 = cloud).
+CLOUD_SCORE_PLUS = "GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED"
+
+
+def _image(
+    ee: Any,
+    config: EarthEngineImageryConfig,
+    bounds: tuple[float, float, float, float] | None = None,
+) -> Any:
+    """The ee.Image to render: the asset, or the collection filtered and reduced."""
     if config.image is not None:
         return ee.Image(config.image)
     collection = ee.ImageCollection(config.collection)
+    if bounds is not None:
+        # Only scenes over the region: the same pixels there, far less work for Earth Engine.
+        collection = collection.filterBounds(ee.Geometry.Rectangle(list(bounds)))
     if config.start is not None or config.end is not None:
         collection = collection.filterDate(config.start or "1970-01-01", config.end or "2100-01-01")
+    if config.max_cloud is not None:
+        collection = collection.filter(
+            ee.Filter.lte(config.cloud_filter_property, config.max_cloud)
+        )
+    if config.cloud_score_plus is not None:
+        threshold = config.cloud_score_plus
+        collection = collection.linkCollection(
+            ee.ImageCollection(CLOUD_SCORE_PLUS), ["cs_cdf"]
+        ).map(lambda image: image.updateMask(image.select("cs_cdf").gte(threshold)))
     return getattr(collection, config.reducer)()
 
 
-def tile_url(config: EarthEngineImageryConfig) -> str:
+def tile_url(
+    config: EarthEngineImageryConfig, bounds: tuple[float, float, float, float] | None = None
+) -> str:
     """An XYZ ``{z}/{x}/{y}`` URL template for ``config``'s image, freshly created.
+
+    ``bounds`` (west, south, east, north in degrees) limits a collection to the scenes
+    over the region, which changes nothing there but saves Earth Engine work.
 
     Raises:
         RuntimeError: The ``gee`` extra is missing, or Earth Engine refused (not logged
@@ -51,7 +77,7 @@ def tile_url(config: EarthEngineImageryConfig) -> str:
     ee = _ee()
     try:
         ee.Initialize(project=config.project)
-        map_id = _image(ee, config).getMapId(config.vis.params())
+        map_id = _image(ee, config, bounds).getMapId(config.vis.params())
     except Exception as exc:
         what = config.image or config.collection
         raise RuntimeError(

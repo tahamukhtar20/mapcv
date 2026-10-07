@@ -7,7 +7,7 @@ load a config with ``MapcvConfig.from_yaml(path)`` and tweak it in code.
     python examples/scripts/python_api.py                 # plan, then generate
     python examples/scripts/python_api.py --plan-only     # no download
 
-Imagery: Esri World Imagery (check Esri's terms before sharing the output).
+Imagery: Esri World Imagery (see PROVIDERS.md for its credit line).
 Labels: © OpenStreetMap contributors, ODbL 1.0.
 """
 

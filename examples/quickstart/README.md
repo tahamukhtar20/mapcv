@@ -95,6 +95,6 @@ Regenerate it with `python ../scripts/fetch_osm_labels.py quickstart`. A dataset
 derive from these labels is subject to the ODbL's share-alike terms for databases.
 
 **Imagery** — Esri World Imagery (sources: Esri, Maxar, Earthstar Geographics, and the GIS
-user community). It is not included in this repository. mapcv does not grant any rights to
-it: check Esri's terms of use before downloading, storing, sharing or training on it, and
-see [PROVIDERS.md](../../PROVIDERS.md). Do not commit the generated `dataset/` folder.
+user community), proprietary, under Esri's terms of use; see
+[PROVIDERS.md](../../PROVIDERS.md). It is not included in this repository, so don't commit the
+generated `dataset/` folder.

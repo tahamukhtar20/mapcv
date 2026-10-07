@@ -63,9 +63,8 @@ terms.
 
 **Imagery is not included.** The examples download it when you run them:
 
-* Esri World Imagery (quickstart) is proprietary. Check Esri's terms before downloading,
-  storing, sharing or training on it.
+* Esri World Imagery (quickstart) is proprietary, under Esri's terms of use.
 * Sentinel-2 data are free and open: "Contains modified Copernicus Sentinel data 2025",
   read from ESA's EOPF Sentinel Zarr Samples service.
 
-mapcv does not grant rights to any imagery; see [PROVIDERS.md](../PROVIDERS.md).
+Licenses and credit lines per source: [PROVIDERS.md](../PROVIDERS.md).

@@ -3,7 +3,7 @@ title: Introduction
 description: What mapcv does, who it is for, and what you get out of it.
 ---
 
-import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import PipelineDiagram from '../../components/PipelineDiagram.astro';
 
 **mapcv turns a region, imagery and labels into a ready-to-train remote-sensing dataset.** You describe *where* (a longitude/latitude box or polygons), *what imagery* (XYZ map tiles, your own GeoTIFF or COG, Sentinel-2, or Google Earth Engine) and, optionally, *what to label* (vector features in GeoJSON, KML, GeoPackage, Shapefile, GeoParquet or straight from OpenStreetMap, or a label raster). mapcv reads the imagery, puts the labels on exactly the same pixel grid, cuts fixed-size patches for the task you choose, and writes them with a manifest and leakage-safe train/val/test splits.
@@ -47,11 +47,11 @@ Details: [Dataset format](/mapcv/reference/dataset-format/).
 
 ## What mapcv does not do
 
-mapcv 0.2 deliberately keeps a narrow scope. It does **not** search catalogues (STAC), mosaic several scenes, mask clouds, write GeoTIFFs, connect to Google Earth Engine, or authenticate to private buckets. It reads one Sentinel-2 product per run, and XYZ sources must serve standard 256 × 256 tiles.
-
-<Aside type="caution" title="Imagery rights are yours to check">
-mapcv processes imagery; it does not grant you the right to download, cache, train on or share it. Read [Providers & licensing](/mapcv/project/providers/) before you generate a dataset from someone else's tiles.
-</Aside>
+- **No resampling between grids.** Imagery is read on its own pixel grid. Several sources or mosaic tiles must share a CRS and line up pixel for pixel (a coarser source may be a whole multiple); mapcv does not warp one grid onto another.
+- **No private stores.** Remote GeoTIFF, STAC and EOPF URLs must be public; signed URLs and private buckets are not supported.
+- **One Sentinel-2 scene per run.** `stac_cog` and `eopf_zarr` pick one item; Earth Engine can composite a collection.
+- **Standard XYZ tiles only.** XYZ sources must serve 256 × 256 tiles.
+- **No imagery of its own.** mapcv fetches what your config names; [Providers & licensing](/mapcv/project/providers/) lists each source's license and credit line.
 
 ## Where to go next
 

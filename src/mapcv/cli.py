@@ -550,16 +550,10 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
     if config.multi_source:
         _console.print(
             "[dim]Several sources: each is read on the first source's grid (coarser ones are "
-            "repeated, never interpolated). Check each provider's terms for XYZ imagery "
-            f"({_PROVIDERS_URL}).[/dim]"
+            "repeated, never interpolated).[/dim]"
         )
     elif isinstance(config.imagery, GeoTiffImageryConfig):
         _console.print("[dim]Your own imagery: mapcv reads it as it is, without resampling.[/dim]")
-    elif not isinstance(config.imagery, (EOPFZarrImageryConfig, StacCogImageryConfig)):
-        _console.print(
-            "[dim]Imagery terms are your responsibility: check the provider's license, "
-            f"attribution and rate limits ({_PROVIDERS_URL}).[/dim]"
-        )
 
 
 def _source_line(record: SourceRecord) -> str:
@@ -795,8 +789,7 @@ class Template(str, Enum):
 _HEADER = f"""\
 # mapcv config - docs: {_DOCS_URL}/reference/configuration/
 # Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
-# You are responsible for the imagery provider's license, attribution and rate limits:
-# {_PROVIDERS_URL}
+# Imagery sources, their licenses and credit lines: {_PROVIDERS_URL}
 """
 
 _XYZ_TEMPLATE = (
@@ -890,7 +883,7 @@ _GEOTIFF_TEMPLATE = (
     f"""\
 # mapcv config - docs: {_DOCS_URL}/reference/configuration/
 # Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
-# Your own GeoTIFF or Cloud Optimized GeoTIFF: you are responsible for its license.
+# Your own GeoTIFF or Cloud Optimized GeoTIFF, read as it is.
 """
     + """
 region:                      # WGS-84 lon/lat bounding box inside the file
@@ -1751,9 +1744,7 @@ def _wizard() -> str:
     )
 
     _console.print("\n[bold cyan]1/4 Imagery[/bold cyan]")
-    _console.print(
-        "  [bold]esri[/bold]       Esri World Imagery — sub-metre RGB (check Esri's terms)"
-    )
+    _console.print("  [bold]esri[/bold]       Esri World Imagery — sub-metre RGB")
     _console.print("  [bold]sentinel2[/bold]  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)")
     _console.print("  [bold]custom[/bold]     your own XYZ tile URL")
     _console.print("  [bold]geotiff[/bold]    your own GeoTIFF / COG file or URL")
@@ -2325,8 +2316,8 @@ def card(
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
     _console.print(
-        f"[green]✓[/green] Dataset card written to [bold]{path}[/bold]. Set its licence to "
-        "what the imagery provider's terms allow before sharing."
+        f"[green]✓[/green] Dataset card written to [bold]{path}[/bold]. Its licence "
+        "is 'other' until you set it."
     )
 
 

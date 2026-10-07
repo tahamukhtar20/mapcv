@@ -2,8 +2,8 @@
 # Run from this folder (paths below are relative to it):
 #   mapcv plan mapcv.yaml && mapcv generate mapcv.yaml && mapcv info dataset
 #
-# Imagery: Esri World Imagery. Check Esri's terms before using or sharing the
-# result: https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md
+# Imagery: Esri World Imagery (credit and license:
+# https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md)
 # Labels: © OpenStreetMap contributors, ODbL 1.0 (see README.md).
 
 region:                      # WGS-84 lon/lat; snapped outward to whole tiles

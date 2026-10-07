@@ -26,7 +26,7 @@ $ mapcv plan big.yaml
 
 Things to check:
 
-- **Tiles and download size.** A quarter of a million tiles is a lot of requests to someone else's server. Check the provider's limits ([Providers & licensing](/mapcv/project/providers/)) and consider one zoom level lower: four times fewer tiles.
+- **Tiles and download size.** A quarter of a million tiles takes a while and may run into the provider's rate limits or quota. One zoom level lower means four times fewer tiles.
 - **Output size.** Estimates use typical compression; real PNGs of dense urban imagery can be larger.
 - **Memory per chunk.** See below.
 
@@ -154,9 +154,8 @@ In the other direction, a manifest written by a newer mapcv (a higher manifest `
 
 1. Generate a tiny version first (a few hundred metres) and look at the patches.
 2. `mapcv plan` the full config; check tiles, output size, memory and warnings.
-3. Confirm the provider's terms allow the volume.
-4. Run `mapcv generate --yes` under `nohup`, `tmux` or a job scheduler.
-5. If it stops, fix the cause and run the same command again.
-6. `mapcv info` the result.
+3. Run `mapcv generate --yes` under `nohup`, `tmux` or a job scheduler.
+4. If it stops, fix the cause and run the same command again.
+5. `mapcv info` the result.
 
 </Steps>

@@ -339,7 +339,8 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
                     found.extend(_vector_label_paths(file_key, path))
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
-            local = eopf_local_path(imagery.path)
+            # A searched product is found at run time, in a remote catalog.
+            local = eopf_local_path(imagery.path) if imagery.path is not None else None
             if local is not None:
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 found.append((where, local))
@@ -668,9 +669,17 @@ def _labels_summary(state: ToolState, config: MapcvConfig) -> Optional[Dict[str,
             ],
             "classes": labels.classes,
         }
+    if labels.osm is not None:
+        return {
+            "type": "osm",
+            "classes": [entry.model_dump(mode="json") for entry in labels.osm.classes],
+            "class_ids": labels.classes,
+        }
+    first = labels.first_path
+    assert first is not None
     return {
         "type": "vector",
-        "path": state.sandbox.rel(labels.first_path),
+        "path": state.sandbox.rel(first),
         "label_field": labels.label_field,
         "classes": labels.classes,
         "layer": labels.layer,
@@ -1079,6 +1088,14 @@ def _plan_summary(data: Dict[str, Any]) -> str:
 
 def make_plan_for(state: ToolState, config: MapcvConfig) -> Tuple[Plan, List[str]]:
     """Estimate a config; also return the Python warnings raised while planning."""
+    labels = config.labels
+    if isinstance(labels, LabelsConfig) and labels.osm is not None:
+        # Plan and generate fetch them, caching the answer outside the server's root.
+        raise ToolFailure(
+            "labels.osm downloads OpenStreetMap labels and caches them outside this server's "
+            "root, so plan and generate are not available for it here. Run `mapcv plan` / "
+            "`mapcv generate` in a terminal, or point labels.path at an OSM extract."
+        )
     with capture_warnings() as caught:
         try:
             estimate = make_plan(config)

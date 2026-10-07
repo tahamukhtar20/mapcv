@@ -14,8 +14,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "website" / "src" / "content" / "docs"
+# The sdist leaves the docs site out; these files are checked in the repository.
+needs_docs = pytest.mark.skipif(not DOCS.is_dir(), reason="needs website/ (not in the sdist)")
 
 
+@needs_docs
 def test_citation_matches_the_package_and_the_citing_page() -> None:
     text = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     citation = yaml.safe_load(text)
@@ -56,6 +59,7 @@ def _normal(text: str) -> str:
     return " ".join(text.split())
 
 
+@needs_docs
 @pytest.mark.parametrize(
     ("source", "page"),
     [("PROVIDERS.md", "project/providers.mdx"), ("MIGRATION.md", "project/migration.mdx")],

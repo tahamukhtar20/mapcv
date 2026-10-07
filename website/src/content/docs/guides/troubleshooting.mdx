@@ -114,6 +114,8 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Unable to open anonymous EOPF product '…': …`** The URL is wrong, not public, or the server is unreachable. Copy the product link again from the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) and make sure it ends in `.zarr` (the product, not one of its assets).
 
+**`Unable to open anonymous EOPF product '…': open_group() got an unexpected keyword argument 'zarr_format'`** The environment has xarray 2026.9 or newer, which needs zarr 3, next to the zarr 2 that xarray-eopf requires. `pip install "mapcv[zarr]"` keeps xarray below 2026.9; in an existing environment run `pip install "xarray<2026.9"`.
+
 **`Generation failed: 408, message='Request Time-out', url='…/measurements/reflectance/r10m/b02/1.3'`** A read from the remote product timed out. Run the same command again: finished chunks are kept.
 
 **`band b02 returned no data for rows … while other bands did; the read probably failed (e.g. a network timeout).`** A band came back empty where the other bands have data, which usually means a failed remote read. mapcv stops instead of writing broken patches; run the same command again to resume from that chunk.

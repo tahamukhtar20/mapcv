@@ -182,7 +182,18 @@ Where polygons overlap, the feature that comes **later** in the file wins. Put f
 
 OpenStreetMap is a common source of building, road and land-use polygons. Its data is licensed under the [ODbL](https://www.openstreetmap.org/copyright): credit "© OpenStreetMap contributors" when you share a dataset made from it.
 
-Some ways to get a GeoJSON for a small area:
+**Straight from the config.** `labels.osm` asks the Overpass API for the region's features and turns them into labels, cached on disk ([reference](/mapcv/reference/configuration/#labels-from-openstreetmap-labelsosm)):
+
+```yaml
+labels:
+  osm:
+    classes:
+      - {name: building, tags: {building: "*"}}
+      - {name: road, tags: {highway: [primary, secondary, residential]}}
+  buffer: {line: 6}
+```
+
+For larger areas, or to keep a file under version control, export a GeoJSON yourself and use `labels.path`. Some ways to get one:
 
 - **[osmnx](https://osmnx.readthedocs.io/)** (Python), for example:
 

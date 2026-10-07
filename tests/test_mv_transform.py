@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-import pytest
 from shapely.geometry import Point
 
 from mapcv._mapcv_rs import xy as rust_xy
@@ -14,10 +13,10 @@ from mapcv.labels import transform_to_mercator
 
 _GOLDEN = Path(__file__).parent / "golden" / "transform_golden.json"
 
+# The fixtures are committed: a missing one is an error, never a skipped test.
 if not _GOLDEN.exists():
-    pytest.skip(
-        "transform_golden.json not found - run tests/generate_golden.py first",
-        allow_module_level=True,
+    raise FileNotFoundError(
+        "transform_golden.json not found - regenerate with: uv run --group golden python tests/generate_golden.py"
     )
 
 

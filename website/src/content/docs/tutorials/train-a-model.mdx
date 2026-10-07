@@ -15,7 +15,7 @@ A notebook version is in the repository: [`examples/notebooks/02-train-a-segment
 
 1. ### Load the splits
 
-   [`mapcv.data.MapcvDataset`](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) reads one split. With `normalize=True` it standardises each band with the mean and standard deviation of the **train** split (from `stats.json`, computed the first time), so RGB and Sentinel-2 inputs need no further scaling, and pixels without imagery become 0. Each item is a dict with an `image` tensor `(C, H, W)` and a `mask` tensor `(H, W)`; `ignore_index` is the mask value mapcv writes where there is no imagery (255).
+   [`mapcv.data.MapcvDataset`](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) reads one split. With `normalize=True` it standardises each band with the mean and standard deviation of the **train** split (read from `stats.json`, or computed in memory when it is missing; run `mapcv stats` once to save them), so RGB and Sentinel-2 inputs need no further scaling, and pixels without imagery become 0. Each item is a dict with an `image` tensor `(C, H, W)` and a `mask` tensor `(H, W)`; `ignore_index` is the mask value mapcv writes where there is no imagery (255).
 
    ```python
    import torch
@@ -126,7 +126,7 @@ A notebook version is in the repository: [`examples/notebooks/02-train-a-segment
            torch.save(model.state_dict(), "best.pt")
    ```
 
-   Use the val split to choose the checkpoint, learning rate and epochs. With rare classes (buildings were ~16 % of pixels), consider class weights from the manifest: see [Use your dataset → class weights](/mapcv/guides/use-your-dataset/#class-weights-from-the-manifest), then pass `weight=` to `CrossEntropyLoss`.
+   Use the val split to choose the checkpoint, learning rate and epochs. With rare classes (buildings were 19 % of pixels), consider class weights from the manifest: see [Use your dataset → class weights](/mapcv/guides/use-your-dataset/#class-weights-from-the-manifest), then pass `weight=` to `CrossEntropyLoss`.
 
 5. ### Test once
 

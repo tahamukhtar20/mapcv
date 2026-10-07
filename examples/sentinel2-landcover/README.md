@@ -30,13 +30,13 @@ mapcv info dataset
 ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────╮
 │ Region   5.4, 51.975 → 5.5, 52.035  (≈ 6.9 × 6.6 km)                         │
 │ Imagery  Sentinel-2 L2A (EOPF) · 4 bands (≈ 10.00 m/px)                      │
-│ Raster   686 × 664 px                                                        │
+│ Raster   709 × 692 px                                                        │
 │ Labels   landuse.geojson · 643 polygon(s) · classes: built_up → 1, farmland  │
 │          → 2, forest → 3, water → 4                                          │
 │ Patches  ≈ 25 × 128 px (grid, stride 128)                                    │
 │ Output   dataset · npy (≈ 6.6 MB)                                            │
 │ Split    spatial · test 0.2 · val 0.1                                        │
-│ Memory   ≈ 15.5 MB per chunk                                                 │
+│ Memory   ≈ 16.7 MB per chunk                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -47,6 +47,8 @@ completed run printed:
 ```text
 ╭─ Dataset ready ──────────────────────────────────────────────────────────────╮
 │ Patches  25                                                                  │
+│ Source   eopf_zarr ·                                                         │
+│          S2A_MSIL2A_20250513T104041_N0511_R008_T31UFT_20250513T143716.zarr   │
 │ Shape    4×128×128 float32                                                   │
 │ Splits   train 18 (72%) · val 2 (8%) · test 5 (20%)                          │
 │ Time     11m 07s                                                             │
@@ -68,21 +70,11 @@ Time-out**: three of four `generate` runs stopped with that error, on different 
 same command again; finished chunks are kept and the run resumes. A faster connection makes
 this much less likely.
 
-In the one run that completed, a timed-out chunk was silently read as missing, so the `b02`
-(blue) band of the 10 southernmost patches was entirely NaN while the other bands were fine.
-mapcv does not flag this, because a patch only counts as empty where *all* bands are NaN.
-Check each band after generating, and regenerate into a fresh `writer.staging_dir` if any band
-is all NaN:
-
-```python
-import numpy as np
-from pathlib import Path
-
-for path in sorted(Path("dataset/Images").glob("*.npy")):
-    empty = np.isnan(np.load(path)).all(axis=(1, 2))  # one flag per band
-    if empty.any():
-        print(path.name, "has empty band(s):", np.flatnonzero(empty))
-```
+Failed reads are retried: a chunk is read up to four times before the run stops with
+`reading rows … failed 4 times`. A read that times out can also come back as an empty band
+while the other bands have data; mapcv checks every chunk for that and stops with
+`band b02 returned no data for rows … while other bands did` instead of writing broken
+patches. In both cases, run the same command again to resume from that chunk.
 
 
 ## What you get
@@ -95,6 +87,7 @@ dataset/
   manifest.json                  product id, bands, dtype, patch shape, CRS (EPSG:32631),
                                  affine transform, per-patch positions and pixel counts
   splits/                        train.txt, val.txt, test.txt, 10|20|30/labeled.txt ...
+  patches.geojson                footprints of the patches, to open in QGIS
 ```
 
 **Bands-first `float32`.** Unlike the PNG/JPG patches of XYZ imagery, every NPY patch has

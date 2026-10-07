@@ -96,9 +96,9 @@ Every `.py` file starts with, in order:
 
 #### Type annotations
 - Required on every public function and method signature (parameters + return).
-- Use `typing` module forms: `Dict`, `List`, `Optional`, `Tuple`, `Literal` - not PEP 585
-  bare generics (`dict`, `list`). The `from __future__ import annotations` already enables
-  deferred evaluation; keep the import style consistent.
+- Use built-in generics and union syntax (`dict[str, int]`, `list[Path]`, `X | None`) with
+  `Literal` and other names from `typing` or `collections.abc` where needed. The
+  `from __future__ import annotations` line makes them work on Python 3.10.
 
 #### Docstrings
 - **Module**: one-line, plain prose.

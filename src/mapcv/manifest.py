@@ -84,8 +84,9 @@ class ManifestEntry(TypedDict):
 
     ``files`` maps a role to a path relative to the dataset folder, with ``/``
     separators: each imagery source's name (``image`` for a single ``imagery`` block;
-    a multi-source dataset has one key per source, in ``Images/<name>/``) and, for
-    segmentation and for instance datasets with ``instance.id_mask``, ``mask``.
+    a multi-source dataset has one key per source, in ``Images/<name>/``, and a change
+    dataset its two sources in ``A/`` and ``B/``) and, for segmentation, change,
+    regression and instance datasets with ``instance.id_mask``, ``mask``.
     Classification datasets have no masks: their labels are in the summary and in
     ``labels.csv``.
     """
@@ -118,8 +119,9 @@ class SourceRecord(BaseModel):
     crs: str | None = None
     transform: Transform | None = None
     patch_shape: list[int] = Field(default_factory=list)
-    # Identity of the input file (a GeoTIFF's size, time and header hash, or a URL's ETag),
-    # so a resumed run refuses a different file. Absent for sources that have none.
+    # Identity of the input (a GeoTIFF's size and header hash, a URL's ETag, the files of a
+    # mosaic, a STAC item or Earth Engine settings), so a resumed run refuses a different
+    # one. Absent for sources that have none.
     fingerprint: dict[str, Any] | None = None
 
     @model_serializer(mode="wrap")
@@ -134,8 +136,9 @@ class TargetRecord(BaseModel):
     """What each patch is annotated with.
 
     ``labels`` holds the label settings (without the path) and the ``sha256`` of
-    the label file, so a resumed run notices edited labels. ``options`` holds
-    task-specific settings (none for segmentation).
+    the label file (a ``fingerprint`` for a label raster or a raster of values), so a
+    resumed run notices edited labels. ``options`` holds task-specific settings (none
+    for segmentation and regression).
     """
 
     model_config = ConfigDict(extra="allow")

@@ -5,15 +5,15 @@ description: Pick an imagery source and resolution — XYZ presets, zoom levels 
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-mapcv reads three kinds of imagery: XYZ tiles, Sentinel-2 products and [your own GeoTIFF or COG](/mapcv/guides/use-your-own-geotiff/) (drone and aerial orthophotos, commercial or national-mapping imagery, any raster you already have, at its own resolution and band layout). Choose by what your model needs to see:
+mapcv reads three kinds of imagery: XYZ tiles (including [Google Earth Engine](#google-earth-engine)), Sentinel-2 products (EOPF Zarr, or COGs from a STAC catalog) and [your own GeoTIFF or COG](/mapcv/guides/use-your-own-geotiff/) (drone and aerial orthophotos, commercial or national-mapping imagery, any raster you already have, at its own resolution and band layout). Choose by what your model needs to see:
 
-| | XYZ tiles | Sentinel-2 L2A (EOPF Zarr) |
+| | XYZ tiles | Sentinel-2 L2A (EOPF Zarr or COGs) |
 | --- | --- | --- |
 | Pixel size | ~0.1–40 m, set by `zoom` | 10, 20 or 60 m |
-| Channels | RGB (3 × `uint8`) | Up to 12 spectral bands (`float32` reflectance) |
+| Channels | RGB (3 × `uint8`) | Up to 12 spectral bands (`float32` reflectance from EOPF Zarr, `uint16` values from COGs) |
 | Good for | Buildings, roads, trees, solar panels, anything you can see at sub-metre scale | Land cover, crops, water, vegetation indices, change over large areas |
 | Licensing | Provider-specific; often restrictive | Free and open Copernicus data |
-| Install | `pip install mapcv` | `pip install "mapcv[zarr]"` (Python 3.10–3.13) |
+| Install | `pip install mapcv` (`pip install "mapcv[gee]"` for Earth Engine) | `pip install "mapcv[zarr]"` for EOPF Zarr (Python 3.10–3.13); COGs (`type: stac_cog`) need no extra |
 
 ## XYZ tiles
 
@@ -63,7 +63,7 @@ imagery:
   max_connections: 4
 ```
 
-The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. Use either `source` or `url_template`, not both.
+The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. Use exactly one of `source`, `url_template` and `earth_engine`.
 
 ### Google Earth Engine
 
@@ -140,7 +140,7 @@ Don't paste keys into shell history, notebooks you share, or bug reports. mapcv'
 
 ## Sentinel-2 L2A
 
-mapcv reads one Sentinel-2 Level-2A product per run in the ESA **EOPF Zarr** format, from a local copy or an anonymous `https://` or `s3://` URL. You can browse products in the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) and use the product (`.zarr`) link as `imagery.path`.
+mapcv reads a Sentinel-2 Level-2A product in the ESA **EOPF Zarr** format, from a local copy or an anonymous `https://` or `s3://` URL. You can browse products in the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) and use the product (`.zarr`) link as `imagery.path`, or let mapcv find the least cloudy product that covers the region with [`imagery.search`](/mapcv/reference/configuration/#find-the-product-imagerysearch). The same bands are also available as Cloud Optimized GeoTIFFs from [Earth Search](https://earth-search.aws.element84.com/v1) with [`type: stac_cog`](/mapcv/reference/configuration/#sentinel-2-as-cloud-optimized-geotiffs-type-stac_cog), which needs no extra.
 
 ### Bands
 
@@ -162,10 +162,10 @@ mapcv reads one Sentinel-2 Level-2A product per run in the ESA **EOPF Zarr** for
 
 `imagery.resolution` (10, 20 or 60) is the output grid; the EOPF reader resamples bands with a different native resolution onto it, on the product's own pixel grid. 10 m keeps the four 10 m bands sharp; 20 m is the native grid for red-edge and SWIR; 60 m is mainly for quick tests.
 
-Output patches are bands-first `float32` NumPy arrays with decoded reflectance and `NaN` for no data; use `writer.image_format: npy` and usually `edge_strategy: drop` and `max_empty_ratio: 0.2`. Patches keep the product's UTM CRS (see [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/)).
+Output patches are bands-first `float32` NumPy arrays with decoded reflectance and `NaN` for no data; use `writer.image_format: npy` (or `tif` for georeferenced GeoTIFF patches) and usually `edge_strategy: drop` and `max_empty_ratio: 0.2`. Patches keep the product's UTM CRS (see [Coordinates and grids](/mapcv/concepts/coordinates-and-grids/)).
 
 ### Limits
 
-One product per run: no mosaicking, cloud masking, catalogue search or time series. Private buckets and URLs with credentials, query strings or fragments are rejected. Choose a product with low cloud cover over your region (the STAC browser shows `eo:cloud_cover`), and check that the region falls inside the product's footprint: swath edges contain no-data areas.
+Each source reads one product; mapcv does not mosaic several scenes into one. `imagery.search` picks the least cloudy product that covers the whole region, and `scl_mask` turns cloud and shadow pixels into pixels without imagery. For a time series, list one source per date on the same tile ([several sources](/mapcv/reference/configuration/#several-imagery-sources)). Private buckets and URLs with credentials, query strings or fragments are rejected. When you pick a product yourself, choose one with low cloud cover over your region (the STAC browser shows `eo:cloud_cover`), and check that the region falls inside the product's footprint: swath edges contain no-data areas.
 
 The [Land cover from Sentinel-2](/mapcv/tutorials/land-cover-from-sentinel-2/) tutorial walks through a complete example.

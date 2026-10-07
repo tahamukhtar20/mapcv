@@ -49,7 +49,7 @@ Building a machine-learning dataset from geospatial data usually means a one-off
 - **Imagery:** XYZ tiles, your own GeoTIFF/COG (local, `https://`, `s3://`), Sentinel-2 (EOPF Zarr, or COGs found in a STAC catalog, with cloud masking), Google Earth Engine; several sources on one grid.
 - **Labels:** GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap, or a label raster.
 - **Tasks:** semantic segmentation, object detection (COCO/YOLO), instance segmentation (COCO RLE), patch classification, change detection and regression.
-- **Output:** PNG/JPEG/GeoTIFF/NPY patches, a manifest, leakage-safe splits, and exports to Hugging Face and TerraTorch; `mapcv.data.MapcvDataset` loads any of them for PyTorch.
+- **Output:** PNG/JPEG/GeoTIFF/NPY patches, a manifest, leakage-safe splits, and exports to Hugging Face Parquet, WebDataset, Zarr and TerraTorch; `mapcv.data.MapcvDataset` loads any of them for PyTorch.
 - **Correct and fast:** masks follow GDAL's exact rules; a careful rasterio script, GDAL's tools and leafmap produce the same patches, 1.5–34× more slowly ([benchmarks](https://tahamukhtar20.github.io/mapcv/project/performance/)). Interrupted runs resume byte for byte; memory stays bounded on any region size.
 
 Why not a script, TorchGeo, Raster Vision or geoai? See [Why mapcv](https://tahamukhtar20.github.io/mapcv/why-mapcv/).
@@ -72,7 +72,7 @@ Optional extras: `mapcv[zarr]` (Sentinel-2 EOPF Zarr, Python 3.10–3.13), `mapc
 mapcv init my_dataset.yaml
 ```
 
-Open the file and fill in your region, imagery source, and (optionally) label path. Everything else has sensible defaults.
+In a terminal this asks a few questions (imagery, area, labels, patches) and writes a working config; `mapcv init my_dataset.yaml --template xyz` writes a commented example to fill in instead. Everything else has sensible defaults.
 
 > **Note:** XYZ sources must return standard **256x256 pixel** tiles. mapcv does not provide imagery; see [PROVIDERS.md](PROVIDERS.md) for how it treats imagery and how to credit each source.
 
@@ -102,7 +102,7 @@ mapcv verify ./output --write-checksums
 
 ## Bring your own imagery
 
-Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL, a public `s3://` object, or a folder of tiles read as one mosaic) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
+Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL, a public `s3://` object, or a glob pattern such as `tiles/*.tif` that reads a folder of local tiles as one mosaic) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
 
 ```yaml
 imagery:

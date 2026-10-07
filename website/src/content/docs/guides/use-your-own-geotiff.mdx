@@ -13,7 +13,7 @@ No extra install is needed: `pip install mapcv` is enough.
 
 - **Grid.** Your WGS-84 `region` is reprojected into the file's CRS and expanded outward to whole pixels of the file, then clipped to the raster. Every patch is a block of the file's pixels, so it equals what `rasterio` reads from the same window.
 - **Labels.** Keep your labels in WGS-84 longitude/latitude, as for any mapcv dataset. mapcv reprojects them into the file's CRS and burns them onto the same pixels. Never reproject labels yourself.
-- **Bands and data type.** The file's bands and data type are kept. 8-bit RGB (or one gray band) can be written as PNG or JPG; everything else (16-bit, float, 4 or more bands) is written as `npy`, bands-first, in the file's own data type.
+- **Bands and data type.** The file's bands and data type are kept. 8-bit RGB (or one gray band) can be written as PNG or JPG; everything else (16-bit, float, 2 or 4 and more bands) needs `npy` (bands-first) or `tif` (a georeferenced GeoTIFF), both in the file's own data type.
 - **NoData.** Pixels equal to the file's NoData value in every selected band, and the area outside the file, count as empty and become `labels.ignore_index` (255) in masks.
 
 ## A local file
@@ -64,7 +64,7 @@ No extra install is needed: `pip install mapcv` is enough.
    │ Region   2.333, 48.856 → 2.34, 48.86  (≈ 0.5 × 0.4 km)                                           │
    │ Imagery  GeoTIFF paris-2024.tif · EPSG:32631 · 3 band(s) uint8 (≈ 0.10 m/px)                     │
    │ Raster   5,174 × 4,492 px                                                                        │
-   │ Labels   none (image-only dataset)                                                               │
+   │ Labels   buildings.geojson · … polygon(s) · classes: building → 1                                │
    │ Patches  ≈ 340 × 256 px (grid, stride 256)                                                       │
    │ Output   dataset · png (≈ 36.8 MB)                                                               │
    │ Split    spatial · test 0.2 · val 0.1                                                            │
@@ -120,7 +120,7 @@ imagery:
   path: https://example.com/cogs/paris-2024.tif
 ```
 
-A public object in S3 works as `s3://bucket/key.tif` (anonymous access, for buckets that allow it). One example is the Sentinel-2 L2A COGs of the Earth Search `sentinel-cogs` bucket; their 8-bit true-colour file is `TCI.tif` inside each scene folder, and the [EOPF STAC browser](https://stac.browser.user.eopf.eodc.eu/) or the Earth Search catalogue lists the scene folders.
+A public object in S3 works as `s3://bucket/key.tif` (anonymous access, for buckets that allow it). One example is the Sentinel-2 L2A COGs of the Earth Search `sentinel-cogs` bucket; their 8-bit true-colour file is `TCI.tif` inside each scene folder, and the [Earth Search](https://earth-search.aws.element84.com/v1) catalogue lists the scenes. To read their spectral bands, let [`type: stac_cog`](/mapcv/reference/configuration/#sentinel-2-as-cloud-optimized-geotiffs-type-stac_cog) find the scene and stack the bands for you.
 
 Rules for remote files:
 

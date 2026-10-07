@@ -5,16 +5,17 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, `task: instance` or `task: classification`, an optional `detection`, `instance` or `classification` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance`, `classification` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`region.path`; `path`, `files[].path` and `annotated_area` of `labels` and of `change.before`/`change.after`; `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, `instance`, `classification` or `change`, an optional block of the same name with that task's settings. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance`, `classification`, `change` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`region.path`; `path`, `files[].path` and `annotated_area` of `labels` and of `change.before`/`change.after`; `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
-task: segmentation  # what the dataset is for: segmentation (default), detection, instance or classification
+task: segmentation  # what the dataset is for: segmentation (default), detection, instance, classification, change or regression
 region:   { … }   # where (required)
 imagery:  { … }   # which pixels (required)
 labels:   { … }   # which polygons or label raster (optional: omit for an image-only dataset)
 detection: { … }  # box settings (optional, task: detection only)
 instance: { … }   # mask settings (optional, task: instance only)
 classification: { … }  # label rule (optional, task: classification only)
+change:   { … }   # change mask settings (optional, task: change only)
 sampler:  { … }   # how to cut patches (required)
 writer:   { … }   # where and how to write (required)
 split:    { … }   # train/val/test lists (optional: omit to skip splitting)
@@ -229,7 +230,7 @@ For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. F
 
 ## `imagery`
 
-Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr`, `stac_cog` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
+Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr`, `stac_cog` or `geotiff`. For segmentation, regression and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
 
 ### Several imagery sources
 
@@ -245,7 +246,7 @@ writer: {staging_dir: ./dataset, image_format: tif}
 
 | Rule | Detail |
 | --- | --- |
-| Names | 1–32 lowercase letters, digits, `_` or `-`, unique. `mask` and names ending in `_world` are reserved |
+| Names | `name` on each source: 1–32 lowercase letters, digits, `_` or `-`, starting with a letter or digit, unique. `mask` and names ending in `_world` are reserved. A single (not listed) source takes no `name` |
 | Grid | The **first** source's pixel grid is the dataset's grid; region, patches, masks and georeferencing all follow it |
 | Other sources | Same CRS as the first, and pixels the same size or a whole number of them across (2×, 3×…) on a grid that shares pixel corners with the first. Coarser pixels are repeated onto the grid (nearest neighbour, exact); nothing is interpolated. A source with finer pixels must come first |
 | Coverage | A pixel has imagery only where **every** source has it. Pixels outside a source count as empty and are `ignore_index` in masks |
@@ -289,7 +290,7 @@ Requests identify themselves with the user agent `mapcv/<version> (+https://gith
 
 **Tile cache.** Downloaded tiles are kept on disk, so a second run over the same area (another patch size, a new `staging_dir`, a sweep of settings) reads them from the cache instead of the server. A tile is reused for as long as the server's caching headers allow: `Cache-Control: max-age` (less `Age`), else `Expires`. A response marked `no-store` or `no-cache` is not kept, and one without caching headers is kept for 7 days (the minimum the OpenStreetMap tile usage policy asks clients to cache for). Expired tiles are downloaded again. Failed tiles are never cached.
 
-- The cache lives in `~/.cache/mapcv/tiles` on Linux (`$XDG_CACHE_HOME/mapcv` when set), `~/Library/Caches/mapcv/tiles` on macOS and `%LOCALAPPDATA%\mapcv\Cache\tiles` on Windows. Set the environment variable `MAPCV_CACHE_DIR` to put it elsewhere.
+- The cache lives in `~/.cache/mapcv/tiles` on Linux (`$XDG_CACHE_HOME/mapcv/tiles` when that is set), `~/Library/Caches/mapcv/tiles` on macOS and `%LOCALAPPDATA%\mapcv\Cache\tiles` on Windows. Set the environment variable `MAPCV_CACHE_DIR` to put the cache folder elsewhere; tiles then go to its `tiles/` subfolder.
 - Tiles are filed under a hash of `url_template`: the template, and any key in it, is never written to disk.
 - `cache: false` downloads every tile and keeps none. [`mapcv cache`](/mapcv/reference/cli/#mapcv-cache) shows the cache's size and clears it.
 - The MCP server never uses the cache, because it writes only inside its `--root`.
@@ -317,11 +318,11 @@ imagery:
 | --- | --- | --- | --- |
 | `image` | string | — | An `ee.Image` asset ID, for example `USGS/SRTMGL1_003` |
 | `collection` | string | — | An `ee.ImageCollection` asset ID, reduced to one image with `reducer` |
-| `start`, `end` | date | — | Filter the collection to `[start, end)` (`YYYY-MM-DD`); collection only |
+| `start`, `end` | date | — | Filter the collection to `[start, end)`: a date (`YYYY-MM-DD`) or an RFC 3339 time; collection only |
 | `reducer` | `median` \| `mean` \| `mosaic` \| `min` \| `max` | `median` | How the collection becomes one image |
 | `max_cloud` | number, 0–100 | — | Keep only scenes whose cloud percentage is at most this; collection only |
-| `cloud_property` | string | detected | The scene property `max_cloud` filters on: `CLOUDY_PIXEL_PERCENTAGE` for Sentinel-2 and `CLOUD_COVER` for Landsat are detected; set it for other collections |
-| `cloud_score_plus` | number, 0–1 | — | Sentinel-2 only: mask each pixel whose [Cloud Score+](https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_CLOUD_SCORE_PLUS_V1_S2_HARMONIZED) clear score (`cs_cdf`) is below this; `0.6` is a good start |
+| `cloud_property` | string | detected | The scene property `max_cloud` filters on: `CLOUDY_PIXEL_PERCENTAGE` for Sentinel-2 and `CLOUD_COVER` for Landsat are detected; for other collections `max_cloud` needs it |
+| `cloud_score_plus` | number, above 0 and below 1 | — | Sentinel-2 collections (`COPERNICUS/S2…`) only: mask each pixel whose [Cloud Score+](https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_CLOUD_SCORE_PLUS_V1_S2_HARMONIZED) clear score (`cs_cdf`) is below this; `0.6` is a good start |
 | `vis.bands` | 1 or 3 band names | required | Rendered as grey or a palette (one band) or RGB (three) |
 | `vis.min`, `vis.max` | number or one per band | `0`, `1` | Values mapped to 0 and 255 |
 | `vis.gamma` | number or one per band | — | Gamma correction |
@@ -346,7 +347,7 @@ Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
 | `resolution` | `10` \| `20` \| `60` | `10` | Output grid in metres; every band is harmonised onto it |
 | `bands` | list of strings | all 12 | Variables to read, **in output order**. Default: `b01 b02 b03 b04 b05 b06 b07 b08 b8a b09 b11 b12` |
 | `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
-| `scl_mask` | list of ints 0–11 | none | Scene classification (SCL) classes whose pixels count as having no imagery, such as `[3, 8, 9, 10]` (cloud shadows, medium and high probability clouds, cirrus) |
+| `scl_mask` | non-empty list of ints 0–11 | none | Scene classification (SCL) classes whose pixels count as having no imagery, such as `[3, 8, 9, 10]` (cloud shadows, medium and high probability clouds, cirrus) |
 
 **Validation:**
 
@@ -400,7 +401,7 @@ writer:
 | --- | --- | --- | --- |
 | `search` | mapping | required | As for [`eopf_zarr`](#find-the-product-imagerysearch): `datetime` (required), `max_cloud` (20), `collection` (`sentinel-2-l2a`), and `catalog`, here `https://earth-search.aws.element84.com/v1` by default. No `asset`: the bands are the assets |
 | `bands` | list of strings | `[red, green, blue, nir]` | Asset keys of the item, in output order. Earth Search names them `coastal`, `blue`, `green`, `red`, `rededge1`–`rededge3`, `nir`, `nir08`, `nir09`, `swir16`, `swir22` |
-| `scl_mask` | list of ints 0–11 | none | Scene classes whose pixels count as having no imagery, read from `scl_asset` |
+| `scl_mask` | non-empty list of ints 0–11 | none | Scene classes whose pixels count as having no imagery, read from `scl_asset` |
 | `scl_asset` | string | `scl` | The item's scene classification asset |
 | `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
 
@@ -414,7 +415,7 @@ Needs no extra install. Reads one file, or a mosaic of local files, as it is: pa
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `type` | `"geotiff"` | required | Selects one GeoTIFF or COG |
+| `type` | `"geotiff"` | required | Selects one GeoTIFF or COG, or a mosaic of local GeoTIFFs |
 | `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder. A local glob pattern (`tiles/*.tif`, `survey/**/*.tif`) reads every matching file as one mosaic |
 | `bands` | list of ints ≥ 1 | all bands | **1-based** band numbers to read, **in output order**: `[3, 2, 1]` reverses the bands of a BGR file. Band names in the manifest keep the file's numbering (`b3`, `b2`, `b1`) |
 | `overview` | int ≥ 0 | `0` | Overview level: `0` is the full resolution, `1` the first (largest) overview, and so on. Fails when the file has fewer levels |
@@ -435,7 +436,7 @@ Needs no extra install. Reads one file, or a mosaic of local files, as it is: pa
 
 ## `labels`
 
-Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` picks where the masks come from: `vector` (the default, so configs without `type` keep working) burns polygons from a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file; `raster` reads a classified GeoTIFF, see [Raster labels](#raster-labels-type-raster).
+Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` picks where the masks come from: `vector` (the default, so configs without `type` keep working) burns polygons from a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file (or several, or OpenStreetMap); `raster` reads a classified GeoTIFF, see [Raster labels](#raster-labels-type-raster); `continuous` reads a raster of values for `task: regression`, see [Continuous values](#continuous-values-type-continuous).
 
 ### Polygon labels (`type: vector`)
 
@@ -475,7 +476,7 @@ labels:
 
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
-**Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` and `buffer` in `target.labels` when they are set (with `files`, each file's settings without its path, and one hash over all files), and the annotated area by its file's hash (`annotated_area_sha256`, so editing it is a resume mismatch); `annotated_area` must be a vector file, needs an `ignore_index` and applies to segmentation and classification only; `buffer` needs a distance above 0, and `buffer.point` and `detection.point_box_size` cannot both be set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+**Validation:** exactly one of `path`, `files` and `osm`; suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; with `path`, `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` and `buffer` in `target.labels` when they are set (with `files`, each file's settings without its path, and one hash over all files), and the annotated area by its file's hash (`annotated_area_sha256`, so editing it is a resume mismatch); `annotated_area` must be a vector file, needs an `ignore_index` and applies to segmentation and classification only; `buffer` needs a distance above 0, and `buffer.point` and `detection.point_box_size` cannot both be set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
 
 #### Labels from OpenStreetMap (`labels.osm`)
 
@@ -491,12 +492,12 @@ labels:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `classes` | list | required | Each class has a `name` and `tags`: a key with `"*"` (any value), one value, or a list of values. A feature belongs to the **first** class whose tags all match |
+| `classes` | list | required | Each class has a unique `name` and `tags`: a key with `"*"` (any value), one value, or a list of values. A feature belongs to the **first** class whose tags all match. Keys are letters, digits and `_:.-`; values hold no quotes or backslashes |
 | `overpass_url` | URL | `https://overpass-api.de/api/interpreter` | The Overpass API to ask (`https://`; `http://` only for `localhost`). The public server limits heavy use: for large areas, run your own or use an extract with `labels.path` |
-| `timeout` | int seconds | `180` | The query's time limit on the server |
+| `timeout` | int seconds, 1–3600 | `180` | The query's time limit on the server |
 | `bbox` | `[west, south, east, north]` | the region | The box to query |
 
-One Overpass query fetches every matching node, way and relation in the box. Closed ways become polygons (except highways, barriers, railways and waterways, and `area=no`, which stay lines), `multipolygon` relations become polygons with their holes, other ways are lines and nodes are points; as with label files, lines and points become labels only with `buffer`. Classes get IDs 1, 2, 3, ... in the order listed, or the IDs of `labels.classes` (by class name). `label_field` and `layer` don't apply. `buffer`, `all_touched`, `ignore_index` and `annotated_area` work as for files, with every task that takes polygon labels.
+One Overpass query fetches every matching node, way and relation in the box. Closed ways become polygons (except highways, barriers, railways and waterways, and `area=no`, which stay lines), `multipolygon` relations become polygons with their holes, other ways are lines and nodes are points; as with label files, lines and points become labels only with `buffer`. Classes get IDs 1, 2, 3, ... in the order listed, or the IDs of `labels.classes` (by class name, so it may only name classes of `osm.classes`). `label_field` and `layer` don't apply. `buffer`, `all_touched`, `ignore_index` and `annotated_area` work as for files, with every task that takes polygon labels.
 
 The answer is stored as GeoJSON in the cache folder (`<cache dir>/osm/`, see the [tile cache](#xyz-tiles-type-xyz)), with the data's timestamp (`osm_base`) and the query, and reused until you delete it: rerunning or resuming does not ask Overpass again, and the labels' SHA-256 in the manifest identifies the exact data. Fresh data (after deleting the file) has another hash, so a resumed run refuses to mix it with the old. `mapcv plan` fetches the labels too, to count them; the MCP server does not fetch them (it writes only inside its root).
 
@@ -535,7 +536,7 @@ labels:
 
 **Alignment.** Each imagery pixel takes the value of the label pixel that contains the imagery pixel's **centre**. The centre (`col + 0.5`, `row + 0.5` in the corner-based affine transform) is projected exactly into the label raster's CRS (pyproj; computed in parallel threads, with exactly the coordinates a call per point gives; for a fixed PROJ pipeline, a 16-pixel grid of centres is projected and the rest interpolated, and every centre the interpolation leaves within its measured error, and at least 0.001 label pixel, of a label-pixel boundary is projected exactly, so the label pixels are the same), then the inverse of the label raster's transform gives a fractional label pixel, which is rounded down (`floor(x + 1e-10)`: a centre exactly on a boundary between two label pixels takes the right / lower one, as GDAL does). Files tagged `PixelIsPoint` are shifted by half a pixel to corner-based, as in GDAL. The result equals `rasterio.warp.reproject(..., resampling=Resampling.nearest, tolerance=0)` onto the patch's transform. (GDAL's default `tolerance=0.125` approximates the transformation and can pick a neighbouring label pixel near boundaries.) When the label raster shares the imagery's CRS and pixel grid, windows are copied directly, with the same result.
 
-**Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation` and, for one label per patch, `task: classification`; `task: detection` and `task: instance` need polygon labels (one feature per object) and refuse `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
+**Validation:** `classes` must list at least one value; no ID may be `ignore_index`; an ID has one name and a name one ID; ID `0` takes no name; `ignore_values` and `nodata` may not be in `classes`; `unmapped: ignore` needs an `ignore_index`. Raster labels make masks, so they work with `task: segmentation`, with `task: classification` (one label per patch) and as the change mask of `task: change`; `task: detection` and `task: instance` need polygon labels (one feature per object) and refuse `type: raster`. `generate` and `plan` refuse a label raster without an EPSG CRS, with non-integer values or without the configured band, and warn when it does not overlap the imagery. Details: [Prepare labels](/mapcv/guides/prepare-labels/#use-a-classified-raster-as-labels).
 
 ### Continuous values (`type: continuous`)
 
@@ -562,7 +563,7 @@ writer: {staging_dir: ./dataset, image_format: tif, mask_format: tif}
 
 Target pixels are `NaN` where there is no value: outside the raster, on its NoData, `NaN` or out-of-range values, and where the imagery has no data (padding included). `sampler.min_label_ratio` keeps a patch only when at least that fraction of its pixels has a value. Each manifest entry's `summary.values` holds the number of pixels with a value and their `min`, `max` and `mean`; `mapcv info` sums them up.
 
-**Validation:** `task: regression` needs `type: continuous` labels, and `type: continuous` needs `task: regression`. `scale` must be finite and non-zero, `valid_min` at most `valid_max`. Float targets do not fit a PNG, so `writer.mask_format` defaults to `tif` for regression and `png` is refused. A resumed run must use the same raster (its fingerprint is recorded) and the same scaling.
+**Validation:** `task: regression` needs `type: continuous` labels, and `type: continuous` needs `task: regression`. `scale` must be finite and non-zero, `offset`, `valid_min` and `valid_max` finite, and `valid_min` at most `valid_max`. Float targets do not fit a PNG, so `writer.mask_format` defaults to `tif` for regression and `png` is refused. A resumed run must use the same raster (its fingerprint is recorded) and the same scaling.
 
 ## `sampler`
 
@@ -574,7 +575,7 @@ Target pixels are `NaN` where there is no value: outside the raster, on its NoDa
 | `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |
 | `pad_mode` | `zero` \| `reflect` | `zero` | How `pad` fills the missing part of an edge patch |
 | `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
-| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled (non-zero mask) fraction is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts; for classification, the valid pixels of any class over the whole patch |
+| `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled fraction (mask pixels that are neither background `0` nor `ignore_index`) is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts; for classification, the valid pixels of any class over the whole patch |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
 | `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |
 
@@ -597,19 +598,19 @@ Random mode draws distinct positions, uniformly over every position where the pa
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `staging_dir` | path | required | Output folder, created if needed; a relative path is resolved against the config file's folder. Re-running into a folder with a compatible `manifest.json` resumes |
-| `image_format` | `png` \| `jpg` \| `npy` \| `tif` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first `float32`); `tif` for any source: a georeferenced GeoTIFF with the source's own band count and data type. For GeoTIFF imagery `png`/`jpg` need `uint8` in 1 or 3 bands, otherwise use `npy` (bands-first, the file's data type) or `tif` |
+| `image_format` | `png` \| `jpg` \| `npy` \| `tif` | `png` | `png`/`jpg` for XYZ (RGB `uint8`); `npy` for Sentinel-2 (bands-first: `float32` for `eopf_zarr`, the COGs' `uint16` for `stac_cog`); `tif` for any source: a georeferenced GeoTIFF with the source's own band count and data type. For GeoTIFF imagery `png`/`jpg` need `uint8` in 1 or 3 bands, otherwise use `npy` (bands-first, the file's data type) or `tif` |
 | `jpg_quality` | int, 1–100 | `95` | JPEG quality when `image_format: jpg` |
 | `jpg_subsampling` | `4:2:0` \| `4:4:4` | `4:2:0` | JPEG chroma subsampling when `image_format: jpg`. `4:2:0` stores colour at half resolution in each direction, like Pillow's default, and gives smaller files (about 10% on typical aerial imagery at quality 95, up to half on noisy colour imagery). Use `4:4:4` to keep full colour resolution. JPEG datasets made by mapcv 0.2 are `4:4:4`, so resume them with `jpg_subsampling: 4:4:4` |
-| `mask_format` | `png` \| `npy` \| `tif` | `png` | How masks are stored (with `labels`). `png` is a single-channel PNG (8-bit; 16-bit for 16-bit masks); `npy` a NumPy array; `tif` a GeoTIFF that opens aligned with the image. The mask values, including `labels.ignore_index`, are identical in every format |
+| `mask_format` | `png` \| `npy` \| `tif` | `png` (`tif` for regression) | How masks are stored (with `labels`). `png` is a single-channel PNG (8-bit; 16-bit for 16-bit masks); `npy` a NumPy array; `tif` a GeoTIFF that opens aligned with the image. The mask values, including `labels.ignore_index`, are identical in every format |
 | `world_files` | bool | `false` | Write a world file next to every PNG (`.pgw`) and JPG (`.jgw`) patch, images and masks, so QGIS and GDAL place them on the map. World files hold no CRS (it is `crs` in the manifest). Not needed for `tif`, which carries its georeferencing inside; an error when neither images nor masks are PNG or JPG |
-| `footprints` | bool | `true` | Write `patches.geojson` after the split: one WGS-84 footprint polygon per patch with its file name, split, row and column, and class pixel counts. Open it in QGIS to see where each patch is. Needs `pyproj` (`pip install "mapcv[zarr]"`) unless the imagery is XYZ or EPSG:4326; without it mapcv warns and skips the file |
+| `footprints` | bool | `true` | Write `patches.geojson` after the split: one WGS-84 footprint polygon per patch with its file name, split, row and column, and class pixel counts. Open it in QGIS to see where each patch is |
 | `stack_sources` | bool | `false` | With [several imagery sources](#several-imagery-sources) (a segmentation or regression dataset), write them into **one** file per patch instead of one per source: `npy` stores a `(T, C, H, W)` array (T sources in config order, C bands each), `tif` a GeoTIFF of `T × C` bands named `<source>_<band>`. For time series and temporal models (several dates of one product). Every source needs the same band count and data type |
 
-The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` and `stack_sources: true` when they are on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection and classification datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY.
+The manifest records the writer as `{layout: files, image_format, jpg_quality, jpg_subsampling, mask_format}` (plus `world_files: true` and `stack_sources: true` when they are on). Changing `image_format`, `mask_format` or `world_files` of an existing dataset is a configuration mismatch, so resuming it is refused; `footprints` does not affect the patches and may change. Layout and naming: [Dataset format](/mapcv/reference/dataset-format/). Detection and classification datasets record no `mask_format` (setting it is an error: they write no masks) and write images to `images/` (lowercase, where Ultralytics looks for them) instead of `Images/`; Ultralytics reads PNG, JPG and TIF images, not NPY. Instance datasets also write `images/`, and record `mask_format` only with `instance.id_mask` (its PNGs go to `masks/`). Change datasets write `A/`, `B/` and `label/`.
 
 **GeoTIFF output.** `tif` patches (and masks) are written by mapcv itself, without GDAL: striped, Deflate-compressed with the horizontal predictor (the floating-point predictor for `float32`), one band per channel. They carry the source's EPSG code and each patch's own affine transform, so QGIS, rasterio and TerraTorch open them in place. Images declare `NaN` as no-data when they are floating point (and nothing for integer data, where 0 is a real value); masks declare `labels.ignore_index` as no-data, so GIS tools show the pixels without imagery as transparent. See [Dataset format](/mapcv/reference/dataset-format/#geotiff-patches).
 
-**Validation:** XYZ needs `png`, `jpg` or `tif`; EOPF needs `npy` or `tif`; GeoTIFF imagery needs `npy` or `tif` unless it is `uint8` in 1 or 3 bands (see [GeoTIFF](#geotiff-and-cloud-optimized-geotiff-type-geotiff)). `world_files` needs PNG or JPG files to write next to. `stack_sources` needs `imagery` as a list of two or more sources, `task: segmentation` or `regression`, and `image_format` `npy` or `tif`; sources with different band counts or data types are refused when they are opened, before anything is written.
+**Validation:** XYZ needs `png`, `jpg` or `tif`; EOPF and `stac_cog` need `npy` or `tif`; GeoTIFF imagery needs `npy` or `tif` unless it is `uint8` in 1 or 3 bands (see [GeoTIFF](#geotiff-and-cloud-optimized-geotiff-type-geotiff)). `world_files` needs PNG or JPG files to write next to. `stack_sources` needs `imagery` as a list of two or more sources, `task: segmentation` or `regression`, and `image_format` `npy` or `tif`; sources with different band counts or data types are refused when they are opened, before anything is written.
 
 ## `split`
 
@@ -642,4 +643,4 @@ Config error in old.yaml:
 | `region.zoom` | `imagery.zoom` |
 | `tiles:` | `imagery: {type: xyz, zoom: …, source: …}` |
 
-Full guide: [Migrating to 0.2](/mapcv/project/migration/).
+Full guide: [Migrating](/mapcv/project/migration/).

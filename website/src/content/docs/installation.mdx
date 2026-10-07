@@ -37,13 +37,13 @@ mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built w
 | Windows x86-64 | yes |
 | Other (for example Windows on ARM) | builds from the source distribution; needs a [Rust toolchain](https://rustup.rs/) |
 
-The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML, pyproj (its wheel bundles PROJ, so there is nothing else to install) and pyshp (a pure-Python Shapefile reader, so Shapefile labels work out of the box; GeoPackage needs only the standard library). There is no GDAL or rasterio dependency. XYZ tiles and GeoTIFF/COG files (local, `https://` or public `s3://`) work with the base install alone; only Sentinel-2 needs an extra.
+The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML, pyproj (its wheel bundles PROJ, so there is nothing else to install) and pyshp (a pure-Python Shapefile reader, so Shapefile labels work out of the box; GeoPackage needs only the standard library). There is no GDAL or rasterio dependency. XYZ tiles, GeoTIFF/COG files (local, `https://` or public `s3://`) and Sentinel-2 COGs from a STAC catalog (`type: stac_cog`) work with the base install alone. Sentinel-2 EOPF Zarr products, Google Earth Engine, GeoParquet labels and some export formats need an extra.
 
 ## Optional extras
 
 | Extra | Install | Adds | Python |
 | --- | --- | --- | --- |
-| `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
+| `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input and `mapcv export --format zarr`: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs, pystac-client | 3.10 – 3.13 |
 | `parquet` | `pip install "mapcv[parquet]"` | GeoParquet label files (`.parquet`, `.geoparquet`): pyarrow | 3.10 – 3.14 |
 | `export` | `pip install "mapcv[export]"` | `mapcv export --format hf-parquet` (Hugging Face Parquet): pyarrow | 3.10 – 3.14 |
 | `gee` | `pip install "mapcv[gee]"` | Google Earth Engine imagery (`imagery.earth_engine`): the [earthengine-api](https://github.com/google/earthengine-api) client. Log in once with `earthengine authenticate` | 3.10 – 3.14 |
@@ -60,7 +60,7 @@ $ mapcv --version
 mapcv 0.2.0
 ```
 
-`mapcv --help` (or `mapcv -h`) lists the commands, grouped in the order you use them: **1. Build a dataset** (`init`, `plan`, `generate`), **2. Use a dataset** (`info`, `split`) and **3. Utilities** (`validate`). If the shell says `command not found`, activate the environment you installed into, or run `python -m pip show mapcv` to see where it went.
+`mapcv --help` (or `mapcv -h`) lists the commands, grouped in the order you use them: **1. Build a dataset** (`init`, `plan`, `generate`), **2. Use a dataset** (`info`, `split`, `stats`, `card`, `verify`, `export`) and **3. Utilities** (`validate`, `cache`, `mcp`, `doctor`). If the shell says `command not found`, activate the environment you installed into, or run `python -m pip show mapcv` to see where it went.
 
 ## Shell completion
 
@@ -93,7 +93,7 @@ Use this for development or on platforms without a wheel.
    maturin develop --release
    ```
 
-   Contributors use `uv sync --extra dev && uv run maturin develop` instead; see [Contributing](/mapcv/project/contributing/).
+   Contributors use `uv sync --all-extras && uv run maturin develop` instead; see [Contributing](/mapcv/project/contributing/).
 
 </Steps>
 

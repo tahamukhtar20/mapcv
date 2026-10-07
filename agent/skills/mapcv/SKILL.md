@@ -1,6 +1,6 @@
 ---
 name: mapcv
-description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO), per-object masks (instance, COCO RLE) or one label or a label set per patch (classification, CSV and JSON). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Sentinel-2, GeoTIFF/COG) and polygon labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet) or a label raster, or asks about a mapcv config, plan, dataset or error.
+description: Build remote-sensing training datasets with mapcv from a region, imagery and labels, as image patches with masks (segmentation), boxes (detection, COCO/YOLO), per-object masks (instance, COCO RLE), one label or a label set per patch (classification, CSV and JSON), before/after pairs with change masks (change detection) or float targets (regression). Use when the user wants a dataset from satellite or aerial imagery (XYZ tiles, Google Earth Engine, Sentinel-2 as EOPF Zarr or STAC COGs, GeoTIFF/COG files or mosaics) and labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap, a label raster or a raster of values), or asks about a mapcv config, plan, dataset or error.
 ---
 
 # mapcv: datasets from imagery and labels
@@ -57,7 +57,7 @@ imagery:
   source: esri_satellite        # or url_template: "https://.../{z}/{x}/{y}.png" (needs {x} {y} {z})
   max_connections: 4            # modest; respect the provider's limits
 labels:
-  path: buildings.geojson       # .geojson .json .kml .gpkg .shp .parquet; other CRSs are reprojected
+  path: buildings.geojson       # .geojson .json .kml .gpkg .shp .parquet .geoparquet; other CRSs are reprojected
   # layer: buildings            # only for a GeoPackage with several tables
   label_field: class            # omit: every polygon is class 1
   # classes: {building: 1, road: 2}   # optional fixed ids (1..255); needs label_field
@@ -67,6 +67,27 @@ split: {strategy: spatial, test_ratio: 0.2, val_ratio: 0.1}
 ```
 
 Masks hold class ids, 0 for background and 255 (`labels.ignore_index`) where there is no imagery. Omit `labels` for an image-only dataset. Built-in sources: `describe_config_schema` lists `rules.xyz_sources`.
+
+More ways to give labels (instead of `path`):
+
+```yaml
+labels:
+  files:                         # several files; later files win where features overlap
+    - {path: landuse.gpkg, layer: landuse, label_field: landuse}
+    - {path: roads.geojson, class: road, buffer: {line: 6}}   # lines become 6 m wide polygons
+  classes: {road: 1, forest: 2, crop: 3}
+  annotated_area: surveyed.geojson   # outside it: ignore_index, not background (segmentation, classification)
+```
+
+```yaml
+labels:
+  osm:                           # straight from OpenStreetMap (Overpass); the CLI only, not the MCP plan/generate
+    classes:
+      - {name: building, tags: {building: "*"}}
+      - {name: water, tags: {natural: water}}
+```
+
+`region` can also be polygons in a file: `region: {path: sites.geojson, name_field: site}` makes patches only over the polygons, and `split: {strategy: region}` sends whole sites to one split each.
 
 ### Object detection (boxes, COCO and YOLO)
 
@@ -159,14 +180,46 @@ sampler: {patch_size: 128, edge_strategy: drop, max_empty_ratio: 0.2}
 writer: {staging_dir: dataset, image_format: npy}   # npy or tif; float32, bands first
 ```
 
-The region must lie inside the product's footprint (one ~110 km tile). Products are listed at https://stac.browser.user.eopf.eodc.eu/.
+The region must lie inside the product's footprint (one ~110 km tile). Products are listed at https://stac.browser.user.eopf.eodc.eu/. Instead of `path`, `search: {datetime: 2025-05-01/2025-05-31, max_cloud: 10}` picks the least cloudy product that covers the whole region; `scl_mask: [3, 8, 9, 10]` turns cloud and shadow pixels into pixels without imagery.
+
+### Sentinel-2 as COGs from a STAC catalog (no extra)
+
+```yaml
+imagery:
+  type: stac_cog                         # Earth Search (Element 84) by default
+  search: {datetime: 2025-04-01/2025-06-30, max_cloud: 20}
+  bands: [red, green, blue, nir]         # the item's asset keys, in output order
+  scl_mask: [3, 8, 9, 10]
+writer: {staging_dir: dataset, image_format: npy}   # npy or tif; uint16 digital numbers
+```
+
+### Google Earth Engine (XYZ tiles rendered by Earth Engine)
+
+Needs `pip install "mapcv[gee]"` and a one-time `earthengine authenticate` by the user.
+
+```yaml
+imagery:
+  type: xyz
+  zoom: 15
+  earth_engine:
+    collection: COPERNICUS/S2_SR_HARMONIZED   # or image: <asset id>
+    start: "2024-06-01"
+    end: "2024-09-01"
+    max_cloud: 40                # collections only; Sentinel-2 and Landsat are detected
+    cloud_score_plus: 0.6        # Sentinel-2 only
+    reducer: median
+    vis: {bands: [B4, B3, B2], min: 0, max: 3000}
+    project: my-cloud-project    # the user's Cloud project registered for Earth Engine
+```
+
+`mapcv init --template earth-engine` writes this recipe.
 
 ### Your own GeoTIFF or COG
 
 ```yaml
 imagery:
   type: geotiff
-  path: ortho.tif              # local (relative to the config), https:// or anonymous s3://
+  path: ortho.tif              # local (relative to the config), https:// or anonymous s3://; tiles/*.tif reads local tiles as one mosaic
   # bands: [1, 2, 3]           # 1-based; default all bands
   # overview: 0                # 0 = full resolution
   # nodata: 0
@@ -176,7 +229,7 @@ writer: {staging_dir: dataset, image_format: png}   # png/jpg need 1 or 3 uint8 
 
 The file is read as it is, in its own CRS and pixel grid; labels in lon/lat are reprojected into it.
 
-### Several sources at the same patches (segmentation only)
+### Several sources at the same patches (segmentation, regression, change)
 
 ```yaml
 imagery:                         # a list: every source needs a unique lowercase name
@@ -188,7 +241,7 @@ writer: {staging_dir: dataset, image_format: tif}
 
 The first source's grid is the dataset's. The others must be in the same CRS, with pixels of the same size or a whole number of them across, sharing pixel corners; otherwise `generate` stops with an error saying how the grid differs, and the file must be resampled first. Patches land in `Images/<name>/`, masks in one `Masks/`. XYZ sources at zoom z and z-1 of one provider line up (2x).
 
-### A classified label raster (segmentation only)
+### A classified label raster (segmentation, classification, change)
 
 ```yaml
 labels:
@@ -209,14 +262,14 @@ labels:
 | `region.west must be less than region.east` (or south/north) | Order is west, south, east, north; longitude first |
 | `region.south must be a latitude in -90..90 ... not swapped` | Longitude and latitude are swapped |
 | `Extra inputs are not permitted` at `x.y` | Unknown key, usually a typo; remove or fix `x.y` |
-| `imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'` | Add `type:` under `imagery` |
-| `imagery: provide either 'source' or 'url_template'` / `set ... not both` | Exactly one of them |
+| `imagery.type is required: 'xyz', 'geotiff', 'eopf_zarr' or 'stac_cog'` | Add `type:` under `imagery` |
+| `imagery: provide either 'source', 'url_template' or 'earth_engine'` / `set ... not both` | Exactly one of them |
 | `url_template must contain {x}, {y} and {z}` / `unsupported placeholder(s) {s}` | Add the placeholders; replace `{s}` with one subdomain such as `a` |
 | `the built-in 'google_satellite' / 'osm' source was removed` | Not allowed by those providers; choose another source (see PROVIDERS.md) |
 | `XYZ imagery supports writer.image_format 'png', 'jpg' or 'tif'` | `npy` is for Sentinel-2 and GeoTIFF |
 | `EOPF Zarr imagery requires writer.image_format='npy' (or 'tif')` | Set it |
 | `labels.classes requires labels.label_field` | Name the field that holds the class |
-| `task: detection needs labels` / `needs vector labels ... not a label raster` | Add vector labels; rasters work for segmentation only |
+| `task: detection needs labels` / `needs vector labels ... not a label raster` | Add vector labels; label rasters work for segmentation, classification and change |
 | `labels.ignore_index ... detection writes no masks; remove it` (also `mask_format`, `all_touched`) | Remove the option that only applies to masks |
 | `... is outside the folder this server may use` | The path is outside `--root`; use a path inside it or ask the user to restart with another `--root` |
 | `... writes files, and this server is read-only` | Ask the user to restart `mapcv mcp --allow-write` |
@@ -234,10 +287,10 @@ labels:
 | `Sentinel-2 ... needs Python 3.10-3.13` / `install it with 'pip install mapcv[zarr]'` | Install the extra in a Python 3.13 environment |
 | `requested region does not intersect the EOPF product` | The region is outside that product's footprint |
 | `EOPF variables not found: b10` | Valid bands are b01 to b09, b8a, b11, b12 |
-| `Generation failed: 408 ... Request Time-out` | A remote read timed out; call `generate` again, finished chunks are kept |
+| `reading rows ... failed 4 times` / `band ... returned no data for rows` | A remote read failed; call `generate` again, finished chunks are kept |
 
 After an error in `generate`, finished chunks are kept: fix the cause and call it again.
 
 ## What you get
 
-`dataset/` holds `Images/` (and `Masks/` for segmentation), `manifest.json` (version 3), `splits/{train,val,test}.txt` and `patches.geojson`; detection adds `annotations/`, `labels/` and `dataset.yaml`; instance adds `annotations/` (COCO RLE); classification has `images/`, `labels.csv`, `labels_<split>.csv`, `classes.txt` and `labels.json` and no masks. Splits are spatial blocks by default, so neighbouring patches do not leak between train and test. Training guides: https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/
+`dataset/` holds `Images/` (and `Masks/` for segmentation and regression), `manifest.json` (version 3), `splits/{train,val,test}.txt` and `patches.geojson`; detection has `images/`, `annotations/`, `labels/` and `dataset.yaml`; instance has `images/` and `annotations/` (COCO RLE); classification has `images/`, `labels.csv`, `labels_<split>.csv`, `classes.txt` and `labels.json` and no masks; change has `A/`, `B/` and `label/`. Splits are spatial blocks by default, so neighbouring patches do not leak between train and test. Training guides: https://tahamukhtar20.github.io/mapcv/guides/use-your-dataset/

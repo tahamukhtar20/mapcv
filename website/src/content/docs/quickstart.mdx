@@ -7,7 +7,7 @@ import { Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/c
 
 In five minutes you will build a small, labeled dataset of building footprints over Amsterdam's Eastern Docklands: Esri aerial imagery at about 0.36 m per pixel, OpenStreetMap building polygons as labels, cut into 256 × 256 patches with a leakage-safe train/val/test split.
 
-You need Python 3.10+ and an internet connection. Everything below is real output from `mapcv` 0.2.0.
+You need Python 3.10+ and an internet connection. Everything below is real output from `mapcv`.
 
 <Steps>
 
@@ -32,7 +32,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
 
 3. ### Write a config with `mapcv init`
 
-   `mapcv init` asks four questions and writes `mapcv.yaml`. Type the answers shown after the prompts below; press <kbd>Enter</kbd> for the others to accept the default:
+   `mapcv init` asks a few questions in four steps and writes `mapcv.yaml`. Type the answers shown after the prompts below; press <kbd>Enter</kbd> for the others to accept the default:
 
    ```console
    $ mapcv init
@@ -44,10 +44,13 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      esri       Esri World Imagery — sub-metre RGB
      sentinel2  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)
      custom     your own XYZ tile URL
-   Imagery [esri/sentinel2/custom] (esri):
+     geotiff    your own GeoTIFF / COG file or URL
+     gee        Google Earth Engine — Sentinel-2, Landsat, NAIP or any asset
+   Imagery [esri/sentinel2/custom/geotiff/gee] (esri):
 
    2/4 Area
-   Area: a bounding box west,south,east,north or a .geojson/.kml file: 4.9375,52.3725,4.9515,52.3780
+   Area: a bounding box west,south,east,north or a vector file (.geojson, .kml, .gpkg, .shp,
+   .parquet): 4.9375,52.3725,4.9515,52.3780
      zoom    pixel size
        15    2.92 m
        16    1.46 m
@@ -57,11 +60,17 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    Zoom (17): 18
 
    3/4 Labels
-   Label file (.geojson/.kml; blank for an image-only dataset): buildings.geojson
+   Label file (.geojson, .kml, .gpkg, .shp, .parquet, or a .tif label raster; blank for an
+   image-only dataset): buildings.geojson
      field       example values
      class       building
      building    house, apartments, houseboat, yes, retail
    Which field holds the class? (blank = every polygon is class 1) (): class
+     segmentation  a class mask per patch
+     detection     a box per object (COCO and YOLO)
+     instance      a mask per object (COCO RLE, optional instance-ID PNG)
+     classification  a label (or set of labels) per patch, as a CSV
+   Task [segmentation/detection/instance/classification] (segmentation):
 
    4/4 Patches and output
    Patch size in pixels (256):
@@ -73,11 +82,16 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    Next
      1. See what it will cost:  mapcv plan mapcv.yaml
      2. Build the dataset:      mapcv generate mapcv.yaml
+   Imagery terms: https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md
    ```
 
-   The area can also be a `.geojson` or `.kml` file: mapcv then uses the extent of its polygons and offers the same file as labels. The result is a short, commented YAML file you can edit and commit:
+   The area can also be a vector file (`.geojson`, `.kml`, `.gpkg`, `.shp` or `.parquet`): mapcv then uses the extent of its polygons and offers the same file as labels. The result is a short, commented YAML file you can edit and commit:
 
    ```yaml title="mapcv.yaml"
+   # mapcv config - docs: https://tahamukhtar20.github.io/mapcv/reference/configuration/
+   # Check the cost first with `mapcv plan <this file>`, then run `mapcv generate <this file>`.
+   # Imagery sources, their licenses and credit lines: https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md
+
    region:
      west: 4.937500
      south: 52.372500
@@ -147,6 +161,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      Reading imagery and writing patches ━━━━━━━━━━━━━━━ 2/2 chunks • 0:00:21 • eta 0:00:00
    ╭─ Dataset ready ──────────────────────────────────────────────────────────────────────╮
    │ Patches  77                                                                          │
+   │ Source   xyz · esri_satellite                                                        │
    │ Shape    256×256×3 uint8                                                             │
    │ Tiles    77 fetched · 0 failed                                                       │
    │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                                │
@@ -213,6 +228,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
       - 10/
       - 20/
       - 30/ labeled/unlabeled subsets of train
+    - patches.geojson footprints of the patches, to open in QGIS
 </FileTree>
 
 Load a pair to check that the mask lines up:

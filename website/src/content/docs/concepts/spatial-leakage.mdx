@@ -25,7 +25,7 @@ A model can score well on such a split by recognising local context instead of l
 
 The default `split.strategy: spatial`:
 
-1. **Splits by area, not by patch.** The raster is divided into square blocks (`block_size`, 4 × `patch_size` by default) and each block goes entirely to train, val or test. Most neighbours of a test patch are therefore test patches too.
+1. **Splits by area, not by patch.** The raster is divided into square blocks (`block_size`: 4 × `patch_size` by default, smaller on a small raster so that it has at least 10 blocks) and each block goes entirely to train, val or test. Most neighbours of a test patch are therefore test patches too.
 2. **Removes overlap across splits.** Train or val patches whose footprint overlaps a test patch, and train patches overlapping a val patch, are left out of every list. No pixel appears in two splits.
 3. **Warns about leaky choices.** If you pick `stratified` or `random` for a dataset whose patches overlap or repeat, mapcv writes the split but warns that it leaks pixels.
 
@@ -39,7 +39,7 @@ The cost: some patches are discarded when patches overlap, and split ratios are 
 ## What it cannot do
 
 - **Patches along block borders still touch.** A test block's edge patches sit next to train patches. Larger blocks make this a smaller share of the test set.
-- **One region is one distribution.** All blocks come from the same city or scene, date and sensor. A spatial split measures generalisation to *nearby* unseen areas. To claim more (another city, country or season), hold out a separate region: generate a second dataset with its own config and use it as the test set.
+- **One region is one distribution.** All blocks come from the same city or scene, date and sensor. A spatial split measures generalisation to *nearby* unseen areas. To claim more (another city, country or season), hold out a separate region. With an area of interest of several polygons ([`region.path`](/mapcv/reference/configuration/#region)), `split.strategy: region` sends whole regions to one split each; or generate a second dataset with its own config and use it as the test set.
 - **Labels can leak too.** If labels were drawn by a model trained on the same area, or if a region's labels are systematically shifted, no split will reveal it.
 
 <Aside type="tip">

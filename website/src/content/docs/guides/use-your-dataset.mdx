@@ -9,7 +9,7 @@ import { Aside, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <FileTree>
 - dataset/
-  - Images/ patch_0000000.png (RGB uint8), .npy (bands-first float32) or .tif (GeoTIFF)
+  - Images/ patch_0000000.png (RGB uint8), .npy (bands-first, the source's data type) or .tif (GeoTIFF)
   - Masks/ patch_0000000.png (uint8: 0 = background, 1..255 = class), .npy or .tif
   - manifest.json task, bands, CRS, class names, per-patch files and stats
   - patches.geojson where every patch is, with its split
@@ -96,7 +96,7 @@ The loaders above read the default formats. With `writer.image_format: tif` or `
   </TabItem>
 </Tabs>
 
-`rasterio` is `pip install rasterio`; a GeoTIFF also reads with GDAL, `tifffile` (pixels only) and TerraTorch, which reads GeoTIFF but not NPY. The mask's data type is `uint8` for segmentation today; `npy` and `tif` masks can be `uint16` or `float32` for tasks that need more than 255 classes or regression targets, so avoid hard-coding `uint8` when you load them.
+`rasterio` is `pip install rasterio`; a GeoTIFF also reads with GDAL, `tifffile` (pixels only) and TerraTorch, which reads GeoTIFF but not NPY. The mask's data type is `uint8` for segmentation and change detection, `uint16` for instance-ID masks and `float32` for regression targets, so avoid hard-coding `uint8` when you load them.
 
 ## Class names
 

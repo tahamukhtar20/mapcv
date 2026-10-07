@@ -30,6 +30,8 @@ uvx --from "mapcv[mcp]" mapcv mcp --root ~/datasets      # the only folder it ma
 uvx --from "mapcv[mcp]" mapcv mcp --root ~/datasets --allow-write
 ```
 
+The environment variable `MAPCV_MCP_ALLOW_WRITE=true` does the same as `--allow-write`, for clients that configure servers through the environment (the Claude Code plugin uses it).
+
 <Tabs syncKey="agent">
   <TabItem label="Claude Code">
     The plugin installs the skill and registers the server in one step:
@@ -115,7 +117,9 @@ An agent can run long jobs, download imagery and write files, so the server is b
 | **Config files only** | `write_config` writes only `.yaml` or `.yml` files, and only after the content validates as a mapcv config. |
 | **Interruptible** | `generate` reports progress per chunk and stops when the call is cancelled. Finished chunks are kept; calling it again resumes. |
 
-What the server does **not** do: it does not limit which hosts a config's `url_template` or remote GeoTIFF may contact, and a config can name any `https://` imagery. Review the config the agent wrote, as you would any file it produces. And as with the CLI, the imagery provider's terms are yours to check: see [Providers & licensing](/mapcv/project/providers/).
+What the server does **not** do: it does not limit which hosts a config's `url_template` or remote GeoTIFF may contact, and a config can name any `https://` imagery. Review the config the agent wrote, as you would any file it produces. Each imagery source's license and credit line are listed under [Providers & licensing](/mapcv/project/providers/).
+
+Two things work differently from the CLI, because both would write outside `--root`: `generate` does not use the on-disk [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz), and `plan` and `generate` refuse [`labels.osm`](/mapcv/reference/configuration/#labels-from-openstreetmap-labelsosm), whose answer is cached there (run `mapcv plan` / `mapcv generate` in a terminal, or point `labels.path` at an OSM extract).
 
 ## Tools
 
@@ -134,7 +138,7 @@ Each result is structured JSON (also sent as text, for clients that only show te
 
 ## The agent skill
 
-`agent/skills/mapcv/SKILL.md` in the [repository](https://github.com/tahamukhtar20/mapcv/tree/main/agent) teaches an agent the journey, config recipes per task (segmentation, detection, instance, classification) and imagery (XYZ, Sentinel-2, GeoTIFF/COG, label rasters), a reminder to check the provider's terms, and what to do about the real error messages. The Claude Code plugin installs it. For other agents that read `SKILL.md` skill folders, copy the `agent/skills/mapcv/` folder into their skills folder.
+`agent/skills/mapcv/SKILL.md` in the [repository](https://github.com/tahamukhtar20/mapcv/tree/main/agent) teaches an agent the journey, config recipes per task (segmentation, detection, instance, classification, change, regression), imagery (XYZ, Earth Engine, Sentinel-2 as EOPF Zarr or STAC COGs, GeoTIFF/COG and mosaics) and labels (several files, OpenStreetMap, label rasters), where each source's license and credit line are listed, and what to do about the real error messages. The Claude Code plugin installs it. For other agents that read `SKILL.md` skill folders, copy the `agent/skills/mapcv/` folder into their skills folder.
 
 ## A session
 

@@ -1,5 +1,6 @@
 """
-mapcv - A satellite imagery dataset creation tool for segmentation, detection, instance segmentation and classification.
+mapcv - Remote-sensing training datasets for segmentation, detection, instance segmentation,
+classification, change detection and regression.
 """
 
 from importlib.metadata import PackageNotFoundError

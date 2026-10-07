@@ -157,7 +157,33 @@ def test_rasterize_matches_rasterio(data: st.DataObject, all_touched: bool) -> N
         all_touched=all_touched,
         dtype="uint8",
     )
+    if all_touched:
+        # A polygon that meets a pixel only along its edge (or overlaps it by a sliver far
+        # below a pixel) is a tie: whether it "touches" depends on the last bit of rounding,
+        # and GDAL's own answer differs between platforms (x86-64 and arm64 macOS disagree).
+        # Such pixels may differ; every other pixel must match.
+        from shapely.geometry import box
+
+        for row, col in zip(*np.nonzero(found != expected)):
+            left, top = x0 + col * size, y0 - row * size
+            pixel = box(left, top - size, left + size, top)
+            assert any(
+                Polygon(ring).intersects(pixel)
+                and Polygon(ring).intersection(pixel).area < 1e-9 * size**2
+                for ring, _ in polygons
+            ), f"pixel ({row}, {col}) differs and is not an edge tie"
+        found = np.where(found != expected, expected, found)
     np.testing.assert_array_equal(found, expected)
+
+
+def test_rasterize_counts_an_edge_contact_as_touching() -> None:
+    """A triangle that meets the raster only along the top edge of its pixel: with
+    all_touched mapcv burns the pixel, as GDAL does on x86-64 (GDAL on arm64 macOS does not;
+    see the tie rule above). Found by hypothesis on macOS CI."""
+    transform = (2.5, 0.0, 0.0, 0.0, -2.5, -33.0)
+    ring = [(1.25, -33.0), (0.9375, -33.0), (0.3545777318290328, -31.801344656671077)]
+    assert _mapcv_rs.rasterize([([ring], 1)], 1, 1, transform, True).tolist() == [[1]]
+    assert _mapcv_rs.rasterize([([ring], 1)], 1, 1, transform, False).tolist() == [[0]]
 
 
 # ── Sampler invariants ───────────────────────────────────────────────────────

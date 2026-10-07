@@ -269,7 +269,11 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
 
 
 def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary:
-    where = ", ".join(str(path) for _, path in labels.keyed_files())
+    where = (
+        "OpenStreetMap (Overpass)"
+        if labels.osm is not None
+        else ", ".join(str(path) for _, path in labels.keyed_files())
+    )
     missing = [path for _, path in labels.keyed_files() if not path.exists()]
     if missing:
         return LabelSummary(where, 0, {}, [f"label file not found: {path}" for path in missing])

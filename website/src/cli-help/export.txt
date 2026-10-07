@@ -1,0 +1,23 @@
+ Usage: mapcv export [OPTIONS] {staging_dir}
+
+ Export a dataset for another tool: Hugging Face Parquet or a TerraTorch data config.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
+│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ *  --format  -f      <str>   hf-parquet (Hugging Face) or terratorch (a data         │
+│                              config).                                                │
+│                              [required]                                              │
+│    --out     -o      <path>  hf-parquet: a new folder (required). terratorch: the    │
+│                              YAML file (default STAGING_DIR/terratorch.yaml).        │
+│    --help    -h              Show this message and exit.                             │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv export dataset/ --format hf-parquet --out dataset-hf/
+
+ mapcv export dataset/ --format terratorch   writes dataset/terratorch.yaml
+
+

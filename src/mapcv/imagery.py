@@ -37,6 +37,8 @@ from mapcv.config import (
     GeoTiffImageryConfig,
     RegionConfig,
     XYZImageryConfig,
+    _LOOPBACK_HOSTS,
+    _validate_eopf_path,
     eopf_local_path,
 )
 from mapcv.downloader import resolve_url_template
@@ -606,8 +608,38 @@ class EOPFZarrRasterSource:
     """Lazy window reader for one Sentinel-2 L2A EOPF Zarr product."""
 
     def __init__(self, region: RegionConfig, config: EOPFZarrImageryConfig) -> None:
-        # URL safety rules are enforced by EOPFZarrImageryConfig validation.
-        local_path = eopf_local_path(config.path)
+        fingerprint: Dict[str, Any] = {}
+        if config.search is not None:
+            from mapcv.stac import find_product
+
+            match = find_product(
+                config.search, (region.west, region.south, region.east, region.north)
+            )
+            try:
+                path = _validate_eopf_path(match.href)
+            except ValueError as exc:
+                raise ValueError(f"STAC item {match.item_id}: {exc}") from None
+            catalog_host = urlsplit(config.search.catalog).hostname or ""
+            if eopf_local_path(path) is not None and catalog_host not in _LOOPBACK_HOSTS:
+                # A catalog is remote input: it may name remote products only, never a
+                # file on this machine (outside, say, the MCP server's root).
+                raise ValueError(
+                    f"STAC item {match.item_id} points to a local file ({match.href}); a "
+                    "catalog may only point to https:// or s3:// products"
+                )
+            fingerprint["stac"] = {
+                "catalog": config.search.catalog,
+                "collection": config.search.collection,
+                "item": match.item_id,
+            }
+        else:
+            assert config.path is not None  # EOPFZarrImageryConfig: path or search
+            path = config.path
+        if config.scl_mask is not None:
+            fingerprint["scl_mask"] = list(config.scl_mask)
+        # URL safety rules are enforced by EOPFZarrImageryConfig validation (and above
+        # for a found product).
+        local_path = eopf_local_path(path)
         if local_path is not None and not local_path.exists():
             raise FileNotFoundError(f"EOPF Zarr product not found: {local_path}")
 
@@ -624,14 +656,15 @@ class EOPFZarrRasterSource:
                 "EOPF Zarr support is optional; install it with 'pip install mapcv[zarr]'."
             ) from exc
 
-        storage_options = {"anon": True} if urlsplit(config.path).scheme == "s3" else None
+        storage_options = {"anon": True} if urlsplit(path).scheme == "s3" else None
+        variables = list(config.bands) + (["scl"] if config.scl_mask is not None else [])
 
         def open_dataset(**spatial_options: Any) -> Any:
             return xr.open_dataset(
-                config.path,
+                path,
                 engine="eopf-zarr",
                 op_mode="analysis",
-                variables=config.bands,
+                variables=variables,
                 resolution=config.resolution,
                 chunks={},
                 storage_options=storage_options,
@@ -642,10 +675,10 @@ class EOPFZarrRasterSource:
             discovery = open_dataset()
         except Exception as exc:
             raise RuntimeError(
-                f"Unable to open anonymous EOPF product '{_safe_product_id(config.path)}': {exc}"
+                f"Unable to open anonymous EOPF product '{_safe_product_id(path)}': {exc}"
             ) from exc
 
-        missing = [band for band in config.bands if band not in discovery.data_vars]
+        missing = [band for band in variables if band not in discovery.data_vars]
         if missing:
             available = ", ".join(sorted(str(name) for name in discovery.data_vars))
             discovery.close()
@@ -689,7 +722,7 @@ class EOPFZarrRasterSource:
             dataset = open_dataset(bbox=[left, bottom, right, top], crs=crs)
         except Exception as exc:
             raise RuntimeError(
-                f"Unable to crop anonymous EOPF product '{_safe_product_id(config.path)}': {exc}"
+                f"Unable to crop anonymous EOPF product '{_safe_product_id(path)}': {exc}"
             ) from exc
 
         height = int(dataset.sizes.get("y", 0))
@@ -700,9 +733,10 @@ class EOPFZarrRasterSource:
 
         self._dataset = dataset
         self._bands = list(config.bands)
+        self._scl_mask = list(config.scl_mask) if config.scl_mask is not None else None
         self.metadata = RasterMetadata(
             source_type="eopf_zarr",
-            product_id=_safe_product_id(config.path),
+            product_id=_safe_product_id(path),
             width=width,
             height=height,
             bands=list(config.bands),
@@ -710,6 +744,7 @@ class EOPFZarrRasterSource:
             crs=crs,
             transform=_coordinate_transform(dataset, config.resolution),
             chunk_rows=config.chunk_rows,
+            fingerprint=fingerprint or None,
         )
 
     def read_window(
@@ -746,6 +781,17 @@ class EOPFZarrRasterSource:
         _check_band_coverage(finite, self._bands, row_start, row_stop)
         # A pixel is only usable when every requested band has data.
         valid = np.all(finite, axis=-1)
+        if self._scl_mask is not None:
+            scl = np.asarray(
+                self._dataset["scl"].isel(
+                    y=slice(row_start, row_stop), x=slice(col_start, col_stop)
+                )
+            )
+            # Masked classes, and anything outside 0-11 (the fill at product edges), have
+            # no usable imagery.
+            masked = np.isin(scl, self._scl_mask) | (scl > 11)
+            valid &= ~masked
+            image[masked] = np.nan
         return image, valid
 
     def close(self) -> None:

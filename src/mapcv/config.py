@@ -372,6 +372,58 @@ class XYZImageryConfig(BaseModel):
         return self
 
 
+_STAC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2}))?")
+
+
+class StacSearchConfig(BaseModel):
+    """Find the Sentinel-2 L2A product for a region in a STAC catalog (``imagery.search``).
+
+    The least cloudy item of ``collection`` whose footprint covers the whole region,
+    acquired within ``datetime`` with at most ``max_cloud`` percent cloud, is used; ties
+    go to the earlier acquisition, then the item ID, so the choice is repeatable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    catalog: str = "https://stac.core.eopf.eodc.eu"
+    collection: str = "sentinel-2-l2a"
+    # A date or RFC 3339 time, or an interval "start/end" with ".." for an open end.
+    datetime: str
+    max_cloud: float = Field(default=20.0, ge=0.0, le=100.0)
+    # The item asset that holds the whole EOPF Zarr product.
+    asset: str = "product"
+
+    @field_validator("catalog")
+    @classmethod
+    def _check_catalog(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        loopback_http = parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS
+        if parsed.scheme != "https" and not loopback_http:
+            raise ValueError("imagery.search.catalog must be an https:// STAC API URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "imagery.search.catalog must not contain credentials, query strings or fragments"
+            )
+        return value.rstrip("/")
+
+    @field_validator("datetime")
+    @classmethod
+    def _check_datetime(cls, value: str) -> str:
+        parts = value.strip().split("/")
+        if (
+            len(parts) > 2
+            or not all(part == ".." or _STAC_TIME.fullmatch(part) for part in parts)
+            or parts == ["..", ".."]
+            or parts == [".."]
+        ):
+            raise ValueError(
+                "imagery.search.datetime must be a date (2025-05-13), a time "
+                "(2025-05-13T10:40:00Z) or an interval such as 2025-05-01/2025-05-31 "
+                "(.. for an open end)"
+            )
+        return value.strip()
+
+
 class EOPFZarrImageryConfig(BaseModel):
     """One local or anonymous public Sentinel-2 L2A EOPF Zarr product."""
 
@@ -381,16 +433,41 @@ class EOPFZarrImageryConfig(BaseModel):
     type: Literal["eopf_zarr"] = "eopf_zarr"
     # Required when imagery is a list of sources: the folder Images/<name>/.
     name: Optional[str] = None
-    path: str
+    # The product, or ``search`` to find it in a STAC catalog: exactly one of the two.
+    path: Optional[str] = None
+    search: Optional[StacSearchConfig] = None
     resolution: Literal[10, 20, 60] = 10
     bands: List[str] = Field(default_factory=lambda: list(DEFAULT_SENTINEL2_L2A_BANDS))
     chunk_rows: int = Field(default=1024, ge=1)
+    # Scene classification (SCL) classes whose pixels count as having no imagery, such
+    # as clouds (8, 9), cirrus (10) and cloud shadows (3).
+    scl_mask: Optional[List[int]] = None
 
-    _check_path = field_validator("path")(_validate_eopf_path)
     _check_name = field_validator("name")(_validate_source_name)
+
+    @field_validator("path")
+    @classmethod
+    def _check_path(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_eopf_path(value) if value is not None else None
+
+    @field_validator("scl_mask")
+    @classmethod
+    def _check_scl_mask(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        if value is None:
+            return None
+        if not value or any(not 0 <= code <= 11 for code in value):
+            raise ValueError(
+                "imagery.scl_mask lists Sentinel-2 scene classes 0-11, for example "
+                "[3, 8, 9, 10] (cloud shadows, clouds and cirrus)"
+            )
+        return sorted(set(value))
 
     @model_validator(mode="after")
     def _validate_bands(self) -> "EOPFZarrImageryConfig":
+        if (self.path is None) == (self.search is None):
+            raise ValueError(
+                "imagery: set exactly one of 'path' (the product) and 'search' (find it)"
+            )
         normalized = [band.lower() for band in self.bands]
         if not normalized:
             raise ValueError("imagery.bands must contain at least one variable")
@@ -503,6 +580,79 @@ def _check_vector_suffix(path: Path, key: str) -> Path:
     return path
 
 
+_OSM_KEY = re.compile(r"[A-Za-z0-9_:.-]{1,64}")
+
+
+class OsmClass(BaseModel):
+    """One class of OpenStreetMap labels: the features whose tags match ``tags``.
+
+    Each tag is a key with ``"*"`` (any value), one value, or a list of values; a
+    feature belongs to the class when every tag matches.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    tags: Dict[str, Union[str, List[str]]]
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("labels.osm.classes: every class needs a non-empty name")
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def _check_tags(
+        cls, tags: Dict[str, Union[str, List[str]]]
+    ) -> Dict[str, Union[str, List[str]]]:
+        if not tags:
+            raise ValueError("labels.osm.classes: each class needs tags, such as {building: '*'}")
+        for key, value in tags.items():
+            values = value if isinstance(value, list) else [value]
+            if (
+                not _OSM_KEY.fullmatch(key)
+                or not values
+                or any(not v or '"' in v or "\\" in v or "\n" in v for v in values)
+            ):
+                raise ValueError(
+                    f"labels.osm.classes: tag {key!r}: keys are letters, digits and _:.-, "
+                    "values are '*', a value, or a list of values (no quotes or backslashes)"
+                )
+        return tags
+
+
+class OsmLabelsSource(BaseModel):
+    """Labels downloaded from OpenStreetMap through the Overpass API (``labels.osm``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    classes: List[OsmClass] = Field(min_length=1)
+    overpass_url: str = "https://overpass-api.de/api/interpreter"
+    timeout: int = Field(default=180, ge=1, le=3600)
+    # (west, south, east, north) to query; the region's box unless given.
+    bbox: Optional[Tuple[float, float, float, float]] = None
+
+    @field_validator("overpass_url")
+    @classmethod
+    def _check_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        loopback_http = parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS
+        if parsed.scheme != "https" and not loopback_http:
+            raise ValueError("labels.osm.overpass_url must be an https:// Overpass API URL")
+        if parsed.username or parsed.password or parsed.fragment:
+            raise ValueError("labels.osm.overpass_url must not contain credentials or a fragment")
+        return value
+
+    @model_validator(mode="after")
+    def _unique_names(self) -> "OsmLabelsSource":
+        names = [entry.name for entry in self.classes]
+        if len(names) != len(set(names)):
+            raise ValueError("labels.osm.classes: class names must be unique")
+        return self
+
+
 class LabelFile(BaseModel):
     """One of several vector label files (``labels.files``).
 
@@ -588,12 +738,14 @@ class LabelsConfig(BaseModel):
     buffer: Optional[BufferConfig] = None
     # Polygons of the area that was labeled; mask pixels outside it get ignore_index.
     annotated_area: Optional[Path] = None
+    # Labels from OpenStreetMap instead of a file (``mapcv.osm``).
+    osm: Optional[OsmLabelsSource] = None
 
     @model_serializer(mode="wrap")
     def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
         # Records and manifests written before these options existed have no such keys.
         data: Dict[str, Any] = handler(self)
-        for key in ("layer", "buffer", "annotated_area", "files"):
+        for key in ("layer", "buffer", "annotated_area", "files", "osm"):
             if key in data and data[key] is None:
                 del data[key]
         if data.get("path", 0) is None:
@@ -602,7 +754,10 @@ class LabelsConfig(BaseModel):
 
     @property
     def label_files(self) -> List[LabelFile]:
-        """Every label file in order: ``files``, or one entry made from ``path``."""
+        """Every label file in order: ``files``, or one entry made from ``path`` (none for
+        OpenStreetMap labels)."""
+        if self.osm is not None:
+            return []
         if self.files is not None:
             return list(self.files)
         assert self.path is not None  # the validator requires path or files
@@ -619,6 +774,8 @@ class LabelsConfig(BaseModel):
 
     def keyed_files(self, prefix: str = "labels") -> List[Tuple[str, Path]]:
         """Each label file's path with its config key (``labels.path``, ``labels.files[1].path``)."""
+        if self.osm is not None:
+            return []
         if self.files is None:
             assert self.path is not None
             return [(f"{prefix}.path", self.path)]
@@ -627,9 +784,11 @@ class LabelsConfig(BaseModel):
         ]
 
     @property
-    def first_path(self) -> Path:
-        """``path``, or the first of ``files`` (for messages that name one file)."""
-        return self.label_files[0].path
+    def first_path(self) -> Optional[Path]:
+        """``path``, or the first of ``files`` (for messages that name one file); ``None``
+        for OpenStreetMap labels."""
+        files = self.label_files
+        return files[0].path if files else None
 
     @field_validator("annotated_area")
     @classmethod
@@ -670,8 +829,26 @@ class LabelsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _classes_need_field(self) -> "LabelsConfig":
-        if (self.path is None) == (self.files is None):
-            raise ValueError("labels needs path (one label file) or files (several), and not both")
+        sources = sum(value is not None for value in (self.path, self.files, self.osm))
+        if sources != 1:
+            raise ValueError(
+                "labels needs exactly one of path (one label file), files (several) and osm "
+                "(OpenStreetMap)"
+            )
+        if self.osm is not None:
+            for key in ("label_field", "layer"):
+                if getattr(self, key) is not None:
+                    raise ValueError(
+                        f"labels.{key} does not apply to labels.osm: each class is named "
+                        "in labels.osm.classes"
+                    )
+            if self.classes is not None:
+                unknown = sorted(set(self.classes) - {entry.name for entry in self.osm.classes})
+                if unknown:
+                    raise ValueError(
+                        f"labels.classes names {', '.join(unknown)}, which labels.osm.classes "
+                        "does not define"
+                    )
         if self.files is not None:
             if not self.files:
                 raise ValueError("labels.files is empty; list at least one label file")
@@ -687,7 +864,12 @@ class LabelsConfig(BaseModel):
                 "labels.layer picks a table of a GeoPackage (.gpkg); "
                 f"'{self.path.name}' has just one, so remove labels.layer"
             )
-        if self.classes is not None and self.label_field is None and self.files is None:
+        if (
+            self.classes is not None
+            and self.label_field is None
+            and self.files is None
+            and self.osm is None
+        ):
             raise ValueError("labels.classes requires labels.label_field")
         if self.classes is not None and self.ignore_index in self.classes.values():
             raise ValueError(
@@ -1112,6 +1294,14 @@ class MapcvConfig(BaseModel):
         return raw
 
     @model_validator(mode="after")
+    def _osm_bbox_from_region(self) -> "MapcvConfig":
+        labels = self.labels
+        if isinstance(labels, LabelsConfig) and labels.osm is not None and labels.osm.bbox is None:
+            region = self.region
+            labels.osm.bbox = (region.west, region.south, region.east, region.north)
+        return self
+
+    @model_validator(mode="after")
     def _validate_sources(self) -> "MapcvConfig":
         if not isinstance(self.imagery, list):
             if self.imagery.name is not None:
@@ -1237,7 +1427,8 @@ class MapcvConfig(BaseModel):
                     "get that value (255 by default; null would make them background)"
                 )
         if labels.buffer is not None:
-            if labels.first_path.suffix.lower() == ".kml":
+            first = labels.first_path
+            if first is not None and first.suffix.lower() == ".kml":
                 raise ValueError(
                     "labels.buffer needs line and point features, which mapcv does not read "
                     "from KML; convert the labels to GeoJSON or GeoPackage"

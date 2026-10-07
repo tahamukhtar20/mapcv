@@ -210,7 +210,7 @@ ONE = {"path": "a.geojson", "class": "a"}
 @pytest.mark.parametrize(
     ("labels", "message"),
     [
-        ({"path": "a.geojson", "files": [ONE]}, "path (one label file) or files"),
+        ({"path": "a.geojson", "files": [ONE]}, "exactly one of path (one label file), files"),
         ({"files": []}, "labels.files is empty"),
         ({"files": [{"path": "a.geojson"}]}, "needs exactly one of label_field"),
         ({"files": [{**ONE, "label_field": "k"}]}, "needs exactly one of label_field"),

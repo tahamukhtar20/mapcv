@@ -272,9 +272,14 @@ def _imagery_label(config: MapcvConfig) -> str:
 
 def _source_label(imagery: Any) -> str:
     if isinstance(imagery, EOPFZarrImageryConfig):
+        if imagery.search is not None:
+            search = imagery.search
+            where = f"search {search.collection} {search.datetime} ≤ {search.max_cloud:g}% cloud"
+        else:
+            where = _redact_url(imagery.path or "")
+        masked = f" · SCL mask {imagery.scl_mask}" if imagery.scl_mask else ""
         return (
-            f"Sentinel-2 EOPF {_redact_url(imagery.path)} · {imagery.resolution} m · "
-            f"{len(imagery.bands)} bands"
+            f"Sentinel-2 EOPF {where} · {imagery.resolution} m · {len(imagery.bands)} bands{masked}"
         )
     if isinstance(imagery, GeoTiffImageryConfig):
         where = _redact_url(imagery.path) if "://" in imagery.path else imagery.path
@@ -355,6 +360,9 @@ def _settings_table(config: MapcvConfig) -> Table:
             else ""
         )
         table.add_row("Labels", f"{where} · values of band {values.band}{scaling}")
+    elif config.labels.osm is not None:
+        names = ", ".join(entry.name for entry in config.labels.osm.classes)
+        table.add_row("Labels", f"OpenStreetMap (Overpass) · {names}")
     elif config.labels.files is not None:
         for index, file in enumerate(config.labels.files):
             what = f"field: {file.label_field}" if file.label_field else f"class: {file.class_name}"
@@ -2105,6 +2113,56 @@ def validate(
             if local is not None and not local.exists():
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 _console.print(f"[yellow]Warning:[/yellow] {where} not found: {local}")
+
+
+@app.command(
+    rich_help_panel="2. Use a dataset",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv export dataset/ --format hf-parquet --out dataset-hf/[/cyan]\n\n"
+        "  [cyan]mapcv export dataset/ --format terratorch[/cyan]   writes dataset/terratorch.yaml"
+    ),
+)
+def export(
+    staging_dir: Path = typer.Argument(
+        ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
+    ),
+    format_: str = typer.Option(
+        ..., "--format", "-f", help="hf-parquet (Hugging Face) or terratorch (a data config)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="hf-parquet: a new folder (required). terratorch: the YAML file "
+        "(default STAGING_DIR/terratorch.yaml).",
+    ),
+) -> None:
+    """Export a dataset for another tool: Hugging Face Parquet or a TerraTorch data config."""
+    from mapcv.export import FORMATS, export_hf_parquet, export_terratorch
+
+    if format_ not in FORMATS:
+        _console.print(f"[red]--format must be one of: {', '.join(FORMATS)}[/red]")
+        raise typer.Exit(code=1)
+    try:
+        if format_ == "hf-parquet":
+            if out is None:
+                _console.print("[red]--out is required for hf-parquet[/red]")
+                raise typer.Exit(code=1)
+            written = export_hf_parquet(staging_dir, out)
+            _console.print(
+                f"[green]✓[/green] {len(written)} Parquet file(s) and a dataset card in "
+                f'[bold]{out}[/bold]. Load them with datasets.load_dataset("{out}").'
+            )
+        else:
+            path = export_terratorch(staging_dir, out)
+            _console.print(
+                f"[green]✓[/green] TerraTorch data config written to [bold]{path}[/bold]; "
+                "paste it into your training config."
+            )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        _console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command(

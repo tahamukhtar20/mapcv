@@ -27,7 +27,7 @@ PATCH = 64
 
 def _files(staging: Path) -> Dict[str, bytes]:
     return {
-        str(path.relative_to(staging)): path.read_bytes()
+        path.relative_to(staging).as_posix(): path.read_bytes()
         for folder in ("Images", "Masks")
         for path in sorted((staging / folder).iterdir())
     }

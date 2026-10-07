@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from shapely.geometry import box, shape
 
-from mapcv.config import StacSearchConfig
+from mapcv.config import StacSearchBase, StacSearchConfig
 
 _TIMEOUT_S = 60
 _MAX_PAGES = 50
@@ -69,7 +69,7 @@ def _get(url: str) -> Dict[str, Any]:
 
 
 def search_items(
-    search: StacSearchConfig, bbox: Tuple[float, float, float, float]
+    search: StacSearchBase, bbox: Tuple[float, float, float, float]
 ) -> Iterator[Dict[str, Any]]:
     """Every item of the search, page by page (at most 5,000)."""
     url: Optional[str] = f"{search.catalog}/search"
@@ -97,12 +97,15 @@ def search_items(
             body = {**(body or {}), **new_body} if following.get("merge") else (new_body or body)
 
 
-def find_product(search: StacSearchConfig, bbox: Tuple[float, float, float, float]) -> StacMatch:
-    """The item to use for ``bbox`` (west, south, east, north in degrees).
+def find_item(
+    search: StacSearchBase, bbox: Tuple[float, float, float, float]
+) -> Tuple[Dict[str, Any], int]:
+    """The item to use for ``bbox`` (west, south, east, north in degrees), and how many
+    qualified.
 
     Raises:
         ValueError: No item of the search covers the region with at most ``max_cloud``
-            percent cloud, or the chosen item lacks the ``asset``.
+            percent cloud.
         RuntimeError: The catalog cannot be reached or answers with an error.
     """
     region = box(*bbox)
@@ -129,16 +132,29 @@ def find_product(search: StacSearchConfig, bbox: Tuple[float, float, float, floa
             f"{covering} covering the whole region); widen imagery.search.datetime, raise "
             "max_cloud or shrink the region"
         )
-    cloud, when, item_id, item = min(candidates, key=lambda c: (c[0], c[1], c[2]))
+    *_, item = min(candidates, key=lambda c: (c[0], c[1], c[2]))
+    return item, len(candidates)
+
+
+def find_product(search: StacSearchConfig, bbox: Tuple[float, float, float, float]) -> StacMatch:
+    """The EOPF product to use for ``bbox`` (see :func:`find_item`).
+
+    Raises:
+        ValueError: As :func:`find_item`, or the chosen item lacks the ``asset``.
+        RuntimeError: As :func:`find_item`.
+    """
+    item, candidates = find_item(search, bbox)
+    item_id = str(item.get("id", ""))
     asset = item.get("assets", {}).get(search.asset)
     if not asset or not asset.get("href"):
         raise ValueError(
             f"STAC item {item_id} has no '{search.asset}' asset (imagery.search.asset)"
         )
+    properties = item.get("properties", {})
     return StacMatch(
         item_id=item_id,
         href=str(asset["href"]),
-        cloud_cover=cloud,
-        datetime=when,
-        candidates=len(candidates),
+        cloud_cover=float(properties["eo:cloud_cover"]),
+        datetime=str(properties.get("datetime") or ""),
+        candidates=candidates,
     )

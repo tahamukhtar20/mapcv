@@ -13,6 +13,7 @@ import shapely
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    StacCogImageryConfig,
     ContinuousLabelsConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
@@ -122,8 +123,12 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, in
 
 def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[int, int]:
     """Raster size in the product's UTM grid, snapped outward to whole pixels."""
+    return _utm_raster(config, imagery.resolution)
+
+
+def _utm_raster(config: MapcvConfig, res: int) -> Tuple[int, int]:
+    """Raster size of the region on the UTM grid of ``res`` metres, snapped outward."""
     region = config.region
-    res = imagery.resolution
     try:
         from pyproj import Transformer
     except ImportError:  # without the zarr extra: kilometre approximation
@@ -347,6 +352,19 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: List[str]) ->
             channels,
             bytes_per_value,
             description,
+            imagery.chunk_rows,
+        )
+    if isinstance(imagery, StacCogImageryConfig):
+        # The finest Sentinel-2 bands are 10 m; the product's UTM grid, as for EOPF.
+        height, width = _utm_raster(config, 10)
+        return _SourceSize(
+            height,
+            width,
+            None,
+            10.0,
+            len(imagery.bands),
+            2,
+            f"Sentinel-2 COGs (STAC search) · {len(imagery.bands)} bands",
             imagery.chunk_rows,
         )
     height, width = _eopf_raster(config, imagery)

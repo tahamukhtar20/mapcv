@@ -24,7 +24,7 @@ The baseline, [`rasterio_script.py`](https://github.com/tahamukhtar20/mapcv/blob
 | L: 100 × 100 tiles, 10,000 patches | mapcv | 15.46 s | 521 MB | 1.00× | — |
 | | rasterio script | 60.17 s | 3,341 MB | 3.89× | yes |
 
-Medians of 3 runs, release build, on an Intel Core i7-10710U laptop (6 cores, 12 threads, 15 GB RAM, Linux, Python 3.13), mapcv at commit `956559e`. The script also writes no manifest, splits or patch summaries, which mapcv's times include.
+Medians of 3 runs, release build, on an Intel Core i7-10710U laptop (6 cores, 12 threads, 15 GB RAM, Linux, Python 3.13), mapcv at commit `d801d66`. The script also writes no manifest, splits or patch summaries, which mapcv's times include.
 
 **Where the difference comes from.** mapcv decodes tiles, rasterizes and encodes patches in Rust on all cores and without the GIL; the script does each step once, single-threaded, in Python and Pillow. With JPEG tiles the decode alone takes the script most of its time. The script also holds the whole stitched raster and mask in memory (3.3 GB at L) where mapcv reads strips of tile rows, so its memory grows with the region and mapcv's does not.
 

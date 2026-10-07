@@ -742,9 +742,15 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> list[str]:
             ("change.after.path", change.after),
         ):
             if label_set is not None:
-                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                prefix = key.rsplit(".", 1)[0]
+                for file_key, path in label_set.keyed_files(prefix):
                     if not path.exists():
                         messages.append(f"{file_key} not found: {state.sandbox.rel(path)}")
+                set_area = label_set.annotated_area
+                if set_area is not None and not set_area.exists():
+                    messages.append(
+                        f"{prefix}.annotated_area not found: {state.sandbox.rel(set_area)}"
+                    )
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

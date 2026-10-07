@@ -179,8 +179,16 @@ jobs:
               assert sum(arch in whl for whl in wheels) >= 2, (arch, wheels)
           for whl in wheels:
               with zipfile.ZipFile(whl) as zf:
-                  name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
+                  names = zf.namelist()
+                  name = next(n for n in names if n.endswith(".dist-info/METADATA"))
                   meta = Parser().parsestr(zf.read(name).decode())
+                  # The Rust dependencies' licences (cargo-about) and the GDAL notice
+                  # must ship in every wheel.
+                  for notice in ("LICENSE", "LICENSES-THIRD-PARTY.md", "THIRD_PARTY_NOTICES.md"):
+                      path = next((n for n in names if n.endswith(f".dist-info/licenses/{notice}")), None)
+                      assert path is not None, (whl, notice)
+                      assert zf.getinfo(path).file_size > 0, (whl, notice)
+                  assert meta.get_all("License-File"), (whl, "no License-File in METADATA")
               assert meta["Requires-Python"] == ">=3.10", (whl, meta["Requires-Python"])
               classifiers = meta.get_all("Classifier") or []
               for minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):

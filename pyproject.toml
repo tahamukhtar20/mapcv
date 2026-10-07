@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "mapcv"
 version = "0.2.0"
-description = "A high-performance satellite imagery dataset creation tool for computer vision"
+description = "Turn a region, imagery and labels into ready-to-train remote-sensing datasets for segmentation, detection, classification, change detection and regression. GDAL-free."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES-THIRD-PARTY.md"]
@@ -25,16 +25,28 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.10"
 keywords = [
     "remote-sensing",
+    "earth-observation",
     "satellite-imagery",
-    "semantic-segmentation",
+    "aerial-imagery",
+    "machine-learning",
     "computer-vision",
     "dataset",
+    "semantic-segmentation",
+    "object-detection",
+    "instance-segmentation",
+    "change-detection",
     "geospatial",
+    "gis",
+    "geotiff",
+    "cog",
+    "stac",
     "sentinel-2",
+    "earth-engine",
     "xyz-tiles",
 ]
 dependencies = [

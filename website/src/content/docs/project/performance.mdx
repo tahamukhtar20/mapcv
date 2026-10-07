@@ -41,18 +41,18 @@ Four ways to build the same dataset from the same tile server, labels, region, p
 
 | Scenario | Tool | Wall time | Peak memory | Time vs mapcv | Same data |
 | --- | --- | --- | --- | --- | --- |
-| S: 100 patches | mapcv | 0.92 s | 111 MB | 1.00× | — |
-| | rasterio script | 1.32 s | 129 MB | 1.44× | yes |
-| | GDAL command line | 5.69 s | 609 MB | 6.18× | yes |
-| | TorchGeo | 7.67 s | 4,764 MB | not comparable | no |
-| | leafmap | 10.31 s | 464 MB | 11.20× | yes |
-| M: 1,024 patches | mapcv | 2.64 s | 236 MB | 1.00× | — |
-| | rasterio script | 8.68 s | 437 MB | 3.29× | yes |
-| | GDAL command line | 49.66 s | 617 MB | 18.80× | yes |
-| | TorchGeo | 37.94 s | 6,358 MB | not comparable | no |
-| | leafmap | 59.92 s | 2,263 MB | 22.69× | yes |
+| S: 100 patches | mapcv | 0.87 s | 110 MB | 1.00× | — |
+| | rasterio script | 1.34 s | 129 MB | 1.54× | yes |
+| | GDAL command line | 4.73 s | 596 MB | 5.43× | yes |
+| | TorchGeo | 5.53 s | 4,788 MB | not comparable | no |
+| | leafmap | 7.44 s | 464 MB | 8.55× | yes |
+| M: 1,024 patches | mapcv | 1.56 s | 234 MB | 1.00× | — |
+| | rasterio script | 6.77 s | 435 MB | 4.33× | yes |
+| | GDAL command line | 47.50 s | 618 MB | 30.37× | yes |
+| | TorchGeo | 34.61 s | 6,329 MB | not comparable | no |
+| | leafmap | 53.86 s | 2,263 MB | 34.44× | yes |
 
-Medians of 3 runs on the same laptop, all tools in one session (the machine was busier than for the table above, so mapcv's own times are higher there; compare within a table). Peak memory is the whole process tree: TorchGeo's includes its `DataLoader` workers, each of which imports PyTorch.
+Medians of 3 runs on the same laptop, all tools in one session. Peak memory is the whole process tree: TorchGeo's includes its `DataLoader` workers, each of which imports PyTorch.
 
 **What the comparison found.**
 

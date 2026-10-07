@@ -384,6 +384,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` 
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
 | `buffer` | `{line, point}` in metres | `null` | Turn line and point features into polygons: a line becomes a band `line` metres wide (a road, a river), a point a disc `point` metres across (a tree, a well). Give one or both; features of the other kind are skipped as before. The buffer is drawn in metres on the ground, in the UTM zone of each feature, then the polygon is labeled like any other. Not for KML (mapcv reads only its polygons) |
 | `files` | list | `null` | Several label files instead of `path` (see below) |
+| `osm` | mapping | `null` | Labels straight from OpenStreetMap instead of a file ([below](#labels-from-openstreetmap-labelsosm)) |
 | `annotated_area` | path | `null` | A polygon file (any of the formats above) outlining where the scene **was labeled**. Mask pixels outside it get `ignore_index` instead of background, so a partly labeled scene does not teach that unlabeled ground is background. For `task: segmentation` and `classification` (where the outside pixels do not count towards coverage); needs an `ignore_index`. Feature attributes are ignored. A relative path is resolved against the config file's folder |
 
 ```yaml
@@ -409,6 +410,31 @@ labels:
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
 **Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` and `buffer` in `target.labels` when they are set (with `files`, each file's settings without its path, and one hash over all files), and the annotated area by its file's hash (`annotated_area_sha256`, so editing it is a resume mismatch); `annotated_area` must be a vector file, needs an `ignore_index` and applies to segmentation and classification only; `buffer` needs a distance above 0, and `buffer.point` and `detection.point_box_size` cannot both be set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+
+#### Labels from OpenStreetMap (`labels.osm`)
+
+```yaml
+labels:
+  osm:
+    classes:
+      - {name: building, tags: {building: "*"}}
+      - {name: water, tags: {natural: water}}
+      - {name: road, tags: {highway: [motorway, primary, secondary, residential]}}
+  buffer: {line: 6}                 # roads become 6 m wide polygons
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `classes` | list | required | Each class has a `name` and `tags`: a key with `"*"` (any value), one value, or a list of values. A feature belongs to the **first** class whose tags all match |
+| `overpass_url` | URL | `https://overpass-api.de/api/interpreter` | The Overpass API to ask (`https://`; `http://` only for `localhost`). The public server limits heavy use: for large areas, run your own or use an extract with `labels.path` |
+| `timeout` | int seconds | `180` | The query's time limit on the server |
+| `bbox` | `[west, south, east, north]` | the region | The box to query |
+
+One Overpass query fetches every matching node, way and relation in the box. Closed ways become polygons (except highways, barriers, railways and waterways, and `area=no`, which stay lines), `multipolygon` relations become polygons with their holes, other ways are lines and nodes are points; as with label files, lines and points become labels only with `buffer`. Classes get IDs 1, 2, 3, ... in the order listed, or the IDs of `labels.classes` (by class name). `label_field` and `layer` don't apply. `buffer`, `all_touched`, `ignore_index` and `annotated_area` work as for files, with every task that takes polygon labels.
+
+The answer is stored as GeoJSON in the cache folder (`<cache dir>/osm/`, see the [tile cache](#xyz-tiles-type-xyz)), with the data's timestamp (`osm_base`) and the query, and reused until you delete it: rerunning or resuming does not ask Overpass again, and the labels' SHA-256 in the manifest identifies the exact data. Fresh data (after deleting the file) has another hash, so a resumed run refuses to mix it with the old. `mapcv plan` fetches the labels too, to count them; the MCP server does not fetch them (it writes only inside its root).
+
+OpenStreetMap data is © OpenStreetMap contributors under the [Open Database License](https://www.openstreetmap.org/copyright): a dataset whose masks come from it is a derived database, to be shared under the ODbL with that credit. [`mapcv card`](/mapcv/reference/cli/#mapcv-card) adds the credit.
 
 ### Raster labels (`type: raster`)
 

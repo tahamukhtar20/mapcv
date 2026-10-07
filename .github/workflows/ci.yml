@@ -137,7 +137,7 @@ jobs:
       run: uv sync --locked --all-extras --reinstall-package mapcv
 
     - name: Run pytest with branch coverage
-      run: uv run pytest --cov=mapcv --cov-branch --cov-report=term --cov-report=xml --cov-fail-under=65
+      run: uv run pytest --cov=mapcv --cov-branch --cov-report=term --cov-report=xml --cov-fail-under=85
 
     - name: End-to-end user journey (real CLI, wizard, generate, resume, split)
       shell: bash

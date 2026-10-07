@@ -360,6 +360,9 @@ def _settings_table(config: MapcvConfig) -> Table:
             else ""
         )
         table.add_row("Labels", f"{where} · values of band {values.band}{scaling}")
+    elif config.labels.osm is not None:
+        names = ", ".join(entry.name for entry in config.labels.osm.classes)
+        table.add_row("Labels", f"OpenStreetMap (Overpass) · {names}")
     elif config.labels.files is not None:
         for index, file in enumerate(config.labels.files):
             what = f"field: {file.label_field}" if file.label_field else f"class: {file.class_name}"

@@ -16,7 +16,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from mapcv import tile_cache
-from mapcv._mapcv_rs import PyTileIndex, fetch_tiles
+from mapcv._mapcv_rs import TileIndex, fetch_tiles
 from mapcv.cli import app
 from mapcv.config import MapcvConfig
 from mapcv.pipeline import run_generate
@@ -235,12 +235,12 @@ def server() -> Iterator[TileServer]:
 def test_fetch_tiles_returns_caching_headers(server: TileServer) -> None:
     server.headers = {"Cache-Control": "max-age=60", "Age": "5"}
     server.failing = {(2, 1)}
-    tiles = [PyTileIndex(1, 1, 2), PyTileIndex(2, 1, 2)]
+    tiles = [TileIndex(1, 1, 2), TileIndex(2, 1, 2)]
     results, failed, _ = fetch_tiles(tiles, server.template, policy="ignore", cache_headers=True)
     by_tile = {(t.x, t.y): (payload, headers) for t, payload, headers in results}
     assert failed == 1
     payload, headers = by_tile[(1, 1)]
-    assert payload == _png(1, 1)
+    assert payload == _png(1, 1) and headers is not None
     cache_control, expires, date, age = headers
     assert (cache_control, expires, age) == ("max-age=60", None, "5") and date
     assert by_tile[(2, 1)][1] is None  # a black fill has no headers

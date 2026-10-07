@@ -22,6 +22,7 @@ PYO3_PYTHON=$PWD/.venv/bin/python .venv/bin/maturin develop --uv -q   # build th
 ```
 
 - Rebuild after every change under `src/*.rs`.
+- A change to a `#[pyfunction]` or `#[pyclass]` signature also goes into `src/mapcv/_mapcv_rs.pyi`; `tests/test_extension_stubs.py` runs `mypy.stubtest` to catch drift.
 - If imports look stale, delete `src/mapcv/_mapcv_rs*.so` and rebuild.
 - The Rust toolchain is pinned in `rust-toolchain.toml` (1.99.0).
 

@@ -12,12 +12,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
-import anyio
 import pytest
 from PIL import Image
 from typer.testing import CliRunner
 
 pytest.importorskip("mcp")
+
+import anyio  # noqa: E402 - a dependency of mcp, absent without the mcp extra
 
 from mcp.client import Client  # noqa: E402
 from mcp.types import CallToolResult  # noqa: E402

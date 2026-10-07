@@ -28,7 +28,7 @@ from rich.table import Table
 
 import mapcv
 from mapcv import pipeline
-from mapcv._mapcv_rs import parse_kml_rs
+from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
@@ -1092,7 +1092,7 @@ def label_fields(
         text = data.decode("utf-8", errors="replace")
         names = set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text))
         for name in sorted(names):
-            polygons, _ = parse_kml_rs(data, name)
+            polygons, _ = _parse_kml_bytes(data, name)
             values[name] = Counter(label for _, label in polygons if label)
     elif suffix in (".geojson", ".json"):
         obj: Any = json.loads(path.read_bytes().decode("utf-8"))

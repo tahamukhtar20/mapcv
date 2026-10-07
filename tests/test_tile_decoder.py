@@ -21,7 +21,7 @@ import numpy.typing as npt
 import pytest
 from PIL import Image, ImageFile, ImageFilter
 
-from mapcv._mapcv_rs import PyTileIndex, decode_tile_window
+from mapcv._mapcv_rs import TileIndex, decode_tile_window
 from mapcv.config import RegionConfig, XYZImageryConfig
 from mapcv.imagery import XYZRasterSource
 
@@ -297,7 +297,7 @@ def _reference_window(
 
 
 def _source(
-    monkeypatch: pytest.MonkeyPatch, grid: List[PyTileIndex], payloads: Dict[Tuple[int, int], bytes]
+    monkeypatch: pytest.MonkeyPatch, grid: List[TileIndex], payloads: Dict[Tuple[int, int], bytes]
 ) -> XYZRasterSource:
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
@@ -316,10 +316,10 @@ def _source(
     return XYZRasterSource(region, XYZImageryConfig(zoom=12, source="esri_satellite"))
 
 
-def _mixed_grid() -> Tuple[List[PyTileIndex], Dict[Tuple[int, int], bytes]]:
+def _mixed_grid() -> Tuple[List[TileIndex], Dict[Tuple[int, int], bytes]]:
     """4x3 tiles at (20, 30): PNG, WebP, JPEG and 16-bit PNG, one black, one missing."""
     rng = np.random.default_rng(11)
-    grid = [PyTileIndex(x, y, 12) for y in range(30, 33) for x in range(20, 24)]
+    grid = [TileIndex(x, y, 12) for y in range(30, 33) for x in range(20, 24)]
     makers = [
         lambda a: _encode(Image.fromarray(a), "PNG"),
         lambda a: _encode(Image.fromarray(a), "WEBP", quality=80),
@@ -369,7 +369,7 @@ def test_read_window_matches_the_pillow_implementation(
 def test_undecodable_tiles_raise_the_same_errors_as_before(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    grid = [PyTileIndex(3, 4, 12), PyTileIndex(4, 4, 12)]
+    grid = [TileIndex(3, 4, 12), TileIndex(4, 4, 12)]
     good = _encode(Image.fromarray(_content("photo")), "PNG")
     broken = good[: len(good) // 2]
     small = _encode(Image.new("RGB", (128, 128)), "PNG")
@@ -390,7 +390,7 @@ def test_undecodable_tiles_raise_the_same_errors_as_before(
 def test_first_bad_pillow_tile_raises_when_several_are_decoded_in_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    grid = [PyTileIndex(x, 4, 12) for x in range(3, 7)]
+    grid = [TileIndex(x, 4, 12) for x in range(3, 7)]
     jpeg = _encode(Image.fromarray(_content("photo")), "JPEG")
     payloads = {(3, 4): jpeg, (4, 4): jpeg[:100], (5, 4): jpeg, (6, 4): jpeg[:50]}
     source = _source(monkeypatch, grid, payloads)
@@ -400,7 +400,7 @@ def test_first_bad_pillow_tile_raises_when_several_are_decoded_in_threads(
 
 
 def test_empty_window_and_missing_tiles(monkeypatch: pytest.MonkeyPatch) -> None:
-    source = _source(monkeypatch, [PyTileIndex(3, 4, 12)], {})
+    source = _source(monkeypatch, [TileIndex(3, 4, 12)], {})
 
     window, valid = source.read_window(0, 256, 0, 256)  # the tile was not fetched
     assert window.shape == (256, 256, 3)

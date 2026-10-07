@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from mapcv._mapcv_rs import PyTileIndex
+from mapcv._mapcv_rs import TileIndex
 from mapcv.config import RegionConfig, XYZImageryConfig
 from mapcv.imagery import (
     XYZRasterSource,
@@ -42,7 +42,7 @@ def _png_tile(value: int) -> bytes:
 
 def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     transform = (2.0, 0.0, 100.0, 0.0, -2.0, 200.0)
-    tile = PyTileIndex(3, 4, 12)
+    tile = TileIndex(3, 4, 12)
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
         lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
@@ -71,7 +71,7 @@ def test_xyz_source_exposes_window_contract(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    tile = PyTileIndex(3, 4, 12)
+    tile = TileIndex(3, 4, 12)
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
         lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
@@ -96,7 +96,7 @@ def test_xyz_source_marks_black_pixels_invalid(monkeypatch: pytest.MonkeyPatch) 
 def test_xyz_custom_template_product_id_keeps_only_hostname(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tile = PyTileIndex(3, 4, 12)
+    tile = TileIndex(3, 4, 12)
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
         lambda *args, **kwargs: SimpleNamespace(west=0, south=0, east=1, north=1),
@@ -129,7 +129,7 @@ def test_offset_transform_uses_global_pixel_origin() -> None:
 
 
 def test_xyz_source_fetches_lazily_per_window_and_evicts(monkeypatch: pytest.MonkeyPatch) -> None:
-    grid = [PyTileIndex(x, y, 12) for y in range(10, 14) for x in range(5, 7)]
+    grid = [TileIndex(x, y, 12) for y in range(10, 14) for x in range(5, 7)]
     calls: List[List[Tuple[int, int]]] = []
 
     def fake_fetch(requested: List[Any], *args: Any, **kwargs: Any) -> Tuple[List[Any], int, Any]:

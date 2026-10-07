@@ -19,17 +19,17 @@ import pytest
 from PIL import Image
 
 from mapcv._mapcv_rs import (
-    PyTileIndex,
+    TileIndex,
     bounds,
     fetch_tiles,
     grid_sample_anchors,
-    parse_kml_rs,
+    parse_kml,
     random_sample_anchors,
     rasterize,
     stitch_tiles,
     tile,
     tile_transform,
-    write_patches_rs,
+    write_patches,
     xy,
     xy_bounds,
 )
@@ -39,7 +39,7 @@ IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
-# write_patches_rs
+# write_patches
 # ---------------------------------------------------------------------------
 
 
@@ -62,7 +62,7 @@ def _write(
     jpg_subsampling: str = "4:2:0",
 ) -> Any:
     n = images.shape[0] if hasattr(images, "shape") and images.ndim else 0
-    return write_patches_rs(
+    return write_patches(
         images,
         masks,
         _meta(n) if meta is None else meta,
@@ -111,7 +111,7 @@ def test_write_patches_rejects_wrong_dtype(tmp_path: Path, dtype: Any) -> None:
 
 def test_write_patches_rejects_non_array(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="numpy array"):
-        write_patches_rs([[1, 2, 3]], None, _meta(1), 0, 0, str(tmp_path), str(tmp_path))
+        write_patches([[1, 2, 3]], None, _meta(1), 0, 0, str(tmp_path), str(tmp_path))  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("n_meta", [0, 1, 3])
@@ -203,12 +203,12 @@ def _png(width: int, height: int) -> bytes:
 @pytest.mark.parametrize("size", [(1, 1), (512, 512), (256, 255), (255, 256)])
 def test_stitch_rejects_tiles_that_are_not_256px(size: Tuple[int, int]) -> None:
     with pytest.raises(ValueError, match="every tile must be 256x256"):
-        stitch_tiles([(PyTileIndex(0, 0, 1), _png(*size))])
+        stitch_tiles([(TileIndex(0, 0, 1), _png(*size))])
 
 
 def test_stitch_rejects_odd_tile_among_good_ones() -> None:
     good = _png(256, 256)
-    tiles = [(PyTileIndex(0, 0, 2), good), (PyTileIndex(1, 0, 2), _png(1, 1))]
+    tiles = [(TileIndex(0, 0, 2), good), (TileIndex(1, 0, 2), _png(1, 1))]
     with pytest.raises(ValueError, match=r"tile 2/1/0 is 1x1 pixels"):
         stitch_tiles(tiles)
 
@@ -216,16 +216,16 @@ def test_stitch_rejects_odd_tile_among_good_ones() -> None:
 def test_stitch_rejects_mixed_zoom_levels() -> None:
     good = _png(256, 256)
     with pytest.raises(ValueError, match="same zoom level"):
-        stitch_tiles([(PyTileIndex(0, 0, 1), good), (PyTileIndex(0, 0, 2), good)])
+        stitch_tiles([(TileIndex(0, 0, 1), good), (TileIndex(0, 0, 2), good)])
 
 
 def test_stitch_undecodable_tile_stays_runtime_error() -> None:
     with pytest.raises(RuntimeError, match="decode"):
-        stitch_tiles([(PyTileIndex(0, 0, 1), b"\x89PNG\r\n\x1a\nbroken")])
+        stitch_tiles([(TileIndex(0, 0, 1), b"\x89PNG\r\n\x1a\nbroken")])
 
 
 def test_stitch_valid_tile_still_stitches() -> None:
-    image, min_x, min_y = stitch_tiles([(PyTileIndex(3, 5, 4), _png(256, 256))])
+    image, min_x, min_y = stitch_tiles([(TileIndex(3, 5, 4), _png(256, 256))])
     assert image.shape == (256, 256, 3)
     assert (min_x, min_y) == (3, 5)
     assert image[0, 0].tolist() == [10, 20, 30]
@@ -367,8 +367,8 @@ def test_scalar_tile_helpers_clamp_extreme_values() -> None:
 )
 def test_parse_kml_rejects_garbage(data: bytes) -> None:
     with pytest.raises(ValueError, match="invalid KML"):
-        parse_kml_rs(data)
+        parse_kml(data)
 
 
 def test_parse_kml_empty_input_has_no_polygons() -> None:
-    assert parse_kml_rs(b"") == ([], 0)
+    assert parse_kml(b"") == ([], 0)

@@ -25,7 +25,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
 from mapcv._mapcv_rs import (
-    PyTileIndex,
+    TileIndex,
     decode_tile_window,
     fetch_tiles,
     snap_bbox,
@@ -471,7 +471,7 @@ class XYZRasterSource:
                 return
         config = self._config
         results, failed, (causes, example) = fetch_tiles(
-            [PyTileIndex(x, y, self._zoom) for x, y in missing],
+            [TileIndex(x, y, self._zoom) for x, y in missing],
             self._template,
             max_connections=config.max_connections,
             policy=config.policy,

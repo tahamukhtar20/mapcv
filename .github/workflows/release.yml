@@ -161,8 +161,10 @@ jobs:
           pattern: wheels-*
           path: dist
           merge-multiple: true
-      - name: Install test tools (pinned by hash)
-        run: pip install --require-hashes -r .github/requirements/release-test.txt
+      - name: Install test tools and reference libraries (pinned by hash)
+        run: >-
+          pip install --require-hashes -r .github/requirements/release-test.txt
+          -r .github/requirements/release-refs.txt
       - name: Check distribution metadata
         run: |
           twine check --strict dist/*
@@ -201,7 +203,9 @@ jobs:
           # of a released version), and pip would happily take that wheel instead.
           pip install --no-index --no-deps --only-binary :all: --find-links dist "mapcv==${VERSION}"
           # Then its dependencies from PyPI; the installed mapcv already satisfies the pin.
-          pip install --only-binary mapcv --find-links dist "mapcv==${VERSION}"
+          # With the extras users install, so their code paths are tested against the
+          # wheel too (Sentinel-2's zarr extra below, where it installs).
+          pip install --only-binary mapcv --find-links dist "mapcv[parquet,export,mcp]==${VERSION}"
           python scripts/check_installed_wheel.py dist
           python -c "import mapcv"
           if [ "${{ matrix.python }}" != "3.14" ]; then
@@ -212,7 +216,9 @@ jobs:
       - name: Run tests against the installed wheel
         run: |
           mv src src.unused
-          pytest --cov=mapcv --cov-branch --cov-fail-under=65
+          # With the extras and the reference libraries (release-refs.txt) almost every
+          # test runs against the wheel; CI holds the source tree to 85 %.
+          pytest --cov=mapcv --cov-branch --cov-fail-under=80
       - name: End-to-end user journey (installed CLI, wizard, generate, resume, split)
         run: python tests/e2e/journey.py --version "$VERSION"
       - name: Live quickstart with Esri imagery (dry run only)

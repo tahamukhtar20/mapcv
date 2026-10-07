@@ -1,0 +1,10 @@
+# Installed next to release-test.txt (compiled against it, so shared pins agree).
+# Reference libraries the test suite compares the installed wheel against (glibc,
+# macOS and Windows test jobs; rasterio has no musl wheels). rasterio 1.4.4 is the
+# newest release with wheels for every Python mapcv supports (3.10-3.14). Compile with:
+#   uv pip compile --universal --generate-hashes --python-version 3.10 \
+#     -c .github/requirements/release-test.txt \
+#     .github/requirements/release-refs.in -o .github/requirements/release-refs.txt
+rasterio==1.4.4
+pycocotools
+hypothesis

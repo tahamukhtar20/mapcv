@@ -122,7 +122,7 @@ footprint: present only with --footprint
 
 ## Optional runs
 
-**`--online`** runs `examples/quickstart` (77 Esri World Imagery tiles, four connections) once and records its time and memory under `online`, separate from the offline scenarios. It checks that the run succeeds and writes a consistent dataset, not pixels. You are responsible for the provider's terms ([PROVIDERS.md](../PROVIDERS.md)); do not put it in CI.
+**`--online`** runs `examples/quickstart` (77 Esri World Imagery tiles, four connections) once and records its time and memory under `online`, separate from the offline scenarios. It checks that the run succeeds and writes a consistent dataset, not pixels. It is not meant for CI; Esri's terms and credit line are in [PROVIDERS.md](../PROVIDERS.md).
 
 **`--footprint [REQUIREMENT]`** creates a fresh venv and measures `pip install REQUIREMENT` (default `mapcv`, i.e. the latest release on PyPI): wheel size, number of direct and total dependencies, size on disk and install time without pip's cache. It needs network access. Pass a local wheel (`--footprint dist/mapcv-*.whl`) to measure an unpublished build. Install time depends on your network; compare it on the same connection only.
 

@@ -13,7 +13,7 @@ Python 3.10–3.14 for the base package. Sentinel-2 support (`mapcv[zarr]`) work
 
 ### Can I use Google, Bing or OpenStreetMap tiles?
 
-mapcv has no presets for them: Google's and the OpenStreetMap Foundation's terms do not allow bulk downloading for this purpose. You can point `imagery.url_template` at any tile service you are authorised to use in this way. OpenStreetMap *data* is a good source of labels. See [Providers & licensing](/mapcv/project/providers/).
+mapcv has no presets for them, because Google and the OpenStreetMap Foundation ask clients not to bulk-download their tiles. `imagery.url_template` takes any XYZ tile service. OpenStreetMap *data* is a good source of labels. See [Providers & licensing](/mapcv/project/providers/).
 
 ### Can I use my own GeoTIFF or drone orthomosaic?
 

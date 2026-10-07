@@ -74,7 +74,7 @@ mapcv init my_dataset.yaml
 
 Open the file and fill in your region, imagery source, and (optionally) label path. Everything else has sensible defaults.
 
-> **Note:** XYZ sources must return standard **256x256 pixel** tiles. You are responsible for complying with the imagery provider's license, attribution, rate limits, and terms. mapcv does not grant imagery rights.
+> **Note:** XYZ sources must return standard **256x256 pixel** tiles. mapcv does not provide imagery; see [PROVIDERS.md](PROVIDERS.md) for how it treats imagery and how to credit each source.
 
 ### 2. Generate the dataset
 

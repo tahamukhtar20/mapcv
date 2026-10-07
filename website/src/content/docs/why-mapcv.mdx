@@ -26,7 +26,7 @@ All tools below are good at what they were built for. The question is what you n
 
 **GDAL's command-line tools** (`gdal_translate`, `gdal_rasterize`). The reference for correctness, and mapcv matches it. Cutting thousands of patches means thousands of processes (30× slower than mapcv on 1,024 patches), and GDAL has to be installed.
 
-**[TorchGeo](https://github.com/torchgeo/torchgeo).** A PyTorch library that samples geospatial rasters and vectors *at training time*, with many benchmark datasets and pretrained models. It reads rasters you already have (it does not fetch map tiles) and samples patches during training rather than writing a dataset you can inspect, share or split. Its `GridGeoSampler` lays the grid from the dataset's bounds (with labels, the labels' extent), so on our benchmark its patches were 0.39 pixel off the imagery's grid and resampled. Use TorchGeo for training on large rasters directly; use mapcv to build the dataset, then load it with `MapcvDataset` or TorchGeo.
+**[TorchGeo](https://github.com/torchgeo/torchgeo).** A PyTorch library that samples geospatial rasters and vectors *at training time*, with many benchmark datasets and pretrained models. It reads rasters you already have (it does not fetch map tiles) and samples patches during training rather than writing a dataset you can inspect, share or split. Use TorchGeo for training on large rasters directly; use mapcv to build the dataset, then load it with `MapcvDataset` or TorchGeo.
 
 **[Raster Vision](https://github.com/azavea/raster-vision).** A full framework for chip, train, predict and bundle pipelines in Python. A good fit if you want its end-to-end workflow and models; heavier to install and to configure when what you need is the dataset.
 

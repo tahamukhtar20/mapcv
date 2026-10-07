@@ -57,8 +57,7 @@ Medians of 3 runs on the same laptop, all tools in one session. Peak memory is t
 **What the comparison found.**
 
 - The rasterio script, the GDAL pipeline and leafmap write the same patches as mapcv: identical images, and masks that agree on every pixel or, for leafmap, on all but 0.02 % (a polygon edge that rounds the other way).
-- **TorchGeo does not.** `GridGeoSampler` lays its grid from the bounds of the dataset it samples, here the intersection of the imagery and the labels, which is the labels' extent. That grid sits 0.39 pixel off the imagery's pixel grid, so TorchGeo resamples every patch (nearest neighbour) and its patches match none of the imagery's own windows.
-- TorchGeo also returns each patch's transform in `float32`: at Web Mercator coordinates its origin is off by about 3 cm (0.04 pixel at zoom 18).
+- **TorchGeo** samples patches on its own grid rather than on the imagery's pixel grid, so its patches are not the imagery's own windows and are not compared as the same data; its time is shown for reference only.
 
 | | mapcv | rasterio script | GDAL command line | TorchGeo | leafmap |
 | --- | --- | --- | --- | --- | --- |

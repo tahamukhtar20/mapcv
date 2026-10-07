@@ -1,6 +1,6 @@
 ---
 title: mapcv
-description: Turn a region, imagery and labels into a ready-to-train remote-sensing dataset for segmentation, detection, instance segmentation, classification, change detection or regression, from map tiles, GeoTIFFs, Sentinel-2 or Earth Engine, with leakage-safe splits and no GDAL.
+description: Turn a region, imagery and labels into a ready-to-train remote-sensing dataset for segmentation, detection, instance segmentation, classification, change detection or regression, from map tiles, GeoTIFFs, Sentinel-2 or Earth Engine, fast, with leakage-safe splits.
 template: splash
 hero:
   title: Map labels in.<br/>Training data out.
@@ -39,7 +39,7 @@ Real (trimmed) output from the [Quickstart](/mapcv/quickstart/): 967 OpenStreetM
 ## Built for the dataset step, and only that
 
 <CardGrid>
-  <Card title="No GDAL, Rust core" icon="seti:rust">
+  <Card title="Fast Rust core" icon="seti:rust">
     Tile fetching, GeoTIFF reading, rasterizing and patch encoding run in Rust. One wheel per
     platform covers Python 3.10 and newer. `pip install` and go.
   </Card>

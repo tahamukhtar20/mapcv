@@ -16,9 +16,9 @@ import PipelineDiagram from '../../components/PipelineDiagram.astro';
 
 ## Why it exists
 
-Building a dataset from geospatial imagery usually means a one-off script: stitching tiles or windows by hand, fighting coordinate systems, installing GDAL, and a split that quietly leaks neighbouring pixels between train and test. mapcv is a **data-creation-first** tool: one YAML file, a few commands, and the result is plain files on disk.
+Building a dataset from geospatial imagery usually means a one-off script: stitching tiles or windows by hand, fighting coordinate systems, and a split that quietly leaks neighbouring pixels between train and test. mapcv is a **data-creation-first** tool: one YAML file, a few commands, and the result is plain files on disk.
 
-- **No GDAL.** The core is Rust (tile math and fetching, GeoTIFF reading and writing, rasterizing, patch encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ tiles and GeoTIFF/COG.
+- **Fast Rust core.** The heavy lifting is Rust (tile math and fetching, GeoTIFF reading and writing, rasterizing, patch encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ tiles and GeoTIFF/COG.
 - **Correct by default.** Masks follow GDAL's exact rules, labels are reprojected into the imagery's own CRS, class IDs are stable, and the default split keeps spatially close patches together.
 - **Honest estimates.** `mapcv plan` tells you how many tiles, patches, megabytes and how much memory a run needs before anything is downloaded.
 - **Resumable.** Progress is saved as the run goes and whenever it stops. If a run stops, the same command continues it, and the result is byte for byte the same.

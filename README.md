@@ -5,7 +5,7 @@
 <h1 align="center">mapcv</h1>
 
 <p align="center">
-    <em>Turn a region, imagery and labels into a ready-to-train remote-sensing dataset. GDAL-free, exact, resumable.</em>
+    <em>Turn imagery and labels into ready-to-train remote-sensing datasets, fast. Exact, resumable, one <code>pip install</code>.</em>
 </p>
 
 <p align="center">
@@ -102,7 +102,7 @@ mapcv verify ./output --write-checksums
 
 ## Bring your own imagery
 
-Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL, a public `s3://` object, or a glob pattern such as `tiles/*.tif` that reads a folder of local tiles as one mosaic) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
+Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL, a public `s3://` object, or a glob pattern such as `tiles/*.tif` that reads a folder of local tiles as one mosaic) can be the imagery; no tile server is involved. mapcv reads it directly, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
 
 ```yaml
 imagery:

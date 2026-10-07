@@ -1,4 +1,4 @@
-"""Readers for GeoPackage, Shapefile and GeoParquet label files, without GDAL.
+"""Readers for GeoPackage, Shapefile and GeoParquet label files.
 
 Each reader returns a :class:`VectorTable`: one shapely geometry per feature
 (``None`` where the feature has none) in WGS-84 longitude/latitude, and the

@@ -43,7 +43,7 @@ _SPLITS = ("train", "val", "test")
 
 def _read(path: Path) -> npt.NDArray[Any]:
     """A patch file as ``(C, H, W)``, or as stored for NPY (``(H, W)`` masks, ``(T, C, H,
-    W)`` stacks). PNG/JPEG via Pillow, GeoTIFF via mapcv's own reader (no GDAL)."""
+    W)`` stacks). PNG/JPEG via Pillow, GeoTIFF via mapcv's own reader."""
     suffix = path.suffix.lower()
     if suffix == ".npy":
         array: npt.NDArray[Any] = np.load(path, allow_pickle=False)

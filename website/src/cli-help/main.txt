@@ -39,5 +39,6 @@
 │ validate  Check a config without reading labels or imagery (use plan for estimates). │
 │ cache     Show or clear the on-disk cache of downloaded XYZ tiles.                   │
 │ mcp       Run an MCP server over stdio so AI agents can build datasets with mapcv.   │
+│ doctor    Diagnose the installation, extras, tile cache and network.                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 

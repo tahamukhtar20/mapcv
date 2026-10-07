@@ -11,6 +11,10 @@ Messages below are quoted from mapcv 0.2.0. Use your browser's find (<kbd>Ctrl</
 Most problems show up in `mapcv plan`, which downloads nothing. Run it after every config change.
 </Aside>
 
+<Aside type="tip">
+When mapcv does not work at all (an import error, a missing extra, tiles that never download), start with `mapcv doctor`. In a few seconds it checks your install, the optional extras, the tile cache folder and whether the tile and catalog services answer, and says what to do about each problem. Add `--offline` to skip the network checks. See [`mapcv doctor`](/mapcv/reference/cli/#mapcv-doctor).
+</Aside>
+
 ## Config errors
 
 mapcv lists every invalid field at once, then exits with code 1:
@@ -140,4 +144,4 @@ Fix the fields above, or start from a working config with mapcv init.
 
 Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, retries and why a resume was refused. `--debug-log run.log` writes the same to a file.
 
-Then open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv --version`, `mapcv validate <config>` (it hides URLs and keys) and the `--debug` output or log file. Tile URLs show only their host there; remove any other API keys from anything you paste.
+Then open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv doctor` (or `mapcv doctor --json`; it prints no secrets), `mapcv validate <config>` (it hides URLs and keys) and the `--debug` output or log file. Tile URLs show only their host there; remove any other API keys from anything you paste.

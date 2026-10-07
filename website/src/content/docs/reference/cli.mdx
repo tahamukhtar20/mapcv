@@ -16,10 +16,11 @@ import verifyHelp from '../../../cli-help/verify.txt?raw';
 import exportHelp from '../../../cli-help/export.txt?raw';
 import validateHelp from '../../../cli-help/validate.txt?raw';
 import cacheHelp from '../../../cli-help/cache.txt?raw';
+import doctorHelp from '../../../cli-help/doctor.txt?raw';
 import mcpHelp from '../../../cli-help/mcp.txt?raw';
 import version from '../../../cli-help/version.txt?raw';
 
-The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits, `stats`, `card` and `verify` to prepare a dataset for training and sharing, `validate` to check a config and `mcp` to let an AI agent do all of this. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
+The `mapcv` command follows the order you work in: **init → plan → generate → info**, plus `split` to redo splits, `stats`, `card` and `verify` to prepare a dataset for training and sharing, `validate` to check a config, `doctor` to check your installation and `mcp` to let an AI agent do all of this. The help blocks on this page are snapshots of `mapcv --help` from <code>{version.trim()}</code>.
 
 | Command | What it does | Touches the network |
 | --- | --- | --- |
@@ -35,6 +36,7 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
 | [`mapcv cache`](#mapcv-cache) | Show or clear the on-disk tile cache | no |
 | [`mapcv mcp`](#mapcv-mcp) | Serve mapcv to AI agents over MCP | only when an agent generates |
+| [`mapcv doctor`](#mapcv-doctor) | Check the installation, extras, tile cache and network | a few small requests (none with `--offline`) |
 
 ## Global options
 
@@ -277,10 +279,88 @@ Runs an [MCP](https://modelcontextprotocol.io/) server over stdio so an AI agent
 
 Install snippets for Claude Code, Claude Desktop, Cursor and VS Code, the tool list and the safety model are in [Use mapcv with AI agents](/mapcv/guides/use-with-ai-agents/).
 
+## `mapcv doctor`
+
+<Code code={doctorHelp} lang="text" title="mapcv doctor --help" />
+
+Diagnoses an installation in a few seconds. Run it first when something does not work, and paste its output into a [bug report](https://github.com/tahamukhtar20/mapcv/issues/new/choose). It reads, and changes nothing but one small probe file in the tile cache folder, which it deletes at once. It never prints a secret: a credentials file is looked for but never opened, and a proxy is named but its value is not shown.
+
+| Section | What it checks |
+| --- | --- |
+| **mapcv** | mapcv version, Python version and implementation, the interpreter, the operating system and CPU (with the C library on Linux), and where mapcv is installed |
+| **Core** | The Rust extension loads and is the same version as the Python package; the version of each core dependency |
+| **Extras** | Whether `zarr` (Sentinel-2 EOPF), `gee` (Earth Engine, and whether credentials exist), `parquet` / `export` (pyarrow) and `mcp` (must be 2.x) are installed. A missing extra is `info` with the `pip install "mapcv[…]"` command, not a problem |
+| **Tile cache** | The cache folder (see `MAPCV_CACHE_DIR`), whether it can be written, and how many tiles it holds |
+| **Terminal** | Output encoding, whether output is a terminal, colour (`NO_COLOR`, `--no-color`) and width |
+| **Network** | Whether the Esri World Imagery tile service, the EOPF STAC catalog, the Earth Search STAC catalog and (with `earthengine-api` installed) Earth Engine answer, with the HTTP status and the time they took; and which proxy variables are set. Each request times out after 5 seconds and they run at the same time |
+
+Each line is `ok`, `warn`, `FAIL` or `info`, with a hint under it saying what to do next. The word is printed, so the report reads the same without colour. An unreachable service is a `warn`, not a failure: you may not use that provider. The command exits with **1** if a check fails (the Rust extension is missing or the wrong version, a core dependency is missing, or the tile cache folder can't be written), and with 0 otherwise, warnings included.
+
+| Option | Meaning |
+| --- | --- |
+| `--offline` | Skip the network checks. No request leaves your machine |
+| `--json` | Print the checks as JSON instead of the table, with no colour and `\n` line endings, for bug reports and scripts |
+
+`--json` prints one object with `ok` (`false` if any check failed), `offline` and `checks`, a list of records with the keys `section`, `name`, `status` (`ok`, `warn`, `fail` or `info`), `detail` and `hint` (`null` when there is nothing to do).
+
+```console
+$ mapcv doctor
+mapcv
+ok    mapcv                     0.2.0
+ok    Python                    3.12.13 (CPython)
+info  Interpreter               ~/mapcv-env/bin/python3
+info  System                    Linux 7.0.0-34-generic x86_64 (glibc 2.43)
+info  Location                  ~/mapcv-env/lib/python3.12/site-packages/mapcv
+
+Core
+ok    Rust extension            loaded, version 0.2.0
+ok    pillow                    12.3.0
+ok    numpy                     2.4.4
+ok    shapely                   2.1.2
+ok    pydantic                  2.13.5
+ok    typer                     0.27.2
+ok    rich                      15.0.0
+ok    pyyaml                    6.0.3
+ok    typing-extensions         4.16.0
+ok    pyproj                    3.7.2
+ok    pyshp                     3.1.6
+
+Extras
+ok    zarr                      xarray-eopf 0.2.9, zarr 2.18.7
+ok    gee                       earthengine-api 1.7.47
+ok    Earth Engine credentials  found:
+                                ~/.config/gcloud/application_default_credentials
+                                .json
+ok    parquet / export          pyarrow 25.0.1
+ok    mcp                       mcp 2.3.0
+
+Tile cache
+ok    Folder                    ~/.cache/mapcv/tiles, writable
+info  Contents                  8 tile(s), 0.1 MB
+
+Terminal
+ok    Encoding                  utf-8
+info  Output                    not a terminal (piped or redirected)
+info  Colour                    off (NO_COLOR is set)
+info  Width                     80 columns
+
+Network
+info  Proxy                     none
+ok    Esri World Imagery tiles  HTTP 200 in 1,459 ms
+ok    EOPF STAC catalog         HTTP 200 in 682 ms
+ok    Earth Search STAC         HTTP 200 in 1,141 ms
+ok    Earth Engine              HTTP 404 in 645 ms (it answered)
+
+All checks passed.
+Paste this output, or the output of mapcv doctor --json, into a bug report.
+```
+
+Paths under your home folder are shown with `~`. The example above comes from a real run, with the two install paths shortened.
+
 ## Exit codes
 
 | Code | When |
 | --- | --- |
 | `0` | Success (also `generate --dry-run`, and `init` when the written file still needs edits) |
-| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, `mapcv verify` found a problem, or a declined large-job prompt |
+| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, `mapcv verify` found a problem, `mapcv doctor` found a failed check, or a declined large-job prompt |
 | `2` | Large job without a terminal and without `--yes`; also invalid command-line usage |

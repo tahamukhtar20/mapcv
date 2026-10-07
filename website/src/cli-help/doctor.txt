@@ -1,0 +1,25 @@
+ Usage: mapcv doctor [OPTIONS]
+
+ Diagnose the installation, extras, tile cache and network.
+
+ Takes a few seconds, for you and for bug reports. Changes nothing (it writes and
+ deletes one small probe file in the tile cache folder) and prints no secrets. Exits
+ with 1 if a check fails, such as a broken Rust extension
+ or a tile cache folder that can't be written; a warning does not fail the run.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────╮
+│ --json               Print the checks as JSON (no colour), for bug reports and       │
+│                      scripts.                                                        │
+│ --offline            Skip the network checks (no request leaves this machine).       │
+│ --help     -h        Show this message and exit.                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+ Examples:
+
+ mapcv doctor                      check this installation
+
+ mapcv doctor --offline            skip the network checks
+
+ mapcv doctor --json               for bug reports and scripts
+
+

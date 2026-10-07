@@ -1469,7 +1469,9 @@ class MapcvConfig(BaseModel):
         imagery = raw.get("imagery")
         for source in imagery if isinstance(imagery, list) else [imagery]:
             if isinstance(source, dict) and "type" not in source:
-                raise ValueError("imagery.type is required: 'xyz', 'eopf_zarr' or 'geotiff'")
+                raise ValueError(
+                    "imagery.type is required: 'xyz', 'geotiff', 'eopf_zarr' or 'stac_cog'"
+                )
         labels = raw.get("labels")
         if isinstance(labels, dict) and "type" not in labels:
             # Polygon labels predate labels.type; configs without it keep working.

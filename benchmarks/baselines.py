@@ -1,4 +1,4 @@
-"""Extension point for comparison baselines (none are registered yet).
+"""Comparison baselines: other ways of building the same dataset.
 
 A baseline is anything that turns the same inputs mapcv gets into image/mask
 patches: a rasterio + geopandas script, TorchGeo, leafmap, and so on. Register
@@ -13,7 +13,12 @@ that writes mapcv's layout (``Images/``, ``Masks/``, ``manifest.json``,
 own wrapper; for fairness, give it the same fetch concurrency as mapcv
 (``Workload.max_connections``).
 
-Example (not registered)::
+Registered: ``rasterio-script`` (``baseline_scripts/rasterio_script.py``), the
+hand-rolled rasterio + Pillow pipeline. Its output is compared with mapcv's patch by
+patch (:func:`benchmarks.checks.compare_with_mapcv`); a baseline whose data differs is
+reported as such next to its time.
+
+Example of another one::
 
     class MyScript:
         name = "rasterio-script"
@@ -27,6 +32,7 @@ Example (not registered)::
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Protocol, Tuple
@@ -63,3 +69,33 @@ BASELINES: Dict[str, Baseline] = {}
 def register(baseline: Baseline) -> None:
     """Make ``baseline`` selectable with ``--baselines``."""
     BASELINES[baseline.name] = baseline
+
+
+_SCRIPTS = Path(__file__).resolve().parent / "baseline_scripts"
+
+
+class RasterioScript:
+    """A well-written rasterio + Pillow script (see ``baseline_scripts/rasterio_script.py``)."""
+
+    name = "rasterio-script"
+
+    def command(self, work: Workload) -> List[str]:
+        west, south, east, north = work.region
+        return [
+            sys.executable,
+            str(_SCRIPTS / "rasterio_script.py"),
+            work.tile_url,
+            str(work.zoom),
+            repr(west),
+            repr(south),
+            repr(east),
+            repr(north),
+            str(work.labels),
+            str(work.patch_size),
+            str(work.stride),
+            str(work.max_connections),
+            str(work.output_dir),
+        ]
+
+
+register(RasterioScript())

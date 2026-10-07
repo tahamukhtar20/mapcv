@@ -2,7 +2,7 @@
 
 A reproducible, offline benchmark suite for `mapcv generate`. It doubles as a large-scale end-to-end test: every run is checked against values computed independently of mapcv, and any mismatch fails the run with a non-zero exit code.
 
-It measures mapcv only. Comparisons with other tools are not part of this suite yet; see [Baselines](#baselines-extension-point).
+It measures mapcv and, with `--baselines`, other ways of building the same dataset, after checking they produce the same data; see [Baselines](#baselines).
 
 ## Quick start
 
@@ -126,15 +126,22 @@ footprint: present only with --footprint
 
 **`--footprint [REQUIREMENT]`** creates a fresh venv and measures `pip install REQUIREMENT` (default `mapcv`, i.e. the latest release on PyPI): wheel size, number of direct and total dependencies, size on disk and install time without pip's cache. It needs network access. Pass a local wheel (`--footprint dist/mapcv-*.whl`) to measure an unpublished build. Install time depends on your network; compare it on the same connection only.
 
-## Baselines (extension point)
+## Baselines
 
-Comparisons with other tools are out of scope for now, but the harness has a hook. A baseline is an object with a `name` and a `command(workload)` method returning the command line of a script that does the same job (same tile server, labels, region, patch size, and fetch concurrency) and writes to `workload.output_dir`. Register it in `baselines.py` (see the example in that file) and run:
+A baseline does the same job as `mapcv generate` another way: same tile server, labels, region, patch size, stride and fetch concurrency (`workload.max_connections`). It runs once per repeat in a fresh child process, measured exactly like mapcv (wall time and peak RSS of the process tree), and appears under `scenarios.<name>.baselines.<baseline>`.
+
+| Baseline | What it is |
+| --- | --- |
+| `rasterio-script` | [`baseline_scripts/rasterio_script.py`](baseline_scripts/rasterio_script.py): the hand-rolled pipeline a careful user writes: mercantile for the tiles, a thread pool fetching them with the same concurrency, Pillow to decode and stitch, pyproj to reproject the labels, `rasterio.features.rasterize`, numpy windows, Pillow PNGs |
 
 ```bash
-python -m benchmarks run --scenarios M --baselines my-script
+python -m benchmarks run --scenarios S M L --baselines rasterio-script --out results.json
+python -m benchmarks compare results.json             # a table; --markdown for the docs
 ```
 
-Each baseline runs once per repeat in a fresh child process, measured exactly like mapcv (wall time and peak RSS of the process tree), and appears under `scenarios.M.baselines.my-script`. The harness only measures baselines; checking their output against the same references is up to the baseline's author (`benchmarks.checks.check_dataset` works on any output in mapcv's layout). Give baselines the same fetch concurrency as mapcv (`workload.max_connections`).
+**Same output first, then time.** After the runs, each baseline's patches are compared with mapcv's patch by patch, at the same raster position (`compare_with_mapcv` in `checks.py`): every patch must exist on both sides, images must be identical (unless mapcv wrote JPEG), and masks may disagree on at most 0.1 % of pixels (two projections of a polygon edge can round differently). A baseline whose data differs is reported as a problem and shown as "not comparable" by `compare`: a faster tool that writes different data has not done the same job. Add a baseline by registering an object with a `name` and a `command(workload)` method in `baselines.py`; scripts that write `images/r<row>_c<col>.png` and `masks/r<row>_c<col>.png` get the comparison for free.
+
+Not included: TorchGeo, leafmap or samgeo chipping, raster-vision and a GDAL CLI pipeline. Each needs a heavy install (PyTorch, GDAL binaries) and its own fair, reviewed script; they can be added through the same hook.
 
 ## Tests and CI
 

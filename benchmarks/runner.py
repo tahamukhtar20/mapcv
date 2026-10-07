@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from shapely.geometry import Polygon
 
 from benchmarks import baselines as baseline_registry
-from benchmarks.checks import CheckReport, check_dataset, tree_hash
+from benchmarks.checks import CheckReport, check_dataset, compare_with_mapcv, tree_hash
 from benchmarks.machine import load_average, machine_info, mapcv_info, timestamp
 from benchmarks.measure import (
     ProcessResult,
@@ -259,6 +259,25 @@ def _run_baselines(
             "runs": [r.to_json() for r in results],
             "summary": _timing_summary(results, scenario.tiles, None),
         }
+        dataset = run_dir / "dataset"
+        output = run_dir / f"baseline-{name}"
+        # Compared when the baseline writes the comparable layout (images/r<row>_c<col>.png);
+        # otherwise its data is reported as unchecked.
+        if (
+            results
+            and results[-1].exit_code == 0
+            and (dataset / "manifest.json").exists()
+            and (output / "images").is_dir()
+        ):
+            comparison = compare_with_mapcv(
+                dataset, output, compare_images=scenario.image_format != "jpg"
+            )
+            out[name]["comparison"] = comparison
+            if not comparison["same_data"]:
+                problems.append(
+                    f"baseline {name} produced different data than mapcv: {comparison} "
+                    "(its time is not comparable)"
+                )
     return out, problems
 
 

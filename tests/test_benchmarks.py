@@ -252,3 +252,53 @@ def test_failure_injection_is_deterministic_and_about_the_requested_rate() -> No
     assert failing == [is_failing(x, 5, 50) for x in range(10_000)]
     assert 100 < sum(failing) < 300
     assert not is_failing(1, 1, 0)
+
+
+def test_the_rasterio_script_makes_mapcvs_data(tmp_path: Path) -> None:
+    """The registered baseline writes the same patches as mapcv on a quick scenario, and a
+    broken copy of its output is reported as different data."""
+    results = run_suite(["Q"], repeat=1, baselines=["rasterio-script"], workdir=tmp_path)
+    assert results["ok"], results["problems"]
+    comparison = results["scenarios"]["Q"]["baselines"]["rasterio-script"]["comparison"]
+    assert comparison["same_data"] and comparison["images_differing"] == 0
+    assert comparison["patches_mapcv"] == comparison["patches_baseline"] > 0
+
+    run_dir = tmp_path / "Q"
+    images = sorted((run_dir / "baseline-rasterio-script" / "images").glob("*.png"))
+    pixels = np.asarray(Image.open(images[0])).copy()
+    pixels[0, 0] ^= 1
+    Image.fromarray(pixels).save(images[0])
+    images[1].unlink()
+    broken = checks.compare_with_mapcv(run_dir / "dataset", run_dir / "baseline-rasterio-script")
+    assert broken["images_differing"] == 1 and broken["only_mapcv"] == 1
+    assert not broken["same_data"]
+
+
+def test_compare_table_marks_baselines_with_other_data() -> None:
+    from benchmarks.cli import compare_table
+
+    timing = {"wall_s": {"median": 2.0}, "peak_rss_mb": {"median": 100}}
+    document = {
+        "scenarios": {
+            "M": {
+                "summary": timing,
+                "baselines": {
+                    "same": {
+                        "summary": {"wall_s": {"median": 3.0}, "peak_rss_mb": {"median": 50}},
+                        "comparison": {"same_data": True},
+                    },
+                    "other": {
+                        "summary": {"wall_s": {"median": 1.0}, "peak_rss_mb": {"median": 50}},
+                        "comparison": {"same_data": False},
+                    },
+                },
+            }
+        }
+    }
+    text = compare_table(document)
+    assert "1.50×" in text and "not comparable" in text
+    markdown = compare_table(document, markdown=True)
+    assert (
+        markdown.splitlines()[0].startswith("| scenario | tool |")
+        and "| M | other | 1.00 s | 50 MB | not comparable | no |" in markdown
+    )

@@ -35,7 +35,12 @@ def main() -> int:
         print("usage: check_installed_wheel.py <wheel-dir>", file=sys.stderr)
         return 2
     dist = metadata.distribution("mapcv")
-    native = [f for f in dist.files or [] if f.name.startswith("_mapcv_rs")]
+    # The compiled extension only: the package also ships its type stub, _mapcv_rs.pyi.
+    native = [
+        f
+        for f in dist.files or []
+        if f.name.startswith("_mapcv_rs") and f.suffix in (".so", ".pyd", ".dylib")
+    ]
     if len(native) != 1:
         print(f"error: expected one _mapcv_rs module, found {native}", file=sys.stderr)
         return 1

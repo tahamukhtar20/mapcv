@@ -827,25 +827,16 @@ def test_a_failing_generate_step_is_reported(
     run_client(project, scenario)
 
 
-def test_serve_keeps_progress_bars_off_the_protocol_stream(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from mapcv import pipeline
+def test_serve_runs_over_stdio(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from mapcv import mcp_server
 
     seen: List[Any] = []
 
     class _Server:
         def run(self, transport: str) -> None:
-            seen.extend([transport, pipeline._console.quiet, pipeline._console.file is sys.stderr])
+            seen.append(transport)
 
     monkeypatch.setattr(mcp_server, "build_server", lambda root, allow_write: _Server())
-    before = pipeline._console.quiet
     mcp_server.serve(project, allow_write=True)
-    assert seen == ["stdio", True, True]
-    assert pipeline._console.quiet is before  # restored for whatever runs next in this process
-    # The console still follows sys.stdout, not the stream that was current during serve().
-    replaced = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", replaced)
-    pipeline._console.print("after serve")
-    assert "after serve" in replaced.getvalue()
+    # stdout carries the protocol; the library never prints (tests/test_python_api.py).
+    assert seen == ["stdio"]

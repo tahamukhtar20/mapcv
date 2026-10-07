@@ -69,7 +69,8 @@ def main() -> None:
     if args.plan_only:
         return
 
-    result = mapcv.run_generate(config)  # shows a progress bar; resumes if interrupted
+    # Prints nothing itself; resumes if interrupted. progress(done, total) counts chunks.
+    result = mapcv.generate(config, progress=lambda done, total: print(f"  chunk {done}/{total}"))
     print("\nGenerateResult")
     print(f"  staging_dir      {result.staging_dir}")
     print(f"  new_patches      {result.new_patches} (manifest: {len(result.manifest.patches)})")

@@ -70,7 +70,11 @@ Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1
 
 ### The `task` setting
 
-Configs take an optional top-level `task`. The default, and the only value accepted in this release, is `segmentation`, so existing configs need no change. `detection`, `instance`, `classification`, `change` and `regression` are planned; setting one of them fails validation with a message that lists the supported and planned tasks. The manifest records the task, and a resumed run must use the same one.
+Configs take an optional top-level `task`: `segmentation` (the default, so existing configs need no change), `detection`, `instance`, `classification`, `change` or `regression`. The manifest records the task, and a resumed run must use the same one.
+
+### Library output
+
+`run_generate` no longer draws a progress bar or prints resume messages, and `download_region`/`stitch_region` no longer print: the library writes nothing to stdout. Messages go to the `mapcv` logger (`logging.basicConfig(level=logging.INFO)` shows them), and progress is reported through `progress(done, total)` callbacks (`on_chunk` for `run_generate`). The CLI shows its spinner and progress bars as before. New: `mapcv.generate`, `mapcv.split` and `mapcv.iter_patches`, which yields the patches a config describes without writing them ([Python API](/mapcv/reference/python-api/)).
 
 ## Migrating to 0.2
 

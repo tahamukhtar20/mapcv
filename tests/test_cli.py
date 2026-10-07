@@ -238,7 +238,7 @@ def test_generate_calls_run_generate(tmp_path: Path, monkeypatch: pytest.MonkeyP
     cfg = _write_config(tmp_path)
     called = False
 
-    def mock_run_generate(config: Any) -> None:
+    def mock_run_generate(config: Any, on_chunk: Any = None) -> None:
         nonlocal called
         called = True
 

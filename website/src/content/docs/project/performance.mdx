@@ -1,9 +1,7 @@
 ---
 title: Performance
-description: How fast mapcv builds a dataset compared with a well-written rasterio script producing the same patches, how much memory it uses, and how to reproduce the numbers.
+description: How fast mapcv builds a dataset compared with a rasterio script, GDAL's command-line programs, TorchGeo and leafmap producing the same patches, how much memory each uses, and how to reproduce the numbers.
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 mapcv's benchmark suite ([`benchmarks/`](https://github.com/tahamukhtar20/mapcv/tree/main/benchmarks)) builds the same datasets with mapcv and with other tools, checks that the outputs are **the same data**, and only then compares time and memory. Everything runs offline against a synthetic tile server, so the numbers measure the tools, not the network.
 
@@ -32,9 +30,43 @@ Medians of 3 runs, release build, on an Intel Core i7-10710U laptop (6 cores, 12
 
 **Where mapcv spends its time** (scenario L, medians): fetching 4.0 s, writing patches 2.9 s, decoding 1.9 s, rasterizing 1.8 s, planning 1.3 s, reading labels 1.2 s, sampling 0.9 s. Every run is also checked against independent references: images against the tile server's pixels, masks against rasterio, splits for leakage, and a resumed run against an uninterrupted one, byte for byte.
 
-<Aside>
-Not compared yet: TorchGeo, leafmap/samgeo chipping, raster-vision and a GDAL command-line pipeline. Each needs a heavy install (PyTorch, GDAL binaries) and a fair, reviewed script; the harness takes them through the same baseline hook.
-</Aside>
+## mapcv against other tools
+
+Four ways to build the same dataset from the same tile server, labels, region, patch size and stride, each in its own script in [`benchmarks/baseline_scripts/`](https://github.com/tahamukhtar20/mapcv/tree/main/benchmarks/baseline_scripts):
+
+- **rasterio script**: the hand-written pipeline above.
+- **GDAL command line**: `gdal_translate` reads the tiles through GDAL's TMS driver (16 connections), `ogr2ogr` reprojects and numbers the labels, `gdal_rasterize` burns the mask, and `gdal_translate -srcwin` cuts each patch, one process per file on every core, as a shell `xargs -P` loop would.
+- **TorchGeo** 0.10: the tiles stitched into a GeoTIFF (TorchGeo fetches no tiles), then `RasterDataset & VectorDataset` sampled by `GridGeoSampler` through a `DataLoader` with a worker per core.
+- **leafmap** 0.63: `map_tiles_to_geotiff` downloads the tiles, then rasterio burns the labels and cuts the windows (leafmap has no chipping step of its own).
+
+| Scenario | Tool | Wall time | Peak memory | Time vs mapcv | Same data |
+| --- | --- | --- | --- | --- | --- |
+| S: 100 patches | mapcv | 0.87 s | 110 MB | 1.00× | — |
+| | rasterio script | 1.34 s | 129 MB | 1.54× | yes |
+| | GDAL command line | 4.73 s | 596 MB | 5.43× | yes |
+| | TorchGeo | 5.53 s | 4,788 MB | not comparable | no |
+| | leafmap | 7.44 s | 464 MB | 8.55× | yes |
+| M: 1,024 patches | mapcv | 1.56 s | 234 MB | 1.00× | — |
+| | rasterio script | 6.77 s | 435 MB | 4.33× | yes |
+| | GDAL command line | 47.50 s | 618 MB | 30.37× | yes |
+| | TorchGeo | 34.61 s | 6,329 MB | not comparable | no |
+| | leafmap | 53.86 s | 2,263 MB | 34.44× | yes |
+
+Medians of 3 runs on the same laptop, all tools in one session. Peak memory is the whole process tree: TorchGeo's includes its `DataLoader` workers, each of which imports PyTorch.
+
+**What the comparison found.**
+
+- The rasterio script, the GDAL pipeline and leafmap write the same patches as mapcv: identical images, and masks that agree on every pixel or, for leafmap, on all but 0.02 % (a polygon edge that rounds the other way).
+- **TorchGeo does not.** `GridGeoSampler` lays its grid from the bounds of the dataset it samples, here the intersection of the imagery and the labels, which is the labels' extent. That grid sits 0.39 pixel off the imagery's pixel grid, so TorchGeo resamples every patch (nearest neighbour) and its patches match none of the imagery's own windows.
+- TorchGeo also returns each patch's transform in `float32`: at Web Mercator coordinates its origin is off by about 3 cm (0.04 pixel at zoom 18).
+
+| | mapcv | rasterio script | GDAL command line | TorchGeo | leafmap |
+| --- | --- | --- | --- | --- | --- |
+| Code for this job | a 24-line YAML config | 59 lines | 155 lines (Python driving GDAL's programs; about 10 shell commands) | 58 lines + 52 to fetch the tiles | 62 lines |
+| Needs GDAL | no | inside the rasterio wheel | yes | inside the rasterio wheel | yes (`osgeo` bindings) |
+| Install | `pip install mapcv` | rasterio, mercantile, shapely, pyproj, Pillow | GDAL (conda-forge) | PyTorch, TorchGeo, rasterio, mercantile | conda-forge GDAL, leafmap, rasterio, mercantile |
+
+Not compared: raster-vision, whose chip export needs a full pipeline configuration and pins its own PyTorch and GDAL stack.
 
 ## Reproduce
 
@@ -42,6 +74,11 @@ Not compared yet: TorchGeo, leafmap/samgeo chipping, raster-vision and a GDAL co
 $ uv sync --all-extras && uv run maturin develop --uv --release
 $ uv run python -m benchmarks run --scenarios S M M-jpg M-jpgtiles M-overlap L \
     --baselines rasterio-script --out results.json
+$ GDAL_BIN=/path/to/gdal/bin \
+  MAPCV_BENCH_TORCHGEO_PYTHON=/path/to/torch-env/bin/python \
+  MAPCV_BENCH_LEAFMAP_PYTHON=/path/to/gdal-env/bin/python \
+  uv run python -m benchmarks run --scenarios S M \
+    --baselines rasterio-script gdal-cli torchgeo leafmap --out others.json
 $ uv run python -m benchmarks compare results.json
 ```
 

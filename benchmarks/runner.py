@@ -234,6 +234,12 @@ def _run_baselines(
     out: Dict[str, Any] = {}
     problems: List[str] = []
     for name in ctx.baselines:
+        baseline = baseline_registry.BASELINES[name]
+        reason = baseline.missing()
+        if reason is not None:
+            out[name] = {"skipped": reason}
+            ctx.log(f"    baseline {name}: skipped ({reason})")
+            continue
         results: List[ProcessResult] = []
         for repeat in range(ctx.repeat):
             output = run_dir / f"baseline-{name}"
@@ -250,7 +256,7 @@ def _run_baselines(
                 max_connections=16,
                 output_dir=output,
             )
-            command = baseline_registry.BASELINES[name].command(work)
+            command = baseline.command(work)
             result = run_process(command, run_dir, run_dir / f"baseline-{name}-{repeat}.log")
             results.append(result)
             if result.exit_code != 0:
@@ -274,10 +280,12 @@ def _run_baselines(
             )
             out[name]["comparison"] = comparison
             if not comparison["same_data"]:
-                problems.append(
-                    f"baseline {name} produced different data than mapcv: {comparison} "
-                    "(its time is not comparable)"
-                )
+                message = f"baseline {name} produced different data than mapcv: {comparison}"
+                if baseline.reference:
+                    # A reference burns labels with GDAL's rules: mapcv must match it.
+                    problems.append(f"{message} (its time is not comparable)")
+                else:
+                    out[name]["finding"] = f"{message}; its time is not comparable"
     return out, problems
 
 
@@ -414,7 +422,7 @@ def run_suite(
         raise ValueError(f"unknown baseline(s) {missing}; available: {registered}")
 
     temporary = workdir is None
-    root = Path(tempfile.mkdtemp(prefix="mapcv-bench-")) if workdir is None else workdir
+    root = Path(tempfile.mkdtemp(prefix="mapcv-bench-")) if workdir is None else workdir.resolve()
     root.mkdir(parents=True, exist_ok=True)
     document: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

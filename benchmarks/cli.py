@@ -168,6 +168,9 @@ def compare_table(document: Dict[str, Any], markdown: bool = False) -> str:
             )
         )
         for tool, result in entry.get("baselines", {}).items():
+            if "skipped" in result:
+                rows.append((name, tool, "skipped", "—", "—", "—"))
+                continue
             theirs = result["summary"]["wall_s"]["median"]
             comparison = result.get("comparison", {})
             same = comparison.get("same_data")

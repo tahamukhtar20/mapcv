@@ -229,7 +229,7 @@ For XYZ imagery the box is expanded outward to whole tiles at the chosen zoom. F
 
 ## `imagery`
 
-Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
+Selects an imagery source with the required `type` key: `xyz`, `eopf_zarr`, `stac_cog` or `geotiff`. For segmentation and change datasets it can also be a list of named sources ([several sources](#several-imagery-sources)).
 
 ### Several imagery sources
 
@@ -304,17 +304,72 @@ Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `"eopf_zarr"` | required | Selects one EOPF Sentinel-2 L2A product |
-| `path` | string | required | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
+| `path` | string | — | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
+| `search` | mapping | — | Find the product in a STAC catalog instead of naming it ([below](#find-the-product-imagerysearch)); set `path` or `search`, not both |
 | `resolution` | `10` \| `20` \| `60` | `10` | Output grid in metres; every band is harmonised onto it |
 | `bands` | list of strings | all 12 | Variables to read, **in output order**. Default: `b01 b02 b03 b04 b05 b06 b07 b08 b8a b09 b11 b12` |
 | `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+| `scl_mask` | list of ints 0–11 | none | Scene classification (SCL) classes whose pixels count as having no imagery, such as `[3, 8, 9, 10]` (cloud shadows, medium and high probability clouds, cirrus) |
 
 **Validation:**
 
+- Exactly one of `path` and `search`.
 - `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Windows paths (`C:\data\S2.zarr`, `file:///C:/data/S2.zarr`) work.
 - `bands` must be non-empty and without duplicates; names are lower-cased (`B04` → `b04`). Unknown band names fail when the product is opened, with a list of what is available.
 - `writer.image_format` must be `npy` or `tif`.
 - The region must intersect the product.
+
+#### Find the product (`imagery.search`)
+
+```yaml
+imagery:
+  type: eopf_zarr
+  search:
+    datetime: 2025-05-01/2025-05-31
+    max_cloud: 10
+  bands: [b02, b03, b04, b08]
+  scl_mask: [3, 8, 9, 10]
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `datetime` | string | required | A date (`2025-05-13`), an RFC 3339 time, or an interval `start/end` (`..` for an open end); dates cover whole days |
+| `max_cloud` | number 0–100 | `20` | Highest `eo:cloud_cover` (percent) of an acceptable product |
+| `catalog` | URL | `https://stac.core.eopf.eodc.eu` | A STAC API (`https://`; `http://` only for `localhost`) |
+| `collection` | string | `sentinel-2-l2a` | The collection to search |
+| `asset` | string | `product` | The item asset holding the whole EOPF Zarr product |
+
+When the run starts, mapcv searches the catalog for the region's bounding box and picks, among the items whose footprint covers the **whole** region with at most `max_cloud` percent cloud, the least cloudy one; ties go to the earlier acquisition, then to the item ID, so the same catalog gives the same product every time. The manifest's `sources[0].fingerprint` records the catalog, collection and item, and `product_id` the product's name: resuming refuses to continue with another product if the search later finds a different one. `mapcv plan` estimates without contacting the catalog. When no item qualifies, the run stops and says how many items were found and how many covered the region.
+
+**`scl_mask`** reads the product's scene classification layer (20 m, nearest-neighbour onto the output grid) and treats pixels of the listed classes as pixels without imagery: their band values become `NaN`, segmentation masks mark them with `labels.ignore_index`, and they count towards `sampler.max_empty_ratio`, so `max_empty_ratio: 0.2` drops patches that are more than a fifth cloud. Values outside 0–11 (the fill at product edges) also count as no imagery.
+
+### Sentinel-2 as Cloud Optimized GeoTIFFs (`type: stac_cog`)
+
+Each band of a Sentinel-2 L2A scene as its own COG, found in a STAC catalog: by default [Earth Search](https://earth-search.aws.element84.com/v1) (Element 84), whose COGs sit in a public AWS bucket. No extra install: mapcv reads the COGs with its own reader, over HTTPS range requests.
+
+```yaml
+imagery:
+  type: stac_cog
+  search:
+    datetime: 2025-04-01/2025-06-30
+    max_cloud: 20
+  bands: [red, green, blue, nir, swir16]   # the item's asset keys, in output order
+  scl_mask: [3, 8, 9, 10]                  # cloud shadows, clouds, cirrus: no imagery
+writer:
+  image_format: npy                        # or tif
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `search` | mapping | required | As for [`eopf_zarr`](#find-the-product-imagerysearch): `datetime` (required), `max_cloud` (20), `collection` (`sentinel-2-l2a`), and `catalog`, here `https://earth-search.aws.element84.com/v1` by default. No `asset`: the bands are the assets |
+| `bands` | list of strings | `[red, green, blue, nir]` | Asset keys of the item, in output order. Earth Search names them `coastal`, `blue`, `green`, `red`, `rededge1`–`rededge3`, `nir`, `nir08`, `nir09`, `swir16`, `swir22` |
+| `scl_mask` | list of ints 0–11 | none | Scene classes whose pixels count as having no imagery, read from `scl_asset` |
+| `scl_asset` | string | `scl` | The item's scene classification asset |
+| `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+
+The item is chosen as for `eopf_zarr` search: the least cloudy one covering the whole region, ties to the earlier acquisition, then the ID. Bands come at 10, 20 or 60 m; every band is placed on the grid of the **finest** band among `bands`, a coarser band's pixels repeated (nearest neighbour, exact: Sentinel-2's grids share their origin), so 20 m bands are not interpolated. Values are the COGs' as stored (`uint16` digital numbers for Earth Search; reflectance = value / 10000, plus the offset its metadata states for processing baseline 04.00 and later). A pixel has imagery when every band has data (not the COGs' NoData, `0`) and, with `scl_mask`, its scene class is not masked; SCL's class 0 is "no data" as well. Patches are `writer.image_format: npy` or `tif`. The manifest's `sources[0]` records `source_type: stac_cog`, the item ID as `product_id`, and the catalog, collection and item in its fingerprint, so a resumed run refuses another item.
+
+A catalog may point only to `https://` or `s3://` COGs (local files only from a `localhost` catalog, for testing).
 
 ### GeoTIFF and Cloud Optimized GeoTIFF (`type: geotiff`)
 
@@ -357,6 +412,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` 
 | `all_touched` | bool | `false` | Burn every pixel a polygon touches, not only pixels whose centre is inside |
 | `buffer` | `{line, point}` in metres | `null` | Turn line and point features into polygons: a line becomes a band `line` metres wide (a road, a river), a point a disc `point` metres across (a tree, a well). Give one or both; features of the other kind are skipped as before. The buffer is drawn in metres on the ground, in the UTM zone of each feature, then the polygon is labeled like any other. Not for KML (mapcv reads only its polygons) |
 | `files` | list | `null` | Several label files instead of `path` (see below) |
+| `osm` | mapping | `null` | Labels straight from OpenStreetMap instead of a file ([below](#labels-from-openstreetmap-labelsosm)) |
 | `annotated_area` | path | `null` | A polygon file (any of the formats above) outlining where the scene **was labeled**. Mask pixels outside it get `ignore_index` instead of background, so a partly labeled scene does not teach that unlabeled ground is background. For `task: segmentation` and `classification` (where the outside pixels do not count towards coverage); needs an `ignore_index`. Feature attributes are ignored. A relative path is resolved against the config file's folder |
 
 ```yaml
@@ -382,6 +438,31 @@ labels:
 **How class IDs are chosen** (`label_field` set, no `classes`): if every label is an integer from 1 to 255, the integer is the ID; otherwise the distinct labels are sorted and numbered 1, 2, 3, …. `3` and `3.0` are the same class. More than 255 distinct labels is an error. Features without polygon geometry or without a label value are skipped with a warning that counts them. Where polygons overlap, the one later in the file wins.
 
 **Validation:** suffix must be one of the above (unzip a KMZ to its KML first; a `.tif` asks for `type: raster`); `layer` needs a `.gpkg`; `classes` keys must be non-empty and values integers in 1–255; `classes` requires `label_field`. GeoJSON with a projected `crs` member is rejected. At run time a Shapefile without `.prj`, a layer without a CRS and a GeoParquet file with `crs: null` are errors (the CRS would be a guess), GeoParquet needs `pip install "mapcv[parquet]"`, and a `label_field` that is not a column of the table lists the columns. The manifest records `layer` and `buffer` in `target.labels` when they are set (with `files`, each file's settings without its path, and one hash over all files), and the annotated area by its file's hash (`annotated_area_sha256`, so editing it is a resume mismatch); `annotated_area` must be a vector file, needs an `ignore_index` and applies to segmentation and classification only; `buffer` needs a distance above 0, and `buffer.point` and `detection.point_box_size` cannot both be set. Details: [Prepare labels](/mapcv/guides/prepare-labels/).
+
+#### Labels from OpenStreetMap (`labels.osm`)
+
+```yaml
+labels:
+  osm:
+    classes:
+      - {name: building, tags: {building: "*"}}
+      - {name: water, tags: {natural: water}}
+      - {name: road, tags: {highway: [motorway, primary, secondary, residential]}}
+  buffer: {line: 6}                 # roads become 6 m wide polygons
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `classes` | list | required | Each class has a `name` and `tags`: a key with `"*"` (any value), one value, or a list of values. A feature belongs to the **first** class whose tags all match |
+| `overpass_url` | URL | `https://overpass-api.de/api/interpreter` | The Overpass API to ask (`https://`; `http://` only for `localhost`). The public server limits heavy use: for large areas, run your own or use an extract with `labels.path` |
+| `timeout` | int seconds | `180` | The query's time limit on the server |
+| `bbox` | `[west, south, east, north]` | the region | The box to query |
+
+One Overpass query fetches every matching node, way and relation in the box. Closed ways become polygons (except highways, barriers, railways and waterways, and `area=no`, which stay lines), `multipolygon` relations become polygons with their holes, other ways are lines and nodes are points; as with label files, lines and points become labels only with `buffer`. Classes get IDs 1, 2, 3, ... in the order listed, or the IDs of `labels.classes` (by class name). `label_field` and `layer` don't apply. `buffer`, `all_touched`, `ignore_index` and `annotated_area` work as for files, with every task that takes polygon labels.
+
+The answer is stored as GeoJSON in the cache folder (`<cache dir>/osm/`, see the [tile cache](#xyz-tiles-type-xyz)), with the data's timestamp (`osm_base`) and the query, and reused until you delete it: rerunning or resuming does not ask Overpass again, and the labels' SHA-256 in the manifest identifies the exact data. Fresh data (after deleting the file) has another hash, so a resumed run refuses to mix it with the old. `mapcv plan` fetches the labels too, to count them; the MCP server does not fetch them (it writes only inside its root).
+
+OpenStreetMap data is © OpenStreetMap contributors under the [Open Database License](https://www.openstreetmap.org/copyright): a dataset whose masks come from it is a derived database, to be shared under the ODbL with that credit. [`mapcv card`](/mapcv/reference/cli/#mapcv-card) adds the credit.
 
 ### Raster labels (`type: raster`)
 

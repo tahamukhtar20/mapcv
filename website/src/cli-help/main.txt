@@ -28,6 +28,8 @@
 │ card      Write a dataset card (README.md with Hugging Face metadata) for sharing.   │
 │ verify    Check that every file is present and intact (and SHA256SUMS, when there is │
 │           one).                                                                      │
+│ export    Export a dataset: Hugging Face Parquet, WebDataset shards, Zarr or a       │
+│           TerraTorch config.                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ 3. Utilities ───────────────────────────────────────────────────────────────────────╮
 │ validate  Check a config without reading labels or imagery (use plan for estimates). │

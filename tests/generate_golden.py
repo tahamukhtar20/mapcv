@@ -1,9 +1,13 @@
 """Golden fixture generator for the MV validation suite.
 
-Run with the GDAL conda env:
-  /home/tahamukhtar20/miniconda3/envs/GDAL/bin/python tests/generate_golden.py
+The reference libraries (mercantile, pyproj, rasterio/GDAL, geopandas) are in the
+``golden`` dependency group:
 
-Produces tests/golden/{tile_math,transform,rasterize_golden,label_parse}_golden.{json,npz}.
+  uv run --group golden python tests/generate_golden.py
+
+Produces tests/golden/{tile_math,transform,rasterize_golden,label_parse}_golden.{json,npz}
+and tests/golden/versions.json, which records the library versions the fixtures came
+from. The fixtures are committed; regenerate them only to change a case.
 """
 
 from __future__ import annotations
@@ -465,6 +469,22 @@ def generate_label_parse_golden() -> None:
     print(f"  {len(cases)} KML cases, {total} total features")
 
 
+def write_versions() -> None:
+    """Record the versions of the libraries that produced the fixtures."""
+    import platform
+    from importlib.metadata import version
+
+    import rasterio
+
+    versions = {
+        name: version(name)
+        for name in ("geopandas", "mercantile", "numpy", "pyproj", "rasterio", "shapely")
+    }
+    versions["gdal"] = rasterio.__gdal_version__
+    versions["python"] = platform.python_version()
+    (GOLDEN_DIR / "versions.json").write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n")
+
+
 if __name__ == "__main__":
     print("Generating tile_math_golden.json ...")
     generate_tile_math_golden()
@@ -474,4 +494,5 @@ if __name__ == "__main__":
     generate_rasterize_golden()
     print("Generating label_parse_golden.json ...")
     generate_label_parse_golden()
+    write_versions()
     print("Done. Golden files written to", GOLDEN_DIR)

@@ -54,7 +54,7 @@ _ATTRIBUTION = {
 
 
 def _attribution(record: SourceRecord) -> Optional[str]:
-    if record.source_type == "eopf_zarr":
+    if record.source_type in ("eopf_zarr", "stac_cog"):
         return "Contains modified Copernicus Sentinel data"
     return _ATTRIBUTION.get(record.product_id or "")
 
@@ -193,6 +193,12 @@ def card_text(staging_dir: Path) -> str:
             digest = fingerprint.get("sha256_head_tail") or fingerprint.get("sha256_head")
             body.append(f"- Imagery `{record.name}` fingerprint: `{digest}`.")
     credits = sorted({line for line in map(_attribution, manifest.sources) if line})
+    if labels.get("osm"):
+        # The masks are a database adapted from OpenStreetMap: ODbL share-alike applies.
+        credits.append(
+            "Labels © OpenStreetMap contributors, under the Open Database License (ODbL); "
+            "datasets derived from them must be shared under the ODbL too"
+        )
     if credits:
         body += ["", "## Attribution", ""] + [f"- {line}" for line in credits]
     body += [

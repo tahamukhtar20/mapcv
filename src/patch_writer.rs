@@ -1,11 +1,9 @@
 //! Parallel patch writer: encodes and writes image/mask patches using rayon.
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ImageBuffer, Luma, Rgb};
+use image::{ExtendedColorType, ImageEncoder};
 use jpeg_encoder::{ChromaSubsamplingMethod, ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 /// Per-patch result returned after writing to disk.
@@ -253,29 +251,27 @@ fn encode_image(
             .map_err(|e| e.to_string())?;
         std::fs::write(path, &out).map_err(|e| e.to_string())?;
     } else {
-        let file = File::create(path).map_err(|e| e.to_string())?;
-        let enc = PngEncoder::new_with_quality(
-            BufWriter::new(file),
-            CompressionType::Fast,
-            FilterType::Sub,
-        );
-        let img: ImageBuffer<Rgb<u8>, _> =
-            ImageBuffer::from_raw(ps, ps, data.to_vec()).ok_or("image buffer alloc failed")?;
-        img.write_with_encoder(enc).map_err(|e| e.to_string())?;
+        write_png(data, ps, ExtendedColorType::Rgb8, path)?;
     }
     Ok(())
+}
+
+/// Encode *data* as a PNG straight from the borrowed pixels (no copy into an image
+/// buffer) in memory, then write it once, so a failed write is reported (a dropped
+/// `BufWriter` would lose the error of its last flush).
+fn write_png(data: &[u8], side: u32, color: ExtendedColorType, path: &Path) -> Result<(), String> {
+    let mut out = Vec::with_capacity(data.len() / 2);
+    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Sub)
+        .write_image(data, side, side, color)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(path, &out).map_err(|e| e.to_string())
 }
 
 /// Encode *data* (raw single-channel u8 bytes) as a lossless PNG and write to *path*.
 fn encode_mask(data: &[u8], patch_size: usize, path: &Path) -> Result<(), String> {
     let ps = u32::try_from(patch_size)
         .map_err(|_| format!("patch size {patch_size} is too large to encode"))?;
-    let file = File::create(path).map_err(|e| e.to_string())?;
-    let enc =
-        PngEncoder::new_with_quality(BufWriter::new(file), CompressionType::Fast, FilterType::Sub);
-    let img: ImageBuffer<Luma<u8>, _> =
-        ImageBuffer::from_raw(ps, ps, data.to_vec()).ok_or("mask buffer alloc failed")?;
-    img.write_with_encoder(enc).map_err(|e| e.to_string())
+    write_png(data, ps, ExtendedColorType::L8, path)
 }
 
 /// Count pixels by class label in *mask*.

@@ -16,10 +16,10 @@ from mapcv.rasterizer import rasterize
 _NPZ = Path(__file__).parent / "golden" / "rasterize_golden.npz"
 _META_FILE = Path(__file__).parent / "golden" / "rasterize_golden_meta.json"
 
+# The fixtures are committed: a missing one is an error, never a skipped test.
 if not _NPZ.exists() or not _META_FILE.exists():
-    pytest.skip(
-        "rasterize_golden.npz / rasterize_golden_meta.json not found - run tests/generate_golden.py first",
-        allow_module_level=True,
+    raise FileNotFoundError(
+        "rasterize_golden.npz / rasterize_golden_meta.json not found - regenerate with: uv run --group golden python tests/generate_golden.py"
     )
 
 

@@ -24,6 +24,9 @@
     <a href="https://tahamukhtar20.github.io/mapcv/" target="_blank">
         <img src="https://img.shields.io/badge/docs-online-blue" alt="Documentation">
     </a>
+    <a href="https://www.bestpractices.dev/projects/15276" target="_blank">
+        <img src="https://www.bestpractices.dev/projects/15276/badge" alt="OpenSSF Best Practices">
+    </a>
     <a href="https://scorecard.dev/viewer/?uri=github.com/tahamukhtar20/mapcv" target="_blank">
         <img src="https://api.scorecard.dev/projects/github.com/tahamukhtar20/mapcv/badge" alt="OpenSSF Scorecard">
     </a>

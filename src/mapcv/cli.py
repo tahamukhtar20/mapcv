@@ -1823,7 +1823,7 @@ def _wizard() -> str:
     ):
         labels_path = area_file
         labels_layer = area_layer
-    elif area_file is None:
+    else:  # no area file, or labels from another file
         answer = Prompt.ask(
             "Label file [dim](.geojson, .kml, .gpkg, .shp, .parquet, or a .tif label raster; "
             "blank for an image-only dataset)[/dim]",
@@ -2233,7 +2233,7 @@ def split(
         warnings.simplefilter("always")
         try:
             counts = run_split(staging_dir, cfg)
-        except (FileNotFoundError, ManifestMismatchError) as exc:
+        except (FileNotFoundError, ValueError) as exc:  # ManifestMismatchError is a ValueError
             _debug_traceback(exc)
             _console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1)
@@ -2268,7 +2268,7 @@ def stats(
         raise typer.Exit(code=1)
     try:
         path, values = write_stats(staging_dir, split_name)
-    except (FileNotFoundError, ManifestMismatchError) as exc:
+    except (FileNotFoundError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
@@ -2312,7 +2312,7 @@ def card(
         raise typer.Exit(code=1)
     try:
         path = write_card(staging_dir, overwrite=force)
-    except FileExistsError as exc:
+    except (FileExistsError, ManifestMismatchError) as exc:
         _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
@@ -2395,7 +2395,7 @@ def validate(
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
-            if glob.has_magic(imagery.path):
+            if imagery.is_pattern:
                 # A mosaic pattern: missing only when it matches no file.
                 local = None if glob.glob(str(local), recursive=True) else local
             if local is not None and not local.exists():

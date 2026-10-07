@@ -173,7 +173,7 @@ class MapcvDataset:
         if not documents:
             raise FileNotFoundError(
                 f"No COCO files in {folder}: MapcvDataset reads boxes from them, so write "
-                "the dataset with task_options formats including coco"
+                "the dataset with detection.formats including coco"
             )
         objects: dict[str, list[dict[str, Any]]] = {}
         for document in documents:

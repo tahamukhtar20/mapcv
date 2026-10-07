@@ -681,7 +681,7 @@ def test_schema_tool_has_every_config_field(project: Path) -> None:
     assert rules["labels_allowed_per_task"]["regression"] == ["continuous"]
     assert rules["labels_allowed_per_task"]["segmentation"] == ["none", "vector", "raster"]
     assert rules["labels_allowed_per_task"]["change"] == ["vector", "raster"]
-    assert rules["imagery_types"] == ["xyz", "eopf_zarr", "geotiff"]
+    assert rules["imagery_types"] == ["xyz", "eopf_zarr", "geotiff", "stac_cog"]
     assert rules["labels_allowed_per_task"]["segmentation"] == ["none", "vector", "raster"]
     assert rules["labels_allowed_per_task"]["detection"] == ["vector"]
     assert rules["labels_allowed_per_task"]["classification"] == ["vector", "raster"]

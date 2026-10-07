@@ -107,7 +107,8 @@ def _check_geotiff_location(path: str, field: str) -> str:
 
 def _validate_geotiff_path(path: str) -> str:
     _check_geotiff_location(path, "imagery.path")
-    if glob.has_magic(path) and eopf_local_path(path) is None:
+    # Only the path of a URL counts: http://[::1]/x.tif has brackets in its host.
+    if eopf_local_path(path) is None and glob.has_magic(urlsplit(path).path):
         raise ValueError(
             "imagery.path: glob patterns (*, ?, [...]) work for local files only; "
             "a remote GeoTIFF is one URL"
@@ -681,13 +682,23 @@ class GeoTiffImageryConfig(BaseModel):
     _check_path = field_validator("path")(_validate_geotiff_path)
     _check_name = field_validator("name")(_validate_source_name)
 
+    @property
+    def is_pattern(self) -> bool:
+        """``True`` when ``path`` is a local glob pattern (a mosaic), not one file or URL."""
+        return eopf_local_path(self.path) is not None and glob.has_magic(self.path)
+
     def files(self) -> list[str]:
         """The GeoTIFFs this source reads: ``path``, or the sorted local files its glob
         pattern matches (none is an error)."""
-        if not glob.has_magic(self.path):
-            return [self.path]
         local = eopf_local_path(self.path)
-        assert local is not None  # remote patterns are refused by validation
+        if not self.is_pattern or local is None:
+            if local is not None and local.is_dir():
+                pattern = self.path.rstrip("/\\") + "/*.tif"
+                raise ValueError(
+                    f"imagery.path {self.path} is a folder; to read the GeoTIFFs in it as one "
+                    f"mosaic, use a pattern such as {pattern}"
+                )
+            return [self.path]
         matches = sorted(
             found for found in glob.glob(str(local), recursive=True) if Path(found).is_file()
         )
@@ -735,7 +746,10 @@ AnyImageryConfig = Annotated[
 ]
 
 #: Parts of a validation error's location that are union tags, not config keys.
-UNION_TAGS = frozenset({"xyz", "eopf_zarr", "geotiff", "stac_cog", "single-source", "source-list"})
+UNION_TAGS = frozenset(
+    {"xyz", "eopf_zarr", "geotiff", "stac_cog", "single-source", "source-list"}
+    | {"vector", "raster", "continuous"}  # labels.type
+)
 
 
 class BufferConfig(BaseModel):
@@ -1689,7 +1703,34 @@ class MapcvConfig(BaseModel):
             self._check_change()
         if self.task == "regression":
             self._check_regression()
+        self._check_world_files()
+        if self.split is not None and self.split.strategy == "region" and self.region.path is None:
+            raise ValueError(
+                "split.strategy: region holds out whole areas of interest, which come from "
+                "region.path; set region.path to a file of area polygons, or use another "
+                "strategy (spatial is the default)"
+            )
         return self
+
+    def _check_world_files(self) -> None:
+        """World files go next to PNG/JPG images or masks; refuse them when there are none.
+
+        The per-task checks cover detection, instance and classification.
+        """
+        writer = self.writer
+        if not writer.world_files or writer.image_format in ("png", "jpg"):
+            return
+        if self.task == "segmentation" and self.labels is None:
+            what = "an image-only dataset writes no masks"
+        elif self.task == "regression":
+            what = f"regression targets are {writer.mask_format.upper()} files"
+        else:
+            return
+        raise ValueError(
+            "writer.world_files adds .pgw/.jgw files to PNG and JPG patches and "
+            f"{what}, so with image_format '{writer.image_format}' it would write none; "
+            "remove it (GeoTIFF patches carry their georeferencing)"
+        )
 
     def _check_regression(self) -> None:
         if not isinstance(self.labels, ContinuousLabelsConfig):

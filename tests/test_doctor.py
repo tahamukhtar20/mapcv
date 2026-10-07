@@ -449,11 +449,14 @@ def secret_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A home folder whose credential files hold a sentinel, with Earth Engine 'installed'."""
     home = tmp_path / "home"
     (home / ".config" / "earthengine").mkdir(parents=True)
-    (home / ".config" / "gcloud").mkdir(parents=True)
+    # gcloud keeps its files in %APPDATA% on Windows, in ~/.config elsewhere.
+    gcloud = home / "AppData" / "gcloud" if sys.platform == "win32" else home / ".config" / "gcloud"
+    gcloud.mkdir(parents=True)
+    monkeypatch.setenv("APPDATA", str(home / "AppData"))
     (home / ".config" / "earthengine" / "credentials").write_text(
         json.dumps({"refresh_token": SENTINEL}), encoding="utf-8"
     )
-    (home / ".config" / "gcloud" / "application_default_credentials.json").write_text(
+    (gcloud / "application_default_credentials.json").write_text(
         json.dumps({"client_secret": SENTINEL}), encoding="utf-8"
     )
     service_account = tmp_path / "service-account.json"

@@ -27,3 +27,6 @@ website/node_modules/
 
 # Benchmark results and scratch output
 benchmark-results.json
+
+# Datasets made by website/scripts/figures.py
+.figures-work/

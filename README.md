@@ -5,7 +5,7 @@
 <h1 align="center">mapcv</h1>
 
 <p align="center">
-    <em>A high-performance satellite imagery dataset creation tool for computer vision.</em>
+    <em>Turn a region, imagery and labels into a ready-to-train remote-sensing dataset. GDAL-free, exact, resumable.</em>
 </p>
 
 <p align="center">
@@ -34,11 +34,22 @@
 
 ---
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/tahamukhtar20/mapcv/main/website/src/assets/figures/segmentation-patches.webp" alt="Aerial patches over Amsterdam and the same patches with mapcv's building masks" width="760"/>
+  <br/><sub>Patches and building masks made by mapcv. Imagery: Beeldmateriaal Nederland (CC BY 4.0); labels: © OpenStreetMap contributors.</sub>
+</p>
+
 ## Statement of Need
 
-Creating machine learning datasets from satellite imagery is traditionally a frustrating experience. Wrestling with heavy, notoriously complex GIS libraries like GDAL is a massive pain point for researchers who just want to train models.
+Building a machine-learning dataset from geospatial data usually means a one-off script: fetch or read imagery, burn label polygons, cut patches, split. Done carefully, it handles coordinate systems, pixel-centre rules, NoData, memory, crashes and spatial leakage between train and test; done quickly, it silently gets them wrong. Existing geospatial tools are **analysis-first** or sample data at training time. **mapcv** is **data-creation-first**: one YAML config, and the result is plain files on disk, checked against reference implementations.
 
-Existing geospatial ecosystems are heavily **analysis-first**. **mapcv** is different. It is explicitly designed as a **data creation-first** tool. It provides a fast, end-to-end pipeline written in Python and Rust specifically optimized for fetching map tiles, rasterizing complex labels (GeoJSON, KML, GeoPackage, Shapefile, GeoParquet), and splitting areas into uniform, ML-ready patches. The target audience includes computer vision researchers, data scientists, and ML engineers who need an efficient and reliable way to prepare high-quality satellite datasets for training segmentation models without the traditional GIS headaches.
+- **Imagery:** XYZ tiles, your own GeoTIFF/COG (local, `https://`, `s3://`), Sentinel-2 (EOPF Zarr, or COGs found in a STAC catalog, with cloud masking), Google Earth Engine; several sources on one grid.
+- **Labels:** GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap, or a label raster.
+- **Tasks:** semantic segmentation, object detection (COCO/YOLO), instance segmentation (COCO RLE), patch classification, change detection and regression.
+- **Output:** PNG/JPEG/GeoTIFF/NPY patches, a manifest, leakage-safe splits, and exports to Hugging Face and TerraTorch; `mapcv.data.MapcvDataset` loads any of them for PyTorch.
+- **Correct and fast:** masks follow GDAL's exact rules; a careful rasterio script, GDAL's tools and leafmap produce the same patches, 1.5–34× more slowly ([benchmarks](https://tahamukhtar20.github.io/mapcv/project/performance/)). Interrupted runs resume byte for byte; memory stays bounded on any region size.
+
+Why not a script, TorchGeo, Raster Vision or geoai? See [Why mapcv](https://tahamukhtar20.github.io/mapcv/why-mapcv/).
 
 ## Installation
 
@@ -48,13 +59,7 @@ pip install mapcv
 
 Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64 and aarch64 with glibc or musl, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
 
-EOPF Sentinel-2 L2A Zarr support is optional:
-
-```bash
-pip install "mapcv[zarr]"
-```
-
-The `zarr` extra currently supports Python 3.10–3.13: its zarr 2 dependency has no Python 3.14 wheels yet.
+Optional extras: `mapcv[zarr]` (Sentinel-2 EOPF Zarr, Python 3.10–3.13), `mapcv[gee]` (Google Earth Engine), `mapcv[parquet]` (GeoParquet labels), `mapcv[export]` (Hugging Face Parquet) and `mapcv[mcp]` (the MCP server for AI agents). XYZ tiles, GeoTIFF/COG and STAC need none of them.
 
 ## Quick start
 
@@ -92,46 +97,20 @@ mapcv card ./output      # README.md dataset card with Hugging Face metadata
 mapcv verify ./output --write-checksums
 ```
 
-## EOPF Sentinel-2 Zarr
+## Bring your own imagery
 
-Version 0.2.0 can read one local or anonymous public EOPF Sentinel-2 L2A product per run. It preserves the product's projected CRS, harmonizes selected bands with the EOPF backend, and writes bands-first `float32` NPY patches.
-
-```yaml
-region:
-  west: 10.0
-  south: 45.0
-  east: 10.2
-  north: 45.2
-
-imagery:
-  type: eopf_zarr
-  path: /data/S2_L2A_PRODUCT.zarr
-  resolution: 10
-  bands: [b01, b02, b03, b04, b05, b06, b07, b08, b8a, b09, b11, b12]
-  chunk_rows: 1024
-
-sampler:
-  patch_size: 256
-
-writer:
-  staging_dir: ./dataset
-  image_format: npy
-```
-
-Private-store credentials, STAC discovery, mosaicking, cloud masking, GeoTIFF output, and Google Earth Engine integration are outside the 0.2.0 scope. See the [migration guide](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) and [provider guidance](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
-
-## GeoTIFF and COG imagery
-
-Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL or a public `s3://` object) can be the imagery. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects WGS-84 labels onto it. 8-bit RGB can be written as PNG/JPG; any other layout needs `image_format: npy`.
+Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL or a public `s3://` object) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
 
 ```yaml
 imagery:
   type: geotiff
-  path: ortho/scene.tif      # or https://.../scene.tif
+  path: ortho/scene.tif      # or https://.../scene.tif, s3://bucket/scene.tif
   # bands: [1, 2, 3]         # 1-based, default: all
   # overview: 0              # reduced-resolution level
   # nodata: 0                # override the file's NoData
 ```
+
+Sentinel-2 can come from an EOPF Zarr product (`type: eopf_zarr`) or be found for your region and dates in a STAC catalog (`type: stac_cog`, with SCL cloud masking); Earth Engine images use `imagery.earth_engine`. Every option: [configuration reference](https://tahamukhtar20.github.io/mapcv/reference/configuration/).
 
 ## AI agents
 

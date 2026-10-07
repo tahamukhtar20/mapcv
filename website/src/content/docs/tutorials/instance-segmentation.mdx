@@ -131,6 +131,10 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
 
 5. ### Look at the masks
 
+   ![Aerial patches with every building in its own colour](../../../assets/figures/instance-masks.webp)
+
+   *Each building is its own instance, even where buildings touch. Shown with Dutch open aerial imagery (Beeldmateriaal Nederland, CC BY 4.0) over the same area; with the tutorial's Esri imagery your patches look alike.*
+
    Each COCO annotation has a `segmentation` in compressed RLE form, `{"size": [256, 256], "counts": "…"}`. `pycocotools` decodes it to the instance's exact mask:
 
    ```python title="look.py"

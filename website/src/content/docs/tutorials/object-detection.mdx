@@ -131,6 +131,10 @@ This tutorial builds an **object detection** dataset from the [quickstart](/mapc
 
 5. ### Look at the boxes
 
+   ![Aerial patches with a box around every building; boxes cut by the patch edge in blue](../../../assets/figures/detection-boxes.webp)
+
+   *Boxes from the COCO file: buildings cut by the patch edge (`truncated`) in blue. Shown with Dutch open aerial imagery (Beeldmateriaal Nederland, CC BY 4.0) over the same area; with the tutorial's Esri imagery your patches look alike.*
+
    COCO boxes are `[x, y, width, height]` in pixels from the patch's top-left corner:
 
    ```python title="look.py"

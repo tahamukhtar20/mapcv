@@ -120,7 +120,7 @@ def generate(
 ) -> GenerateResult
 ```
 
-The library form of `mapcv generate`: builds the dataset into `config.writer.staging_dir`, or resumes it. `config` is a `MapcvConfig` or the path of a YAML file (read with `MapcvConfig.from_yaml`). `progress(done, total)` is called with the chunks written so far and the chunks of this run, before the first chunk and after every chunk is saved; an exception it raises stops the run there, and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels).
+The library form of `mapcv generate`: builds the dataset into `config.writer.staging_dir`, or resumes it. `config` is a `MapcvConfig` or the path of a YAML file (read with `MapcvConfig.from_yaml`). `progress(done, total)` is called with the chunks written so far and the chunks of this run, before the first chunk and after every chunk; an exception it raises stops the run there (the finished chunks are saved), and the next call resumes (this is how the [MCP server](/mapcv/guides/use-with-ai-agents/) reports progress and cancels).
 
 ```python
 import mapcv

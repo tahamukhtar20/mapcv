@@ -45,6 +45,8 @@ from mapcv.targets.base import Annotation, WindowTarget
 from mapcv.writers import FilesWriter, check_compatible, create_writer, refresh_split_outputs
 
 _log = logging.getLogger(__name__)
+# How often a running generation rewrites manifest.json (seconds).
+_SAVE_EVERY_S = 10.0
 
 _MANIFEST_FILENAME = "manifest.json"
 _SPLITS_SUBDIR = "splits"
@@ -216,21 +218,66 @@ def _area_of_interest(
     return AreaOfInterest(config.region, source.metadata.crs, source.metadata.transform)
 
 
+# A chunk's window (every source's pixels, read at once) stays below this many bytes:
+# a wider chunk is read as several column windows, so memory does not grow with the
+# raster's width (a 10980-column, 12-band float32 Sentinel-2 strip is 540 MB).
+_WINDOW_BYTES = 256 * 2**20
+
+
+def _pixel_bytes(sources: List[WindowedRasterSource]) -> int:
+    """Bytes of one pixel of every source together, as read."""
+    return sum(
+        max(1, len(each.metadata.bands)) * np.dtype(each.metadata.dtype).itemsize
+        for each in sources
+    )
+
+
+def _max_window_width(rows: int, width: int, pixel_bytes: int, patch_size: int) -> int:
+    """The widest window of ``rows`` rows read at once: ``width`` when it fits in
+    :data:`_WINDOW_BYTES`, else what fits (but at least two patches wide)."""
+    if rows * width * pixel_bytes <= _WINDOW_BYTES:
+        return width
+    return max(2 * patch_size, _WINDOW_BYTES // (rows * pixel_bytes))
+
+
+def _column_windows(
+    group: List[Tuple[int, int]], patch_size: int, pixel_bytes: int
+) -> List[List[Tuple[int, int]]]:
+    """``group`` as it is, or, when its window would pass :data:`_WINDOW_BYTES`, split
+    into column ranges whose windows stay below it (left to right, order kept)."""
+    rows = max(row for row, _ in group) + patch_size - min(row for row, _ in group)
+    first = min(col for _, col in group)
+    width = max(col for _, col in group) + patch_size - first
+    max_width = _max_window_width(rows, width, pixel_bytes, patch_size)
+    if max_width >= width:
+        return [group]
+    step = max_width - patch_size
+    split: Dict[int, List[Tuple[int, int]]] = {}
+    for anchor in group:
+        split.setdefault((anchor[1] - first) // step, []).append(anchor)
+    return [split[key] for key in sorted(split)]
+
+
 def _anchor_groups(
-    config: MapcvConfig, source: WindowedRasterSource, aoi: Optional[AreaOfInterest]
+    config: MapcvConfig,
+    sources: List[WindowedRasterSource],
+    aoi: Optional[AreaOfInterest],
 ) -> List[List[Tuple[int, int]]]:
     """Every patch anchor of the raster, grouped into the chunks they are read in."""
-    anchors = _global_anchors(source.metadata.height, source.metadata.width, config.sampler)
-    groups = _group_anchors(anchors, source.metadata.chunk_rows)
+    meta = sources[0].metadata
+    patch_size = config.sampler.patch_size
+    anchors = _global_anchors(meta.height, meta.width, config.sampler)
+    groups = _group_anchors(anchors, meta.chunk_rows)
     if aoi is not None:
         # Only patches over the polygons, read in windows around them.
-        anchors = aoi.keep(anchors, config.sampler.patch_size)
+        anchors = aoi.keep(anchors, patch_size)
         groups = [
             cluster
-            for group in _group_anchors(anchors, source.metadata.chunk_rows)
-            for cluster in column_clusters(group, config.sampler.patch_size)
+            for group in _group_anchors(anchors, meta.chunk_rows)
+            for cluster in column_clusters(group, patch_size)
         ]
-    return groups
+    pixel_bytes = _pixel_bytes(sources)
+    return [part for group in groups for part in _column_windows(group, patch_size, pixel_bytes)]
 
 
 @dataclass
@@ -306,7 +353,7 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
         source = opened[0]
         target.prepare(source.metadata)
         crs = source.metadata.crs
-        for group in _anchor_groups(config, source, _area_of_interest(config, source)):
+        for group in _anchor_groups(config, opened, _area_of_interest(config, source)):
             images, annotations, metadata, other_patches, _ = _process_anchor_chunk(
                 source, group, config.sampler, target, others
             )
@@ -332,9 +379,13 @@ def run_generate(
     patch is annotated with and the writer (``create_writer``) how it reaches disk.
 
     ``on_chunk(done, total)``, if given, is called with the chunks written so far and
-    the chunks of this run: once before the first chunk and after every chunk (whose
-    manifest is already saved). An exception it raises stops the run there; the
-    finished chunks stay and the same call again resumes.
+    the chunks of this run: once before the first chunk and after every chunk. An
+    exception it raises stops the run there; the finished chunks are saved and the
+    same call again resumes.
+
+    The manifest is saved every :data:`_SAVE_EVERY_S` seconds and whenever the run
+    stops, normally or with an exception (Ctrl-C included); a process killed outright
+    loses at most those seconds of chunks, which a resumed run writes again.
     """
     started = time.monotonic()
     staging = config.writer.staging_dir
@@ -395,7 +446,7 @@ def run_generate(
 
         resumed_patches = len(manifest.patches)
         patch_size = config.sampler.patch_size
-        groups = _anchor_groups(config, source, aoi)
+        groups = _anchor_groups(config, opened, aoi)
         completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
         # Number chunks over the whole raster so a resumed run records the same
         # chunk index for each patch as an uninterrupted one.
@@ -411,29 +462,42 @@ def run_generate(
             _log.info("Resuming: %d patch(es) already written, %d to go", resumed_patches, to_go)
         if on_chunk is not None:
             on_chunk(0, len(chunks))
-        for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
-            images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
-                source, chunk_anchors, config.sampler, target, others
-            )
-            annotations = window.collate(per_patch, patch_size)
-            if other_patches:
-                if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
-                    raise RuntimeError("several imagery sources need the files layout")
-                writer.write(
-                    images, annotations, metadata, manifest, chunk_index, others=other_patches
+        saved = time.monotonic()
+        complete = len(manifest.patches)  # entries of fully finished chunks
+        try:
+            for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
+                images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
+                    source, chunk_anchors, config.sampler, target, others
                 )
-            else:
-                writer.write(images, annotations, metadata, manifest, chunk_index)
-            if aoi is not None:
-                for entry in manifest.patches[len(manifest.patches) - len(metadata) :]:
-                    entry["summary"]["region"] = aoi.region_of(
-                        entry["row"], entry["col"], patch_size
+                annotations = window.collate(per_patch, patch_size)
+                if other_patches:
+                    if not isinstance(writer, FilesWriter):  # pragma: no cover - create_writer
+                        raise RuntimeError("several imagery sources need the files layout")
+                    writer.write(
+                        images, annotations, metadata, manifest, chunk_index, others=other_patches
                     )
-            # Persist after every chunk so an interrupted run resumes from here.
+                else:
+                    writer.write(images, annotations, metadata, manifest, chunk_index)
+                if aoi is not None:
+                    for entry in manifest.patches[len(manifest.patches) - len(metadata) :]:
+                        entry["summary"]["region"] = aoi.region_of(
+                            entry["row"], entry["col"], patch_size
+                        )
+                complete = len(manifest.patches)
+                # Persist every few seconds (rewriting a large manifest after every chunk
+                # costs more than the chunk), and below whenever the run stops early.
+                if time.monotonic() - saved >= _SAVE_EVERY_S:
+                    manifest.save(manifest_path)
+                    saved = time.monotonic()
+                if on_chunk is not None:
+                    on_chunk(done, len(chunks))
+        except BaseException:
+            # Interrupted (Ctrl-C, a failed chunk, a cancelling callback): keep the
+            # finished chunks, so the same call resumes after them. A chunk stopped
+            # part way is dropped; a resumed run writes it again over its files.
+            del manifest.patches[complete:]
             manifest.save(manifest_path)
-            if on_chunk is not None:
-                on_chunk(done, len(chunks))
-
+            raise
         # A finished dataset is left untouched (a 0.2 manifest stays version 2).
         if chunks or not manifest_path.exists():
             manifest.save(manifest_path)

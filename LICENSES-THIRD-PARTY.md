@@ -34,7 +34,6 @@ Code that mapcv derived from other projects is acknowledged in
 - displaydoc 0.2.5: MIT OR Apache-2.0
 - either 1.15.0: MIT OR Apache-2.0
 - encoding_rs 0.8.35: (Apache-2.0 OR MIT) AND BSD-3-Clause
-- errno 0.3.14: MIT OR Apache-2.0
 - fdeflate 0.3.7: MIT OR Apache-2.0
 - flate2 1.1.10: MIT OR Apache-2.0
 - form_urlencoded 1.2.2: MIT OR Apache-2.0
@@ -73,7 +72,6 @@ Code that mapcv derived from other projects is acknowledged in
 - jpeg-encoder 0.7.1: (MIT OR Apache-2.0) AND IJG
 - libc 0.2.186: MIT OR Apache-2.0
 - litemap 0.8.2: Unicode-3.0
-- lock_api 0.4.14: MIT OR Apache-2.0
 - log 0.4.29: MIT OR Apache-2.0
 - matrixmultiply 0.3.10: MIT OR Apache-2.0
 - memchr 2.8.0: Unlicense OR MIT
@@ -88,8 +86,6 @@ Code that mapcv derived from other projects is acknowledged in
 - numpy 0.29.0: BSD-2-Clause
 - once_cell 1.21.4: MIT OR Apache-2.0
 - openssl-probe 0.2.1: MIT OR Apache-2.0
-- parking_lot 0.12.5: MIT OR Apache-2.0
-- parking_lot_core 0.9.12: MIT OR Apache-2.0
 - percent-encoding 2.3.2: MIT OR Apache-2.0
 - pin-project-lite 0.2.17: Apache-2.0 OR MIT
 - png 0.18.1: MIT OR Apache-2.0
@@ -114,10 +110,8 @@ Code that mapcv derived from other projects is acknowledged in
 - rustls-platform-verifier 0.7.1: MIT OR Apache-2.0
 - rustls-webpki 0.103.15: ISC
 - schannel 0.1.29: MIT
-- scopeguard 1.2.0: MIT OR Apache-2.0
 - security-framework 3.7.0: MIT OR Apache-2.0
 - security-framework-sys 2.17.0: MIT OR Apache-2.0
-- signal-hook-registry 1.4.8: MIT OR Apache-2.0
 - simd-adler32 0.3.9: MIT
 - slab 0.4.12: MIT
 - smallvec 1.15.1: MIT OR Apache-2.0
@@ -130,7 +124,6 @@ Code that mapcv derived from other projects is acknowledged in
 - synstructure 0.13.2: MIT
 - tinystr 0.8.3: Unicode-3.0
 - tokio 1.53.1: MIT
-- tokio-macros 2.7.0: MIT
 - tokio-rustls 0.26.4: MIT OR Apache-2.0
 - tower 0.5.3: MIT
 - tower-http 0.6.8: MIT
@@ -1447,39 +1440,6 @@ THE SOFTWARE.
 
 ### MIT License
 
-Used by: errno 0.3.14
-
-``````text
-Copyright (c) 2014 Chris Wong
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-``````
-
-### MIT License
-
 Used by: bitflags 2.11.1, log 0.4.29, num-complex 0.4.6, num-integer 0.1.46, num-traits 0.2.19
 
 ``````text
@@ -1879,72 +1839,6 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Used by: lock_api 0.4.14, parking_lot 0.12.5, parking_lot_core 0.9.12
-
-``````text
-Copyright (c) 2016 The Rust Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-``````
-
-### MIT License
-
-Used by: scopeguard 1.2.0
-
-``````text
-Copyright (c) 2016-2019 Ulrik Sverdrup "bluss" and scopeguard developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-``````
-
-### MIT License
-
 Used by: reqwest 0.13.5
 
 ``````text
@@ -2042,39 +1936,6 @@ Used by: tokio-rustls 0.26.4
 
 ``````text
 Copyright (c) 2017 quininer kel
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-``````
-
-### MIT License
-
-Used by: signal-hook-registry 1.4.8
-
-``````text
-Copyright (c) 2017 tokio-jsonrpc developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2782,36 +2643,6 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice (including the next paragraph) shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-``````
-
-### MIT License
-
-Used by: tokio-macros 2.7.0
-
-``````text
-MIT License
-
-Copyright (c) 2019 Yoshua Wuyts
-Copyright (c) Tokio Contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 ``````
 

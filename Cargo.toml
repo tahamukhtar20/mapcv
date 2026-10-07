@@ -2,6 +2,9 @@
 name = "mapcv_rs"
 version = "0.2.0"
 edition = "2021"
+# The oldest Rust that builds the crate and its dependencies (image and weezl need 1.88);
+# CI and releases use the pinned toolchain in rust-toolchain.toml.
+rust-version = "1.88"
 description = "Rust core of mapcv: tile fetching and decoding, rasterization, GeoTIFF I/O and patch writing"
 license = "MIT"
 repository = "https://github.com/tahamukhtar20/mapcv"
@@ -26,7 +29,8 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # JPEG patch writer: 4:2:0 / 4:4:4 chroma, which the image crate cannot write.
 jpeg-encoder = { version = "0.7", features = ["simd"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-tokio = { version = "1", features = ["full"] }
+# Only the multi-threaded runtime and timers (retry backoff) are used.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
 futures = "0.3"
 rayon = "1"
 quick-xml = { version = "0.42", features = ["encoding"] }
@@ -39,6 +43,14 @@ weezl = "0.2"
 zune-jpeg = "0.5"
 image-webp = "0.2"
 zstd = { version = "0.14", default-features = false }
+
+# Wheels are built with --release: one optimisation unit with link-time optimisation
+# (a smaller and slightly faster extension) and no symbols. Panics stay unwinding:
+# PyO3 turns a panic into a Python exception instead of aborting the interpreter.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
 
 [lints.rust]
 missing_docs = "deny"

@@ -345,6 +345,35 @@ def split_manifest(
     return _split(manifest, config, output_dir, stacklevel=3)
 
 
+def _warn_about_shares(
+    counts: dict[str, int], config: SplitterConfig, strategy: str, stacklevel: int
+) -> None:
+    """Warn when train is empty, or when whole blocks or regions moved the test share far
+    from the one asked for."""
+    total = counts["train"] + counts["val"] + counts["test"]
+    if total == 0:
+        return
+    if counts["train"] == 0:
+        warnings.warn(
+            f"No patch is left for train ({counts['test']} test, {counts['val']} val): lower "
+            "split.test_ratio and split.val_ratio, or make more patches.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+        return
+    share = counts["test"] / total
+    if strategy in ("spatial", "region") and total >= 10 and abs(share - config.test_ratio) > 0.1:
+        unit = "regions" if strategy == "region" else "blocks"
+        smaller = "more regions" if strategy == "region" else "a smaller split.block_size"
+        warnings.warn(
+            f"test holds {share:.0%} of the patches, not the {config.test_ratio:.0%} asked for, "
+            f"because whole {unit} go to one split; use {smaller} for shares closer to the "
+            "ratios.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+
+
 def _split(
     manifest: Manifest,
     config: SplitterConfig,
@@ -422,6 +451,7 @@ def _split(
         "test": len(test_files),
         "dropped": dropped,
     }
+    _warn_about_shares(counts, config, strategy, stacklevel + 1)
     # Record how the lists were made, so a split can be reproduced or audited later.
     record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
     (output_dir / "split.json").write_text(

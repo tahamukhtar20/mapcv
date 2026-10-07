@@ -150,15 +150,25 @@ def _utm_raster(config: MapcvConfig, res: int) -> tuple[int, int]:
 
 
 def _pixel_size_m(crs: str, transform: tuple[float, float, float, float, float, float]) -> float:
-    """Ground size of one pixel of a raster in ``crs``, in metres (at the raster's origin)."""
-    from pyproj import CRS
+    """Ground size of one pixel of a raster in ``crs``, in metres (at the raster's origin).
 
-    a, b, _, d, e, f = transform  # f is the top latitude for a geographic CRS
+    A projected CRS's units are metres on the map, not on the ground: Web Mercator's grow
+    by 1/cos(latitude). The projection's scale factor at the origin corrects for that.
+    """
+    from pyproj import CRS, Proj, Transformer
+
+    a, b, c, d, e, f = transform  # f is the top latitude for a geographic CRS
     size = math.sqrt(abs(a * e - b * d))
     parsed = CRS.from_user_input(crs)
     if parsed.is_geographic:
         return size * 111_320.0 * math.cos(math.radians(f))
-    return size * float(parsed.axis_info[0].unit_conversion_factor)
+    on_map = size * float(parsed.axis_info[0].unit_conversion_factor)
+    try:
+        lon, lat = Transformer.from_crs(parsed, "EPSG:4326", always_xy=True).transform(c, f)
+        scale = math.sqrt(Proj(parsed).get_factors(lon, lat).areal_scale)
+    except Exception:  # noqa: BLE001 - no scale factor there: map units are the best guess
+        return on_map
+    return on_map / scale if math.isfinite(scale) and scale > 0 else on_map
 
 
 def _geotiff_raster(

@@ -18,7 +18,6 @@ import shapely
 from shapely.geometry import MultiPolygon, shape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform as shapely_transform
 
 from mapcv import vector_files
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
@@ -73,23 +72,23 @@ def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
 
 
 def _to_mercator(
-    x: npt.NDArray[np.float64],
-    y: npt.NDArray[np.float64],
-    z: npt.NDArray[np.float64] | None = None,
-) -> tuple[npt.NDArray[np.float64], ...]:
+    x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     # lat >= +/-90 clamps to +/-inf - matches Rust xy() guard
-    # z is passed by shapely.ops.transform for 3D geometries and returned unchanged
     mx: npt.NDArray[np.float64] = _RE * np.radians(x)
     raw: npt.NDArray[np.float64] = _RE * np.log(np.tan(pi / 4.0 + np.radians(y) / 2.0))
     my: npt.NDArray[np.float64] = np.where(y >= 90.0, np.inf, np.where(y <= -90.0, -np.inf, raw))
-    if z is not None:
-        return mx, my, z
     return mx, my
 
 
+def _mercator_coords(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    mx, my = _to_mercator(coords[:, 0], coords[:, 1])
+    return np.column_stack((mx, my))
+
+
 def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
-    """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857)."""
-    result: BaseGeometry = shapely_transform(_to_mercator, geom)
+    """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857); Z is dropped."""
+    result: BaseGeometry = shapely.transform(geom, _mercator_coords)
     return result
 
 
@@ -102,13 +101,9 @@ def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> list[BaseGe
     if not geometries:
         return []
 
-    def project(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        mx, my = _to_mercator(coords[:, 0], coords[:, 1])
-        return np.column_stack((mx, my))
-
     array = np.empty(len(geometries), dtype=object)
     array[:] = list(geometries)
-    return list(shapely.transform(array, project))
+    return list(shapely.transform(array, _mercator_coords))
 
 
 MAX_CLASS_ID = 255

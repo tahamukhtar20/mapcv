@@ -108,7 +108,7 @@ const pos = (i: number) =>
           <path class="arrow" d={`M${xs[i]},179 L${xs[i - 1] + W + 2},179`} marker-end="url(#ah-d)" />
         ))}
         <text class="sub" x={xs[1] + 4} y="226">
-          the manifest is saved after every chunk, so a rerun resumes at stage 6
+          the manifest keeps every finished chunk, so a rerun resumes at stage 6
         </text>
       </svg>
     )

@@ -41,16 +41,16 @@ On a resume, anchors already in the manifest are removed here.
 
 Anchors are grouped by row into chunks (`strip_rows` × 256 px for XYZ, `chunk_rows` for Sentinel-2). For each chunk, mapcv:
 
-1. reads one window covering all of the chunk's patches, across the full raster width (for XYZ, this is when tiles are fetched, with retries and the failure `policy`);
+1. reads one window covering all of the chunk's patches, across the full raster width, or in column windows when that window would pass 256 MB (for XYZ, this is when tiles are fetched, with retries and the failure `policy`);
 2. builds a validity mask (non-black RGB for XYZ; for Sentinel-2, pixels where every band has data), and for Sentinel-2 stops with a resume hint if one band came back empty while the others have data;
 3. rasterizes the label polygons into a `uint8` mask for the window, in Rust, using the pixel-centre rule (or `all_touched`);
 4. cuts the patches, pads edge patches if needed, measures their empty fraction, and drops those above `max_empty_ratio` or below `min_label_ratio`.
 
-Only one chunk's window is in memory at a time, plus its tiles. That is why memory grows with the region's width, not its area.
+Only one window is in memory at a time, plus its tiles. Memory grows with the region's width up to the 256 MB window cap, and never with its area.
 
 ## 7. Write and save the manifest
 
-Patches are encoded in parallel in Rust (PNG/JPG) or saved as NumPy arrays (NPY), with masks as PNG. Each patch gets a manifest entry with its global `row`/`col`, padding flag, the paths of its files and a summary (empty fraction and per-class pixel counts). The manifest is written atomically **after every chunk**, which makes the run resumable at chunk granularity.
+Patches are encoded in parallel in Rust (PNG/JPG) or saved as NumPy arrays (NPY), with masks as PNG. Each patch gets a manifest entry with its global `row`/`col`, padding flag, the paths of its files and a summary (empty fraction and per-class pixel counts). The manifest is written atomically every 10 seconds and whenever the run stops, which makes the run resumable at chunk granularity; rewriting it after every chunk would cost more than the chunk on large datasets.
 
 Before the first chunk, the existing manifest (if any) is compared with what this config would produce (task, source, bands, dtype, patch shape, CRS, transform, class map, ignore value, label settings and a hash of the label file, sampler, writer settings) and a mismatch stops the run.
 

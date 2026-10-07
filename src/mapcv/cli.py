@@ -41,6 +41,7 @@ import mapcv
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    StacCogImageryConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
@@ -104,6 +105,8 @@ def _make_output_encodable() -> None:
 
 _make_output_encodable()
 _console = Console()
+# NO_COLOR as the environment set it; --no-color turns colours off for one run.
+_NO_COLOR_FROM_ENV = _console.no_color
 # --quiet: hide the spinner, progress bars and progress messages.
 _quiet = False
 
@@ -197,11 +200,15 @@ def _main(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Hide progress output; still show errors and summaries."
     ),
+    no_color: bool = typer.Option(
+        False, "--no-color", help="Print without colours, as NO_COLOR=1 does."
+    ),
 ) -> None:
     """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
     classification dataset."""
     global _quiet
     _quiet = quiet
+    _console.no_color = no_color or _NO_COLOR_FROM_ENV
 
 
 def _format_validation_error(exc: ValidationError) -> List[str]:
@@ -271,6 +278,13 @@ def _imagery_label(config: MapcvConfig) -> str:
 
 
 def _source_label(imagery: Any) -> str:
+    if isinstance(imagery, StacCogImageryConfig):
+        cog = imagery.search
+        masked = f" · SCL mask {imagery.scl_mask}" if imagery.scl_mask else ""
+        return (
+            f"Sentinel-2 COGs · search {cog.collection} {cog.datetime} "
+            f"≤ {cog.max_cloud:g}% cloud · bands {', '.join(imagery.bands)}{masked}"
+        )
     if isinstance(imagery, EOPFZarrImageryConfig):
         if imagery.search is not None:
             search = imagery.search
@@ -473,7 +487,7 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
         )
     elif isinstance(config.imagery, GeoTiffImageryConfig):
         _console.print("[dim]Your own imagery: mapcv reads it as it is, without resampling.[/dim]")
-    elif not isinstance(config.imagery, EOPFZarrImageryConfig):
+    elif not isinstance(config.imagery, (EOPFZarrImageryConfig, StacCogImageryConfig)):
         _console.print(
             "[dim]Imagery terms are your responsibility: check the provider's license, "
             f"attribution and rate limits ({_PROVIDERS_URL}).[/dim]"
@@ -682,12 +696,14 @@ def _print_result(result: GenerateResult) -> None:
         "classification": "tutorials/classification/#train-a-classifier",
     }
     guide = guides.get(manifest.task, "guides/use-your-dataset/")
+    # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
         f"  • Re-split it:     [cyan]mapcv split {result.staging_dir} --strategy spatial[/cyan]\n"
         f"  • Band stats:      [cyan]mapcv stats {result.staging_dir}[/cyan]\n"
-        f"  • Train on it:     {_DOCS_URL}/{guide}"
+        f"  • Train on it:     {_DOCS_URL}/{guide}",
+        soft_wrap=True,
     )
 
 
@@ -1732,6 +1748,7 @@ def init(
             _console.print(line)
         return
     _console.print(f"\n[green]✓[/green] Wrote [bold]{target}[/bold]")
+    # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  1. See what it will cost:  [cyan]mapcv plan {target}[/cyan]\n"
@@ -2128,27 +2145,49 @@ def export(
         ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
     ),
     format_: str = typer.Option(
-        ..., "--format", "-f", help="hf-parquet (Hugging Face) or terratorch (a data config)."
+        ...,
+        "--format",
+        "-f",
+        help="hf-parquet (Hugging Face), webdataset (tar shards), zarr (one store) or "
+        "terratorch (a data config).",
     ),
     out: Optional[Path] = typer.Option(
         None,
         "--out",
         "-o",
-        help="hf-parquet: a new folder (required). terratorch: the YAML file "
-        "(default STAGING_DIR/terratorch.yaml).",
+        help="hf-parquet, webdataset, zarr: a new folder (required). terratorch: the YAML "
+        "file (default STAGING_DIR/terratorch.yaml).",
+    ),
+    shard_mb: int = typer.Option(
+        1000, "--shard-mb", min=1, help="webdataset: largest shard size in MB."
     ),
 ) -> None:
-    """Export a dataset for another tool: Hugging Face Parquet or a TerraTorch data config."""
+    """Export a dataset: Hugging Face Parquet, WebDataset shards, Zarr or a TerraTorch config."""
     from mapcv.export import FORMATS, export_hf_parquet, export_terratorch
+    from mapcv.shards import export_webdataset, export_zarr
 
     if format_ not in FORMATS:
         _console.print(f"[red]--format must be one of: {', '.join(FORMATS)}[/red]")
         raise typer.Exit(code=1)
     try:
-        if format_ == "hf-parquet":
-            if out is None:
-                _console.print("[red]--out is required for hf-parquet[/red]")
-                raise typer.Exit(code=1)
+        if format_ != "terratorch" and out is None:
+            _console.print(f"[red]--out is required for {format_}[/red]")
+            raise typer.Exit(code=1)
+        if format_ == "webdataset":
+            assert out is not None
+            shards = export_webdataset(staging_dir, out, shard_mb * 1_000_000)
+            _console.print(
+                f"[green]✓[/green] {len(shards)} tar shard(s) and shards.json in [bold]{out}[/bold]"
+            )
+        elif format_ == "zarr":
+            assert out is not None
+            export_zarr(staging_dir, out)
+            _console.print(
+                f"[green]✓[/green] Zarr store written to [bold]{out}[/bold]; read it with "
+                f'mapcv.data.MapcvDataset("{out}", split="train").'
+            )
+        elif format_ == "hf-parquet":
+            assert out is not None
             written = export_hf_parquet(staging_dir, out)
             _console.print(
                 f"[green]✓[/green] {len(written)} Parquet file(s) and a dataset card in "
@@ -2232,7 +2271,7 @@ def mcp_server(
     try:
         from mapcv.mcp_server import serve
     except ImportError as exc:
-        err = Console(stderr=True)
+        err = Console(stderr=True, no_color=_console.no_color)
         err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
         err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
         err.print(f"[dim]{escape(str(exc))} (mapcv needs mcp 2.x)[/dim]")

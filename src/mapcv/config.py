@@ -375,8 +375,8 @@ class XYZImageryConfig(BaseModel):
 _STAC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2}))?")
 
 
-class StacSearchConfig(BaseModel):
-    """Find the Sentinel-2 L2A product for a region in a STAC catalog (``imagery.search``).
+class StacSearchBase(BaseModel):
+    """Find the item for a region in a STAC catalog (``imagery.search``).
 
     The least cloudy item of ``collection`` whose footprint covers the whole region,
     acquired within ``datetime`` with at most ``max_cloud`` percent cloud, is used; ties
@@ -390,8 +390,6 @@ class StacSearchConfig(BaseModel):
     # A date or RFC 3339 time, or an interval "start/end" with ".." for an open end.
     datetime: str
     max_cloud: float = Field(default=20.0, ge=0.0, le=100.0)
-    # The item asset that holds the whole EOPF Zarr product.
-    asset: str = "product"
 
     @field_validator("catalog")
     @classmethod
@@ -424,6 +422,31 @@ class StacSearchConfig(BaseModel):
         return value.strip()
 
 
+class StacSearchConfig(StacSearchBase):
+    """The EOPF Zarr product of a region, from a STAC catalog (EOPF's by default)."""
+
+    # The item asset that holds the whole EOPF Zarr product.
+    asset: str = "product"
+
+
+class CogSearchConfig(StacSearchBase):
+    """The Sentinel-2 item of a region whose bands are Cloud Optimized GeoTIFFs (Element 84's
+    Earth Search by default)."""
+
+    catalog: str = "https://earth-search.aws.element84.com/v1"
+
+
+def _check_scl_mask(value: Optional[List[int]]) -> Optional[List[int]]:
+    if value is None:
+        return None
+    if not value or any(not 0 <= code <= 11 for code in value):
+        raise ValueError(
+            "imagery.scl_mask lists Sentinel-2 scene classes 0-11, for example "
+            "[3, 8, 9, 10] (cloud shadows, clouds and cirrus)"
+        )
+    return sorted(set(value))
+
+
 class EOPFZarrImageryConfig(BaseModel):
     """One local or anonymous public Sentinel-2 L2A EOPF Zarr product."""
 
@@ -450,17 +473,7 @@ class EOPFZarrImageryConfig(BaseModel):
     def _check_path(cls, value: Optional[str]) -> Optional[str]:
         return _validate_eopf_path(value) if value is not None else None
 
-    @field_validator("scl_mask")
-    @classmethod
-    def _check_scl_mask(cls, value: Optional[List[int]]) -> Optional[List[int]]:
-        if value is None:
-            return None
-        if not value or any(not 0 <= code <= 11 for code in value):
-            raise ValueError(
-                "imagery.scl_mask lists Sentinel-2 scene classes 0-11, for example "
-                "[3, 8, 9, 10] (cloud shadows, clouds and cirrus)"
-            )
-        return sorted(set(value))
+    _check_scl = field_validator("scl_mask")(_check_scl_mask)
 
     @model_validator(mode="after")
     def _validate_bands(self) -> "EOPFZarrImageryConfig":
@@ -475,6 +488,41 @@ class EOPFZarrImageryConfig(BaseModel):
             raise ValueError("imagery.bands must not contain duplicates")
         self.bands = normalized
         return self
+
+
+class StacCogImageryConfig(BaseModel):
+    """Sentinel-2 bands as separate Cloud Optimized GeoTIFFs of a STAC item (``type: stac_cog``),
+    such as Element 84's Earth Search catalog of Sentinel-2 L2A.
+
+    ``bands`` are the item's asset keys, in output order. They may come at different
+    resolutions (10, 20, 60 m): every band is placed on the grid of the finest one, a
+    coarser band's pixels repeated (nearest neighbour, exact). ``scl_mask`` reads the
+    ``scl_asset`` scene classification the same way.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["stac_cog"] = "stac_cog"
+    name: Optional[str] = None
+    search: CogSearchConfig
+    bands: List[str] = Field(default_factory=lambda: ["red", "green", "blue", "nir"])
+    scl_mask: Optional[List[int]] = None
+    scl_asset: str = "scl"
+    chunk_rows: int = Field(default=1024, ge=1)
+
+    _check_name = field_validator("name")(_validate_source_name)
+    _check_scl = field_validator("scl_mask")(_check_scl_mask)
+
+    @field_validator("bands")
+    @classmethod
+    def _check_bands(cls, bands: List[str]) -> List[str]:
+        if not bands or any(not band.strip() for band in bands):
+            raise ValueError(
+                "imagery.bands lists the item's band assets, such as [red, green, blue]"
+            )
+        if len(bands) != len(set(bands)):
+            raise ValueError("imagery.bands must not contain duplicates")
+        return bands
 
 
 class GeoTiffImageryConfig(BaseModel):
@@ -522,7 +570,7 @@ class GeoTiffImageryConfig(BaseModel):
 
 
 ImageryConfig = Annotated[
-    Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig],
+    Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig],
     Field(discriminator="type"),
 ]
 
@@ -543,7 +591,7 @@ AnyImageryConfig = Annotated[
 ]
 
 #: Parts of a validation error's location that are union tags, not config keys.
-UNION_TAGS = frozenset({"xyz", "eopf_zarr", "geotiff", "single-source", "source-list"})
+UNION_TAGS = frozenset({"xyz", "eopf_zarr", "geotiff", "stac_cog", "single-source", "source-list"})
 
 
 class BufferConfig(BaseModel):
@@ -1359,7 +1407,11 @@ class MapcvConfig(BaseModel):
         return self
 
     def _check_source_writer_pair(self, imagery: Any, where: str) -> None:
-        if isinstance(imagery, EOPFZarrImageryConfig):
+        if isinstance(imagery, StacCogImageryConfig):
+            if self.writer.image_format not in ("npy", "tif"):
+                kind = "Sentinel-2 COG imagery" if where == "imagery" else f"{where} (COGs)"
+                raise ValueError(f"{kind} requires writer.image_format='npy' (or 'tif')")
+        elif isinstance(imagery, EOPFZarrImageryConfig):
             if self.writer.image_format not in ("npy", "tif"):
                 kind = "EOPF Zarr imagery" if where == "imagery" else f"{where} (EOPF Zarr)"
                 raise ValueError(f"{kind} requires writer.image_format='npy' (or 'tif')")
@@ -1392,14 +1444,18 @@ class MapcvConfig(BaseModel):
         return isinstance(self.imagery, list)
 
     @property
-    def sources(self) -> List[Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig]]:
+    def sources(
+        self,
+    ) -> List[
+        Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig]
+    ]:
         """The imagery sources in order: a list of one for a single ``imagery`` block."""
         return list(self.imagery) if isinstance(self.imagery, list) else [self.imagery]
 
     @property
     def primary_imagery(
         self,
-    ) -> Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig]:
+    ) -> Union[XYZImageryConfig, EOPFZarrImageryConfig, GeoTiffImageryConfig, StacCogImageryConfig]:
         """The first imagery source: its grid is the dataset's grid."""
         return self.sources[0]
 

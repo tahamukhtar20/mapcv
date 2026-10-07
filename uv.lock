@@ -2126,7 +2126,7 @@ requires-dist = [
     { name = "shapely", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.9" },
     { name = "typing-extensions", specifier = ">=4.6" },
-    { name = "xarray", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2024.10" },
+    { name = "xarray", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2024.10,<2026.9" },
     { name = "xarray-eopf", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'zarr'", specifier = ">=0.2.9,<0.3" },
     { name = "xarray-eopf", marker = "python_full_version < '3.11' and extra == 'zarr'", specifier = "==0.2.5" },
     { name = "zarr", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2.18,<3" },

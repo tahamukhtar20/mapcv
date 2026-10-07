@@ -31,7 +31,7 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | [`mapcv stats`](#mapcv-stats) | Per-band mean/std and class weights into `stats.json` | no |
 | [`mapcv card`](#mapcv-card) | Write a dataset card (`README.md`) | no |
 | [`mapcv verify`](#mapcv-verify) | Check every file is there and unchanged | no |
-| [`mapcv export`](#mapcv-export) | Hugging Face Parquet or a TerraTorch data config | no |
+| [`mapcv export`](#mapcv-export) | Hugging Face Parquet, WebDataset shards, Zarr or a TerraTorch data config | no |
 | [`mapcv validate`](#mapcv-validate) | Check a config's fields | no |
 | [`mapcv cache`](#mapcv-cache) | Show or clear the on-disk tile cache | no |
 | [`mapcv mcp`](#mapcv-mcp) | Serve mapcv to AI agents over MCP | only when an agent generates |
@@ -44,6 +44,7 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 | --- | --- |
 | `--version`, `-V` | Print `mapcv <version>` and exit |
 | `--quiet`, `-q` | Hide progress bars and progress messages. Put it **before** the command: `mapcv -q generate mapcv.yaml` |
+| `--no-color` | Print without colours (bold and dim stay), as the `NO_COLOR` environment variable does. Output that goes to a file or a pipe has no colours anyway |
 | `--install-completion` | Install tab completion for the current shell |
 | `--show-completion` | Print the completion script |
 | `--help`, `-h` | Show help; works on every command |
@@ -89,7 +90,7 @@ Estimates use typical tile and file sizes. For Sentinel-2 the raster size is com
 
 1. Prints the same plan as `mapcv plan`. With `--dry-run` it stops here.
 2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
-3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest after each chunk.
+3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest every few seconds and whenever the run stops (Ctrl-C, an error).
 4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files written, the class balance, and next steps.
 
 Warnings (skipped label features, labels outside the imagery, split leakage, more than half of the tiles failing) are printed once each, as `⚠` lines. Failures are reported as one `Generation failed: …` message without a traceback, followed by a hint to re-run; a refused resume is reported as `Cannot resume: …` instead.
@@ -211,6 +212,11 @@ Exit code `1` when anything is missing, empty, unreadable (`--deep`) or changed.
 Writes a dataset in the form another tool reads; the dataset itself is not changed.
 
 - **`hf-parquet`** (needs `pip install "mapcv[export]"`): `OUT/data/<split>-00000-of-00001.parquet` for each split (`all` without split lists) and `OUT/README.md`, a [dataset card](#mapcv-card) whose metadata names the split files, so `datasets.load_dataset("OUT")` and the Hugging Face Hub read it as is. Each patch file is a `{bytes, path}` column holding the file exactly as written (PNG and JPEG columns are typed as images; NPY and GeoTIFF columns hold the bytes, for `np.load(io.BytesIO(...))` or rasterio's `MemoryFile`), next to `name`, `row`, `col`, `crs`, `transform` and, for classification, `labels`.
+- **`webdataset`**: `OUT/<split>-000000.tar`, ... of at most `--shard-mb` MB (default 1000), and `OUT/shards.json` listing each split's shards and sample counts. A sample is one patch: `<name>.png` (or `.jpg`, `.npy`, `.tif`: the image file as written), `<name>.mask.<ext>`, `<name>.<source>.<ext>` for further sources, and `<name>.json` (`row`, `col`, `transform`, `crs`, `split`, the manifest `summary`, and for detection and instance segmentation the COCO `annotations`). Samples follow the split lists' order; the tars are byte-for-byte reproducible. Stream them with the [webdataset](https://github.com/webdataset/webdataset) library without unpacking.
+- **`zarr`** (the `zarr` extra): `OUT` is a Zarr group with `images/<source>` `(N, C, H, W)`, `masks` `(N, H, W)`, `split` (`0` train, `1` val, `2` test, `255` none), `row` and `col`, one patch per chunk, plus copies of `manifest.json`, `splits/` and the COCO files. [`MapcvDataset`](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) reads it like the dataset folder: `MapcvDataset("dataset.zarr", split="train")`.
+
+Both pack the dataset into a few files for copying, object storage and fast reading; the dataset folder is unchanged and every other command keeps working on it. To change splits, run `mapcv split` on the folder and export again.
+
 - **`terratorch`**: the `data:` section of a TerraTorch training config, `GenericNonGeoSegmentationDataModule` (or `GenericNonGeoPixelwiseRegressionDataModule`) with the dataset's `Images/` and `Masks/` folders, its split lists, `num_classes`, and the band `means` and `stds` of the train split (from `stats.json`, or computed). It covers single-source segmentation and regression datasets written as `tif` or `png` (TerraTorch reads files with GDAL, which cannot read NPY). A comment says which `ignore_index` the task needs: `-1` for GeoTIFF masks, whose ignore value TerraTorch reads as missing, and `255` for PNG masks.
 
 ```console

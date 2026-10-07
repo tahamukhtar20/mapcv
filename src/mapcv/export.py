@@ -7,6 +7,8 @@
     typed as ``datasets.Image``; NPY/GeoTIFF columns hold the file's bytes), with the
     patch's place (``row``, ``col``, ``crs``, ``transform``) and, for classification,
     its labels. Needs pyarrow (``pip install "mapcv[export]"``).
+``webdataset``, ``zarr``
+    Few large files instead of one per patch: see :mod:`mapcv.shards`.
 ``terratorch``
     ``terratorch.yaml``: the ``data:`` section of a TerraTorch training config
     (``GenericNonGeoSegmentationDataModule``, or the pixel-wise regression one) pointing
@@ -23,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from mapcv.data import splits_of
 from mapcv.manifest import Manifest, ManifestEntry
 
-FORMATS = ("hf-parquet", "terratorch")
+FORMATS = ("hf-parquet", "terratorch", "webdataset", "zarr")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
 
 

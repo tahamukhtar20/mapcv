@@ -17,7 +17,7 @@ Building a segmentation dataset from map imagery usually means stitching tiles b
 - **No GDAL.** The core is Rust (tile math, tile fetching, rasterizing, patch sampling and encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ imagery.
 - **Correct by default.** Labels are reprojected into the imagery's own CRS, class IDs are stable across files, and the default split keeps spatially close patches together.
 - **Honest estimates.** `mapcv plan` tells you how many tiles, patches, megabytes and how much memory a run needs before anything is downloaded.
-- **Resumable.** The manifest is saved after every chunk. If a run stops, the same command continues it.
+- **Resumable.** Progress is saved as the run goes and whenever it stops. If a run stops, the same command continues it.
 
 ## Who it is for
 

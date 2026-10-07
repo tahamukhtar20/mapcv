@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import math
 import os
 import re
@@ -105,7 +106,13 @@ def _check_geotiff_location(path: str, field: str) -> str:
 
 
 def _validate_geotiff_path(path: str) -> str:
-    return _check_geotiff_location(path, "imagery.path")
+    _check_geotiff_location(path, "imagery.path")
+    if glob.has_magic(path) and eopf_local_path(path) is None:
+        raise ValueError(
+            "imagery.path: glob patterns (*, ?, [...]) work for local files only; "
+            "a remote GeoTIFF is one URL"
+        )
+    return path
 
 
 def _validate_label_raster_path(path: str) -> str:
@@ -608,7 +615,9 @@ class StacCogImageryConfig(BaseModel):
 
 
 class GeoTiffImageryConfig(BaseModel):
-    """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling).
+    """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling),
+    or a mosaic of local GeoTIFFs: a glob pattern such as ``survey/*.tif`` (``**`` matches
+    folders too) whose files share one CRS, pixel size and pixel grid.
 
     ``bands`` are 1-based band numbers in the order they should be written
     (default: every band). ``overview`` is the overview level to read (0 = full
@@ -630,6 +639,20 @@ class GeoTiffImageryConfig(BaseModel):
 
     _check_path = field_validator("path")(_validate_geotiff_path)
     _check_name = field_validator("name")(_validate_source_name)
+
+    def files(self) -> list[str]:
+        """The GeoTIFFs this source reads: ``path``, or the sorted local files its glob
+        pattern matches (none is an error)."""
+        if not glob.has_magic(self.path):
+            return [self.path]
+        local = eopf_local_path(self.path)
+        assert local is not None  # remote patterns are refused by validation
+        matches = sorted(
+            found for found in glob.glob(str(local), recursive=True) if Path(found).is_file()
+        )
+        if not matches:
+            raise FileNotFoundError(f"imagery.path: no files match {self.path}")
+        return matches
 
     @field_validator("nodata")
     @classmethod

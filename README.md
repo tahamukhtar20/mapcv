@@ -102,12 +102,12 @@ mapcv verify ./output --write-checksums
 
 ## Bring your own imagery
 
-Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL or a public `s3://` object) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
+Your own GeoTIFF or Cloud Optimized GeoTIFF (a local file, an `https://` URL, a public `s3://` object, or a folder of tiles read as one mosaic) can be the imagery; no tile server is involved. mapcv reads it without GDAL, keeps its CRS, pixel grid, bands and data type, and reprojects the labels onto it. Patches can be written as PNG/JPEG (8-bit RGB), NPY or georeferenced GeoTIFF.
 
 ```yaml
 imagery:
   type: geotiff
-  path: ortho/scene.tif      # or https://.../scene.tif, s3://bucket/scene.tif
+  path: ortho/scene.tif      # or https://.../scene.tif, s3://bucket/scene.tif, or tiles/*.tif (a mosaic)
   # bands: [1, 2, 3]         # 1-based, default: all
   # overview: 0              # reduced-resolution level
   # nodata: 0                # override the file's NoData

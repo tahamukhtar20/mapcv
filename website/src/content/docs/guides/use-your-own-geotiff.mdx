@@ -147,9 +147,23 @@ writer: {staging_dir: ./dataset, image_format: tif}
 
 The first file's grid is the dataset's grid. The others must be in the same CRS with pixels that are the same size or a whole number of them across (the 2 m DEM above, under 1 m imagery), sharing pixel corners with the first; coarser pixels are repeated, never interpolated. A pixel has imagery only where every file has it. See [Several imagery sources](/mapcv/reference/configuration/#several-imagery-sources) for the rules.
 
+## A folder of tiles: one mosaic
+
+Orthophotos and national mapping rasters are often delivered as many files, each covering part of the area. Give a glob pattern as the path and mapcv reads the matching files as one raster, without merging them first:
+
+```yaml
+imagery:
+  type: geotiff
+  path: ortho/tiles/*.tif       # or ortho/**/*.tif to include subfolders
+```
+
+`mapcv plan` shows the pattern and how many files it matched (`*.tif (24 files)`). The files have to be pieces of one grid: the same CRS, data type, band count, NoData value, pixel size, and pixel corners that line up. Otherwise the error names the file and what differs. Where tiles overlap, the first file in sorted path order that has data at a pixel wins, and a pixel that is NoData in one file is taken from the next. Gaps between tiles are empty, like the area outside a single file. Patches cut from a mosaic are byte-identical to patches cut from the same raster as one file.
+
+Patterns work for local files only; a remote COG is always one URL. Files on different grids (another CRS or resolution) have to be warped onto one grid first, for example with `gdalwarp`.
+
 ## Limits
 
-- Several files are sampled together only on one grid (above). Mosaics of tiles that each cover part of the region are not supported; merge them first, for example into a virtual or real COG.
+- Tiles of one grid can be read as a mosaic (above); files on different grids are not resampled to fit together.
 - The file's CRS must be an EPSG code (UTM, Web Mercator, WGS-84 and national grids all are); files with a custom CRS or no CRS are reported with the reason, and need re-tagging first.
 - Supported compression: none, Deflate, LZW, PackBits, ZSTD, JPEG and WebP. A file that uses another one (LERC, JPEG 2000, ...) fails when opened, naming it; convert it with `gdal_translate -co COMPRESS=DEFLATE`.
 - External `.ovr` overviews, internal mask bands and GCP-only georeferencing are not read.

@@ -7,6 +7,7 @@ what it will cost), ``mapcv generate`` (build the dataset) and ``mapcv info``
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import platform
@@ -2208,6 +2209,9 @@ def validate(
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
+            if glob.has_magic(imagery.path):
+                # A mosaic pattern: missing only when it matches no file.
+                local = None if glob.glob(str(local), recursive=True) else local
             if local is not None and not local.exists():
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 _console.print(f"[yellow]Warning:[/yellow] {where} not found: {local}")

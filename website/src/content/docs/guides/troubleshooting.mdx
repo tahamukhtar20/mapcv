@@ -23,15 +23,18 @@ mapcv lists every invalid field at once, then exits with code 1:
 Config error in bad1.yaml:
   • region: region.west must be less than region.east
   • imagery.source: the built-in 'google_satellite' source was removed in mapcv 0.2.0: Google does not
-permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
+    permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
   • labels.path: labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file,
-got 'buildings.kmz' (convert KMZ to KML first)
+    got 'buildings.kmz' (convert KMZ to KML first)
 Fix the fields above, or start from a working config with mapcv init.
 ```
 
 | Message | Fix |
 | --- | --- |
 | `Config file not found: …` | Check the path, or create one with `mapcv init` |
+| `Config error in …: not valid YAML at line 4, column 3 (…)` | A YAML syntax error: usually indentation, a missing colon or space after it, or an unclosed bracket or quote, at or just before that line |
+| `Config error in …: it holds no settings` | The file is empty, or not a mapping of keys (`region:`, `imagery:`, …). Start from `mapcv init` |
+| `Not a config file: … is a folder.` | Pass the YAML file, not its folder |
 | `imagery.type is required: 'xyz', 'geotiff', 'eopf_zarr' or 'stac_cog'` | Add `type:` to the `imagery` block |
 | `region.west must be less than region.east` (or south/north) | Coordinates are swapped. The order is west, south, east, north in degrees |
 | `the built-in 'google_satellite' source was removed …` | Google's terms do not allow it. Choose another source ([Migrating to 0.2](/mapcv/project/migration/#google-imagery-preset)) |
@@ -73,7 +76,7 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`⚠  no usable label polygon in labels.geojson, so every mask would be background.`** (from `plan`; `generate` says the same about "the label file") The file has no feature mapcv can use: it is empty, its features are all of a skipped type (points or lines for segmentation), or no feature has a `label_field` value listed in `classes` (the warnings above it count what was skipped). For a GeoPackage with several layers, check `labels.layer`.
 
-**`GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.`** Some features were not used. Points and lines can't be rasterized as areas; features with an empty `label_field` value are skipped; with `labels.classes`, unlisted values are skipped too. If *all* features are skipped, check the spelling of `label_field`: `mapcv plan` shows `0 polygon(s)`.
+**`GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.`** Some features were not used. Points and lines can't be rasterized as areas; features with an empty `label_field` value are skipped; with `labels.classes`, unlisted values are skipped too. If *all* features are skipped, check the spelling of `label_field`: `mapcv plan` shows `0 polygons`.
 
 **`labels.label_field '…' has N distinct values; masks support at most 255 classes.`** You picked an ID-like field (for example `osm_id`). Choose a category field, or map values with `labels.classes`.
 
@@ -111,6 +114,14 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles or 5 GB without a terminal. Read the plan, then pass `--yes`.
 
+**`Generation failed: permission denied: …`** mapcv can't create or write files in `writer.staging_dir` (or the folder named). Make it writable, or point `writer.staging_dir` at a folder you own, then run the same command again.
+
+**`Generation failed: no space left on the disk: …`** The disk filled up while writing patches. Free some space, or set `writer.staging_dir` to another disk and start there; on the same disk, run the same command again and it resumes.
+
+**`Interrupted. Finished chunks are saved; run the same command again to resume.`** (exit code 130) You pressed Ctrl-C. Nothing is lost but the chunk in progress.
+
+**`No manifest found at …/manifest.json`** (from `info`, `split`, `stats`, `card`, `verify` and `export`) The folder is not a dataset: pass the folder `mapcv generate` wrote, the config's `writer.staging_dir`.
+
 ## Google Earth Engine
 
 **`Earth Engine imagery needs the gee extra: pip install "mapcv[gee]"`** Install it: `pip install "mapcv[gee]"`.
@@ -137,13 +148,15 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`band b02 returned no data for rows … while other bands did; the read probably failed (e.g. a network timeout).`** A band came back empty where the other bands have data, which usually means a failed remote read. mapcv stops instead of writing broken patches; run the same command again to resume from that chunk.
 
-**Long pause after the plan.** Opening a remote product reads its metadata over the network and can take a few minutes; an "Opening imagery…" spinner shows while it does. The progress bar starts once reading begins.
+**Long pause after the plan.** Opening a remote product reads its metadata over the network and can take a few minutes; an "Opening imagery…" spinner (in a log, an `Opening imagery…` line) shows while it does. The progress bar starts once reading begins.
 
 **Many patches skipped.** Swath edges and no-data areas are `NaN`, and a pixel counts as valid only when every selected band has data; with `max_empty_ratio: 0.2`, patches more than 20 % empty are dropped. Move the region inside the footprint or choose another product.
 
 ## Output and logs
 
-**Garbled boxes in CI logs.** mapcv uses Rich; set `NO_COLOR=1` and a wide `COLUMNS` (for example `COLUMNS=120`) for plain, unwrapped logs, and add `-q` to drop progress bars.
+**Garbled boxes in CI logs.** Output to a file or a pipe has no colours and no progress bar (a plain line per tenth of the chunks instead). Panels and tables still wrap at 80 columns there: set a wide `COLUMNS` (for example `COLUMNS=120`) for unwrapped logs, and add `-q` to drop the progress lines too.
+
+**Errors missing from a redirected log.** Errors go to stderr, so `mapcv generate x.yaml > log.txt` leaves them on the terminal. Use `> log.txt 2>&1` to keep both in the file.
 
 ## Still stuck?
 

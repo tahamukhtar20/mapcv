@@ -287,7 +287,7 @@ def test_a_second_run_reads_every_tile_from_the_cache(server: TileServer, tmp_pa
 
     result = runner.invoke(app, ["cache"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    assert f"{downloaded} tile(s)" in result.output and "expired" not in result.output
+    assert f"{downloaded} tiles" in result.output and "expired" not in result.output
 
 
 def test_headers_and_settings_that_keep_tiles_out(server: TileServer, tmp_path: Path) -> None:
@@ -342,14 +342,14 @@ def test_cache_cli(tmp_path: Path) -> None:
     cache.put(1, 1, 1, b"a" * 1000, NONE)
     cache.put(1, 2, 1, b"b", ("max-age=1", None, None, "5"))  # stale on arrival: not kept
     result = runner.invoke(app, ["cache"], env=env)
-    assert result.exit_code == 0 and "1 tile(s)" in result.output
+    assert result.exit_code == 0 and "1 tile, 1.0 KB" in result.output
     assert str(tile_cache.tiles_dir()) in result.output.replace("\n", "")
     result = runner.invoke(app, ["cache", "--expired"], env=env)
-    assert result.exit_code == 1 and "only applies with --clear" in result.output
+    assert result.exit_code == 2 and "only applies with --clear" in result.output
     result = runner.invoke(app, ["cache", "--clear", "--expired"], env=env)
-    assert result.exit_code == 0 and "Deleted 0 expired cached tile(s)" in result.output
+    assert result.exit_code == 0 and "Deleted 0 expired cached tiles" in result.output
     result = runner.invoke(app, ["cache", "--clear"], env=env)
-    assert result.exit_code == 0 and "Deleted 1 cached tile(s)" in result.output
+    assert result.exit_code == 0 and "Deleted 1 cached tile from" in result.output
     assert tile_cache.usage().tiles == 0
 
 

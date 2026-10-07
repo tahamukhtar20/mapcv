@@ -53,6 +53,16 @@ _MANIFEST_FILENAME = "manifest.json"
 _SPLITS_SUBDIR = "splits"
 
 
+def _patches(count: int) -> str:
+    """``1 patch``, ``1,234 patches``, for messages the CLI shows."""
+    return f"{count:,} {'patch' if count == 1 else 'patches'}"
+
+
+def _tiles(count: int) -> str:
+    """``1 tile``, ``12 tiles``, for messages the CLI shows."""
+    return f"{count:,} {'tile' if count == 1 else 'tiles'}"
+
+
 @dataclass
 class GenerateResult:
     """Outcome of :func:`run_generate`."""
@@ -469,9 +479,18 @@ def run_generate(
             _WINDOW_BYTES // 2**20,
         )
         if resumed_patches and not chunks:
-            _log.info("Nothing left to do: all %d patch(es) are already written.", resumed_patches)
+            _log.info(
+                "Nothing left to do: %s already written.",
+                "the 1 patch is"
+                if resumed_patches == 1
+                else f"all {resumed_patches:,} patches are",
+            )
         elif resumed_patches:
-            _log.info("Resuming: %d patch(es) already written, %d to go", resumed_patches, to_go)
+            _log.info(
+                "Resuming: %s already written, %s to go.",
+                _patches(resumed_patches),
+                f"{to_go:,}",
+            )
         if on_chunk is not None:
             on_chunk(0, len(chunks))
         saved = time.monotonic()
@@ -539,14 +558,14 @@ def run_generate(
         why = f" Causes: {reasons}." if reasons else ""
         if requested and failed / requested > _FAILED_TILES_WARNING:
             warnings.warn(
-                f"{failed} of {requested} tiles failed; check the tile URL, your network and "
+                f"{failed:,} of {requested:,} tiles failed; check the tile URL, your network and "
                 f"imagery.policy (failed tiles are left empty or black).{why}",
                 UserWarning,
                 stacklevel=2,
             )
         elif failed and config.sampler.max_empty_ratio >= 1.0:
             warnings.warn(
-                f"{failed} tile(s) failed and were filled with black; patches that include them "
+                f"{_tiles(failed)} failed and were filled with black; patches that include them "
                 "were kept, with labels over black pixels. Set sampler.max_empty_ratio below 1 "
                 f"(for example 0.5) to drop such patches.{why}",
                 UserWarning,

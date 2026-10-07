@@ -104,7 +104,7 @@ def test_validate_warns_missing_labels_path(tmp_path: Path) -> None:
     )
     result = runner.invoke(app, ["validate", str(cfg)])
     assert result.exit_code == 0
-    assert "Warning" in result.output or "warning" in result.output.lower()
+    assert "⚠  labels.path not found" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +197,9 @@ def test_split_config_error(tmp_path: Path) -> None:
     _write_manifest(staging, n=50)
     # providing an invalid strategy to trigger validation error
     result = runner.invoke(app, ["split", str(staging), "--strategy", "invalid_strategy"])
-    assert result.exit_code != 0
-    assert "Config error" in result.output
+    # A bad option is a usage error (exit 2), named as the option.
+    assert result.exit_code == 2
+    assert "Invalid value for '--strategy'" in result.output
 
 
 # ---------------------------------------------------------------------------

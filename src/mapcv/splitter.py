@@ -384,7 +384,8 @@ def _split(
         regions = len({entry["summary"].get("region") for entry in entries})
         if regions < 3:
             warnings.warn(
-                f"Only {regions} region(s): a region split leaves some of train, val and "
+                f"Only {regions} {'region' if regions == 1 else 'regions'}: a region split "
+                "leaves some of train, val and "
                 "test empty; split the area of interest into more regions.",
                 UserWarning,
                 stacklevel=stacklevel,

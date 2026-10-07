@@ -471,7 +471,7 @@ In the manifest, `task` is `regression`, `target.dtype` is `float32`, `target.cl
 | `splits/<percent>/unlabeled.txt` | The rest of `train.txt` |
 | `splits/split.json` | The split settings (`SplitterConfig`), the strategy actually used, and the `train`/`val`/`test`/`dropped` counts |
 
-`<percent>` is the labeled ratio as a percentage: `0.1` → `10/`, `0.125` → `12.5/`. The three main lists are disjoint. With the `spatial` strategy, some patches may be in **no** list: they overlapped a held-out patch and were left out of train/val (the count is reported as "overlapping patch(es) left out"). With `sample_limit`, patches outside the sample are in no list either.
+`<percent>` is the labeled ratio as a percentage: `0.1` → `10/`, `0.125` → `12.5/`. The three main lists are disjoint. With the `spatial` strategy, some patches may be in **no** list: they overlapped a held-out patch and were left out of train/val (the count is reported as "overlapping patches left out"). With `sample_limit`, patches outside the sample are in no list either.
 
 Each list has one name per line and ends with a newline, so `wc -l` counts patches.
 

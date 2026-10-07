@@ -86,7 +86,7 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
    │ Region   4.9375, 52.3725 → 4.9515, 52.378  (≈ 1.0 × 0.6 km)                  │
    │ Imagery  esri_satellite · zoom 18 (≈ 0.36 m/px)                              │
    │ Raster   2,816 × 1,792 px · 77 tiles (≈ 1.9 MB to download)                  │
-   │ Labels   buildings.geojson · 967 polygon(s) · classes: building → 1          │
+   │ Labels   buildings.geojson · 967 polygons · classes: building → 1            │
    │ Patches  ≈ 77 × 256 px (grid, stride 256)                                    │
    │ Objects  ≈ 670 (label features in the region; one mask each, in every patch  │
    │          that shows enough of it)                                            │
@@ -109,7 +109,8 @@ This tutorial builds an **instance segmentation** dataset from the [quickstart](
    │ Tiles    77 fetched · 0 failed                                               │
    │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                        │
    │ Time     8s                                                                  │
-   │ Files    dataset/ (images/, masks/, manifest.json, splits/, annotations/)    │
+   │ Files    dataset/ (images/, masks/, manifest.json, splits/, patches.geojson, │
+   │          annotations/)                                                       │
    ╰──────────────────────────────────────────────────────────────────────────────╯
      class       id    objects     share    patches
      building     1        800    100.0%         58

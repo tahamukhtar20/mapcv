@@ -55,6 +55,17 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 
 `--quiet` hides the progress bars, the "Opening imagery" spinner and the resume message. Plans, warnings, errors and summaries (including the `mapcv split` summary line) are still printed.
 
+Results (plans, summaries, tables) go to stdout; errors, with the next step to take, go to stderr, so `mapcv plan mapcv.yaml > plan.txt` still shows a failure on the terminal. Output that goes to a file or a pipe, or to a terminal with `TERM=dumb`, has no colours, spinners or redrawn lines: `generate` prints `Opening imagery…` and then a plain line per tenth of the chunks instead of a progress bar:
+
+```text
+Reading imagery and writing patches: 0/40 chunks (0%), 0s
+Reading imagery and writing patches: 4/40 chunks (10%), 31s
+…
+Reading imagery and writing patches: 40/40 chunks (100%), 5m 12s
+```
+
+Counts read `1 patch` and `1,234 patches`, sizes `750.0 KB` and `3.3 MB` (1 KB = 1,000 bytes) and durations `45s`, `3m 07s` or `2h 05m`. A command suggested in the output quotes a path with spaces, so it can be copied as it is.
+
 ## `mapcv init`
 
 <Code code={initHelp} lang="text" title="mapcv init --help" />
@@ -63,12 +74,14 @@ The `mapcv` command follows the order you work in: **init → plan → generate 
 - **Guided** (default in an interactive terminal without `--template`): four steps (imagery, area, labels, patches and output). For Google Earth Engine imagery (`gee`) it offers Sentinel-2 (10 m, with cloud filtering and masking), Landsat 8 (30 m), NAIP (about 0.6 m, United States) or any catalog image or collection, then asks for the dates, the cloud limit, your Cloud project and a zoom matched to the data's resolution. The area can be a bounding box `west,south,east,north` or a vector file (`.geojson`/`.json`, `.kml`, `.gpkg`, `.shp`, `.parquet`/`.geoparquet`), whose polygon extent becomes the region (for a GeoPackage with several layers it asks which one); the wizard then offers to use the same file as labels and lists its attribute fields with example values (fields with more than 255 distinct values, such as IDs, are left out). With labels it also asks for the task: `segmentation` (the default), `detection`, `instance` or `classification`, for detection which box formats to write (COCO, YOLO or both), for instance whether to also write instance-ID PNGs, and for classification whether each patch gets one label or every class present. A label file ending in `.tif`/`.tiff` is taken as a [label raster](/mapcv/reference/configuration/#raster-labels-type-raster): the wizard shows its CRS, size and NoData, lists the values under the area with their share (from an overview or a sample of a large area), and writes a `classes` block that maps each value to an ID (the value itself when all are 1–254, else 1, 2, 3, … in value order; `0` is background) named `value_<n>`, for you to rename and merge; the task is then segmentation (set `task: classification` in the file to label patches from the raster instead).
 - **Template** (`--template xyz`, `--template sentinel2`, `--template geotiff`, `--template earth-engine` for a cloud-free Sentinel-2 composite from Google Earth Engine, `--template detection` for boxes or `--template instance` for masks from the quickstart buildings, `--template classification` for a label per patch, `--template change` for before/after pairs with a change mask, `--template regression` for float targets from a raster of values, or whenever stdin/stdout is not a terminal): writes a fully commented example. Add `--stdout` to print the template instead of writing a file.
 - With **GeoTIFF / COG** imagery the wizard asks for the file's path or URL right after the imagery choice, opens it, shows its CRS, size, band count, data type, NoData value and overviews, offers the whole file as the area (press Enter), and picks `png` or `npy` output to match the data (for a file with more than 3 `uint8` bands it asks which bands to use).
-- An existing file is never overwritten without `--force` (the guided mode asks after its questions):
+- An existing file is never overwritten without `--force` (the guided mode asks first, before its questions):
 
   ```console
   $ mapcv init --template xyz
-  mapcv.yaml already exists. Use --force.
+  mapcv.yaml already exists.
+  Add --force to overwrite it, or name another file.
   ```
+- Ctrl-C at a question stops with `Interrupted. Nothing was written.` (exit code 130). When the input ends before the last question (answers piped in that run out), nothing is written either and mapcv suggests `--template` (exit code 1).
 - The written file is validated. If it needs edits (for example, a custom tile URL entered in the wizard without `{x}`, `{y}` and `{z}`), mapcv still writes it and lists the fields to fix.
 
 ```console
@@ -97,13 +110,20 @@ Estimates use typical tile and file sizes. For Sentinel-2 the raster size is com
 <Code code={generateHelp} lang="text" title="mapcv generate --help" />
 
 1. Prints the same plan as `mapcv plan`. With `--dry-run` it stops here.
-2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
-3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar, saving the manifest every few seconds and whenever the run stops (Ctrl-C, an error).
-4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files written, the class balance, and next steps.
+2. **Large jobs** — more than 20,000 tiles, or more than 5 GB of estimated download plus output — ask `This is a large job. Start it?` (default no; answering no exits with code 1). Without a terminal, generation refuses with exit code 2 unless you pass `--yes`.
+3. Opens the imagery (with an "Opening imagery…" spinner), reprojects labels, checks that an existing `manifest.json` in `writer.staging_dir` is compatible, then processes chunks with a progress bar (plain lines when the output is not a terminal), saving the manifest every few seconds and whenever the run stops (Ctrl-C, an error).
+4. Writes split lists if the config has a `split` block, then prints **Dataset ready**: patch count (and how many are new this run), shape and dtype, tiles fetched and failed, split sizes, elapsed time, the files and folders in the dataset (patch folders, `manifest.json`, `splits/`, `patches.geojson`, and the COCO, YOLO or label-table files of the task), the class balance, and next steps.
 
-Warnings (skipped label features, labels outside the imagery, split leakage, more than half of the tiles failing) are printed once each, as `⚠` lines. Failures are reported as one `Generation failed: …` message without a traceback, followed by a hint to re-run; a refused resume is reported as `Cannot resume: …` instead.
+Warnings (skipped label features, labels outside the imagery, split leakage, more than half of the tiles failing) are printed once each, as `⚠` lines. Failures are reported as one `Generation failed: …` message without a traceback, followed by a hint to re-run; a refused resume is reported as `Cannot resume: …` instead. A folder that can't be written and a full disk say so, with what to do:
 
-**Resuming:** run the same command again. Patches already in the manifest are skipped, and XYZ tiles are only fetched for chunks still to do. When everything is already written it prints `Nothing left to do: all 77 patch(es) are already written.` Resuming refuses a folder made with different imagery, labels (including edits to the label file), sampler or writer settings, by mapcv 0.1, by mapcv 0.2 with `sampler.mode: random`, or by a newer mapcv; a 0.2 dataset resumes only with `labels.ignore_index: null` (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)).
+```text
+Generation failed: permission denied: /data/ro/dataset
+Make that folder writable, or set writer.staging_dir to a folder you can write to. Then run the same command again: finished chunks are kept and the run resumes.
+```
+
+Ctrl-C stops with `Interrupted. Finished chunks are saved; run the same command again to resume.` and exit code 130.
+
+**Resuming:** run the same command again. Patches already in the manifest are skipped, and XYZ tiles are only fetched for chunks still to do. When everything is already written it prints `Nothing left to do: all 77 patches are already written.` Resuming refuses a folder made with different imagery, labels (including edits to the label file), sampler or writer settings, by mapcv 0.1, by mapcv 0.2 with `sampler.mode: random`, or by a newer mapcv; a 0.2 dataset resumes only with `labels.ignore_index: null` (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)).
 
 ```console
 $ mapcv generate mapcv.yaml
@@ -160,7 +180,16 @@ use strategy 'spatial'.
 ✓ Splits written to overlap/splits: train 196 (72%) · val 22 (8%) · test 55 (20%)
 ```
 
-Old `splits/<percent>/` folders for ratios you no longer request are left in place.
+Old `splits/<percent>/` folders for ratios you no longer request are left in place. An option value that is out of range is a usage error (exit code 2), named after the option:
+
+```console
+$ mapcv split dataset --test-ratio 2
+Usage: mapcv split [OPTIONS] {STAGING_DIR}
+Try 'mapcv split -h' for help.
+╭─ Error ──────────────────────────────────────────────────────────────────────╮
+│ Invalid value for '--test-ratio': Input should be less than or equal to 1    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
 
 ## `mapcv stats`
 
@@ -181,7 +210,7 @@ $ mapcv stats dataset
   image     b2      124.604    71.8503      1    249
   image     b3      125.002    71.7828      1    249
 Class weights (median frequency): background 0.769, a 1.43
-✓ 36 patch(es) of the train split → dataset/stats.json
+✓ 36 patches of the train split → dataset/stats.json
 ```
 
 `stats.json` is written on request, not by `generate`: reading every patch back costs about as long as writing it, and `generate`'s output stays the same as before. Run it again after `mapcv split`.
@@ -204,14 +233,16 @@ Checks a dataset against its manifest: every listed file exists and is not empty
 
 ```console
 $ mapcv verify dataset --write-checksums
-✓ 48 patch(es), 96 file(s) present.
+✓ 48 patches, 96 files present.
 ✓ SHA256SUMS written to dataset/SHA256SUMS
 
 $ mapcv verify copy-of-dataset
 ✗ Masks/patch_0000012.png does not match its SHA256SUMS hash
+1 problem found.
+Copy the dataset again from where it came from, or generate it into a new folder.
 ```
 
-Exit code `1` when anything is missing, empty, unreadable (`--deep`) or changed.
+Exit code `1` when anything is missing, empty, unreadable (`--deep`) or changed. Files the manifest doesn't list are `⚠` lines and don't fail the check.
 
 ## `mapcv export`
 
@@ -243,9 +274,9 @@ $ mapcv validate bad.yaml
 Config error in bad.yaml:
   • region: region.west must be less than region.east
   • imagery.source: the built-in 'google_satellite' source was removed in mapcv 0.2.0: Google
-does not permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
+    does not permit downloading its imagery for datasets (see MIGRATION.md and PROVIDERS.md)
   • labels.path: labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or
-.geoparquet file, got 'buildings.kmz' (convert KMZ to KML first)
+    .geoparquet file, got 'buildings.kmz' (convert KMZ to KML first)
 Fix the fields above, or start from a working config with mapcv init.
 
 $ mapcv validate unknown.yaml
@@ -253,6 +284,11 @@ Config error in unknown.yaml:
   • imagery: imagery: set 'source' or 'url_template', not both
   • sampler.stide: Extra inputs are not permitted
 Fix the fields above, or start from a working config with mapcv init.
+
+$ mapcv validate broken.yaml
+Config error in broken.yaml: not valid YAML at line 4, column 3 (expected <block end>, but found
+'-').
+Check the indentation, colons and brackets there.
 ```
 
 ## `mapcv cache`
@@ -264,11 +300,11 @@ Shows where the [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz)
 ```console
 $ mapcv cache
 Tile cache: /home/me/.cache/mapcv/tiles
-  1,284 tile(s), 31.6 MB, 96 expired
+  1,284 tiles, 31.6 MB, 96 expired
 Set MAPCV_CACHE_DIR to move it, or imagery.cache: false to skip it.
 
 $ mapcv cache --clear --expired
-✓ Deleted 96 expired cached tile(s) from /home/me/.cache/mapcv/tiles
+✓ Deleted 96 expired cached tiles from /home/me/.cache/mapcv/tiles
 ```
 
 ## `mapcv mcp`
@@ -340,7 +376,7 @@ ok    mcp                       mcp 2.3.0
 
 Tile cache
 ok    Folder                    ~/.cache/mapcv/tiles, writable
-info  Contents                  8 tile(s), 0.1 MB
+info  Contents                  8 tiles, 98.4 KB
 
 Terminal
 ok    Encoding                  utf-8
@@ -366,6 +402,8 @@ Paths under your home folder are shown with `~`. The example above comes from a 
 | Code | When |
 | --- | --- |
 | `0` | Success (also `generate --dry-run`, and `init` when the written file still needs edits) |
-| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, file exists without `--force`, `mapcv verify` found a problem, `mapcv doctor` found a failed check, or a declined large-job prompt |
-| `2` | Large job without a terminal and without `--yes`; also invalid command-line usage |
-| `130` | `mapcv generate` interrupted with Ctrl-C; finished chunks are saved and the same command resumes |
+| `1` | Config not found or invalid, generation failed, resume refused, dataset or manifest not found, a file that can't be read or written, file exists without `--force`, `mapcv verify` found a problem, `mapcv doctor` found a failed check, a declined large-job prompt, or the input ended during `mapcv init`'s questions |
+| `2` | Invalid command-line usage: an unknown command or option, a missing argument, or an option value that is not allowed (`stats --split nope`, `export --format coco`, `export` without the `--out` its format needs, `cache --expired` without `--clear`, a `split` ratio out of range, `mcp --root` that is not a folder). Also a large job without a terminal and without `--yes`. `mapcv` with no command prints the help and exits with 2 too |
+| `130` | Interrupted with Ctrl-C (any command; `generate` keeps the finished chunks) |
+
+Errors are printed on stderr, everything else on stdout.

@@ -46,7 +46,7 @@ In a script or CI (no terminal), it refuses with exit code 2 instead:
 This is a large job. Re-run with --yes to confirm.
 ```
 
-Pass `--yes` (`-y`) once you have read the plan. Add `-q` to drop progress bars from logs: `mapcv -q generate big.yaml --yes`.
+Pass `--yes` (`-y`) once you have read the plan. In a log, progress is a plain line per tenth of the chunks (`Reading imagery and writing patches: 40/400 chunks (10%), 3m 12s`) instead of a bar; add `-q` to drop it too: `mapcv -q generate big.yaml --yes`.
 
 ## 2. Keep memory bounded
 
@@ -93,12 +93,12 @@ Peak memory therefore grows with the **width** of the region and the chunk heigh
 
 ## 4. Resume
 
-Run the same command again. Under the plan, mapcv prints `Resuming: <n> patch(es) already written, <m> to go` and continues.
+Run the same command again. Under the plan, mapcv prints `Resuming: <n> patches already written, <m> to go.` and continues.
 
 If everything is already written, mapcv says so and only refreshes the splits and the summary:
 
 ```text
-Nothing left to do: all 77 patch(es) are already written.
+Nothing left to do: all 77 patches are already written.
 ```
 
 mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches.

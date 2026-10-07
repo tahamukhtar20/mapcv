@@ -27,7 +27,7 @@ No extra install is needed: `pip install mapcv` is enough.
    …
    GeoTIFF / COG path or URL: ortho/paris-2024.tif
    CRS        EPSG:32631
-   Size       12,000 × 9,000 px · 3 band(s) · uint8
+   Size       12,000 × 9,000 px · 3 bands · uint8
    Pixel      0.1 × 0.1 CRS units
    NoData     0
    Overviews  4
@@ -62,9 +62,9 @@ No extra install is needed: `pip install mapcv` is enough.
    $ mapcv plan mapcv.yaml
    ╭─ Plan for mapcv.yaml ────────────────────────────────────────────────────────────────────────────╮
    │ Region   2.333, 48.856 → 2.34, 48.86  (≈ 0.5 × 0.4 km)                                           │
-   │ Imagery  GeoTIFF paris-2024.tif · EPSG:32631 · 3 band(s) uint8 (≈ 0.10 m/px)                     │
+   │ Imagery  GeoTIFF paris-2024.tif · EPSG:32631 · 3 bands uint8 (≈ 0.10 m/px)                       │
    │ Raster   5,174 × 4,492 px                                                                        │
-   │ Labels   buildings.geojson · … polygon(s) · classes: building → 1                                │
+   │ Labels   buildings.geojson · … polygons · classes: building → 1                                  │
    │ Patches  ≈ 340 × 256 px (grid, stride 256)                                                       │
    │ Output   dataset · png (≈ 36.8 MB)                                                               │
    │ Split    spatial · test 0.2 · val 0.1                                                            │

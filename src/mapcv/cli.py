@@ -8,21 +8,26 @@ what it will cost), ``mapcv generate`` (build the dataset) and ``mapcv info``
 from __future__ import annotations
 
 import datetime
+import errno
 import glob
 import json
 import logging
+import os
 import platform
 import re
+import shlex
 import sys
+import time
 import warnings
 from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 from urllib.parse import urlsplit
 
 import numpy as np
 import typer
+import yaml
 from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
@@ -39,6 +44,8 @@ from rich.progress import (
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.status import Status
 from rich.table import Table
+from rich.text import Text
+from typer.core import TyperGroup
 
 import mapcv
 from mapcv import doctor
@@ -70,8 +77,22 @@ from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
 from mapcv.writers.detection import categories
 
+
+class _MapcvGroup(TyperGroup):
+    """The command group: Ctrl-C in any command ends with one line and exit code 130
+    (Typer alone exits silently, leaving the shell prompt after a half-written line)."""
+
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except KeyboardInterrupt:
+            _err_console.print("\n[yellow]Interrupted.[/yellow]")
+            raise typer.Exit(code=130) from None
+
+
 app = typer.Typer(
     name="mapcv",
+    cls=_MapcvGroup,
     help=(
         "Turn a region, imagery and labels into a ready-to-train segmentation, detection, "
         "instance segmentation, classification, change detection or regression dataset.\n\n"
@@ -108,7 +129,10 @@ def _make_output_encodable() -> None:
 
 
 _make_output_encodable()
+# Results, plans and summaries go to stdout; errors (and Ctrl-C) to stderr, so
+# ``mapcv plan x.yaml > plan.txt`` still shows a failure on the terminal.
 _console = Console()
+_err_console = Console(stderr=True)
 # NO_COLOR as the environment set it; --no-color turns colours off for one run.
 _NO_COLOR_FROM_ENV = _console.no_color
 # --quiet: hide the spinner, progress bars and progress messages.
@@ -168,10 +192,30 @@ def _debug_traceback(exc: BaseException) -> None:
         logging.getLogger("mapcv.cli").error("%s: %s", type(exc).__name__, exc, exc_info=exc)
 
 
+def _live_terminal() -> bool:
+    """Whether stdout is a terminal that can redraw a line (spinners, progress bars).
+
+    Piped or redirected output, and ``TERM=dumb``, get plain lines instead: a bar
+    there is only its last frame, with a spinner glyph and an ``eta -:--:--``.
+    """
+    return _console.is_terminal and not _console.is_dumb_terminal
+
+
+def _duration(seconds: float) -> str:
+    """``45s``, ``3m 07s``, ``2h 05m``: the same format everywhere."""
+    seconds = int(seconds)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
 class _GenerateFeedback(logging.Handler):
     """The terminal side of a generation: a spinner while the imagery opens, a progress
     bar over the chunks (it is the ``on_chunk`` callback), and the library's log
-    messages, dimmed. All of it is hidden under ``--quiet``."""
+    messages, dimmed. Output that is not a live terminal gets a plain line per tenth
+    of the chunks instead. All of it is hidden under ``--quiet``."""
 
     def __init__(self) -> None:
         super().__init__(logging.INFO)
@@ -179,6 +223,9 @@ class _GenerateFeedback(logging.Handler):
         self._progress: Progress | None = None
         self._task: Any | None = None
         self._level = logging.NOTSET
+        self._live = _live_terminal()
+        self._started = time.monotonic()
+        self._reported = -1  # the last tenth printed in plain mode
 
     def __enter__(self) -> _GenerateFeedback:
         logger = logging.getLogger("mapcv")
@@ -186,8 +233,11 @@ class _GenerateFeedback(logging.Handler):
         logger.setLevel(logging.DEBUG if _debug else logging.INFO)
         logger.addHandler(self)
         if not _quiet:
-            self._status = _console.status("Opening imagery…")
-            self._status.start()
+            if self._live:
+                self._status = _console.status("Opening imagery…")
+                self._status.start()
+            else:
+                _console.print("Opening imagery…")
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -209,6 +259,16 @@ class _GenerateFeedback(logging.Handler):
 
     def __call__(self, done: int, total: int) -> None:
         self._stop_status()
+        if not self._live:
+            tenth = done * 10 // total if total else 10
+            if not _quiet and total and tenth > self._reported:
+                self._reported = tenth
+                _console.print(
+                    f"Reading imagery and writing patches: {done:,}/{_plural(total, 'chunk')} "
+                    f"({done / total:.0%}), {_duration(time.monotonic() - self._started)}",
+                    soft_wrap=True,
+                )
+            return
         if self._progress is None and total and not _quiet:
             self._progress = Progress(
                 SpinnerColumn(),
@@ -236,6 +296,53 @@ _PROVIDERS_URL = "https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md"
 
 def _version() -> str:
     return mapcv.__version__
+
+
+def _plural(count: int, noun: str, nouns: str | None = None) -> str:
+    """``1 patch``, ``1,234 patches``: a count with its noun, never ``patch(es)``."""
+    return f"{count:,} {noun if count == 1 else nouns or noun + 's'}"
+
+
+def _fail(message: str, hint: str | None = None, code: int = 1) -> NoReturn:
+    """Print an error (Rich markup) and an optional dimmed next step on stderr, and exit.
+
+    Every user error ends here, so they read alike: what went wrong, then what to do.
+    """
+    _err_console.print(message)
+    if hint:
+        _err_console.print(f"[dim]{hint}[/dim]")
+    raise typer.Exit(code=code)
+
+
+def _shell_path(path: Path | str) -> str:
+    """A path as it would be typed in a command: quoted when it has spaces or other
+    characters the shell would split on, so the suggested command can be copied."""
+    text = str(path)
+    if os.name == "nt":
+        return f'"{text}"' if any(char in text for char in " \t&()^;,=") else text
+    return shlex.quote(text)
+
+
+def _coordinate(value: float) -> str:
+    """A longitude or latitude to 6 decimals (about 0.1 m), without trailing zeros."""
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _generate_os_error(exc: OSError) -> tuple[str, str | None]:
+    """For a failed generation: a short reason for an operating-system error, without
+    the ``[Errno 13]`` prefix, and the next step when there is a usual one."""
+    where = f": {exc.filename}" if exc.filename else ""
+    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+        return (
+            f"permission denied{where}",
+            "Make that folder writable, or set writer.staging_dir to a folder you can write to.",
+        )
+    if exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)):
+        return (
+            f"no space left on the disk{where}",
+            "Free some space, or set writer.staging_dir to another disk and start again there.",
+        )
+    return f"{(exc.strerror or str(exc)).rstrip('.')}{where}", None
 
 
 def _version_callback(value: bool) -> None:
@@ -271,48 +378,94 @@ def _main(
     segmentation, classification, change detection or regression dataset."""
     global _quiet
     _quiet = quiet
-    _console.no_color = no_color or _NO_COLOR_FROM_ENV
+    _console.no_color = _err_console.no_color = no_color or _NO_COLOR_FROM_ENV
     _configure_debug(debug, debug_log)
 
 
-def _format_validation_error(exc: ValidationError) -> list[str]:
-    lines = []
+def _validation_items(exc: ValidationError, options: bool = False) -> list[tuple[str, str]]:
+    """``(field, message)`` per validation error; with ``options``, fields are named as
+    the command-line options that set them (``--test-ratio``)."""
+    items = []
     for error in exc.errors():
         location = ".".join(
             str(part)
             for part in error["loc"]
             if not str(part).startswith("function-") and part not in UNION_TAGS
         )
+        if options and location:
+            location = "--" + location.replace("_", "-")
         message = str(error["msg"]).removeprefix("Value error, ")
-        lines.append(f"  • [bold]{location or 'config'}[/bold]: {message}")
-    return lines
+        items.append((location or "config", message))
+    return items
+
+
+def _print_items(console: Console, items: list[tuple[str, str]]) -> None:
+    """``  • field: message`` lines whose wrapped text stays indented under the message
+    (and, unlike a table, without spaces padding each line to the terminal width)."""
+    width = max(console.width - 4, 20)
+    for location, message in items:
+        text = Text.assemble((location, "bold"), f": {message}")
+        for index, line in enumerate(text.wrap(console, width)):
+            line.rstrip()
+            console.print(Text("  • " if index == 0 else "    ") + line, soft_wrap=True)
+
+
+_INIT_HINT = "Fix the fields above, or start from a working config with [bold]mapcv init[/bold]."
 
 
 def _load_config(config_path: Path) -> MapcvConfig:
     if not config_path.exists():
-        _console.print(f"[red]Config file not found:[/red] {config_path}")
-        _console.print("[dim]Create one with [bold]mapcv init[/bold].[/dim]")
-        raise typer.Exit(code=1)
+        _fail(
+            f"[red]Config file not found:[/red] {escape(str(config_path))}",
+            "Create one with [bold]mapcv init[/bold].",
+        )
+    if config_path.is_dir():
+        _fail(
+            f"[red]Not a config file:[/red] {escape(str(config_path))} is a folder.",
+            "Pass the YAML file, for example [bold]mapcv.yaml[/bold].",
+        )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             config = MapcvConfig.from_yaml(config_path)
         except ValidationError as exc:
             _debug_traceback(exc)
-            _console.print(f"[red]Config error[/red] in {config_path}:")
-            for line in _format_validation_error(exc):
-                _console.print(line)
-            _console.print(
-                "[dim]Fix the fields above, or start from a working config with "
-                "[bold]mapcv init[/bold].[/dim]"
+            items = _validation_items(exc)
+            if all(not error["loc"] and error["type"] == "model_type" for error in exc.errors()):
+                _fail(
+                    f"[red]Config error[/red] in {escape(str(config_path))}: it holds no "
+                    "settings (expected YAML keys such as region:, imagery: and writer:).",
+                    "Start from a working config with [bold]mapcv init[/bold].",
+                )
+            _err_console.print(f"[red]Config error[/red] in {escape(str(config_path))}:")
+            _print_items(_err_console, items)
+            _fail(f"[dim]{_INIT_HINT}[/dim]")
+        except yaml.YAMLError as exc:
+            _debug_traceback(exc)
+            mark = getattr(exc, "problem_mark", None)
+            where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+            problem = getattr(exc, "problem", None) or str(exc)
+            _fail(
+                f"[red]Config error[/red] in {escape(str(config_path))}: not valid YAML{where} "
+                f"({escape(str(problem))}).",
+                "Check the indentation, colons and brackets there.",
             )
-            raise typer.Exit(code=1)
+        except UnicodeDecodeError as exc:
+            _debug_traceback(exc)
+            _fail(
+                f"[red]Config error[/red] in {escape(str(config_path))}: not a UTF-8 text file.",
+                "Pass the YAML config, saved as UTF-8.",
+            )
+        except OSError as exc:
+            _debug_traceback(exc)
+            _fail(
+                f"[red]Config error[/red] in {escape(str(config_path))}: cannot read it "
+                f"({escape(exc.strerror or str(exc))})."
+            )
         except Exception as exc:  # noqa: BLE001 - any other config failure is a user error
             _debug_traceback(exc)
-            _console.print(f"[red]Config error:[/red] {exc}")
-            raise typer.Exit(code=1)
-    for warning in caught:
-        warnings.showwarning(warning.message, warning.category, warning.filename, warning.lineno)
+            _fail(f"[red]Config error[/red] in {escape(str(config_path))}: {escape(str(exc))}")
+    _show_warnings(caught, set())
     return config
 
 
@@ -408,6 +561,14 @@ def _task_label(config: MapcvConfig) -> str:
     return detail
 
 
+def _region_box(config: MapcvConfig) -> str:
+    region = config.region
+    west, south, east, north = (
+        _coordinate(value) for value in (region.west, region.south, region.east, region.north)
+    )
+    return f"{west}, {south} → {east}, {north}"
+
+
 def _settings_table(config: MapcvConfig) -> Table:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
@@ -418,8 +579,7 @@ def _settings_table(config: MapcvConfig) -> Table:
     area = f"{region.path} · " if region.path is not None else ""
     table.add_row(
         "Region",
-        f"{area}{region.west:.6g}, {region.south:.6g} → {region.east:.6g}, {region.north:.6g} "
-        "(W, S → E, N)",
+        f"{area}{_region_box(config)} (W, S → E, N)",
     )
     table.add_row("Imagery", _imagery_label(config))
     change = config.change_options
@@ -432,7 +592,8 @@ def _settings_table(config: MapcvConfig) -> Table:
         where = _redact_url(raster.path) if "://" in raster.path else raster.path
         table.add_row(
             "Labels",
-            f"{where} · raster band {raster.band} · {len(raster.class_map())} class(es)",
+            f"{where} · raster band {raster.band} · "
+            f"{_plural(len(raster.class_map()), 'class', 'classes')}",
         )
     elif isinstance(config.labels, ContinuousLabelsConfig):
         values = config.labels
@@ -480,13 +641,11 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
     width_km, height_km = estimate.region_km
-    region = config.region
     if config.task != "segmentation":
         table.add_row("Task", _task_label(config))
     table.add_row(
         "Region",
-        f"{region.west}, {region.south} → {region.east}, {region.north}  "
-        f"[dim](≈ {width_km:.1f} × {height_km:.1f} km)[/dim]",
+        f"{_region_box(config)}  [dim](≈ {width_km:.1f} × {height_km:.1f} km)[/dim]",
     )
     table.add_row("Imagery", f"{estimate.imagery} [dim](≈ {estimate.resolution_m:.2f} m/px)[/dim]")
     width, height = estimate.raster_px
@@ -507,7 +666,7 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
             detail = f"{labels.raster} · classes: {classes or 'none (all background)'}"
             table.add_row("Labels", f"{where} · {detail}")
         else:
-            detail = f"{labels.polygons:,} polygon(s)"
+            detail = _plural(labels.polygons, "polygon")
             detail += f" · classes: {classes}" if classes else " · every polygon is class 1"
             table.add_row("Labels", f"{labels.path} · {detail}")
     table.add_row(
@@ -535,6 +694,14 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         )
     table.add_row("Memory", f"≈ {human_bytes(estimate.chunk_memory_bytes)} per chunk")
     return table
+
+
+def _make_plan(config: MapcvConfig) -> Plan:
+    try:
+        return make_plan(config)
+    except (ValueError, RuntimeError, OSError) as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
 
 
 def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
@@ -703,8 +870,39 @@ def _split_line(counts: dict[str, int]) -> str:
     ]
     line = " · ".join(parts)
     if counts.get("dropped"):
-        line += f" [dim]· {counts['dropped']:,} overlapping patch(es) left out[/dim]"
+        dropped = _plural(counts["dropped"], "overlapping patch", "overlapping patches")
+        line += f" [dim]· {dropped} left out[/dim]"
     return line
+
+
+# What generate may write next to the patch folders, in the order the summary lists it.
+_DATASET_FILES = (
+    "manifest.json",
+    "splits/",
+    "patches.geojson",
+    # detection and instance: COCO, YOLO labels and image lists, the Ultralytics file
+    "annotations/",
+    "labels/",
+    "train.txt",
+    "val.txt",
+    "test.txt",
+    "dataset.yaml",
+    # classification
+    "labels.csv",
+    "labels_train.csv",
+    "labels_val.csv",
+    "labels_test.csv",
+    "labels.json",
+    "classes.txt",
+)
+
+
+def _dataset_files(staging_dir: Path, manifest: Manifest) -> list[str]:
+    """The folders and files of a generated dataset that are there, for the summary."""
+    folders = [f"{folder}/" for folder in patch_folders(manifest)] or ["Images/"]
+    return [
+        name for name in (*folders, *_DATASET_FILES) if (staging_dir / name.rstrip("/")).exists()
+    ]
 
 
 def _print_result(result: GenerateResult) -> None:
@@ -733,20 +931,9 @@ def _print_result(result: GenerateResult) -> None:
         )
     if result.split_counts is not None:
         table.add_row("Splits", _split_line(result.split_counts))
-    minutes, seconds = divmod(int(result.seconds), 60)
-    table.add_row("Time", f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s")
-    written = [f"{folder}/" for folder in patch_folders(manifest)] or ["Images/"]
-    written.append("manifest.json")
-    if result.split_counts is not None:
-        written.append("splits/")
-    written.extend(
-        name
-        for name in ("annotations/", "labels/", "dataset.yaml")
-        if manifest.task in ("detection", "instance") and (result.staging_dir / name).exists()
-    )
-    if manifest.task == "classification":
-        written.extend(("labels.csv", "labels.json", "classes.txt"))
-    table.add_row("Files", f"{result.staging_dir}/ ({', '.join(written)})")
+    table.add_row("Time", _duration(result.seconds))
+    written = ", ".join(_dataset_files(result.staging_dir, manifest))
+    table.add_row("Files", f"{escape(str(result.staging_dir))}/ ({written})")
     _console.print(
         Panel(table, title="[bold]Dataset ready[/bold]", title_align="left", border_style="green")
     )
@@ -759,12 +946,13 @@ def _print_result(result: GenerateResult) -> None:
         "classification": "tutorials/classification/#train-a-classifier",
     }
     guide = guides.get(manifest.task, "guides/use-your-dataset/")
+    staging = escape(_shell_path(result.staging_dir))
     # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
-        f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
-        f"  • Re-split it:     [cyan]mapcv split {result.staging_dir} --strategy spatial[/cyan]\n"
-        f"  • Band stats:      [cyan]mapcv stats {result.staging_dir}[/cyan]\n"
+        f"  • Inspect it:      [cyan]mapcv info {staging}[/cyan]\n"
+        f"  • Re-split it:     [cyan]mapcv split {staging} --strategy spatial[/cyan]\n"
+        f"  • Band stats:      [cyan]mapcv stats {staging}[/cyan]\n"
         f"  • Train on it:     {_DOCS_URL}/{guide}",
         soft_wrap=True,
     )
@@ -1263,7 +1451,7 @@ def _ask_bbox_or_file(
         path = Path(answer).expanduser()
         if path.suffix.lower() in VECTOR_LABEL_SUFFIXES:
             if not path.exists():
-                _console.print(f"[red]File not found:[/red] {path}")
+                _console.print(f"[red]File not found:[/red] {escape(str(path))}")
                 continue
             layer = _ask_layer(path)
             try:
@@ -1282,7 +1470,7 @@ def _ask_bbox_or_file(
             east = max(geom.bounds[2] for geom, _ in geometries)
             north = max(geom.bounds[3] for geom, _ in geometries)
             _console.print(
-                f"[dim]Using the extent of {len(geometries):,} polygon(s): "
+                f"[dim]Using the extent of {_plural(len(geometries), 'polygon')}: "
                 f"{west:.5f}, {south:.5f} → {east:.5f}, {north:.5f}[/dim]"
             )
             return (west, south, east, north), path, layer
@@ -1355,6 +1543,7 @@ def _ask_label_field(path: Path, layer: str | None = None) -> str | None:
         "Which field holds the class? [dim](blank = every polygon is class 1)[/dim]",
         choices=[*fields, ""],
         default="",
+        show_default=False,
         show_choices=False,
         console=_console,
     )
@@ -1431,7 +1620,7 @@ def _ask_geotiff() -> _GeoTiffAnswer:
             )
         except Exception as exc:  # noqa: BLE001 - any failure to open is shown and asked again
             _debug_traceback(exc)
-            _console.print(f"[red]Cannot read that file:[/red] {exc}")
+            _console.print(f"[red]Cannot read that file:[/red] {escape(str(exc))}")
             continue
         break
     info = tif.info
@@ -1441,7 +1630,8 @@ def _ask_geotiff() -> _GeoTiffAnswer:
     crs = f"EPSG:{info.epsg}" if info.epsg is not None else f"none usable ({info.crs_error})"
     table.add_row("CRS", crs)
     table.add_row(
-        "Size", f"{info.width:,} × {info.height:,} px · {info.count} band(s) · {info.dtype}"
+        "Size",
+        f"{info.width:,} × {info.height:,} px · {_plural(info.count, 'band')} · {info.dtype}",
     )
     if info.transform is not None:
         table.add_row("Pixel", f"{abs(info.transform[0]):g} × {abs(info.transform[4]):g} CRS units")
@@ -1537,7 +1727,9 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
         tif = GeoTiff(geotiff_location(path_text))
     except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
         _debug_traceback(exc)
-        _console.print(f"[yellow]Cannot read that file:[/yellow] {exc}. Edit labels.classes.")
+        _console.print(
+            f"[yellow]Cannot read that file:[/yellow] {escape(str(exc))}. Edit labels.classes."
+        )
         return placeholder
     info = tif.info
     table = Table.grid(padding=(0, 2))
@@ -1546,7 +1738,8 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
     crs = f"EPSG:{info.epsg}" if info.epsg is not None else f"none usable ({info.crs_error})"
     table.add_row("CRS", crs)
     table.add_row(
-        "Size", f"{info.width:,} × {info.height:,} px · {info.count} band(s) · {info.dtype}"
+        "Size",
+        f"{info.width:,} × {info.height:,} px · {_plural(info.count, 'band')} · {info.dtype}",
     )
     if info.transform is not None:
         table.add_row("Pixel", f"{abs(info.transform[0]):g} × {abs(info.transform[4]):g} CRS units")
@@ -1562,7 +1755,9 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
         counts, sampled = _sample_label_values(tif, bbox)
     except Exception as exc:  # noqa: BLE001 - shown, and the config is written for editing
         _debug_traceback(exc)
-        _console.print(f"[yellow]Cannot read its values:[/yellow] {exc}. Edit labels.classes.")
+        _console.print(
+            f"[yellow]Cannot read its values:[/yellow] {escape(str(exc))}. Edit labels.classes."
+        )
         return placeholder
     nodata = integer_nodata(info.nodata, info.dtype)
     if nodata is not None:
@@ -1579,7 +1774,7 @@ def _ask_label_raster(path_text: str, bbox: tuple[float, float, float, float]) -
         shown.add_row(str(value), f"{counts[value] / total:.1%}")
     _console.print(shown)
     if len(values) > 20:
-        _console.print(f"[dim]… and {len(values) - 20} more value(s).[/dim]")
+        _console.print(f"[dim]… and {_plural(len(values) - 20, 'more value')}.[/dim]")
     if sampled:
         _console.print("[dim]Values from a sample of the area (an overview or its centre).[/dim]")
     classes = [value for value in values if value != 0]
@@ -1849,9 +2044,9 @@ def _wizard() -> str:
             label_lines.append(f"  layer: {_yaml_str(labels_layer)}")
         label_lines.append(f"  label_field: {field}" if field else "  label_field: null")
         _console.print(
-            "  [bold]segmentation[/bold]  a class mask per patch\n"
-            "  [bold]detection[/bold]     a box per object (COCO and YOLO)\n"
-            "  [bold]instance[/bold]      a mask per object (COCO RLE, optional instance-ID PNG)\n"
+            "  [bold]segmentation[/bold]    a class mask per patch\n"
+            "  [bold]detection[/bold]       a box per object (COCO and YOLO)\n"
+            "  [bold]instance[/bold]        a mask per object (COCO RLE, optional instance-ID PNG)\n"
             "  [bold]classification[/bold]  a label (or set of labels) per patch, as a CSV"
         )
         task = Prompt.ask(
@@ -1945,18 +2140,18 @@ def _wizard() -> str:
 
 @app.command(
     rich_help_panel="1. Build a dataset",
+    # Descriptions start in one column; each line fits 80 columns.
     epilog=(
         "Examples:\n\n"
-        "  [cyan]mapcv init[/cyan]                         guided, writes mapcv.yaml\n\n"
-        "  [cyan]mapcv init --template xyz --stdout[/cyan]   print a template\n\n"
-        "  [cyan]mapcv init my.yaml --template sentinel2[/cyan]   a ready-made example\n\n"
-        "  [cyan]mapcv init gee.yaml --template earth-engine[/cyan]   cloud-free Sentinel-2 from "
-        "Earth Engine\n\n"
-        "  [cyan]mapcv init boxes.yaml --template detection[/cyan]   boxes for COCO and YOLO\n\n"
-        "  [cyan]mapcv init masks.yaml --template instance[/cyan]   a mask per object (COCO RLE)\n\n"
-        "  [cyan]mapcv init tiles.yaml --template classification[/cyan]   a label per patch (CSV)\n\n"
-        "  [cyan]mapcv init pairs.yaml --template change[/cyan]   before/after pairs and change masks\n\n"
-        "  [cyan]mapcv init heights.yaml --template regression[/cyan]   float targets from a raster"
+        "  [cyan]mapcv init[/cyan]                                guided, writes mapcv.yaml\n\n"
+        "  [cyan]mapcv init --template xyz --stdout[/cyan]        print a template\n\n"
+        "  [cyan]mapcv init my.yaml -t sentinel2[/cyan]           a ready-made example\n\n"
+        "  [cyan]mapcv init gee.yaml -t earth-engine[/cyan]       Sentinel-2 from Earth Engine\n\n"
+        "  [cyan]mapcv init boxes.yaml -t detection[/cyan]        boxes for COCO and YOLO\n\n"
+        "  [cyan]mapcv init masks.yaml -t instance[/cyan]         a mask per object (COCO RLE)\n\n"
+        "  [cyan]mapcv init tiles.yaml -t classification[/cyan]   a label per patch (CSV)\n\n"
+        "  [cyan]mapcv init pairs.yaml -t change[/cyan]           before/after pairs and change masks\n\n"
+        "  [cyan]mapcv init heights.yaml -t regression[/cyan]     float targets from a raster"
     ),
 )
 def init(
@@ -1964,7 +2159,13 @@ def init(
         Path("mapcv.yaml"), metavar="OUTPUT", help="Where to write the config."
     ),
     template: Template | None = typer.Option(
-        None, "--template", "-t", help="Write a ready-made example instead of asking."
+        None,
+        "--template",
+        "-t",
+        metavar="NAME",
+        help="Write a ready-made example instead of asking: "
+        + ", ".join(item.value for item in list(Template)[:-1])
+        + f" or {list(Template)[-1].value}.",
     ),
     interactive: bool | None = typer.Option(
         None,
@@ -1984,37 +2185,71 @@ def init(
         typer.echo(_TEMPLATES[template or Template.xyz], nl=False)
         return
     target = output
-    if target.exists() and not force and not guided:
-        _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
-        raise typer.Exit(code=1)
-    text = _wizard() if guided else _TEMPLATES[template or Template.xyz]
-    if (
-        target.exists()
-        and not force
-        and not (
-            guided
-            and Confirm.ask(f"{target} exists. Overwrite it?", default=False, console=_console)
+    exists = f"[red]{escape(str(target))} already exists.[/red]"
+    overwrite = "Add [bold]--force[/bold] to overwrite it, or name another file."
+    if target.is_dir():
+        _fail(f"[red]{escape(str(target))} is a folder.[/red]", "Name the YAML file to write.")
+    try:
+        # Asked before the questions, so a "no" doesn't throw the answers away.
+        if (
+            target.exists()
+            and not force
+            and not (
+                guided
+                and Confirm.ask(f"{target} exists. Overwrite it?", default=False, console=_console)
+            )
+        ):
+            _fail(exists, overwrite)
+        text = _wizard() if guided else _TEMPLATES[template or Template.xyz]
+    except KeyboardInterrupt:
+        _fail("\n[yellow]Interrupted.[/yellow] Nothing was written.", code=130)
+    except EOFError:
+        _fail(
+            "\n[red]The input ended before the last question.[/red] Nothing was written.",
+            "Without a terminal, start from a template: [bold]mapcv init --template xyz[/bold].",
         )
-    ):
-        _console.print(f"[red]{target} already exists.[/red] Use [bold]--force[/bold].")
-        raise typer.Exit(code=1)
-    target.write_text(text, encoding="utf-8")
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        _debug_traceback(exc)
+        _fail(
+            f"[red]Cannot write[/red] {escape(str(target))}: {escape(exc.strerror or str(exc))}.",
+            "Check that its folder exists and that you can write to it.",
+        )
     try:
         MapcvConfig.from_yaml(target)
     except ValidationError as exc:
         _debug_traceback(exc)
-        _console.print(f"[yellow]Wrote {target}, but it needs edits:[/yellow]")
-        for line in _format_validation_error(exc):
-            _console.print(line)
+        _console.print(f"[yellow]⚠[/yellow]  Wrote {escape(str(target))}, but it needs edits:")
+        _print_items(_console, _validation_items(exc))
         return
-    _console.print(f"\n[green]✓[/green] Wrote [bold]{target}[/bold]")
+    _console.print(f"\n[green]✓[/green] Wrote [bold]{escape(str(target))}[/bold]", soft_wrap=True)
+    path = escape(_shell_path(target))
     # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
-        f"  1. See what it will cost:  [cyan]mapcv plan {target}[/cyan]\n"
-        f"  2. Build the dataset:      [cyan]mapcv generate {target}[/cyan]\n"
-        f"[dim]Imagery terms: {_PROVIDERS_URL}[/dim]"
+        f"  1. See what it will cost:  [cyan]mapcv plan {path}[/cyan]\n"
+        f"  2. Build the dataset:      [cyan]mapcv generate {path}[/cyan]\n"
+        f"[dim]Imagery terms: {_PROVIDERS_URL}[/dim]",
+        soft_wrap=True,
     )
+
+
+def _fit_title(text: str) -> str:
+    """A panel title that fits the terminal: a long path loses its start, not its end."""
+    room = max(_console.width - 6, 12)
+    return text if len(text) <= room else "…" + text[-(room - 1) :]
+
+
+def _require_dataset(staging_dir: Path) -> None:
+    """Exit with the same message from every dataset command when there is no dataset."""
+    manifest = staging_dir / "manifest.json"
+    if not manifest.is_file():
+        _fail(
+            f"[red]No manifest found at[/red] {escape(str(manifest))}",
+            "Pass the dataset folder that [bold]mapcv generate[/bold] wrote "
+            "(the config's writer.staging_dir).",
+        )
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -2029,14 +2264,13 @@ def plan(
 ) -> None:
     """Estimate tiles, patches, disk and memory for a config [bold]without downloading[/bold]."""
     config = _load_config(config_path)
-    try:
-        estimate = make_plan(config)
-    except (ValueError, RuntimeError, OSError) as exc:
-        _debug_traceback(exc)
-        _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
-        raise typer.Exit(code=1)
+    estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
-    _console.print(f"\nLooks right? Build it with [cyan]mapcv generate {config_path}[/cyan]")
+    _console.print(
+        "\nLooks right? Build it with "
+        f"[cyan]mapcv generate {escape(_shell_path(config_path))}[/cyan]",
+        soft_wrap=True,
+    )
 
 
 @app.command(
@@ -2059,23 +2293,18 @@ def generate(
     Re-running the same command resumes an interrupted run.
     """
     config = _load_config(config_path)
-    try:
-        estimate = make_plan(config)
-    except (ValueError, RuntimeError, OSError) as exc:
-        _debug_traceback(exc)
-        _console.print(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
-        raise typer.Exit(code=1)
+    estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
     if dry_run:
         return
     if estimate.is_large and not yes:
         if not sys.stdin.isatty():
-            _console.print(
-                "[red]This is a large job.[/red] Re-run with [bold]--yes[/bold] to confirm."
+            _fail(
+                "[red]This is a large job.[/red] Re-run with [bold]--yes[/bold] to confirm.",
+                code=2,
             )
-            raise typer.Exit(code=2)
         if not Confirm.ask("This is a large job. Start it?", default=False, console=_console):
-            raise typer.Exit(code=1)
+            _fail("Not started.", "Re-run with [bold]--yes[/bold] to start without asking.")
     shown = set(estimate.warnings)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -2085,24 +2314,26 @@ def generate(
         except ManifestMismatchError as exc:
             _debug_traceback(exc)
             _show_warnings(caught, shown)
-            _console.print(f"[red]Cannot resume:[/red] {exc}")
-            raise typer.Exit(code=1)
+            _fail(f"[red]Cannot resume:[/red] {escape(str(exc))}")
         except KeyboardInterrupt:
-            _console.print(
+            _fail(
                 "\n[yellow]Interrupted.[/yellow] Finished chunks are saved; run the same "
-                "command again to resume."
+                "command again to resume.",
+                code=130,
             )
-            raise typer.Exit(code=130)
         except Exception as exc:  # noqa: BLE001 - any failure gets the same resume advice
             _debug_traceback(exc)
             _show_warnings(caught, shown)
-            detail = escape(str(exc) or type(exc).__name__)
-            _console.print(f"[red]Generation failed:[/red] {detail}")
-            _console.print(
-                "[dim]Fix the cause and run the same command again: finished chunks are "
-                "kept and the run resumes.[/dim]"
+            hint = None
+            if isinstance(exc, OSError) and exc.errno is not None:
+                detail, hint = _generate_os_error(exc)
+            else:
+                detail = str(exc) or type(exc).__name__
+            resume = "run the same command again: finished chunks are kept and the run resumes."
+            _fail(
+                f"[red]Generation failed:[/red] {escape(detail)}",
+                f"{hint} Then {resume}" if hint else f"Fix the cause and {resume}",
             )
-            raise typer.Exit(code=1)
     _show_warnings(caught, shown)
     if result is not None:
         _print_result(result)
@@ -2115,16 +2346,12 @@ def info(
     ),
 ) -> None:
     """Summarize a generated dataset: source, shapes, class balance and splits."""
-    manifest_path = staging_dir / "manifest.json"
-    if not manifest_path.exists():
-        _console.print(f"[red]No manifest found at[/red] {manifest_path}")
-        raise typer.Exit(code=1)
+    _require_dataset(staging_dir)
     try:
-        manifest = Manifest.load(manifest_path)
-    except ManifestMismatchError as exc:
+        manifest = Manifest.load(staging_dir / "manifest.json")
+    except (ValueError, OSError) as exc:  # ManifestMismatchError and bad JSON are ValueErrors
         _debug_traceback(exc)
-        _console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+        _fail(f"[red]Cannot read the dataset:[/red] {escape(str(exc))}")
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
@@ -2157,13 +2384,14 @@ def info(
             )
     padded = sum(1 for entry in manifest.patches if entry["padded"])
     if padded:
-        table.add_row("Padded", f"{padded:,} patch(es) touch the raster edge")
+        touch = "touches" if padded == 1 else "touch"
+        table.add_row("Padded", f"{_plural(padded, 'patch', 'patches')} {touch} the raster edge")
     splits_dir = staging_dir / "splits"
     if splits_dir.is_dir():
         counts = {}
         for name in ("train", "val", "test"):
             path = splits_dir / f"{name}.txt"
-            text = path.read_text().strip() if path.exists() else ""
+            text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
             counts[name] = len(text.splitlines()) if text else 0
         table.add_row("Splits", _split_line(counts))
     version = f"version {manifest.loaded_version}"
@@ -2171,7 +2399,12 @@ def info(
         version += f" (mapcv 0.{manifest.upgraded_from}; read as version {manifest.version})"
     table.add_row("Manifest", version)
     _console.print(
-        Panel(table, title=f"[bold]{staging_dir}[/bold]", title_align="left", border_style="cyan")
+        Panel(
+            table,
+            title=f"[bold]{escape(_fit_title(str(staging_dir)))}[/bold]",
+            title_align="left",
+            border_style="cyan",
+        )
     )
     classes = _class_table(manifest)
     if classes is not None:
@@ -2209,9 +2442,6 @@ def split(
     sample_limit: int | None = typer.Option(None, help="Use at most this many patches."),
 ) -> None:
     """Re-split an existing dataset from its manifest; no images are read."""
-    if not staging_dir.is_dir():
-        _console.print(f"[red]Not a directory:[/red] {staging_dir}")
-        raise typer.Exit(code=1)
     ratios = labeled_ratios if labeled_ratios is not None else [0.10, 0.20, 0.30]
     try:
         cfg = SplitterConfig(
@@ -2225,22 +2455,21 @@ def split(
         )
     except ValidationError as exc:
         _debug_traceback(exc)
-        _console.print("[red]Config error:[/red]")
-        for line in _format_validation_error(exc):
-            _console.print(line)
-        raise typer.Exit(code=1)
+        option, message = _validation_items(exc, options=True)[0]
+        raise typer.BadParameter(message, param_hint=f"'{option}'") from None
+    _require_dataset(staging_dir)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             counts = run_split(staging_dir, cfg)
-        except (FileNotFoundError, ValueError) as exc:  # ManifestMismatchError is a ValueError
+        except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
             _debug_traceback(exc)
-            _console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=1)
+            _fail(f"[red]Cannot split the dataset:[/red] {escape(str(exc))}")
     _show_warnings(caught, set())
     _console.print(
-        f"[green]✓[/green] Splits written to [bold]{staging_dir / 'splits'}[/bold]: "
-        f"{_split_line(counts)}"
+        f"[green]✓[/green] Splits written to [bold]{escape(str(staging_dir / 'splits'))}[/bold]: "
+        f"{_split_line(counts)}",
+        soft_wrap=True,
     )
 
 
@@ -2264,14 +2493,13 @@ def stats(
     from mapcv.stats import write_stats
 
     if split_name not in ("train", "val", "test", "all"):
-        _console.print("[red]--split must be train, val, test or all[/red]")
-        raise typer.Exit(code=1)
+        raise typer.BadParameter("must be train, val, test or all.", param_hint="'--split'")
+    _require_dataset(staging_dir)
     try:
         path, values = write_stats(staging_dir, split_name)
-    except (FileNotFoundError, ValueError) as exc:  # ManifestMismatchError is a ValueError
+    except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
-        _console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+        _fail(f"[red]Cannot compute the statistics:[/red] {escape(str(exc))}")
     table = Table(box=None, padding=(0, 2), show_edge=False)
     for column in ("source", "band", "mean", "std", "min", "max"):
         table.add_column(column, justify="left" if column in ("source", "band") else "right")
@@ -2288,9 +2516,11 @@ def stats(
             "Class weights (median frequency): "
             + ", ".join(f"{name} {weight:.3g}" for name, weight in weights.items())
         )
+    counted = _plural(values["patches"], "patch", "patches")
     _console.print(
-        f"[green]✓[/green] {values['patches']:,} patch(es) of the [bold]{values['split']}[/bold] "
-        f"split → [bold]{path}[/bold]"
+        f"[green]✓[/green] {counted} of the [bold]{values['split']}[/bold] split → "
+        f"[bold]{escape(str(path))}[/bold]",
+        soft_wrap=True,
     )
 
 
@@ -2307,18 +2537,19 @@ def card(
     """Write a dataset card (README.md with Hugging Face metadata) for sharing."""
     from mapcv.card import write_card
 
-    if not (staging_dir / "manifest.json").exists():
-        _console.print(f"[red]No manifest found at[/red] {staging_dir / 'manifest.json'}")
-        raise typer.Exit(code=1)
+    _require_dataset(staging_dir)
     try:
         path = write_card(staging_dir, overwrite=force)
-    except (FileExistsError, ManifestMismatchError) as exc:
+    except FileExistsError as exc:
         _debug_traceback(exc)
-        _console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+        _fail(f"[red]{escape(str(exc))}[/red]")
+    except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
+        _debug_traceback(exc)
+        _fail(f"[red]Cannot write the dataset card:[/red] {escape(str(exc))}")
     _console.print(
-        f"[green]✓[/green] Dataset card written to [bold]{path}[/bold]. Its licence "
-        "is 'other' until you set it."
+        f"[green]✓[/green] Dataset card written to [bold]{escape(str(path))}[/bold]. Its licence "
+        "is 'other' until you set it.",
+        soft_wrap=True,
     )
 
 
@@ -2342,22 +2573,38 @@ def verify(
     """Check that every file is present and intact (and SHA256SUMS, when there is one)."""
     from mapcv.verify import CHECKSUMS_FILENAME, verify_dataset, write_checksums
 
+    _require_dataset(staging_dir)
     report = verify_dataset(staging_dir, deep=deep)
     for note in report.notes:
-        _console.print(f"[yellow]Note:[/yellow] {note}")
+        _console.print(f"[yellow]⚠[/yellow]  {escape(note)}")
     if not report.ok:
         for problem in report.problems[:20]:
-            _console.print(f"[red]✗[/red] {problem}")
+            _console.print(f"[red]✗[/red] {escape(problem)}")
         if len(report.problems) > 20:
-            _console.print(f"[red]… and {len(report.problems) - 20} more[/red]")
-        raise typer.Exit(code=1)
-    hashes = f", {report.checked_hashes:,} hash(es) match" if report.checked_hashes else ""
+            _console.print(f"[red]… and {len(report.problems) - 20:,} more[/red]")
+        _fail(
+            f"[red]{_plural(len(report.problems), 'problem')} found.[/red]",
+            "Copy the dataset again from where it came from, or generate it into a new folder.",
+        )
+    hashes = (
+        f", {_plural(report.checked_hashes, 'hash', 'hashes')} match"
+        if report.checked_hashes
+        else ""
+    )
     _console.print(
-        f"[green]✓[/green] {report.patches:,} patch(es), {report.files:,} file(s) present{hashes}."
+        f"[green]✓[/green] {_plural(report.patches, 'patch', 'patches')}, "
+        f"{_plural(report.files, 'file')} present{hashes}."
     )
     if write_checksums_:
-        path = write_checksums(staging_dir)
-        _console.print(f"[green]✓[/green] {CHECKSUMS_FILENAME} written to [bold]{path}[/bold]")
+        try:
+            path = write_checksums(staging_dir)
+        except OSError as exc:
+            _debug_traceback(exc)
+            _fail(f"[red]Cannot write {CHECKSUMS_FILENAME}:[/red] {escape(str(exc))}")
+        _console.print(
+            f"[green]✓[/green] {CHECKSUMS_FILENAME} written to [bold]{escape(str(path))}[/bold]",
+            soft_wrap=True,
+        )
 
 
 @app.command(
@@ -2368,20 +2615,22 @@ def validate(
 ) -> None:
     """Check a config without reading labels or imagery (use [bold]plan[/bold] for estimates)."""
     config = _load_config(config_path)
-    _console.print(f"[green]✓[/green] {config_path} is a valid config.")
+    _console.print(
+        f"[green]✓[/green] {escape(str(config_path))} is a valid config.", soft_wrap=True
+    )
     _console.print(_settings_table(config))
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):
         label_file = eopf_local_path(labels.path)
         if label_file is not None and not label_file.exists():
-            _console.print(f"[yellow]Warning:[/yellow] labels.path not found: {label_file}")
+            _console.print(f"[yellow]⚠[/yellow]  labels.path not found: {label_file}")
     elif labels is not None:
         for key, path in labels.keyed_files():
             if not path.exists():
-                _console.print(f"[yellow]Warning:[/yellow] {key} not found: {path}")
+                _console.print(f"[yellow]⚠[/yellow]  {key} not found: {path}")
     area = labels.annotated_area if isinstance(labels, LabelsConfig) else None
     if area is not None and not area.exists():
-        _console.print(f"[yellow]Warning:[/yellow] labels.annotated_area not found: {area}")
+        _console.print(f"[yellow]⚠[/yellow]  labels.annotated_area not found: {area}")
     change = config.change
     if change is not None:
         for key, label_set in (
@@ -2392,11 +2641,11 @@ def validate(
                 prefix = key.rsplit(".", 1)[0]
                 for file_key, path in label_set.keyed_files(prefix):
                     if not path.exists():
-                        _console.print(f"[yellow]Warning:[/yellow] {file_key} not found: {path}")
+                        _console.print(f"[yellow]⚠[/yellow]  {file_key} not found: {path}")
                 set_area = label_set.annotated_area
                 if set_area is not None and not set_area.exists():
                     _console.print(
-                        f"[yellow]Warning:[/yellow] {prefix}.annotated_area not found: {set_area}"
+                        f"[yellow]⚠[/yellow]  {prefix}.annotated_area not found: {set_area}"
                     )
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
@@ -2406,7 +2655,7 @@ def validate(
                 local = None if glob.glob(str(local), recursive=True) else local
             if local is not None and not local.exists():
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
-                _console.print(f"[yellow]Warning:[/yellow] {where} not found: {local}")
+                _console.print(f"[yellow]⚠[/yellow]  {where} not found: {local}")
 
 
 @app.command(
@@ -2444,42 +2693,44 @@ def export(
     from mapcv.shards import export_webdataset, export_zarr
 
     if format_ not in FORMATS:
-        _console.print(f"[red]--format must be one of: {', '.join(FORMATS)}[/red]")
-        raise typer.Exit(code=1)
+        raise typer.BadParameter(
+            f"must be one of: {', '.join(FORMATS)}.", param_hint="'--format' / '-f'"
+        )
+    if format_ != "terratorch" and out is None:
+        raise typer.BadParameter(
+            f"required with --format {format_}: the folder to write.", param_hint="'--out' / '-o'"
+        )
+    _require_dataset(staging_dir)
+    shown = escape(str(out))
     try:
-        if format_ != "terratorch" and out is None:
-            _console.print(f"[red]--out is required for {format_}[/red]")
-            raise typer.Exit(code=1)
         if format_ == "webdataset":
             assert out is not None
             shards = export_webdataset(staging_dir, out, shard_mb * 1_000_000)
-            _console.print(
-                f"[green]✓[/green] {len(shards)} tar shard(s) and shards.json in [bold]{out}[/bold]"
-            )
+            message = f"{_plural(len(shards), 'tar shard')} and shards.json in [bold]{shown}[/bold]"
         elif format_ == "zarr":
             assert out is not None
             export_zarr(staging_dir, out)
-            _console.print(
-                f"[green]✓[/green] Zarr store written to [bold]{out}[/bold]; read it with "
-                f'mapcv.data.MapcvDataset("{out}", split="train").'
+            message = (
+                f"Zarr store written to [bold]{shown}[/bold]; read it with "
+                f'mapcv.data.MapcvDataset("{shown}", split="train").'
             )
         elif format_ == "hf-parquet":
             assert out is not None
             written = export_hf_parquet(staging_dir, out)
-            _console.print(
-                f"[green]✓[/green] {len(written)} Parquet file(s) and a dataset card in "
-                f'[bold]{out}[/bold]. Load them with datasets.load_dataset("{out}").'
+            message = (
+                f"{_plural(len(written), 'Parquet file')} and a dataset card in "
+                f'[bold]{shown}[/bold]. Load them with datasets.load_dataset("{shown}").'
             )
         else:
             path = export_terratorch(staging_dir, out)
-            _console.print(
-                f"[green]✓[/green] TerraTorch data config written to [bold]{path}[/bold]; "
+            message = (
+                f"TerraTorch data config written to [bold]{escape(str(path))}[/bold]; "
                 "paste it into your training config."
             )
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         _debug_traceback(exc)
-        _console.print(f"[red]{escape(str(exc))}[/red]")
-        raise typer.Exit(code=1)
+        _fail(f"[red]Cannot export the dataset:[/red] {escape(str(exc))}")
+    _console.print(f"[green]✓[/green] {message}", soft_wrap=True)
 
 
 @app.command(
@@ -2501,17 +2752,20 @@ def cache_command(
     from mapcv import tile_cache
 
     if expired and not clear:
-        _console.print("[red]--expired only applies with --clear[/red]")
-        raise typer.Exit(code=1)
+        raise typer.BadParameter("only applies with --clear.", param_hint="'--expired'")
     if clear:
         removed = tile_cache.clear(expired_only=expired)
-        what = "expired cached tile(s)" if expired else "cached tile(s)"
-        _console.print(f"[green]✓[/green] Deleted {removed:,} {what} from {tile_cache.tiles_dir()}")
+        what = "expired cached tile" if expired else "cached tile"
+        _console.print(
+            f"[green]✓[/green] Deleted {_plural(removed, what)} from "
+            f"{escape(str(tile_cache.tiles_dir()))}",
+            soft_wrap=True,
+        )
         return
     found = tile_cache.usage()
-    _console.print(f"Tile cache: [bold]{found.path}[/bold]")
+    _console.print(f"Tile cache: [bold]{escape(str(found.path))}[/bold]", soft_wrap=True)
     _console.print(
-        f"  {found.tiles:,} tile(s), {found.bytes / 1e6:,.1f} MB"
+        f"  {_plural(found.tiles, 'tile')}, {human_bytes(found.bytes)}"
         + (f", {found.expired:,} expired" if found.expired else "")
     )
     _console.print(
@@ -2522,6 +2776,12 @@ def cache_command(
 @app.command(
     "mcp",
     rich_help_panel="3. Utilities",
+    # Typer keeps single line breaks of a docstring, so the help is one line per paragraph.
+    help=(
+        "Run an MCP server over stdio so AI agents can build datasets with mapcv.\n\n"
+        'Needs [bold]pip install "mapcv\\[mcp]"[/bold]. Without [bold]--allow-write[/bold] the '
+        "server can only read, validate and plan."
+    ),
     epilog=(
         "Examples:\n\n"
         "  [cyan]mapcv mcp[/cyan]                         read-only, in this folder\n\n"
@@ -2541,26 +2801,23 @@ def mcp_server(
         help="Also offer the tools that write: write_config, generate and split.",
     ),
 ) -> None:
-    """Run an MCP server over stdio so AI agents can build datasets with mapcv.
-
-    Needs [bold]pip install "mapcv\\[mcp]"[/bold]. Without [bold]--allow-write[/bold] the
-    server can only read, validate and plan.
-    """
+    """Run an MCP server over stdio so AI agents can build datasets with mapcv."""
+    if not root.is_dir():
+        raise typer.BadParameter(f"{root} is not a folder.", param_hint="'--root'")
     try:
         from mapcv.mcp_server import serve
     except ImportError as exc:
         _debug_traceback(exc)
-        err = Console(stderr=True, no_color=_console.no_color)
-        err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
-        err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
-        err.print(f"[dim]{escape(str(exc))} (mapcv needs mcp 2.x)[/dim]")
-        raise typer.Exit(code=1)
+        _fail(
+            "[red]The MCP server needs the optional 'mcp' extra.[/red]\n"
+            'Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.',
+            f"{escape(str(exc))} (mapcv needs mcp 2.x)",
+        )
     try:
         serve(root, allow_write)
     except ValueError as exc:
         _debug_traceback(exc)
-        _console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
+        _fail(f"[red]{escape(str(exc))}[/red]")
 
 
 _STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "bold red", "info": "dim"}
@@ -2596,10 +2853,13 @@ def _print_doctor_report(checks: list[doctor.Check]) -> None:
     _console.print()
     if failed:
         _console.print(
-            f"[red]{failed} check(s) failed.[/red] Fix them first; mapcv can't work until then."
+            f"[red]{_plural(failed, 'check')} failed.[/red] Fix them first; mapcv can't work "
+            "until then."
         )
     elif warned:
-        _console.print(f"[yellow]{warned} warning(s).[/yellow] mapcv works; see the hints above.")
+        _console.print(
+            f"[yellow]{_plural(warned, 'warning')}.[/yellow] mapcv works; see the hints above."
+        )
     else:
         _console.print("[green]All checks passed.[/green]")
     _console.print(
@@ -2610,6 +2870,13 @@ def _print_doctor_report(checks: list[doctor.Check]) -> None:
 @app.command(
     "doctor",
     rich_help_panel="3. Utilities",
+    help=(
+        "Diagnose the installation, extras, tile cache and network.\n\n"
+        "Takes a few seconds, for you and for bug reports. Changes nothing (it writes and "
+        "deletes one small probe file in the tile cache folder) and prints no secrets. Exits "
+        "with 1 if a check fails, such as a broken Rust extension or a tile cache folder that "
+        "can't be written; a warning does not fail the run."
+    ),
     epilog=(
         "Examples:\n\n"
         "  [cyan]mapcv doctor[/cyan]                      check this installation\n\n"
@@ -2625,12 +2892,7 @@ def doctor_command(
         False, "--offline", help="Skip the network checks (no request leaves this machine)."
     ),
 ) -> None:
-    """Diagnose the installation, extras, tile cache and network.
-
-    Takes a few seconds, for you and for bug reports. Changes nothing (it writes and
-    deletes one small probe file in the tile cache folder) and prints no secrets. Exits with 1 if a check fails, such as a broken Rust extension
-    or a tile cache folder that can't be written; a warning does not fail the run.
-    """
+    """Diagnose the installation, extras, tile cache and network."""
     terminal = doctor.TerminalInfo(
         encoding=_console.encoding,
         is_tty=_console.is_terminal,

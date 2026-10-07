@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "mapcv"
 version = "0.2.0"
-description = "Turn a region, imagery and labels into ready-to-train remote-sensing datasets for segmentation, detection, classification, change detection and regression. GDAL-free."
+description = "Turn imagery and labels into ready-to-train remote-sensing datasets, fast."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES-THIRD-PARTY.md"]

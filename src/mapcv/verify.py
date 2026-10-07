@@ -138,7 +138,8 @@ def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport:
             unknown = [n for n in split_file.read_text(encoding="utf-8").split() if n not in names]
             if unknown:
                 report.problems.append(
-                    f"splits/{split}.txt names {len(unknown)} patch(es) the manifest does not "
+                    f"splits/{split}.txt names {len(unknown):,} "
+                    f"{'patch' if len(unknown) == 1 else 'patches'} the manifest does not "
                     f"list (first: {unknown[0]}); re-split with mapcv split"
                 )
 
@@ -152,7 +153,8 @@ def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport:
     )
     if orphans:
         report.notes.append(
-            f"{len(orphans)} file(s) in the patch folders are not in the manifest (left by an "
+            f"{len(orphans):,} {'file' if len(orphans) == 1 else 'files'} in the patch folders "
+            f"{'is' if len(orphans) == 1 else 'are'} not in the manifest (left by an "
             f"interrupted run or added by hand; first: {orphans[0]})"
         )
 

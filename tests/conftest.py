@@ -24,3 +24,14 @@ def _private_tile_cache(
 ) -> None:
     """Every test gets an empty tile cache of its own, never the user's."""
     monkeypatch.setenv(CACHE_ENV, str(tmp_path_factory.mktemp("tile-cache")))
+
+
+@pytest.fixture(autouse=True)
+def _plain_usage_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Typer forces colour into its usage errors on GitHub Actions (GITHUB_ACTIONS), which
+    splits the text tests look for with escape codes; render them as in a pipe."""
+    try:
+        from typer import rich_utils
+    except ImportError:  # pragma: no cover - Typer without Rich
+        return
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False, raising=False)

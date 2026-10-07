@@ -121,6 +121,17 @@ def _display_path(path: str | Path) -> str:
     return text
 
 
+def _tiles_and_size(tiles: int, size: float) -> str:
+    """``1 tile, 31.6 KB``: the format of ``mapcv cache`` (``planning.human_bytes``), kept
+    here so the doctor imports nothing that may be the broken part."""
+    count = f"{tiles:,} {'tile' if tiles == 1 else 'tiles'}"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1000 or unit == "TB":
+            return f"{count}, {size:.0f} {unit}" if unit == "B" else f"{count}, {size:.1f} {unit}"
+        size /= 1000
+    return count  # pragma: no cover - the loop always returns
+
+
 def _installed(module: str) -> bool:
     """Whether ``module`` can be imported, without importing it."""
     try:
@@ -429,7 +440,7 @@ def cache_checks() -> list[Check]:
     ]
     if folder.is_dir():
         found = tile_cache.usage()
-        detail = f"{found.tiles:,} tile(s), {found.bytes / 1e6:,.1f} MB"
+        detail = _tiles_and_size(found.tiles, found.bytes)
         if found.expired:
             checks.append(
                 Check(

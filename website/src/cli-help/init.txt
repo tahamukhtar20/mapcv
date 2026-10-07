@@ -6,41 +6,35 @@
 │   OUTPUT      <path>  Where to write the config. [default: mapcv.yaml]               │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
-│ --template     -t                      <xyz|sentinel2|geotif  Write a ready-made     │
-│                                        f|earth-engine|detect  example instead of     │
-│                                        ion|instance|classifi  asking.                │
-│                                        cation|change|regress                         │
-│                                        ion>                                          │
-│ --interactive      --no-interactive                           Ask questions          │
-│                                                               (default: when run in  │
-│                                                               a terminal without     │
-│                                                               --template).           │
-│ --force        -f                                             Overwrite an existing  │
-│                                                               file.                  │
-│ --stdout                                                      Print the template     │
-│                                                               instead of writing.    │
-│ --help         -h                                             Show this message and  │
-│                                                               exit.                  │
+│ --template     -t                      NAME  Write a ready-made example instead of   │
+│                                              asking: xyz, sentinel2, geotiff,        │
+│                                              earth-engine, detection, instance,      │
+│                                              classification, change or regression.   │
+│ --interactive      --no-interactive          Ask questions (default: when run in a   │
+│                                              terminal without --template).           │
+│ --force        -f                            Overwrite an existing file.             │
+│ --stdout                                     Print the template instead of writing.  │
+│ --help         -h                            Show this message and exit.             │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 
  Examples:
 
- mapcv init                         guided, writes mapcv.yaml
+ mapcv init                                guided, writes mapcv.yaml
 
- mapcv init --template xyz --stdout   print a template
+ mapcv init --template xyz --stdout        print a template
 
- mapcv init my.yaml --template sentinel2   a ready-made example
+ mapcv init my.yaml -t sentinel2           a ready-made example
 
- mapcv init gee.yaml --template earth-engine   cloud-free Sentinel-2 from Earth Engine
+ mapcv init gee.yaml -t earth-engine       Sentinel-2 from Earth Engine
 
- mapcv init boxes.yaml --template detection   boxes for COCO and YOLO
+ mapcv init boxes.yaml -t detection        boxes for COCO and YOLO
 
- mapcv init masks.yaml --template instance   a mask per object (COCO RLE)
+ mapcv init masks.yaml -t instance         a mask per object (COCO RLE)
 
- mapcv init tiles.yaml --template classification   a label per patch (CSV)
+ mapcv init tiles.yaml -t classification   a label per patch (CSV)
 
- mapcv init pairs.yaml --template change   before/after pairs and change masks
+ mapcv init pairs.yaml -t change           before/after pairs and change masks
 
- mapcv init heights.yaml --template regression   float targets from a raster
+ mapcv init heights.yaml -t regression     float targets from a raster
 
 

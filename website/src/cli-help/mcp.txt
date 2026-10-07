@@ -2,8 +2,8 @@
 
  Run an MCP server over stdio so AI agents can build datasets with mapcv.
 
- Needs pip install "mapcv[mcp]". Without --allow-write the
- server can only read, validate and plan.
+ Needs pip install "mapcv[mcp]". Without --allow-write the server can only read,
+ validate and plan.
 
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
 │ --root                 <path>  The only folder the server may read or write          │

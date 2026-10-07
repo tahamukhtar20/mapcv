@@ -185,7 +185,8 @@ def _geotiff_raster(
     meta = source.metadata
     source.close()
     resolution = _pixel_size_m(meta.crs, meta.transform)
-    description = f"GeoTIFF {meta.product_id} · {meta.crs} · {len(meta.bands)} band(s) {meta.dtype}"
+    bands = f"{len(meta.bands)} band" + ("" if len(meta.bands) == 1 else "s")
+    description = f"GeoTIFF {meta.product_id} · {meta.crs} · {bands} {meta.dtype}"
     return (
         meta.height,
         meta.width,

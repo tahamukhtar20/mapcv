@@ -487,7 +487,7 @@ def test_verify_split_lists_and_missing_or_broken_manifests(dataset: Path, tmp_p
     with (dataset / "splits" / "val.txt").open("a") as handle:
         handle.write("ghost.npy\n")
     problems = verify_dataset(dataset).problems
-    assert len(problems) == 1 and "splits/val.txt names 1 patch(es)" in problems[0]
+    assert len(problems) == 1 and "splits/val.txt names 1 patch the manifest" in problems[0]
     assert "ghost.npy" in problems[0]
 
     assert "no manifest.json" in verify_dataset(tmp_path / "nowhere").problems[0]
@@ -641,7 +641,7 @@ def test_cli_commands(dataset: Path, tmp_path: Path) -> None:
     assert "b4" in result.output and "Class weights (median frequency): background" in result.output
     assert "split → " in result.output and (dataset / "stats.json").exists()
     result = runner.invoke(app, ["stats", str(dataset), "--split", "nope"], env=ENV)
-    assert result.exit_code == 1 and "--split must be" in result.output
+    assert result.exit_code == 2 and "Invalid value for '--split'" in result.output
     result = runner.invoke(app, ["stats", str(tmp_path / "nowhere")], env=ENV)
     assert result.exit_code == 1 and "No manifest found" in result.output
 
@@ -660,9 +660,9 @@ def test_cli_commands(dataset: Path, tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["verify", str(dataset), "--deep", "--write-checksums"], env=ENV)
     assert result.exit_code == 0, result.output
-    assert "file(s) present" in result.output and (dataset / CHECKSUMS_FILENAME).exists()
+    assert "files present" in result.output and (dataset / CHECKSUMS_FILENAME).exists()
     result = runner.invoke(app, ["verify", str(dataset)], env=ENV)
-    assert result.exit_code == 0 and "hash(es) match" in result.output
+    assert result.exit_code == 0 and "hashes match" in result.output
     manifest = Manifest.load(dataset / "manifest.json")
     for entry in manifest.patches[:22]:
         (dataset / entry["files"]["mask"]).unlink()
@@ -670,4 +670,5 @@ def test_cli_commands(dataset: Path, tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify", str(dataset), "--write-checksums"], env=ENV)
     assert result.exit_code == 1
     assert "is missing" in result.output and "… and 24 more" in result.output
-    assert "Note:" in result.output and "Images/extra.json" in result.output
+    assert "⚠" in result.output and "Images/extra.json" in result.output
+    assert "problems found" in result.output

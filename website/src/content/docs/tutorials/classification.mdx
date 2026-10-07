@@ -83,8 +83,8 @@ This tutorial builds a **scene classification** dataset in the style of EuroSAT 
    │ Region   5.4, 51.975 → 5.5, 52.035  (≈ 6.9 × 6.6 km)                         │
    │ Imagery  esri_satellite · zoom 16 (≈ 1.47 m/px)                              │
    │ Raster   4,864 × 4,608 px · 342 tiles (≈ 8.6 MB to download)                 │
-   │ Labels   landuse.geojson · 643 polygon(s) · classes: built_up → 1,           │
-   │          farmland → 2, forest → 3, water → 4                                 │
+   │ Labels   landuse.geojson · 643 polygons · classes: built_up → 1, farmland →  │
+   │          2, forest → 3, water → 4                                            │
    │ Patches  ≈ 1,368 × 128 px (grid, stride 128)                                 │
    │ Output   dataset · png (≈ 37.3 MB)                                           │
    │ Split    spatial · test 0.2 · val 0.1                                        │
@@ -105,8 +105,9 @@ This tutorial builds a **scene classification** dataset in the style of EuroSAT 
    │ Tiles    342 fetched · 0 failed                                              │
    │ Splits   train 700 (71%) · val 81 (8%) · test 203 (21%)                      │
    │ Time     51s                                                                 │
-   │ Files    dataset/ (images/, manifest.json, splits/, labels.csv, labels.json, │
-   │          classes.txt)                                                        │
+   │ Files    dataset/ (images/, manifest.json, splits/, patches.geojson,         │
+   │          labels.csv, labels_train.csv, labels_val.csv, labels_test.csv,      │
+   │          labels.json, classes.txt)                                           │
    ╰──────────────────────────────────────────────────────────────────────────────╯
      label       id    patches    share
      built_up     1        106    10.8%

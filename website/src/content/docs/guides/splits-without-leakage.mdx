@@ -31,7 +31,7 @@ mapcv writes `splits/train.txt`, `val.txt` and `test.txt` at the end of `generat
 ```console
 $ mapcv split overlap
 ✓ Splits written to overlap/splits: train 137 (67%) · val 10 (5%) · test 57 (28%) · 69
-overlapping patch(es) left out
+overlapping patches left out
 ```
 
 That example used `stride: 128` with 256 px patches (heavy overlap) on a small raster. Without overlap (`stride` = `patch_size`, the default) nothing is left out.

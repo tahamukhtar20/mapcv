@@ -144,7 +144,7 @@ def test_mcp_command_without_the_extra_prints_an_install_hint(
 def test_mcp_command_rejects_a_missing_root(tmp_path: Path) -> None:
     pytest.importorskip("mcp")
     result = CliRunner().invoke(app, ["mcp", "--root", str(tmp_path / "nope")])
-    assert result.exit_code == 1
+    assert result.exit_code == 2  # a bad option value is a usage error
     assert "not a folder" in result.output and "Traceback" not in result.output
 
 

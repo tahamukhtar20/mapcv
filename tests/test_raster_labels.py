@@ -967,7 +967,7 @@ def test_cli_validate_plan_generate_info(tmp_path: Path) -> None:
     )
     result = runner.invoke(app, ["validate", str(config_path)])
     assert result.exit_code == 0, result.output
-    assert flat("raster band 1 · 2 class(es)") in flat(result.output)
+    assert flat("raster band 1 · 2 classes") in flat(result.output)
 
     result = runner.invoke(app, ["plan", str(config_path)])
     assert result.exit_code == 0, result.output

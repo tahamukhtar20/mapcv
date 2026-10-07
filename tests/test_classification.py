@@ -1620,7 +1620,7 @@ split:
     assert "classification · multi-label · min_fraction 0.01 · empty: background" in result.output
     result = runner.invoke(app, ["plan", config])
     assert result.exit_code == 0, result.output
-    assert "classification" in result.output and "polygon(s)" in result.output
+    assert "classification" in result.output and "polygons" in result.output
 
     result = runner.invoke(app, ["generate", config, "--yes"])
     assert result.exit_code == 0, result.output

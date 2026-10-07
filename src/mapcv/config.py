@@ -372,6 +372,58 @@ class XYZImageryConfig(BaseModel):
         return self
 
 
+_STAC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2}))?")
+
+
+class StacSearchConfig(BaseModel):
+    """Find the Sentinel-2 L2A product for a region in a STAC catalog (``imagery.search``).
+
+    The least cloudy item of ``collection`` whose footprint covers the whole region,
+    acquired within ``datetime`` with at most ``max_cloud`` percent cloud, is used; ties
+    go to the earlier acquisition, then the item ID, so the choice is repeatable.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    catalog: str = "https://stac.core.eopf.eodc.eu"
+    collection: str = "sentinel-2-l2a"
+    # A date or RFC 3339 time, or an interval "start/end" with ".." for an open end.
+    datetime: str
+    max_cloud: float = Field(default=20.0, ge=0.0, le=100.0)
+    # The item asset that holds the whole EOPF Zarr product.
+    asset: str = "product"
+
+    @field_validator("catalog")
+    @classmethod
+    def _check_catalog(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        loopback_http = parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS
+        if parsed.scheme != "https" and not loopback_http:
+            raise ValueError("imagery.search.catalog must be an https:// STAC API URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "imagery.search.catalog must not contain credentials, query strings or fragments"
+            )
+        return value.rstrip("/")
+
+    @field_validator("datetime")
+    @classmethod
+    def _check_datetime(cls, value: str) -> str:
+        parts = value.strip().split("/")
+        if (
+            len(parts) > 2
+            or not all(part == ".." or _STAC_TIME.fullmatch(part) for part in parts)
+            or parts == ["..", ".."]
+            or parts == [".."]
+        ):
+            raise ValueError(
+                "imagery.search.datetime must be a date (2025-05-13), a time "
+                "(2025-05-13T10:40:00Z) or an interval such as 2025-05-01/2025-05-31 "
+                "(.. for an open end)"
+            )
+        return value.strip()
+
+
 class EOPFZarrImageryConfig(BaseModel):
     """One local or anonymous public Sentinel-2 L2A EOPF Zarr product."""
 
@@ -381,16 +433,41 @@ class EOPFZarrImageryConfig(BaseModel):
     type: Literal["eopf_zarr"] = "eopf_zarr"
     # Required when imagery is a list of sources: the folder Images/<name>/.
     name: Optional[str] = None
-    path: str
+    # The product, or ``search`` to find it in a STAC catalog: exactly one of the two.
+    path: Optional[str] = None
+    search: Optional[StacSearchConfig] = None
     resolution: Literal[10, 20, 60] = 10
     bands: List[str] = Field(default_factory=lambda: list(DEFAULT_SENTINEL2_L2A_BANDS))
     chunk_rows: int = Field(default=1024, ge=1)
+    # Scene classification (SCL) classes whose pixels count as having no imagery, such
+    # as clouds (8, 9), cirrus (10) and cloud shadows (3).
+    scl_mask: Optional[List[int]] = None
 
-    _check_path = field_validator("path")(_validate_eopf_path)
     _check_name = field_validator("name")(_validate_source_name)
+
+    @field_validator("path")
+    @classmethod
+    def _check_path(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_eopf_path(value) if value is not None else None
+
+    @field_validator("scl_mask")
+    @classmethod
+    def _check_scl_mask(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        if value is None:
+            return None
+        if not value or any(not 0 <= code <= 11 for code in value):
+            raise ValueError(
+                "imagery.scl_mask lists Sentinel-2 scene classes 0-11, for example "
+                "[3, 8, 9, 10] (cloud shadows, clouds and cirrus)"
+            )
+        return sorted(set(value))
 
     @model_validator(mode="after")
     def _validate_bands(self) -> "EOPFZarrImageryConfig":
+        if (self.path is None) == (self.search is None):
+            raise ValueError(
+                "imagery: set exactly one of 'path' (the product) and 'search' (find it)"
+            )
         normalized = [band.lower() for band in self.bands]
         if not normalized:
             raise ValueError("imagery.bands must contain at least one variable")

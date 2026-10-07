@@ -339,7 +339,8 @@ def config_paths(config: MapcvConfig) -> List[Tuple[str, Path]]:
                     found.extend(_vector_label_paths(file_key, path))
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
-            local = eopf_local_path(imagery.path)
+            # A searched product is found at run time, in a remote catalog.
+            local = eopf_local_path(imagery.path) if imagery.path is not None else None
             if local is not None:
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 found.append((where, local))

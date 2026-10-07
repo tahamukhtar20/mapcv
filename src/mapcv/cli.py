@@ -41,6 +41,7 @@ from rich.status import Status
 from rich.table import Table
 
 import mapcv
+from mapcv import doctor
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
     RASTER_LABEL_TYPES,
@@ -2562,4 +2563,90 @@ def mcp_server(
     except ValueError as exc:
         _debug_traceback(exc)
         _console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
+_STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "bold red", "info": "dim"}
+_STATUS_LABEL = {"ok": "ok", "warn": "warn", "fail": "FAIL", "info": "info"}
+
+
+def _print_doctor_report(checks: list[doctor.Check]) -> None:
+    """The checks as one small table per section: a word for the status (it reads the same
+    without colour), the name, the detail, and the hint dimmed under it."""
+    first = True
+    for section in doctor.SECTIONS:
+        rows = [check for check in checks if check.section == section]
+        if not rows:
+            continue
+        _console.print(("" if first else "\n") + f"[bold]{escape(section)}[/bold]")
+        first = False
+        table = Table.grid(padding=(0, 2))
+        table.add_column(width=4, no_wrap=True)
+        table.add_column(width=24)
+        table.add_column(ratio=1, overflow="fold")
+        for check in rows:
+            style = _STATUS_STYLE[check.status]
+            table.add_row(
+                f"[{style}]{_STATUS_LABEL[check.status]}[/{style}]",
+                escape(check.name),
+                escape(check.detail),
+            )
+            if check.hint:
+                table.add_row("", "", f"[dim]→ {escape(check.hint)}[/dim]")
+        _console.print(table)
+    failed = sum(check.status == "fail" for check in checks)
+    warned = sum(check.status == "warn" for check in checks)
+    _console.print()
+    if failed:
+        _console.print(
+            f"[red]{failed} check(s) failed.[/red] Fix them first; mapcv can't work until then."
+        )
+    elif warned:
+        _console.print(f"[yellow]{warned} warning(s).[/yellow] mapcv works; see the hints above.")
+    else:
+        _console.print("[green]All checks passed.[/green]")
+    _console.print(
+        "[dim]Paste this output, or the output of mapcv doctor --json, into a bug report.[/dim]"
+    )
+
+
+@app.command(
+    "doctor",
+    rich_help_panel="3. Utilities",
+    epilog=(
+        "Examples:\n\n"
+        "  [cyan]mapcv doctor[/cyan]                      check this installation\n\n"
+        "  [cyan]mapcv doctor --offline[/cyan]            skip the network checks\n\n"
+        "  [cyan]mapcv doctor --json[/cyan]               for bug reports and scripts"
+    ),
+)
+def doctor_command(
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the checks as JSON (no colour), for bug reports and scripts."
+    ),
+    offline: bool = typer.Option(
+        False, "--offline", help="Skip the network checks (no request leaves this machine)."
+    ),
+) -> None:
+    """Diagnose the installation, extras, tile cache and network.
+
+    Takes a few seconds, for you and for bug reports. Changes nothing (it writes and
+    deletes one small probe file in the tile cache folder) and prints no secrets. Exits with 1 if a check fails, such as a broken Rust extension
+    or a tile cache folder that can't be written; a warning does not fail the run.
+    """
+    terminal = doctor.TerminalInfo(
+        encoding=_console.encoding,
+        is_tty=_console.is_terminal,
+        width=_console.width,
+        color_system=_console.color_system,
+        no_color_env=_NO_COLOR_FROM_ENV,
+        no_color_flag=_console.no_color and not _NO_COLOR_FROM_ENV,
+    )
+    checks = doctor.run_checks(terminal, offline=offline)
+    if json_output:
+        sys.stdout.write(doctor.to_json(checks, offline=offline))
+        sys.stdout.flush()
+    else:
+        _print_doctor_report(checks)
+    if doctor.has_failure(checks):
         raise typer.Exit(code=1)

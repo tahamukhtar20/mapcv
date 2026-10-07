@@ -33,6 +33,14 @@ body:
       required: true
 
   - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `mapcv doctor`
+      description: |
+        Run `mapcv doctor` (or `mapcv doctor --json`) and paste the output. It lists your versions, the optional extras, the tile cache folder and whether the tile services answer, and prints no secrets. Skip it only if mapcv will not start.
+      render: text
+
+  - type: textarea
     id: description
     attributes:
       label: Description

@@ -12,6 +12,9 @@ imagery pixel takes the value of the label pixel that contains its **centre**
    pyproj, exactly, every point on its own (in parallel threads; the coordinates are
    bit for bit those of one call per point). (GDAL's warper approximates the
    transformation with an error of up to 0.125 pixel by default; mapcv does not.)
+   For a fixed PROJ pipeline, a 16-pixel grid of centres is projected and the rest
+   interpolated, and every centre whose label pixel the interpolation cannot settle is
+   projected exactly (see ``_interpolated_pixels``): the label pixels are the same.
 3. The inverse of the label raster's affine transform gives fractional label pixel
    coordinates. The transform is corner-based for ``PixelIsPoint`` files too: the
    reader shifts it by half a pixel, as GDAL and rasterio do.
@@ -67,6 +70,15 @@ _MARGIN = 1
 # points (smaller arrays stay on the calling thread). PROJ transforms one point after
 # another, whatever the array size, and pyproj releases the GIL while it does.
 _PROJ_THREADS = min(8, os.cpu_count() or 1)
+# Interpolated cross-CRS lookup: control points every this many pixels; a cell's
+# measured interpolation error times the safety factor (but at least the minimum
+# margin, in label pixels) is how close to a label-pixel boundary a centre may fall
+# before it is projected exactly; a cell whose error passes the maximum is projected
+# exactly as a whole.
+_CONTROL_STEP = 16
+_ERROR_SAFETY = 4.0
+_MIN_MARGIN = 1e-3
+_MAX_CELL_ERROR = 0.05
 _MIN_PIECE = 1 << 15
 _proj_pool: Optional[ThreadPoolExecutor] = None
 
@@ -189,6 +201,9 @@ class _GridSampler:
             from pyproj import Transformer
 
             self._to_label = Transformer.from_crs(imagery_crs, self.crs, always_xy=True)
+        # A fixed pipeline is smooth across the window and may be interpolated; without
+        # one PROJ picks an operation per point, which can jump between neighbours.
+        self._interpolate = bool(self._to_label is not None and self._to_label.operations)
 
     def _decode(self, values: npt.NDArray[Any]) -> npt.NDArray[Any]:
         raise NotImplementedError  # pragma: no cover - every sampler defines it
@@ -347,10 +362,13 @@ class _GridSampler:
         block = max(1, _BLOCK_PIXELS // max(width, 1))
         for start in range(0, height, block):
             stop = min(height, start + block)
-            v = np.arange(start, stop, dtype=np.float64)[:, None] + 0.5
-            frac_rows, frac_cols = self._fractional(transform, u, v)
-            rows = self._indices(frac_rows, self.info.height)
-            cols = self._indices(frac_cols, self.info.width)
+            if self._interpolate and stop - start >= 2 and width >= 2:
+                rows, cols = self._interpolated_pixels(transform, start, stop, width)
+            else:
+                v = np.arange(start, stop, dtype=np.float64)[:, None] + 0.5
+                frac_rows, frac_cols = self._fractional(transform, u, v)
+                rows = self._indices(frac_rows, self.info.height)
+                cols = self._indices(frac_cols, self.info.width)
             hit = (rows >= 0) & (cols >= 0)
             if not hit.any():
                 continue
@@ -383,6 +401,84 @@ class _GridSampler:
             target = out[start:stop]
             target[hit] = codes[rows_in - cache[0], cols_in - cache[2]]
         return out
+
+    def _interpolated_pixels(
+        self, transform: Transform, start: int, stop: int, width: int
+    ) -> Tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+        """Label ``(row, col)`` indices of imagery rows ``[start, stop)``, the same as
+        projecting every centre, for a fraction of the projections.
+
+        Centres on a grid every :data:`_CONTROL_STEP` pixels (and the last row and
+        column) are projected exactly, and the fractional label coordinates in between
+        are interpolated bilinearly. The interpolation error of a smooth projection is
+        largest at a cell's centre and edge midpoints, which are projected exactly too.
+        A centre keeps its interpolated label pixel only when no label-pixel boundary
+        lies within the margin (:data:`_ERROR_SAFETY` times the largest error, at least
+        :data:`_MIN_MARGIN`) of it. Every other centre, and every centre of a cell whose
+        error passes :data:`_MAX_CELL_ERROR` or that has no finite coordinates, is
+        projected exactly.
+        """
+        ku = np.unique(np.append(np.arange(0, width, _CONTROL_STEP), width - 1))
+        kv = np.unique(np.append(np.arange(start, stop, _CONTROL_STEP), stop - 1))
+        pu, pv = ku + 0.5, kv + 0.5
+        mu, mv = (pu[:-1] + pu[1:]) / 2, (pv[:-1] + pv[1:]) / 2
+        # One projection for the nodes, the cell centres and both kinds of edge midpoints.
+        grids = ((pu, pv), (mu, mv), (mu, pv), (pu, mv))
+        flat_u = np.concatenate([np.tile(gu, gv.size) for gu, gv in grids])
+        flat_v = np.concatenate([np.repeat(gv, gu.size) for gu, gv in grids])
+        ends = np.cumsum([0] + [gu.size * gv.size for gu, gv in grids])
+        # A cell [k_i, k_i+1) holds those pixels; the last one also holds its end pixel.
+        count_u, count_v = np.diff(ku), np.diff(kv)
+        count_u[-1] += 1
+        count_v[-1] += 1
+        tu = (np.arange(width) - np.repeat(ku[:-1], count_u)) / np.repeat(np.diff(ku), count_u)
+        tv = (np.arange(start, stop) - np.repeat(kv[:-1], count_v)) / np.repeat(
+            np.diff(kv), count_v
+        )
+
+        nodes, error = [], np.zeros((kv.size - 1, ku.size - 1))
+        for exact in self._fractional(transform, flat_u, flat_v):
+            grid, centre, u_edge, v_edge = (
+                exact[ends[i] : ends[i + 1]].reshape(gv.size, gu.size)
+                for i, (gu, gv) in enumerate(grids)
+            )
+            with np.errstate(invalid="ignore"):
+                corners = (grid[:-1, :-1] + grid[:-1, 1:] + grid[1:, :-1] + grid[1:, 1:]) / 4
+                u_error = np.abs((grid[:, :-1] + grid[:, 1:]) / 2 - u_edge)
+                v_error = np.abs((grid[:-1] + grid[1:]) / 2 - v_edge)
+                error = np.fmax(error, np.abs(corners - centre))
+                error = np.fmax(error, np.fmax(u_error[:-1], u_error[1:]))
+                error = np.fmax(error, np.fmax(v_error[:, :-1], v_error[:, 1:]))
+                # NaN (fmax ignores it) anywhere in a cell projects the whole cell.
+                error[~np.isfinite(corners + centre)] = np.inf
+            nodes.append(grid)
+        whole = ~(_ERROR_SAFETY * error <= _MAX_CELL_ERROR)
+        margin = max(_MIN_MARGIN, _ERROR_SAFETY * float(error[~whole].max(initial=0.0)))
+
+        exact_pixels = np.repeat(np.repeat(whole, count_v, axis=0), count_u, axis=1)
+        indices = []
+        for grid, size in zip(nodes, (self.info.height, self.info.width)):
+            with np.errstate(invalid="ignore"):
+                along = np.repeat(grid[:, :-1], count_u, axis=1)
+                along += (np.repeat(grid[:, 1:], count_u, axis=1) - along) * tu
+                shifted = np.repeat(along[:-1], count_v, axis=0)
+                shifted += np.repeat(along[1:] - along[:-1], count_v, axis=0) * tv[:, None]
+                shifted += TIE_EPSILON
+                floor = np.floor(shifted)
+                shifted -= floor
+                exact_pixels |= (shifted < margin) | (shifted > 1.0 - margin)
+                index = floor.astype(np.int64)
+            index[(index < 0) | (index >= size)] = -1
+            indices.append(index)
+        rows, cols = indices
+        pick_v, pick_u = np.nonzero(exact_pixels)
+        if pick_v.size:
+            centre_u = pick_u.astype(np.float64) + 0.5
+            centre_v = (pick_v + start).astype(np.float64) + 0.5
+            frac_rows, frac_cols = self._fractional(transform, centre_u, centre_v)
+            rows[pick_v, pick_u] = self._indices(frac_rows, self.info.height)
+            cols[pick_v, pick_u] = self._indices(frac_cols, self.info.width)
+        return rows, cols
 
     def _perimeter_window(
         self, transform: Transform, height: int, width: int

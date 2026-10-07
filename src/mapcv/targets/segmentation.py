@@ -62,8 +62,18 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> Tuple[List[GeomWi
     ``labels.classes`` when given), so a name has one ID whichever file it comes from.
     Features keep the file order: later files are rasterized later and win overlaps.
     """
+    if labels.osm is not None:
+        from mapcv.osm import default_class_ids, osm_labels_file
+
+        return load_vector_labels(
+            osm_labels_file(labels.osm),
+            "class",
+            labels.classes or default_class_ids(labels.osm),
+            points=points,
+            buffer=label_buffer(labels),
+        )
     if labels.files is None:
-        assert labels.path is not None  # the config requires path or files
+        assert labels.path is not None  # the config requires path, files or osm
         return load_vector_labels(
             labels.path,
             labels.label_field,
@@ -114,6 +124,10 @@ def label_settings(labels: LabelsConfig, exclude: Set[str]) -> Dict[str, Any]:
 
 def labels_sha256(labels: LabelsConfig) -> str:
     """SHA-256 of the label file(s), recorded so a resumed run notices edited labels."""
+    if labels.osm is not None:
+        from mapcv.osm import osm_labels_file
+
+        return label_file_sha256(osm_labels_file(labels.osm))
     if labels.files is None:
         assert labels.path is not None
         return label_file_sha256(labels.path)

@@ -19,6 +19,7 @@ from mapcv.config import (
     RasterClass,
     RasterLabelsConfig,
     RegionConfig,
+    StacCogImageryConfig,
     XYZImageryConfig,
 )
 from mapcv.downloader import (
@@ -27,6 +28,8 @@ from mapcv.downloader import (
     resolve_url_template,
     stitch_region,
 )
+from mapcv.infer import predict_raster
+from mapcv.data import MapcvDataset
 from mapcv.labels import (
     ClassMap,
     GeomWithClass,
@@ -68,11 +71,13 @@ except PackageNotFoundError:  # running from a source tree without installing
 __all__ = [
     "__version__",
     "GenerateResult",
+    "MapcvDataset",
     "Patch",
     "Plan",
     "generate",
     "iter_patches",
     "plan",
+    "predict_raster",
     "split",
     "run_generate",
     "run_split",
@@ -85,6 +90,7 @@ __all__ = [
     "RasterLabelsConfig",
     "ImageryConfig",
     "XYZImageryConfig",
+    "StacCogImageryConfig",
     "EOPFZarrImageryConfig",
     "GeoTiffImageryConfig",
     "DEFAULT_SENTINEL2_L2A_BANDS",

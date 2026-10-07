@@ -57,6 +57,10 @@ Configs take an optional top-level `task`: `segmentation` (the default, so exist
 
 `run_generate` no longer draws a progress bar or prints resume messages, and `download_region`/`stitch_region` no longer print: the library writes nothing to stdout. Messages go to the `mapcv` logger (`logging.basicConfig(level=logging.INFO)` shows them), and progress is reported through `progress(done, total)` callbacks (`on_chunk` for `run_generate`). The CLI shows its spinner and progress bars as before. New: `mapcv.generate`, `mapcv.split` and `mapcv.iter_patches`, which yields the patches a config describes without writing them ([Python API](https://tahamukhtar20.github.io/mapcv/reference/python-api/)).
 
+## Saving progress
+
+`mapcv generate` saves `manifest.json` every 10 seconds and whenever a run stops (Ctrl-C, an error, a progress callback that raises) instead of after every chunk, which cost more than the chunk itself on large datasets. An interrupted run still resumes after its last finished chunk. A process killed outright (`kill -9`, a power cut) can lose up to the last 10 seconds of chunks; the next run writes them again, and the dataset ends up byte for byte the same.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

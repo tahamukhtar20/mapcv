@@ -256,8 +256,8 @@ def summarize_labels(config: MapcvConfig) -> LabelSummary | None:
     labels = config.labels
     options = config.change_options
     if labels is None and options.before is not None and options.after is not None:
-        before = _summarize_vector(config, options.before)
-        after = _summarize_vector(config, options.after)
+        before = _summarize_vector(config, options.before, "change.before")
+        after = _summarize_vector(config, options.after, "change.after")
         return LabelSummary(
             f"{before.path} → {after.path}",
             before.polygons,
@@ -273,7 +273,9 @@ def summarize_labels(config: MapcvConfig) -> LabelSummary | None:
     return _summarize_vector(config, labels)
 
 
-def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary:
+def _summarize_vector(
+    config: MapcvConfig, labels: LabelsConfig, key: str = "labels"
+) -> LabelSummary:
     where = (
         "OpenStreetMap (Overpass)"
         if labels.osm is not None
@@ -288,7 +290,7 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
         geometries, class_map = load_labels(labels, points)
     messages = [str(warning.message) for warning in caught]
     if labels.annotated_area is not None and not labels.annotated_area.exists():
-        messages.append(f"labels.annotated_area not found: {labels.annotated_area}")
+        messages.append(f"{key}.annotated_area not found: {labels.annotated_area}")
     region = config.region
     area = box(region.west, region.south, region.east, region.north)
     in_region = sum(1 for geometry, _ in geometries if geometry.intersects(area))

@@ -1375,8 +1375,9 @@ class ChangeOptions(BaseModel):
     The change mask comes either from ``labels`` (features, or a label raster, that
     mark what changed: every labeled pixel is change) or from two label sets,
     ``before`` and ``after``: a pixel changed where they differ (an object appeared or
-    disappeared there or, when both sets map ``label_field`` with the same
-    ``classes``, changed class). Changed pixels get ``change_value``, others 0, and
+    disappeared there or, when both sets name classes, changed class: classes match
+    by name, on the same ``classes`` in both or, without, one class map made over
+    both sets' names). Changed pixels get ``change_value``, others 0, and
     pixels without imagery in either image, or outside either set's
     ``annotated_area`` (where nothing is known), the ignore value.
     """
@@ -1406,6 +1407,42 @@ class ChangeOptions(BaseModel):
                     )
                 out[key] = {"type": "vector", **value}
         return out
+
+
+def change_class_source(labels: LabelsConfig) -> str | None:
+    """How a change label set names its classes (``osm``, ``files`` or ``label_field``),
+    or ``None`` when every feature is one kind of object (a ``path`` without
+    ``label_field``)."""
+    if labels.osm is not None:
+        return "osm"
+    if labels.files is not None:
+        return "files"
+    if labels.label_field is not None:
+        return "label_field"
+    return None
+
+
+def _check_change_classes(before: LabelsConfig, after: LabelsConfig) -> None:
+    """Both change label sets name classes, or neither does; with names, both give the
+    same ``classes`` or none (one class map is then made over both sets' names)."""
+    sources = {"before": change_class_source(before), "after": change_class_source(after)}
+    if (sources["before"] is None) != (sources["after"] is None):
+        named = "before" if sources["before"] is not None else "after"
+        plain = "after" if named == "before" else "before"
+        path = (after if plain == "after" else before).path
+        raise ValueError(
+            f"change.{named} names classes ({sources[named]}) but change.{plain} does not: "
+            f"every feature of its path is one kind of object, so the two sets cannot be "
+            f"compared class by class. Give change.{plain} a class: write it as "
+            f"`files: [{{path: {path}, class: <name>}}]` with the name change.{named} uses "
+            "for those objects, or set its label_field"
+        )
+    if sources["before"] is not None and before.classes != after.classes:
+        raise ValueError(
+            "change.before and change.after need the same classes mapping (so a class has "
+            "one ID in both), or no classes in either: the class names of both sets then "
+            "get one class map"
+        )
 
 
 # The label of classification patches that no class qualifies for (``empty: background``).
@@ -1766,15 +1803,7 @@ class MapcvConfig(BaseModel):
                     "give either labels (what changed) or change.before and change.after (two "
                     "label sets whose difference is the change), not both"
                 )
-            if (before.label_field is None) != (after.label_field is None) or (
-                before.label_field is not None
-                and (before.classes is None or before.classes != after.classes)
-            ):
-                raise ValueError(
-                    "to compare classes, change.before and change.after both need label_field "
-                    "and the same classes mapping (so a class has one ID in both); without "
-                    "label_field only the presence of objects is compared"
-                )
+            _check_change_classes(before, after)
             if before.ignore_index != after.ignore_index:
                 raise ValueError(
                     "change.before and change.after need the same ignore_index (the mask "

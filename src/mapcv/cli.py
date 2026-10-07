@@ -2389,9 +2389,15 @@ def validate(
             ("change.after.path", change.after),
         ):
             if label_set is not None:
-                for file_key, path in label_set.keyed_files(key.rsplit(".", 1)[0]):
+                prefix = key.rsplit(".", 1)[0]
+                for file_key, path in label_set.keyed_files(prefix):
                     if not path.exists():
                         _console.print(f"[yellow]Warning:[/yellow] {file_key} not found: {path}")
+                set_area = label_set.annotated_area
+                if set_area is not None and not set_area.exists():
+                    _console.print(
+                        f"[yellow]Warning:[/yellow] {prefix}.annotated_area not found: {set_area}"
+                    )
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)

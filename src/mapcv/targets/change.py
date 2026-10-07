@@ -18,9 +18,9 @@ import numpy as np
 import numpy.typing as npt
 
 from mapcv._patching import MaskWindow
-from mapcv.config import ChangeOptions, LabelsConfig, RasterLabelsConfig
+from mapcv.config import ChangeOptions, LabelsConfig, RasterLabelsConfig, change_class_source
 from mapcv.imagery import RasterMetadata
-from mapcv.labels import ClassMap
+from mapcv.labels import MAX_CLASS_ID, ClassMap, assign_class_ids
 from mapcv.manifest import TargetRecord
 from mapcv.targets.base import Transform, WindowTarget
 from mapcv.targets.raster_labels import RasterSegmentationTarget
@@ -30,6 +30,30 @@ from mapcv.targets.segmentation import SegmentationTarget
 CHANGE_CLASS = "change"
 
 _LabelTarget = SegmentationTarget | RasterSegmentationTarget
+
+
+def shared_class_map(before: ClassMap, after: ClassMap) -> ClassMap:
+    """One class map over the class names of both label sets, numbered by the rule each
+    set uses on its own (integer names as themselves, others 1, 2, ... in sorted order)."""
+    names = sorted(set(before) | set(after))
+    if len(names) > MAX_CLASS_ID:
+        raise ValueError(
+            f"change.before and change.after name {len(names)} classes together, more than "
+            f"the {MAX_CLASS_ID} a mask holds; give both the same classes mapping"
+        )
+    _, class_map = assign_class_ids(list(names), "class")
+    return class_map
+
+
+def _to_shared(own: ClassMap, shared: ClassMap) -> npt.NDArray[np.int32]:
+    """A lookup table from a set's own class IDs to the shared map's. Background stays 0;
+    any other value (the ignore value) gets a negative code of its own, equal in both sets
+    and never a class."""
+    table = -np.arange(256, dtype=np.int32) - 1
+    table[0] = 0
+    for name, class_id in own.items():
+        table[class_id] = shared[name]
+    return table
 
 
 def _window_mask(
@@ -59,6 +83,10 @@ class ChangeTarget:
         self._before: SegmentationTarget | None = None
         self._after: SegmentationTarget | None = None
         self._annotated_areas = False
+        # Sets that name classes without a classes mapping number them on their own; they
+        # are compared on one class map over both sets' names (set by prepare).
+        self._shared_classes: ClassMap | None = None
+        self._lookups: tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]] | None = None
         if options.before is not None and options.after is not None:
             self._before = SegmentationTarget(options.before)
             self._after = SegmentationTarget(options.after)
@@ -93,6 +121,19 @@ class ChangeTarget:
         for target in (self._changed, self._before, self._after):
             if target is not None:
                 target.prepare(source)
+        before, after = self._options.before, self._options.after
+        if (
+            self._before is not None
+            and self._after is not None
+            and before is not None
+            and after is not None
+            and change_class_source(before) is not None
+            and before.classes is None
+        ):
+            own = (self._before.class_map, self._after.class_map)
+            shared = shared_class_map(*own)
+            self._shared_classes = shared
+            self._lookups = (_to_shared(own[0], shared), _to_shared(own[1], shared))
 
     def record(self) -> TargetRecord | None:
         """The change class, ignore value and change value, and the label settings with
@@ -108,6 +149,9 @@ class ChangeTarget:
                 "before": before.labels if before is not None else None,
                 "after": after.labels if after is not None else None,
             }
+            if self._shared_classes is not None:
+                # The class map both sets were compared on (without a classes mapping).
+                labels["classes"] = self._shared_classes
         return TargetRecord(
             type="change",
             class_map=self.class_map,
@@ -136,7 +180,12 @@ class ChangeTarget:
             assert self._before is not None and self._after is not None
             before = _window_mask(self._before, transform, height, width, valid_mask)
             after = _window_mask(self._after, transform, height, width, valid_mask)
-            change = np.where(before != after, value, 0).astype(np.uint8)
+            if self._lookups is not None:
+                change = np.where(
+                    self._lookups[0][before] != self._lookups[1][after], value, 0
+                ).astype(np.uint8)
+            else:
+                change = np.where(before != after, value, 0).astype(np.uint8)
             if ignore is not None and self._annotated_areas:
                 # Outside a set's annotated_area nothing was labeled (its mask holds the
                 # ignore value there), so whether the pixel changed is unknown.

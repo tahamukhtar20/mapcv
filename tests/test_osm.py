@@ -302,8 +302,10 @@ def test_config_refusals(labels: dict[str, Any], message: str) -> None:
 def test_osm_labels_as_the_after_set_of_change_detection(
     tmp_path: Path, region: dict[str, float], overpass: Overpass
 ) -> None:
-    # Hand labels from before (the house only) against today's OpenStreetMap (the house
-    # and the lake, buildings ID 1 and water ID 2): the lake is the change.
+    # Hand labels from before (the house, class building) against today's OpenStreetMap
+    # (the house and the lake). OpenStreetMap alone numbers its classes in config order
+    # (water 1, building 2) and the file set alone has building 1; compared on one class
+    # map by name, the house is unchanged and the lake is the change.
     from pyproj import Transformer
     from rasterio.features import rasterize
     from rasterio.transform import Affine
@@ -330,7 +332,7 @@ def test_osm_labels_as_the_after_set_of_change_detection(
             }
         )
     )
-    osm_classes = CLASSES[:2]
+    osm_classes = [CLASSES[1], CLASSES[0]]
     config = MapcvConfig.model_validate(
         {
             "task": "change",
@@ -340,7 +342,7 @@ def test_osm_labels_as_the_after_set_of_change_detection(
                 {"type": "geotiff", "name": "after", "path": str(tmp_path / "image.tif")},
             ],
             "change": {
-                "before": {"path": str(before)},
+                "before": {"files": [{"path": str(before), "class": "building"}]},
                 "after": {"osm": {"classes": osm_classes, "overpass_url": overpass.url}},
             },
             "sampler": {"patch_size": PATCH, "edge_strategy": "drop"},

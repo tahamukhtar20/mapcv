@@ -178,7 +178,7 @@ Optional, and only allowed with `task: change` (another task with a `change` blo
 The mask comes from one of two places:
 
 - **`labels`** that mark what changed, vector or a label raster (`type: raster`): every labeled pixel is change. For a raster, pixels it does not label (outside it, its NoData, `ignore_values`) keep the ignore value.
-- **`change.before` and `change.after`**, two vector label sets (same fields as [`labels`](#polygon-labels-type-vector)): a pixel changed where their masks differ, for example a building that appeared or was demolished. Without `label_field` only the presence of an object counts; with `label_field` and the **same** `classes` mapping in both, a change of class counts too.
+- **`change.before` and `change.after`**, two vector label sets (same fields as [`labels`](#polygon-labels-type-vector)): a pixel changed where their masks differ, for example a building that appeared or was demolished. A set given as one `path` without `label_field` marks objects of one kind, and only their presence is compared. Sets that name classes (`label_field`, `files` with a `class` or `label_field` each, or `osm`) are compared class by class, so a change of class counts too: classes match **by name**. Without `classes` the names of both sets get one class map (IDs 1, 2, … in sorted order, or integer names as themselves; recorded as `target.labels.classes` in the manifest); with `classes`, give the **same** mapping in both. Both sets must name classes, or neither: to compare a plain file with a named set, write it as `files: [{path: …, class: <name>}]`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -197,7 +197,7 @@ change:
 
 Pixels without imagery in either image get the ignore value (`labels.ignore_index`, or the label sets' shared `ignore_index`; default 255), as in segmentation masks. So do pixels outside either label set's `annotated_area`: nothing was labeled there in that set, so whether the pixel changed is unknown, and it is neither change nor no change. For example, with the same buildings in both sets but `before.annotated_area` covering the west half, the east half is ignored, not change.
 
-**Validation** (with `task: change`): exactly two imagery sources; either `labels` or both `change.before` and `change.after`, not both; the two label sets need the same `ignore_index` (not `null` when either has an `annotated_area`), and comparing classes needs `label_field` and an identical `classes` mapping in both; `change_value` must differ from the ignore value. A resumed run must use the same labels (their files' hashes are recorded) and `change_value`.
+**Validation** (with `task: change`): exactly two imagery sources; either `labels` or both `change.before` and `change.after`, not both; the two label sets need the same `ignore_index` (not `null` when either has an `annotated_area`), both sets name classes or neither does, and sets that name classes have the same `classes` mapping or none; `change_value` must differ from the ignore value. A resumed run must use the same labels (their files' hashes are recorded) and `change_value`.
 
 ## `region`
 

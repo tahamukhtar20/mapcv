@@ -47,6 +47,8 @@ Python API changes: `Manifest` has `task`, `sources`, `target` (`SourceRecord`, 
 
 `mapcv generate` resumes a 0.2 dataset when the imagery, labels, sampler and writer settings match, with one addition: **set `labels.ignore_index: null`**. mapcv 0.2 wrote background (`0`) where there was no imagery; 0.3 writes `labels.ignore_index` (default `255`) there, and a resumed run must keep the dataset consistent. Without it, generation stops with a message that says so. A finished 0.2 dataset resumes as a no-op and is left as it is; one that gains patches is saved as version 3. New masks come from 0.3's rasterizer, which follows GDAL's rules exactly, so pixels on polygon edges can differ slightly from masks 0.2 wrote.
 
+JPEG patches are encoded with 4:2:0 chroma subsampling by default (`writer.jpg_subsampling: "4:2:0"`), as Pillow and libjpeg do, which makes them up to half the size of 0.2's 4:4:4 patches at the same quality. A 0.2 dataset written as JPEG resumes only with **`writer.jpg_subsampling: "4:4:4"`**, so that old and new patches match; without it, generation stops and names the `writer` settings. New datasets need no change.
+
 Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1 datasets (as in 0.2), and 0.2 datasets made with `sampler.mode: random`, because 0.3 draws random positions without repeats and would mix two different samples. Both can still be split and inspected.
 
 ## The `task` setting

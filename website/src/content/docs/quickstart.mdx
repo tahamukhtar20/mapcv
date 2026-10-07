@@ -41,7 +41,7 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
 
    1/4 Imagery
-     esri       Esri World Imagery — sub-metre RGB (check Esri's terms)
+     esri       Esri World Imagery — sub-metre RGB
      sentinel2  Sentinel-2 L2A — open 10 m multispectral (EOPF Zarr)
      custom     your own XYZ tile URL
    Imagery [esri/sentinel2/custom] (esri):
@@ -132,8 +132,6 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    │ Split    spatial · test 0.2 · val 0.1                                                │
    │ Memory   ≈ 28.8 MB per chunk                                                         │
    ╰──────────────────────────────────────────────────────────────────────────────────────╯
-   Imagery terms are your responsibility: check the provider's license, attribution and
-   rate limits (https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md).
 
    Looks right? Build it with mapcv generate mapcv.yaml
    ```

@@ -129,10 +129,6 @@ Rules for remote files:
 - Reads are cached in memory and retried on transient errors. A plain, non-tiled GeoTIFF over HTTP works too, but mapcv then has to fetch whole strips, so a COG is much cheaper.
 - Resuming checks the URL, the server's `ETag` and the file size, so a file replaced on the server is noticed.
 
-<Aside type="caution">
-Check the licence and attribution requirements of imagery you did not make yourself before you share a dataset built from it.
-</Aside>
-
 ## Several co-registered files
 
 Files that cover the same place on the same pixel grid (two dates, optical and a DEM, a stack of indices) can be sampled together: list them under `imagery`, each with a `name`. Every patch then has one file per source, `Images/<name>/patch_*.tif`, all at the same position and with one shared mask.

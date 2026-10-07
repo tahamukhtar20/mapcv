@@ -59,9 +59,9 @@ Real (trimmed) output from the [Quickstart](/mapcv/quickstart/): 967 OpenStreetM
     Patches as PNG, JPEG, NPY or georeferenced GeoTIFF, COCO/YOLO, a manifest and split lists.
     Load them with `MapcvDataset`, or export to Hugging Face and TerraTorch.
   </Card>
-  <Card title="Honest about imagery rights" icon="information">
-    mapcv ships no presets for servers that forbid bulk downloads and keeps API keys out of
-    manifests. Licensing stays your call, and the docs tell you what to check.
+  <Card title="Keys stay private" icon="information">
+    API keys in a tile URL never reach the manifest, logs or messages, and Earth Engine runs on
+    your own login. Each source's credit line is listed and written into the dataset card.
   </Card>
 </CardGrid>
 

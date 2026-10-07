@@ -46,8 +46,8 @@ confirm_large=true.
 
 Rules: every path must be inside the folder the server was started with (relative
 paths are relative to it). Tools that write exist only if the user started the server
-with --allow-write. Tile imagery has provider terms the user is responsible for; do not
-invent a url_template, and never put credentials in a config you show or log.
+with --allow-write. Do not invent a url_template, and never put credentials in a config
+you show or log.
 """
 
 _READ = ToolAnnotations(

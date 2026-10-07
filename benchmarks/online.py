@@ -4,8 +4,6 @@ Reported separately from the offline scenarios because it measures the network
 and the provider as much as mapcv. It is small (77 tiles, polite concurrency),
 runs once, never in CI, and only checks that the run succeeds and writes a
 consistent dataset; pixels cannot be verified against a live service.
-
-You are responsible for the provider's terms (see PROVIDERS.md).
 """
 
 from __future__ import annotations

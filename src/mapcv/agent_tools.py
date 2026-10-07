@@ -620,7 +620,7 @@ def describe_config_schema(state: ToolState) -> ToolResult:
     data["notes"] = [
         "Unknown keys are errors. Region is a WGS-84 lon/lat box (west, south, east, north).",
         "Paths in a config file are relative to the file's folder.",
-        "Imagery terms are the user's responsibility: " + _PROVIDERS_URL,
+        "Imagery sources, their licenses and credit lines: " + _PROVIDERS_URL,
     ]
     rules = data["rules"]
     return ToolResult(

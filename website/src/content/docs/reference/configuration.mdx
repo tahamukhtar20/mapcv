@@ -325,8 +325,8 @@ imagery:
 
 Set exactly one of `image` or `collection`. Each time it opens the imagery, mapcv asks Earth Engine for a tile URL (`getMapId`) with your credentials. That URL holds a short-lived map ID, so it is never written to the config, the manifest, the tile cache or messages. The manifest records `earth-engine:<asset>` and the rendering settings (not `project`), so a resumed run must ask for the same image and rendering. Earth Engine's terms, quotas and any billing are yours; see [Providers & licensing](/mapcv/project/providers/).
 
-<Aside type="caution">
-Built-in names are conveniences, not licences. Check the provider's terms before downloading; see [Providers & licensing](/mapcv/project/providers/). Keep API keys out of committed YAML: mapcv never writes `url_template` into the manifest, but your config file is your responsibility.
+<Aside>
+Each source's license and credit line: [Providers & licensing](/mapcv/project/providers/). mapcv never writes `url_template` into the manifest, but a key in a config file you commit is in your repository; see [Keep API keys out of YAML](/mapcv/guides/choose-imagery-and-zoom/#keep-api-keys-out-of-yaml).
 </Aside>
 
 ### Sentinel-2 L2A EOPF Zarr (`type: eopf_zarr`)

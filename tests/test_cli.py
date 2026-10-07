@@ -232,7 +232,7 @@ def test_generate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, ["generate", str(cfg)])
     assert result.exit_code != 0
     assert "Config error" in result.output
-    assert "Permission denied" in result.output
+    assert "Permission denied" in result.output.replace("\n", "")  # wraps on long paths
 
 
 def test_generate_calls_run_generate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +266,7 @@ def test_validate_unreadable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, ["validate", str(cfg)])
     assert result.exit_code != 0
     assert "Config error" in result.output
-    assert "Permission denied" in result.output
+    assert "Permission denied" in result.output.replace("\n", "")  # wraps on long paths
 
 
 def test_validate_shows_split_info(tmp_path: Path) -> None:

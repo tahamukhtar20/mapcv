@@ -312,7 +312,8 @@ def test_info_keeps_the_end_of_a_long_path_in_its_title(tmp_path: Path) -> None:
     result = runner.invoke(app, ["info", str(staging)], env={"COLUMNS": "80"})
     assert result.exit_code == 0, result.output
     title = result.output.splitlines()[0]
-    assert title.startswith("╭─ …") and "dataset-at-the-end" in title
+    # The start of the path gives way; its end, the dataset's folder, stays.
+    assert "─ …" in title and "dataset-at-the-end ─" in title
 
 
 @pytest.mark.parametrize(

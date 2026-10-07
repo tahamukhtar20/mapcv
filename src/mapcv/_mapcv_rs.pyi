@@ -17,12 +17,15 @@ from typing import (
 import numpy as np
 import numpy.typing as npt
 
+__version__: str
+
 __all__ = [
     "BBox",
     "GeoTiff",
     "PyBBox",
     "PyTileIndex",
     "TileIndex",
+    "__version__",
     "bounds",
     "decode_tile_window",
     "fetch_tiles",

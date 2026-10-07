@@ -926,5 +926,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PyTileIndex", m.getattr("TileIndex")?)?;
     m.add("PyBBox", m.getattr("BBox")?)?;
     m.add_class::<PyGeoTiff>()?;
+    // The version this binary was built from; `mapcv doctor` compares it with the package's.
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

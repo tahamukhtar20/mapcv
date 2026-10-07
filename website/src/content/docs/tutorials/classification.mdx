@@ -237,7 +237,7 @@ This tutorial builds a **scene classification** dataset in the style of EuroSAT 
        with torch.no_grad():
            for images, labels in val:
                correct += (model(images).argmax(1) == labels).sum().item()
-       print(epoch, float(loss), correct / len(val.dataset))
+       print(epoch, loss.item(), correct / len(val.dataset))
    ```
 
    The classes are unbalanced (60 % forest), so look at per-class recall, not only accuracy, and consider a weighted loss. Evaluate once on `labels_test.csv` at the end.

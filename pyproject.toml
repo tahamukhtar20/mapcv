@@ -75,6 +75,10 @@ dev = [
 parquet = [
     "pyarrow>=14",
 ]
+# `mapcv export --format hf-parquet` (Hugging Face Parquet).
+export = [
+    "pyarrow>=14",
+]
 docs = [
     "matplotlib",
     "ipywidgets",
@@ -84,7 +88,8 @@ docs = [
 zarr = [
     "xarray-eopf==0.2.5; python_version < '3.11'",
     "xarray-eopf>=0.2.9,<0.3; python_version >= '3.11' and python_version < '3.14'",
-    "xarray>=2024.10; python_version < '3.14'",
+    # xarray 2026.9 needs zarr 3, which xarray-eopf does not support yet.
+    "xarray>=2024.10,<2026.9; python_version < '3.14'",
     "dask[array]>=2024.10; python_version < '3.14'",
     "numba>=0.68; python_version < '3.14'",  # 0.68 is the first to support numpy 2.5
     "zarr>=2.18,<3; python_version < '3.14'",
@@ -141,6 +146,8 @@ module = [
     "yaml",
     "xarray",
     "xarray.*",
+    "zarr",
+    "zarr.*",
     "pyproj",
     "pyproj.*",
     "shapefile",
@@ -177,7 +184,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 65
+fail_under = 85
 show_missing = true
 skip_covered = true
 
@@ -190,6 +197,7 @@ dev = [
 ]
 # Reference implementations the test suite checks mapcv's outputs against.
 test = [
+    "hypothesis>=6.100",
     "pycocotools>=2.0.8",
 ]
 # Only the benchmark suite in benchmarks/ needs these; mapcv itself does not.
@@ -197,4 +205,11 @@ bench = [
     "psutil>=5.9",
     "pyproj>=3.6",
     "rasterio>=1.3",
+]
+golden = [
+    "geopandas>=0.14",
+    "mercantile>=1.2",
+    "pyproj>=3.6",
+    "rasterio>=1.3",
+    "shapely>=2",
 ]

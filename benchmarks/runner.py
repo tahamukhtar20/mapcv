@@ -288,6 +288,15 @@ def _written_patches(manifest: Path) -> int:
         return 0  # not written yet, or caught mid-replace
 
 
+def _written_images(dataset: Path) -> int:
+    """Patch images on disk: the manifest is only rewritten every few seconds, so it
+    lags behind the files while a run is going."""
+    try:
+        return sum(1 for _ in (dataset / "Images").iterdir())
+    except OSError:
+        return 0  # not created yet
+
+
 def _run_resume_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
     """An uninterrupted run, then an interrupted + resumed one that must match it exactly."""
     if sys.platform == "win32":
@@ -311,7 +320,7 @@ def _run_resume_scenario(scenario: Scenario, ctx: Context) -> Dict[str, Any]:
     manifest = root / "resumed" / "dataset" / "manifest.json"
     target = int(report.stats.get("patches", scenario.expected_patches()) * INTERRUPT_AT_FRACTION)
     first = _generate(
-        config, "interrupted", interrupt_when=lambda: _written_patches(manifest) >= target
+        config, "interrupted", interrupt_when=lambda: _written_images(manifest.parent) >= target
     )
     partial = _written_patches(manifest)
     ctx.log(f"    interrupted at {partial} patches: exit {first.exit_code}")

@@ -13,6 +13,7 @@ import shapely
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    StacCogImageryConfig,
     ContinuousLabelsConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
@@ -23,6 +24,7 @@ from mapcv.config import (
     eopf_local_path,
 )
 from mapcv.imagery import GeoTiffRasterSource
+from mapcv.pipeline import _max_window_width
 from shapely.geometry import box
 
 from mapcv.targets.segmentation import load_labels
@@ -121,8 +123,12 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> Tuple[int, in
 
 def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> Tuple[int, int]:
     """Raster size in the product's UTM grid, snapped outward to whole pixels."""
+    return _utm_raster(config, imagery.resolution)
+
+
+def _utm_raster(config: MapcvConfig, res: int) -> Tuple[int, int]:
+    """Raster size of the region on the UTM grid of ``res`` metres, snapped outward."""
     region = config.region
-    res = imagery.resolution
     try:
         from pyproj import Transformer
     except ImportError:  # without the zarr extra: kilometre approximation
@@ -269,7 +275,11 @@ def summarize_labels(config: MapcvConfig) -> Optional[LabelSummary]:
 
 
 def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary:
-    where = ", ".join(str(path) for _, path in labels.keyed_files())
+    where = (
+        "OpenStreetMap (Overpass)"
+        if labels.osm is not None
+        else ", ".join(str(path) for _, path in labels.keyed_files())
+    )
     missing = [path for _, path in labels.keyed_files() if not path.exists()]
     if missing:
         return LabelSummary(where, 0, {}, [f"label file not found: {path}" for path in missing])
@@ -283,7 +293,7 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
     region = config.region
     area = box(region.west, region.south, region.east, region.north)
     in_region = sum(1 for geometry, _ in geometries if geometry.intersects(area))
-    if geometries and not in_region:
+    if not in_region:
         if config.task == "detection":
             what, outcome = "feature", "no patch would have objects"
         elif config.task == "instance":
@@ -294,10 +304,18 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
             what, outcome = "polygon", "no patch would show a change"
         else:
             what, outcome = "polygon", "every mask would be background"
-        messages.append(
-            f"no label {what} intersects the region, so {outcome}. "
-            "Check that labels are longitude/latitude (not swapped) and cover the region."
-        )
+        if not geometries:
+            messages.append(
+                f"no usable label {what} in {where}, so {outcome}. Check labels.path, "
+                "labels.label_field and labels.classes (and labels.layer for a GeoPackage "
+                "with several layers)."
+            )
+        else:
+            messages.append(
+                f"no label {what} intersects the region, so {outcome}. Check that the "
+                "region and the labels are longitude/latitude (not swapped) and that the "
+                "labels cover the region."
+            )
     return LabelSummary(where, len(geometries), class_map, messages, in_region)
 
 
@@ -342,6 +360,19 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: List[str]) ->
             channels,
             bytes_per_value,
             description,
+            imagery.chunk_rows,
+        )
+    if isinstance(imagery, StacCogImageryConfig):
+        # The finest Sentinel-2 bands are 10 m; the product's UTM grid, as for EOPF.
+        height, width = _utm_raster(config, 10)
+        return _SourceSize(
+            height,
+            width,
+            None,
+            10.0,
+            len(imagery.bands),
+            2,
+            f"Sentinel-2 COGs (STAC search) · {len(imagery.bands)} bands",
             imagery.chunk_rows,
         )
     height, width = _eopf_raster(config, imagery)
@@ -426,11 +457,12 @@ def plan(config: MapcvConfig) -> Plan:
     if config.task == "classification":
         output += patches * _CLASSIFICATION_BYTES
     window_rows = min(height, primary.chunk_rows + patch_size)
+    pixel_bytes = sum(size.channels * size.bytes_per_value for size in sizes)
+    # A wide chunk is read in column windows that stay below the pipeline's budget.
+    window_width = min(width, _max_window_width(window_rows, width, pixel_bytes, patch_size))
     # Window, validity mask, label mask and extracted patches each hold a copy; further
     # sources are read on the first one's grid, so their windows are as large.
-    chunk_memory = (
-        window_rows * width * (sum(size.channels * size.bytes_per_value for size in sizes) * 2 + 2)
-    )
+    chunk_memory = window_rows * window_width * (pixel_bytes * 2 + 2)
 
     labels = summarize_labels(config)
     if labels is not None:

@@ -14,10 +14,10 @@ from mapcv.labels import parse_kml
 
 _GOLDEN = Path(__file__).parent / "golden" / "label_parse_golden.json"
 
+# The fixtures are committed: a missing one is an error, never a skipped test.
 if not _GOLDEN.exists():
-    pytest.skip(
-        "label_parse_golden.json not found - run tests/generate_golden.py first",
-        allow_module_level=True,
+    raise FileNotFoundError(
+        "label_parse_golden.json not found - regenerate with: uv run --group golden python tests/generate_golden.py"
     )
 
 _KML_HEADER = b'<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2">'

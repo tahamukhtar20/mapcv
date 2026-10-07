@@ -598,3 +598,14 @@ def test_redirected_output_on_a_legacy_code_page_does_not_crash(
     print("Region 4.9 → 5.0 ✓ ⚠ ╭─╮", file=redirected)
     redirected.flush()
     assert "→ 5.0 ✓".encode() in redirected.buffer.getvalue()
+
+
+def test_no_color_turns_colours_off_for_one_run(tmp_path: Path) -> None:
+    from mapcv import cli
+
+    before = cli._console.no_color
+    result = runner.invoke(app, ["--no-color", "validate", str(tmp_path / "missing.yaml")])
+    assert result.exit_code != 0
+    assert cli._console.no_color
+    runner.invoke(app, ["validate", str(tmp_path / "missing.yaml")])
+    assert cli._console.no_color == before

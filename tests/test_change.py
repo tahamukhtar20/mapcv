@@ -192,6 +192,24 @@ BASE: dict[str, Any] = {
                     "after": {"path": "b.geojson"},
                 }
             },
+            "Give change.after a class: write it as `files: [{path: b.geojson, class: <name>}]`",
+        ),
+        (
+            {
+                "change": {
+                    "before": {"path": "a.geojson"},
+                    "after": {"files": [{"path": "b.geojson", "class": "house"}]},
+                }
+            },
+            "change.after names classes (files) but change.before does not",
+        ),
+        (
+            {
+                "change": {
+                    "before": {"path": "a.geojson", "label_field": "k", "classes": {"x": 1}},
+                    "after": {"path": "b.geojson", "label_field": "k"},
+                }
+            },
             "the same classes mapping",
         ),
         (
@@ -272,7 +290,7 @@ def test_every_label_set_path_resolves_against_the_config_folder(tmp_path: Path)
         "  - {type: xyz, name: before, zoom: 18, source: esri_satellite}\n"
         "  - {type: xyz, name: after, zoom: 18, source: esri_satellite}\n"
         "change:\n"
-        "  before: {path: a.geojson, annotated_area: areas/a.geojson}\n"
+        "  before: {path: a.geojson, label_field: kind, annotated_area: areas/a.geojson}\n"
         "  after:\n"
         "    files: [{path: sets/b.geojson, class: house}]\n"
         "    annotated_area: areas/b.geojson\n"
@@ -419,6 +437,94 @@ def test_an_annotated_label_set_needs_an_ignore_index() -> None:
                 },
             }
         )
+
+
+def _burn_named(
+    sets: list[tuple[Path, str]], transform: Affine, ids: dict[str, int]
+) -> npt.NDArray[np.uint8]:
+    """rasterio's mask of class-named files on a patch grid, later files on top."""
+    shapes = []
+    for path, name in sets:
+        for feature in json.loads(path.read_text())["features"]:
+            geometry = rasterio.warp.transform_geom(
+                "EPSG:4326", f"EPSG:{EPSG}", feature["geometry"], precision=-1
+            )
+            shapes.append((geometry, ids[name]))
+    burned: npt.NDArray[np.uint8] = rasterio.features.rasterize(
+        shapes, out_shape=(PATCH, PATCH), transform=transform, fill=0, dtype="uint8"
+    )
+    return burned
+
+
+def test_label_sets_share_one_class_map(tmp_path: Path, scene: dict[str, Any]) -> None:
+    # Roads and houses before; the same roads after, the houses demolished. Each set
+    # alone would number its classes 1, 2, ... (houses 1 and roads 2 before, roads 1
+    # after), so the unchanged roads would differ. One class map over both sets'
+    # names compares them by name: only the houses changed.
+    region = scene["region"]
+    roads = write_features(
+        tmp_path / "roads.geojson",
+        [(_polygon(region, (0.05, 0.05), (0.95, 0.10), (0.95, 0.20)), None)],
+    )
+    houses = write_features(
+        tmp_path / "houses.geojson",
+        [(_polygon(region, (0.30, 0.50), (0.60, 0.55), (0.45, 0.85)), None)],
+    )
+    before = [(roads, "road"), (houses, "house")]
+    after = [(roads, "road")]
+    config = change_config(
+        tmp_path,
+        region,
+        change={
+            "before": {"files": [{"path": str(p), "class": name} for p, name in before]},
+            "after": {"files": [{"path": str(p), "class": name} for p, name in after]},
+        },
+    )
+    manifest = run_generate(config).manifest
+    ids = {"house": 1, "road": 2}  # any one map for both sets will do
+    roads_seen = changed = 0
+    for entry in manifest.patches:
+        transform = Affine(*manifest.patch_transform(entry))
+        was, now = _burn_named(before, transform, ids), _burn_named(after, transform, ids)
+        want = (was != now).astype(np.uint8)
+        mask = _mask(config.writer.staging_dir, entry)
+        np.testing.assert_array_equal(mask, want, err_msg=f"{entry['row']},{entry['col']}")
+        roads_seen += int((now == ids["road"]).any())
+        changed += int(want.any())
+    assert roads_seen > 0 and changed > 0
+    # The manifest records the one class map both sets were compared with.
+    target = manifest.target
+    assert target is not None and target.labels is not None
+    assert target.labels["classes"] == {"house": 1, "road": 2}
+
+
+def test_label_field_sets_without_classes_share_one_class_map(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    # Before: only sheds; after: the same sheds plus a house. Numbered per set, the shed
+    # would be 1 before and 2 after; named, it is the same class in both.
+    region = scene["region"]
+    shed = _polygon(region, (0.10, 0.10), (0.40, 0.12), (0.30, 0.45))
+    house = _polygon(region, (0.55, 0.50), (0.90, 0.55), (0.75, 0.90))
+    before = write_features(tmp_path / "sheds.geojson", [(shed, "shed")])
+    after = write_features(tmp_path / "both.geojson", [(shed, "shed"), (house, "house")])
+    config = change_config(
+        tmp_path,
+        region,
+        change={
+            "before": {"path": str(before), "label_field": "kind"},
+            "after": {"path": str(after), "label_field": "kind"},
+        },
+    )
+    manifest = run_generate(config).manifest
+    assert manifest.target is not None and manifest.target.labels is not None
+    assert manifest.target.labels["classes"] == {"house": 1, "shed": 2}
+    for entry in manifest.patches:
+        transform = Affine(*manifest.patch_transform(entry))
+        want = (_burn(before, transform, "kind") != _burn(after, transform, "kind")).astype(
+            np.uint8
+        )
+        np.testing.assert_array_equal(_mask(config.writer.staging_dir, entry), want)
 
 
 def test_classes_compare_object_kinds_too(tmp_path: Path, scene: dict[str, Any]) -> None:
@@ -637,6 +743,36 @@ def test_cli_and_plan_describe_change_datasets(tmp_path: Path, scene: dict[str, 
     config = change_config(tmp_path, scene["region"], labels={"path": str(far)})
     estimate = plan(config)
     assert any("no patch would show a change" in message for message in estimate.warnings)
+
+
+def test_a_missing_annotated_area_of_a_label_set_is_reported(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    import yaml
+
+    from mapcv.agent_tools import Sandbox, ToolState, validate_config
+
+    data = {
+        "task": "change",
+        "region": scene["region"],
+        "imagery": _sources(tmp_path),
+        "change": {
+            "before": {"path": str(scene["before_set"]), "annotated_area": "gone.geojson"},
+            "after": {"path": str(scene["before_set"])},
+        },
+        "sampler": {"patch_size": PATCH},
+        "writer": {"staging_dir": "cli"},
+    }
+    path = tmp_path / "change.yaml"
+    path.write_text(yaml.safe_dump(data))
+    message = "change.before.annotated_area not found"
+    result = runner.invoke(app, ["validate", str(path)], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    assert message in " ".join(result.output.split())
+    estimate = plan(MapcvConfig.from_yaml(path))
+    assert any(message in warning for warning in estimate.warnings)
+    answer = validate_config(ToolState(Sandbox(tmp_path)), "change.yaml")
+    assert f"{message}: gone.geojson" in answer.data["warnings"]
 
 
 def test_mcp_sandbox_checks_both_label_sets(tmp_path: Path, scene: dict[str, Any]) -> None:

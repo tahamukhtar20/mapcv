@@ -19,6 +19,10 @@ A model can score well on such a split by recognising local context instead of l
 
 ## What mapcv does
 
+![Map of 256-pixel patches over Amsterdam outlined in green (train), yellow (val) and pink (test), with val and test in whole blocks](../../../assets/figures/spatial-split.webp)
+
+*The quickstart's patches by split: val and test patches come in whole blocks, so no test patch has a training neighbour that shows the same buildings.*
+
 The default `split.strategy: spatial`:
 
 1. **Splits by area, not by patch.** The raster is divided into square blocks (`block_size`, 4 × `patch_size` by default) and each block goes entirely to train, val or test. Most neighbours of a test patch are therefore test patches too.

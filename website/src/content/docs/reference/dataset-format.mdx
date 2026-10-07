@@ -435,6 +435,10 @@ target = {image: np.isin(np.arange(len(index)), [index[name] for name in names])
 
 ## Change detection datasets
 
+![Three before/after pairs of aerial patches over IJburg, Amsterdam: open water in 2016, a new island with streets and buildings in 2026](../../../assets/figures/change-pairs.webp)
+
+*Before/after pairs as a change dataset holds them: the same patch from two imagery sources on one grid, here PDOK's 2016 and 2026 aerial photos of Strandeiland, an island raised from the water in between (Beeldmateriaal Nederland, CC BY 4.0).*
+
 With `task: change` each patch is a pair of images, before and after, with a change mask, in the folder layout of LEVIR-CD that change-detection loaders read:
 
 ```text

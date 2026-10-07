@@ -82,6 +82,7 @@ export default defineConfig({
           label: 'Get started',
           items: [
             { label: 'Introduction', slug: 'introduction' },
+            { label: 'Why mapcv', slug: 'why-mapcv' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Quickstart', slug: 'quickstart', badge: { text: '5 min', variant: 'tip' } },
           ],

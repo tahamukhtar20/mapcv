@@ -6,23 +6,29 @@ description: What mapcv does, who it is for, and what you get out of it.
 import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import PipelineDiagram from '../../components/PipelineDiagram.astro';
 
-**mapcv turns a region and polygon labels into a ready-to-train semantic-segmentation dataset.** You describe *where* (a longitude/latitude box), *what imagery* (XYZ map tiles or a Sentinel-2 L2A product) and, optionally, *what to label* (a GeoJSON, KML, GeoPackage, Shapefile or GeoParquet file). mapcv fetches the imagery, burns the polygons into masks on exactly the same pixel grid, cuts fixed-size patches, and writes them with a manifest and leakage-safe train/val/test splits.
+**mapcv turns a region, imagery and labels into a ready-to-train remote-sensing dataset.** You describe *where* (a longitude/latitude box or polygons), *what imagery* (XYZ map tiles, your own GeoTIFF or COG, Sentinel-2, or Google Earth Engine) and, optionally, *what to label* (vector features in GeoJSON, KML, GeoPackage, Shapefile, GeoParquet or straight from OpenStreetMap, or a label raster). mapcv reads the imagery, puts the labels on exactly the same pixel grid, cuts fixed-size patches for the task you choose, and writes them with a manifest and leakage-safe train/val/test splits.
+
+![Four aerial patches over Amsterdam and the same patches with building masks](../../assets/figures/segmentation-patches.webp)
+
+*Patches and building masks made by mapcv (imagery: Beeldmateriaal Nederland, CC BY 4.0; labels: © OpenStreetMap contributors).*
 
 <PipelineDiagram variant="overview" />
 
 ## Why it exists
 
-Building a segmentation dataset from map imagery usually means stitching tiles by hand, fighting coordinate systems, installing GDAL, and writing a one-off split script that quietly leaks neighbouring pixels between train and test. mapcv is a **data-creation-first** tool: one YAML file, three commands, and the result is plain files on disk.
+Building a dataset from geospatial imagery usually means a one-off script: stitching tiles or windows by hand, fighting coordinate systems, installing GDAL, and a split that quietly leaks neighbouring pixels between train and test. mapcv is a **data-creation-first** tool: one YAML file, a few commands, and the result is plain files on disk.
 
-- **No GDAL.** The core is Rust (tile math, tile fetching, rasterizing, patch sampling and encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ imagery.
-- **Correct by default.** Labels are reprojected into the imagery's own CRS, class IDs are stable across files, and the default split keeps spatially close patches together.
+- **No GDAL.** The core is Rust (tile math and fetching, GeoTIFF reading and writing, rasterizing, patch encoding) behind a small Python layer. `pip install mapcv` is the whole setup for XYZ tiles and GeoTIFF/COG.
+- **Correct by default.** Masks follow GDAL's exact rules, labels are reprojected into the imagery's own CRS, class IDs are stable, and the default split keeps spatially close patches together.
 - **Honest estimates.** `mapcv plan` tells you how many tiles, patches, megabytes and how much memory a run needs before anything is downloaded.
-- **Resumable.** Progress is saved as the run goes and whenever it stops. If a run stops, the same command continues it.
+- **Resumable.** Progress is saved as the run goes and whenever it stops. If a run stops, the same command continues it, and the result is byte for byte the same.
+
+How this compares with scripts, TorchGeo, Raster Vision and geoai: [Why mapcv](/mapcv/why-mapcv/).
 
 ## Who it is for
 
-- Computer-vision and ML researchers who need a segmentation dataset for a specific place, without becoming GIS specialists.
-- Remote-sensing practitioners who want multispectral Sentinel-2 patches as plain `float32` arrays.
+- Computer-vision and ML researchers who need a dataset for a specific place and task, without becoming GIS specialists.
+- Remote-sensing practitioners who want multispectral Sentinel-2 or their own GeoTIFFs as plain arrays or georeferenced patches.
 - Anyone teaching or benchmarking who needs a dataset that can be regenerated from a config file.
 
 ## What you get

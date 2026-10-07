@@ -1,0 +1,47 @@
+---
+title: Why mapcv
+description: What mapcv does that a hand-written script, GDAL, TorchGeo, Raster Vision or geoai don't, measured on the same datasets, and when another tool is the better choice.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Turning imagery and labels into a training dataset looks like an afternoon's script: fetch tiles, burn polygons, cut patches. The script that works for one region quietly gets the hard parts wrong at scale: a mask half a pixel off, train and test patches that touch, a crash at hour three that means starting over, a 3 GB raster held in memory. mapcv is that script done once, carefully, and checked.
+
+## What you get that a script doesn't
+
+- **The same data, provably.** Masks are burned with GDAL's exact rules (mapcv's rasterizer is a port, compared pixel for pixel with rasterio), labels are projected into the imagery's own CRS, and every output patch knows its exact place on the ground. On the [benchmarks](/mapcv/project/performance/), a careful rasterio script, GDAL's own command-line tools and leafmap all produce *exactly* mapcv's patches.
+- **Faster, and memory that does not grow with the region.** On 1,024 patches mapcv takes 1.6 s against 6.8 s for the rasterio script, 48 s for the GDAL command line and 54 s for leafmap. At 10,000 patches the script needs 3.3 GB of memory; mapcv stays near 0.5 GB because it works in bounded windows.
+- **Splits without leakage.** The default split keeps whole blocks of neighbouring patches together, so test scores are not inflated by near-duplicates of training patches ([why it matters](/mapcv/concepts/spatial-leakage/)).
+- **Resumable, byte for byte.** Ctrl-C, a lost connection or a killed process: run the same command and it continues; the finished dataset is identical to an uninterrupted run.
+- **A plan before the download.** `mapcv plan` shows tiles, patches, disk and memory before a single request.
+- **Six tasks from one config.** Segmentation masks, detection boxes (COCO and YOLO), instance masks (COCO RLE), patch classification, change detection and regression targets, with the same imagery, labels and splits.
+- **Many inputs, one wheel, no GDAL.** XYZ tiles, GeoTIFF/COG (local, https, s3), Sentinel-2 (EOPF Zarr, or COGs found in a STAC catalog), Google Earth Engine, several sources on one grid; labels from GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap or label rasters. `pip install mapcv` is the whole setup.
+- **Ready for training.** `mapcv.data.MapcvDataset` loads any task for PyTorch, and `mapcv export` writes Hugging Face Parquet and TerraTorch configs.
+
+## How it compares
+
+All tools below are good at what they were built for. The question is what you need.
+
+**A hand-written rasterio / geopandas script.** Fully flexible, and the right choice for a one-off on a small area. You own the details mapcv handles: CRS axis order, pixel-centre rules, edge patches, NoData, leakage-safe splits, retries, resuming and memory. Our [reference script](https://github.com/tahamukhtar20/mapcv/blob/main/benchmarks/baseline_scripts/rasterio_script.py), written carefully, matches mapcv's data and is 1.5–4.3× slower.
+
+**GDAL's command-line tools** (`gdal_translate`, `gdal_rasterize`). The reference for correctness, and mapcv matches it. Cutting thousands of patches means thousands of processes (30× slower than mapcv on 1,024 patches), and GDAL has to be installed.
+
+**[TorchGeo](https://github.com/torchgeo/torchgeo).** A PyTorch library that samples geospatial rasters and vectors *at training time*, with many benchmark datasets and pretrained models. It reads rasters you already have (it does not fetch map tiles) and samples patches during training rather than writing a dataset you can inspect, share or split. Its `GridGeoSampler` lays the grid from the dataset's bounds (with labels, the labels' extent), so on our benchmark its patches were 0.39 pixel off the imagery's grid and resampled. Use TorchGeo for training on large rasters directly; use mapcv to build the dataset, then load it with `MapcvDataset` or TorchGeo.
+
+**[Raster Vision](https://github.com/azavea/raster-vision).** A full framework for chip, train, predict and bundle pipelines in Python. A good fit if you want its end-to-end workflow and models; heavier to install and to configure when what you need is the dataset.
+
+**[geoai](https://github.com/opengeos/geoai) and [leafmap](https://github.com/opengeos/leafmap).** Interactive geospatial AI and mapping in notebooks: tile downloads to GeoTIFF, raster/vector chipping, Segment Anything and more. Great for exploring; mapcv adds the dataset-level guarantees (splits, resume, manifest, exactness) and runs from a config in CI.
+
+**[label-maker](https://github.com/developmentseed/label-maker)** pioneered building training data from map tiles and OpenStreetMap; it has not been updated since 2023 and covers XYZ imagery only.
+
+<Aside type="tip" title="Use them together">
+mapcv writes plain files: PNG/JPEG/GeoTIFF/NPY patches, masks, COCO/YOLO, a manifest and split lists. TorchGeo, Raster Vision, Ultralytics, torchvision, Hugging Face and TerraTorch can all read them.
+</Aside>
+
+## How we keep it honest
+
+- Rasterization and resampling are compared with rasterio, boxes with an independent shapely computation, COCO RLE with pycocotools.
+- Changes that should not alter outputs must prove byte-identical datasets against the previous version.
+- The [benchmark suite](/mapcv/project/performance/) builds the same datasets with every other tool and compares the data before comparing times; it is in the repository, so you can rerun it.
+
+<LinkCard title="Try it in five minutes" href="/mapcv/quickstart/" description="A building-segmentation dataset over Amsterdam, from install to patches." />

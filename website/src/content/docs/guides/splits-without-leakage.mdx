@@ -20,6 +20,10 @@ mapcv writes `splits/train.txt`, `val.txt` and `test.txt` at the end of `generat
 
 ## How the spatial split works
 
+![Map of patches outlined by split, with val and test in contiguous blocks](../../../assets/figures/spatial-split.webp)
+
+*A spatial split of the quickstart's dataset: green train, yellow val, pink test.*
+
 1. The raster is divided into square blocks of `block_size` pixels. Each patch belongs to the block containing its top-left corner.
 2. Blocks are shuffled with `seed` and assigned whole, one by one: a block goes to test if that brings test closer to its target size, otherwise to val if that brings val closer to its target, otherwise to train.
 3. Train and val patches whose footprint overlaps any test patch are **left out**, and so are train patches that overlap a val patch. They are listed in no split file.

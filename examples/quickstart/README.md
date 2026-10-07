@@ -36,6 +36,7 @@ The end of `mapcv generate mapcv.yaml` (timings depend on your connection):
 ```text
 ╭─ Dataset ready ──────────────────────────────────────────────────────────────╮
 │ Patches  77                                                                  │
+│ Source   xyz · esri_satellite                                                │
 │ Shape    256×256×3 uint8                                                     │
 │ Tiles    77 fetched · 0 failed                                               │
 │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                        │
@@ -55,6 +56,7 @@ dataset/
   Masks/patch_0000000.png ...     256×256 class ids: 0 = background, 1 = building
   manifest.json                   source, class map, CRS, per-patch positions and pixel counts
   splits/train.txt val.txt test.txt, splits/10|20|30/labeled.txt unlabeled.txt
+  patches.geojson                 footprints of the patches, to open in QGIS
 ```
 
 The split is `spatial`: whole blocks of the raster go to train, val or test, so neighbouring

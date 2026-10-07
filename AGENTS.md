@@ -9,10 +9,10 @@ strict version.
 A GDAL-free Python + Rust library and CLI that turns a region, imagery and labels into
 ready-to-train remote-sensing datasets.
 
-- **Imagery:** XYZ tiles, Sentinel-2 EOPF Zarr, GeoTIFF/COG (local, https, s3); several sources sampled on one grid.
-- **Labels:** GeoJSON, KML, GeoPackage, Shapefile or GeoParquet features, or label rasters.
+- **Imagery:** XYZ tiles (built-in sources, a URL template or Google Earth Engine), Sentinel-2 EOPF Zarr or COGs found in a STAC catalog, GeoTIFF/COG (local, https, s3; a glob of local tiles reads as one mosaic); several sources sampled on one grid.
+- **Labels:** GeoJSON, KML, GeoPackage, Shapefile or GeoParquet features, OpenStreetMap through Overpass, label rasters, or a raster of values for regression.
 - **Tasks:** segmentation; detection with COCO/YOLO output; instance segmentation with COCO RLE masks; classification with CSV/JSON patch labels; change detection (before/after pairs, LEVIR-CD layout); regression (float targets from a raster of values).
-- **Output:** image/mask patches, `manifest.json` (v3) and leakage-safe `splits/`.
+- **Output:** image/mask patches, `manifest.json` (v3), leakage-safe `splits/` and `patches.geojson`; `stats`, `card`, `verify` and `export` (Hugging Face Parquet, WebDataset, Zarr, TerraTorch) prepare a dataset for training and sharing.
 
 ## Setup
 
@@ -49,16 +49,19 @@ env PATH=$PWD/.venv/bin:$PATH UV_NO_SYNC=1 PYO3_PYTHON=$PWD/.venv/bin/python git
 
 | Area | Where |
 |---|---|
-| CLI (`init`, `validate`, `plan`, `generate`, `info`, `split`) | `src/mapcv/cli.py` |
+| CLI (`init`, `plan`, `generate`, `info`, `split`, `stats`, `card`, `verify`, `export`, `validate`, `cache`, `mcp`, `doctor`) | `src/mapcv/cli.py`; `stats.py`, `card.py`, `verify.py`, `export.py` and `shards.py`, `doctor.py` |
 | Config (pydantic, `extra="forbid"`) | `src/mapcv/config.py` |
 | MCP server for AI agents (`mapcv mcp`): tools, then protocol wiring | `src/mapcv/agent_tools.py`, `src/mapcv/mcp_server.py` |
 | Agent skill and Claude Code plugin (repo only) | `agent/`, `.claude-plugin/` |
-| Imagery sources (`WindowedRasterSource`) | `src/mapcv/imagery.py`, `src/mapcv/geotiff.py` |
+| Imagery sources (`WindowedRasterSource`) | `src/mapcv/imagery.py`, `src/mapcv/geotiff.py`; Earth Engine in `earth_engine.py`, STAC search in `stac.py`, the tile cache in `tile_cache.py` |
+| Labels: vector files, OpenStreetMap, the area of interest | `src/mapcv/labels.py`, `src/mapcv/vector_files.py`, `src/mapcv/osm.py`, `src/mapcv/aoi.py` |
+| Planning (`mapcv plan`) | `src/mapcv/planning.py` |
 | Pipeline: anchors, then per-chunk window, annotate, write | `src/mapcv/pipeline.py` |
 | Targets: what each task attaches to a patch | `src/mapcv/targets/` |
 | Writers: output layouts; `finalize` runs after splitting | `src/mapcv/writers/`, `src/mapcv/writer.py` |
 | Manifest v3 (reads v1/v2) | `src/mapcv/manifest.py` |
 | Splits (spatial by default, no leakage) | `src/mapcv/splitter.py` |
+| Reading a dataset for training (`MapcvDataset`), tiled inference | `src/mapcv/data.py`, `src/mapcv/infer.py` |
 | Rust: rasterizer (a port of GDAL), tile fetch/decode, GeoTIFF read/write, KML, patch writer | `src/*.rs`, `src/geotiff/` |
 | Benchmarks and correctness at scale | `benchmarks/` |
 

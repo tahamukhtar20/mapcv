@@ -19,7 +19,7 @@ if TYPE_CHECKING:  # the targets package imports the config, which imports this 
 
 
 class SamplerConfig(BaseModel):
-    """Configuration for patch sampling from an image strip."""
+    """Configuration for cutting patches from the raster (``sampler`` in the config)."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")

@@ -5,7 +5,7 @@ description: Folder layout, file naming, image and mask encoding, COCO and YOLO 
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks and [instance segmentation datasets](#instance-segmentation-datasets) a mask per object and [classification datasets](#classification-datasets) a label table instead of masks.
+Everything mapcv writes goes into `writer.staging_dir`. The layout is the same for every source; only the file formats differ (`writer.image_format` and `writer.mask_format`). This is a segmentation dataset; [detection datasets](#detection-datasets) have boxes instead of masks, [instance segmentation datasets](#instance-segmentation-datasets) a mask per object, [classification datasets](#classification-datasets) a label table instead of masks, [change detection datasets](#change-detection-datasets) image pairs and a change mask, and [regression datasets](#regression-datasets) float targets.
 
 <FileTree>
 - dataset/
@@ -37,15 +37,15 @@ Everything mapcv writes goes into `writer.staging_dir`. The layout is the same f
 
 **Several imagery sources.** With [`imagery` as a list](/mapcv/reference/configuration/#several-imagery-sources), each source's patches go to `Images/<name>/` under the same stem (`Images/before/patch_0000042.tif`, `Images/after/patch_0000042.tif`), every one on the first source's pixel grid, and the masks stay in `Masks/`. Each source keeps its own band count and data type. With `writer.stack_sources: true` the sources share one file per patch instead, `Images/patch_0000042.npy` of shape `(T, C, H, W)` (T sources in config order) or a GeoTIFF of `T × C` bands named `<source>_<band>`; its `files` key is `image`, and the manifest's `writer.stack_sources` is `true`.
 
-| | `png` / `jpg` (XYZ) | `npy` (Sentinel-2) | `tif` (either source) |
+| | `png` / `jpg` | `npy` | `tif` |
 | --- | --- | --- | --- |
-| Image | RGB, `uint8`, shape `(H, W, 3)` when decoded | NumPy array, `float32`, shape `(bands, H, W)` (bands-first) | GeoTIFF with one band per channel, the source's data type (`uint8` for XYZ, `float32` for Sentinel-2); reads as `(bands, H, W)` |
-| Band order | red, green, blue | exactly `imagery.bands` | the same, also named in the file (band descriptions) |
-| Values | 0–255 | decoded L2A surface reflectance (typically 0–1) | as the other two |
-| NoData | black `(0, 0, 0)` pixels (failed tiles, padding, provider NoData) | `NaN` where the product has no data; `0` in padded areas | like the source's format; floating-point GeoTIFFs declare `NaN` as no-data |
+| Image | RGB (or gray repeated into three channels), `uint8`, shape `(H, W, 3)` when decoded: XYZ tiles, or a `uint8` GeoTIFF with 1 or 3 bands | NumPy array in the source's data type (`float32` for EOPF Zarr, `uint16` for Sentinel-2 COGs, the file's for a GeoTIFF), shape `(bands, H, W)` (bands-first) | GeoTIFF with one band per channel, the source's data type; reads as `(bands, H, W)` |
+| Band order | red, green, blue (XYZ) or `imagery.bands` | exactly `imagery.bands` | the same, also named in the file (band descriptions) |
+| Values | 0–255 | as the source stores them: decoded L2A surface reflectance (typically 0–1) for EOPF Zarr, digital numbers for COGs | as the other two |
+| NoData | black `(0, 0, 0)` pixels (failed tiles, padding, provider NoData) | `NaN` where an EOPF product has no data, `0` in padded areas; integer data keeps its NoData value | like the source's format; floating-point GeoTIFFs declare `NaN` as no-data |
 | Mask | single-channel PNG, `uint8` (16-bit PNG for `uint16` masks), `(H, W)` | NumPy array, `(H, W)`, the mask's own dtype | single-band GeoTIFF, the mask's own dtype |
 
-**Masks.** `0` is background (imagery, no polygon), other values are class IDs from the manifest's `target.class_map`, and `255` (`labels.ignore_index`, recorded as the manifest's `target.ignore_index`) marks pixels with no imagery under them: padding, failed tiles and NoData. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. With [raster labels](/mapcv/reference/configuration/#raster-labels-type-raster), `255` also marks pixels without a label: outside the label raster, its NoData and `labels.ignore_values`. The values are the same in `png`, `npy` and `tif`; today segmentation masks are `uint8`, and `npy` and `tif` can also hold `uint16` and wider integers or `float32`/`float64` where a task needs them (PNG holds `uint8` and `uint16`). A `tif` mask also declares `ignore_index` as its no-data value, so GIS tools and `rasterio` (`read(masked=True)`) treat those pixels as missing. Pass the ignore value to your loss; see [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
+**Masks.** `0` is background (imagery, no polygon), other values are class IDs from the manifest's `target.class_map`, and `255` (`labels.ignore_index`, recorded as the manifest's `target.ignore_index`) marks pixels with no imagery under them: padding, failed tiles and NoData. Without `labels.label_field`, every polygon is `1` and `class_map` is empty. With [raster labels](/mapcv/reference/configuration/#raster-labels-type-raster), `255` also marks pixels without a label: outside the label raster, its NoData and `labels.ignore_values`. The values are the same in `png`, `npy` and `tif`. Segmentation and change masks are `uint8`, instance-ID masks `uint16` and regression targets `float32` (PNG holds `uint8` and `uint16`). A `tif` mask also declares `ignore_index` as its no-data value, so GIS tools and `rasterio` (`read(masked=True)`) treat those pixels as missing. Pass the ignore value to your loss; see [Use your dataset](/mapcv/guides/use-your-dataset/#nodata-and-ignore-pixels).
 
 ## Georeferenced outputs
 
@@ -94,9 +94,9 @@ A GeoJSON `FeatureCollection` in WGS-84 (longitude, latitude) with one Polygon p
 | `filename` | The name the split lists use (the file name of the image) |
 | `split` | `train`, `val` or `test`; `null` without a split, or for a patch a spatial split dropped |
 | `row`, `col`, `padded`, `empty_ratio` | As in the manifest entry |
-| `class_pixels` | Mask pixels per class ID, as in the manifest summary (segmentation only) |
+| `class_pixels` | Mask pixels per class ID, as in the manifest summary (segmentation and change) |
 
-`mapcv split` rewrites the file's `split` properties when it finds one. Turn the file off with `writer.footprints: false` (a million patches make a file of several hundred MB). Coordinates have nine decimals (about 0.1 mm). CRSs other than Web Mercator and WGS-84 are converted with `pyproj`, installed with `pip install "mapcv[zarr]"`; without it the file is skipped with a warning.
+`mapcv split` rewrites the file's `split` properties when it finds one. Turn the file off with `writer.footprints: false` (a million patches make a file of several hundred MB). Coordinates have nine decimals (about 0.1 mm). CRSs other than Web Mercator and WGS-84 are converted with `pyproj`.
 
 ## `manifest.json`
 
@@ -152,11 +152,12 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
-| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"`, `"instance"` or `"classification"` |
+| `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"`, `"instance"`, `"classification"`, `"change"` or `"regression"` |
 | `sources` | list | The imagery, one object per source: one named `"image"`, or the [configured sources](/mapcv/reference/configuration/#several-imagery-sources) in order. See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
-| `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`), plus `world_files: true` when world files are written. A resume notices a format change |
+| `writer` | object | How patches are stored: `layout` (`"files"`: one file per patch in `Images/` and `Masks/`; `"change"` for [change datasets](#change-detection-datasets)), `image_format` (`png`, `jpg`, `npy` or `tif`), `jpg_quality`, `jpg_subsampling` and `mask_format` (`png`, `npy` or `tif`; absent for detection, classification and instance datasets without `instance.id_mask`), plus `world_files: true` and `stack_sources: true` when they are on. A resume notices a format change |
 | `sampler` | object | The resolved `sampler` config (with `stride` filled in). Used for resume checks, spatial splits and patch bounds |
+| `region` | object | Only with an area of interest ([`region.path`](/mapcv/reference/configuration/#region)): `aoi_sha256`, the SHA-256 of the polygon file, plus `name_field` and `layer` when they are set. A resume refuses edited polygons |
 | `patches` | list | One entry per patch, in file order. See [Patch entries](#patch-entries) |
 
 ### Sources
@@ -164,26 +165,26 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `name` | string | The source's name, and the key of its patch in each entry's `files`: `"image"` for one `imagery` block, else the configured `name` |
-| `source_type` | string | `"xyz"`, `"eopf_zarr"` or `"geotiff"` |
-| `product_id` | string \| null | XYZ: the built-in source name, or `custom-xyz:<hostname>` for a `url_template` (the template itself is never stored). Sentinel-2: the product's file name. GeoTIFF: the file name (from a URL, its last path segment) |
-| `bands` | list of strings | Channel names in storage order: `red, green, blue` or the configured Sentinel-2 bands |
-| `dtype` | string | `"uint8"` (XYZ) or `"float32"` (Sentinel-2) |
-| `crs` | string | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2 |
+| `source_type` | string | `"xyz"`, `"eopf_zarr"`, `"stac_cog"` or `"geotiff"` (Earth Engine imagery is `"xyz"`) |
+| `product_id` | string \| null | XYZ: the built-in source name, `custom-xyz:<hostname>` for a `url_template` (the template itself is never stored), or `earth-engine:<asset>` for Earth Engine. EOPF Zarr: the product's file name. `stac_cog`: the STAC item ID. GeoTIFF: the file name (from a URL, its last path segment); for a mosaic, the glob pattern and the number of files (`tiles/*.tif (12 files)`) |
+| `bands` | list of strings | Channel names in storage order: `red, green, blue` (XYZ), the configured Sentinel-2 bands or asset keys, or `b1, b2, …` for a GeoTIFF (the file's 1-based band numbers) |
+| `dtype` | string | The stored data type: `"uint8"` (XYZ), `"float32"` (EOPF Zarr), the COGs' type (`stac_cog`, `"uint16"` on Earth Search) or the file's (GeoTIFF) |
+| `crs` | string | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2, the file's CRS for a GeoTIFF |
 | `transform` | 6 floats | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
 | `patch_shape` | list of int | Shape of one stored image patch: `[H, W, 3]` for PNG/JPG, `[bands, H, W]` for NPY and TIF |
 | `factor`, `offset` | int, `[row, col]` | Only for a further source whose own grid differs from the first source's: each of its pixels is `factor` × `factor` first-source pixels (repeated onto the grid), and its pixel `(0, 0)` starts at first-source pixel `offset`. `transform` stays the source's own. Every patch, whichever source, is georeferenced by the **first** source's `transform` |
-| `fingerprint` | object | GeoTIFF only (absent for other sources): identifies the input file so a resumed run refuses a different one, plus the read settings. For a local file: `size` and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path and modification time are not recorded, so a copied or moved file still resumes). For a URL: the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB. Both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file |
+| `fingerprint` | object | Identifies the input so a resumed run refuses a different one; absent for built-in and custom XYZ sources and for an EOPF product named by `path` without `scl_mask`. **GeoTIFF:** `kind: "file"` with `size` and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path and modification time are not recorded, so a copied or moved file still resumes), or `kind: "url"` with the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB; both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file. **Mosaic:** `kind: "mosaic"` and `files`, each file's `name` and fingerprint, plus `overview`, `bands` and `nodata`. **STAC** (`stac_cog`, or `eopf_zarr` with `search`): `stac` with the `catalog`, `collection` and `item`. **Sentinel-2 with `scl_mask`:** `scl_mask`, the masked classes. **Earth Engine:** `earth_engine`, the image and rendering settings without `project` |
 
 ### Target
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch), `"detection"` (boxes), `"instance"` (a mask per object) or `"classification"` (labels per patch) |
+| `type` | string | The kind of annotation: `"segmentation"` (a class mask per patch), `"detection"` (boxes), `"instance"` (a mask per object), `"classification"` (labels per patch), `"change"` (a change mask per pair) or `"regression"` (float targets) |
 | `class_map` | object | Label value → class ID (mask value, COCO `category_id`). Empty when every polygon is class 1 |
 | `ignore_index` | int \| null | Mask value of pixels without imagery (`labels.ignore_index`) and, with raster labels, without a label (outside the label raster, its NoData and `ignore_values`); `null` when they are background, and for detection and instance. Classification keeps the setting (it decides which pixels are valid) |
-| `dtype` | string \| null | Data type of the mask values: `"uint8"`; `"uint16"` for instance datasets with `instance.id_mask`; `null` for detection, classification and for instance datasets without ID masks |
+| `dtype` | string \| null | Data type of the mask values: `"uint8"` for segmentation and change; `"float32"` for regression; `"uint16"` for instance datasets with `instance.id_mask`; `null` for detection, classification and for instance datasets without ID masks |
 | `labels` | object | The `labels` settings (without the path and the mask settings) plus the `sha256` of the label file (for a Shapefile also covering its `.dbf`, `.prj` and `.cpg`), so a resume notices edited labels. `layer` appears when a GeoPackage layer was chosen. For raster labels (`"type": "raster"`) the settings are `band`, `classes` (each value as `{"id", "name"}`), `nodata`, `ignore_values`, `unmapped` and `resampling`, plus a `fingerprint` that identifies the label raster as a GeoTIFF source's does (`size` and `sha256_head_tail` for a local file; `url`, `etag`, `size` and `sha256_head` for a URL) instead of a `sha256`, since nothing reads the whole file |
-| `options` | object | Task-specific settings: empty for segmentation; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection, the resolved [`instance`](/mapcv/reference/configuration/#instance) block for instance, the resolved [`classification`](/mapcv/reference/configuration/#classification) block for classification |
+| `options` | object | Task-specific settings: empty for segmentation and regression; the resolved [`detection`](/mapcv/reference/configuration/#detection) block for detection, the resolved [`instance`](/mapcv/reference/configuration/#instance) block for instance, the resolved [`classification`](/mapcv/reference/configuration/#classification) block for classification, `{"change_value": …}` for change |
 
 ### Patch entries
 
@@ -193,7 +194,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `padded` | bool | Part of the patch lies outside the raster and was filled by `pad_mode` |
 | `chunk` | int | Index of the processing chunk that wrote the patch (used to resume) |
 | `files` | object | Role → path of the patch's files, relative to the dataset folder with `/` separators: each source's name (`image` for one `imagery` block) and, with labels, `mask` (instance datasets: only with `instance.id_mask`); with `world_files`, `image_world` (`<name>_world` per source) and `mask_world` |
-| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects). Classification datasets have `class_coverage`, each class's share of the patch's valid pixels (class IDs as strings, ascending; classes without pixels are left out: `{"1": 0.375, "3": 0.0625}`), and `labels`, the class IDs the patch was given, ascending (`[1]`; `[0]` is the `background` label) |
+| `summary` | object | What the patch holds, readable without opening it: `empty_ratio` (fraction of empty pixels, black RGB or NaN in any band, 0–1) and, with labels, `class_pixels` (mask pixel count per class ID as strings, ascending, the ignore value included: `{"0": 54098, "1": 11438, "255": 512}`). Detection and instance datasets have `class_objects` instead: the number of boxes or masks per class ID, as strings, ascending (`{"1": 12, "3": 2}`; `{}` for a patch without objects). Classification datasets have `class_coverage`, each class's share of the patch's valid pixels (class IDs as strings, ascending; classes without pixels are left out: `{"1": 0.375, "3": 0.0625}`), and `labels`, the class IDs the patch was given, ascending (`[1]`; `[0]` is the `background` label). Regression datasets have `values` (see [Regression datasets](#regression-datasets)). With an area of interest, every entry also has `region`, the name of the region that covers most of the patch |
 
 Readers should ignore keys they do not know: later 0.3 releases may add keys (new tasks add `files` roles and `summary` keys) without changing `version`. Renaming or removing a key changes `version`.
 
@@ -220,7 +221,7 @@ print(source["crs"], (left, bottom, right, top))
 
 | Version | Written by | Upgraded as |
 | --- | --- | --- |
-| 2 | mapcv 0.2 | `filename`/`mask_filename` become `files` (`Images/…`, `Masks/…`), `strip_index` becomes `chunk`, `per_class_pixel_counts` and `empty_ratio` move into `summary`, the source fields into `sources[0]`, `class_map` and `labels` into `target`. mapcv 0.2 had no ignore index, so `target.ignore_index` is `null` (a `labels.ignore_index` recorded by a 0.3 development build is kept). `writer` gains `layout: files` and `mask_format: png`. `mapcv_version` is `null` |
+| 2 | mapcv 0.2 | `filename`/`mask_filename` become `files` (`Images/…`, `Masks/…`), `strip_index` becomes `chunk`, `per_class_pixel_counts` and `empty_ratio` move into `summary`, the source fields into `sources[0]`, `class_map` and `labels` into `target`. mapcv 0.2 had no ignore index, so `target.ignore_index` is `null` (a `labels.ignore_index` recorded by a 0.3 development build is kept). `writer` gains `layout: files`, `mask_format: png` and `jpg_subsampling` (`"4:4:4"` for JPEG patches, which 0.2 wrote with full-resolution colour; `"4:2:0"` otherwise). `mapcv_version` is `null` |
 | 1 | mapcv 0.1 | As version 2, without `sampler`, `writer`, `labels`, `crs` and `transform`; `row` is relative to a strip, not the raster |
 
 A version-2 dataset can be split, inspected and **resumed** by mapcv 0.3 when its settings match the config, with `labels.ignore_index: null` because 0.2 wrote background where there is no imagery. A finished 0.2 dataset is left untouched; a resumed one that gains patches is saved as version 3. Version-1 datasets, and version-2 datasets made with `sampler.mode: random` (0.3 draws random anchors differently), can be split and inspected but not resumed. Details: [Migrating to 0.3](/mapcv/project/migration/#migrating-to-03).
@@ -312,7 +313,7 @@ names:
 
 ### `annotations/objects/`
 
-One JSON file per processing chunk (`chunk_000012.json`, the manifest entries' `chunk`), mapping each patch's image file name to its objects as `[category_id, x, y, width, height, area, truncated]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without recomputing any box. Read the COCO or YOLO files instead; this folder is mapcv's own.
+One JSON file per processing chunk (`chunk_000012.json`, the manifest entries' `chunk`): `{"chunk": 12, "patches": {…}}`, where `patches` maps each patch's image file name to its objects as `[category_id, x, y, width, height, area, truncated]`. They are written next to the images, so an interrupted run resumes and `mapcv split` re-splits without recomputing any box. Read the COCO or YOLO files instead; this folder is mapcv's own.
 
 ## Instance segmentation datasets
 
@@ -465,7 +466,7 @@ In the manifest, `task` is `regression`, `target.dtype` is `float32`, `target.cl
 
 | File | Content |
 | --- | --- |
-| `splits/train.txt`, `val.txt`, `test.txt` | Patch names, one per line: the file name of each entry's `files.image` (`patch_0000123.png`) |
+| `splits/train.txt`, `val.txt`, `test.txt` | Patch names, one per line: the file name of each entry's first source (`files.image` for one source, `patch_0000123.png`) |
 | `splits/<percent>/labeled.txt` | The first ⌈ratio × len(train)⌉ names of a shuffled `train.txt` |
 | `splits/<percent>/unlabeled.txt` | The rest of `train.txt` |
 | `splits/split.json` | The split settings (`SplitterConfig`), the strategy actually used, and the `train`/`val`/`test`/`dropped` counts |
@@ -503,6 +504,7 @@ Each list has one name per line and ends with a newline, so `wc -l` counts patch
 | --- | --- | --- |
 | `stats.json` | [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats) | Per-band statistics of each source and the class balance, over one split |
 | `README.md` | [`mapcv card`](/mapcv/reference/cli/#mapcv-card) | A dataset card with Hugging Face YAML metadata |
+| `terratorch.yaml` | [`mapcv export --format terratorch`](/mapcv/reference/cli/#mapcv-export) | The `data:` section of a TerraTorch training config (unless `--out` names another file) |
 | `SHA256SUMS` | [`mapcv verify --write-checksums`](/mapcv/reference/cli/#mapcv-verify) | `<sha256>  <path>` per line (the `sha256sum` format) for every file in the dataset folder |
 
 ```json title="dataset/stats.json (abridged)"

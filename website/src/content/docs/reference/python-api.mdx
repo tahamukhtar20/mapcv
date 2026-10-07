@@ -24,16 +24,17 @@ print(result.new_patches, result.split_counts)
 
 ```python
 class MapcvConfig(BaseModel):
-    task: Literal["segmentation", "detection", "instance", "classification"] = "segmentation"   # more tasks are planned
+    task: Literal["segmentation", "detection", "instance", "classification", "change", "regression"] = "segmentation"
     region: RegionConfig
     imagery: ImageryConfig | list[ImageryConfig]   # one source (by imagery.type), or a list of named ones
-    labels: LabelsConfig | RasterLabelsConfig | None = None  # by labels.type: vector | raster
+    labels: LabelsConfig | RasterLabelsConfig | ContinuousLabelsConfig | None = None  # by labels.type: vector | raster | continuous
     sampler: SamplerConfig
     writer: WriterConfig
     split: SplitterConfig | None = None
     detection: DetectionOptions | None = None   # task: detection only
     instance: InstanceOptions | None = None     # task: instance only
     classification: ClassificationOptions | None = None   # task: classification only
+    change: ChangeOptions | None = None         # task: change only
 
     @property
     def sources(self) -> list[ImageryConfig]: ...   # every source; a list of one for a single block
@@ -56,8 +57,11 @@ class MapcvConfig(BaseModel):
     @property
     def classification_options(self) -> ClassificationOptions: ...   # the block, or its defaults
 
+    @property
+    def change_options(self) -> ChangeOptions: ...         # the block, or its defaults
+
     @classmethod
-    def from_yaml(cls, path: Path) -> MapcvConfig: ...
+    def from_yaml(cls, path: str | os.PathLike) -> MapcvConfig: ...
 
 
 class DetectionOptions(BaseModel):
@@ -71,13 +75,25 @@ class InstanceOptions(BaseModel):
     min_visible: float = 0.3
     min_area: int = 4
     id_mask: bool = False
+
+
+class ClassificationOptions(BaseModel):
+    mode: Literal["single", "multi"] = "single"
+    min_fraction: float = 0.0
+    empty: Literal["skip", "background"] = "skip"
+
+
+class ChangeOptions(BaseModel):          # from mapcv.config
+    change_value: int = 1
+    before: LabelsConfig | None = None
+    after: LabelsConfig | None = None
 ```
 
-Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative `labels.path`, `writer.staging_dir` and every local imagery `path` against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
+Pydantic v2 models, so you can also build them from dicts with `MapcvConfig.model_validate({...})` or construct the parts directly. `from_yaml` resolves relative paths (`region.path`, every local imagery `path`, `labels.path`, `labels.files[].path`, `labels.annotated_area`, `change.before.path`, `change.after.path` and `writer.staging_dir`) against the YAML file's folder; `model_validate` leaves paths as given. Unknown keys and validation errors raise `pydantic.ValidationError`; the removed 0.1 keys `tiles` and `region.zoom` are validation errors that name the replacement. Field reference: [Configuration](/mapcv/reference/configuration/).
 
 `imagery` is a list when the config names [several sources](/mapcv/reference/configuration/#several-imagery-sources), so code that reads one source's settings should use `config.primary_imagery` (or loop over `config.sources`) rather than `config.imagery`.
 
-Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `GeoTiffImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig` (polygon labels), `RasterLabelsConfig` and `RasterClass` (raster labels), `SamplerConfig`, `WriterConfig`, `SplitterConfig`, and `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names).
+Also exported: `RegionConfig`, `XYZImageryConfig`, `EOPFZarrImageryConfig`, `StacCogImageryConfig`, `GeoTiffImageryConfig`, `ImageryConfig` (the discriminated union), `LabelsConfig` (polygon labels), `RasterLabelsConfig` and `RasterClass` (raster labels), `SamplerConfig`, `WriterConfig`, `SplitterConfig`, `DEFAULT_SENTINEL2_L2A_BANDS` (the 12 default band names), the type aliases `ClassMap` (`dict[str, int]`) and `GeomWithClass` (`tuple[BaseGeometry, int]`), `MANIFEST_VERSION` (`3`) and `__version__`. `ContinuousLabelsConfig` and `ChangeOptions` are importable from `mapcv.config`.
 
 ## Planning and generation
 
@@ -102,11 +118,12 @@ A dataclass:
 | `raster_px` | `(int, int)` | Raster `(width, height)` |
 | `patches` | `int` | Estimated patch count |
 | `patch_size` | `int` | From the sampler |
-| `tiles` | `int \| None` | XYZ tile count (`None` for Sentinel-2) |
+| `tiles` | `int \| None` | XYZ tile count (`None` for other imagery) |
 | `download_bytes` | `int \| None` | Rough download size (XYZ only) |
 | `output_bytes` | `int` | Rough size on disk |
 | `chunk_memory_bytes` | `int` | Rough peak memory per chunk |
-| `labels` | `LabelSummary \| None` | `path`, `polygons`, `classes`, `warnings` |
+| `labels` | `LabelSummary \| None` | `path`, `polygons`, `classes`, `warnings`, `in_region` (features that intersect the region) and `raster` (a label raster's description, else `None`) |
+| `objects` | `int \| None` | Detection and instance: label features in the region, each one object; `None` for other tasks |
 | `warnings` | `list[str]` | Messages to show the user |
 | `is_large` | `bool` (property) | More than 20,000 tiles or 5 GB; the CLI asks before starting such jobs |
 
@@ -146,7 +163,7 @@ print(result.new_patches, "new patches in", result.staging_dir)
 | `manifest` | `Manifest` | The final manifest (all patches, including resumed ones) |
 | `new_patches` | `int` | Patches written by this call |
 | `split_counts` | `dict[str, int] \| None` | `train`, `val`, `test`, `dropped`; `None` without a `split` block |
-| `tiles_requested` | `int` | XYZ tiles requested in this call (0 for Sentinel-2) |
+| `tiles_requested` | `int` | XYZ tiles requested in this call (0 for other imagery) |
 | `tiles_failed` | `int` | Of those, how many failed |
 | `seconds` | `float` | Wall-clock time |
 | `tiles_cached` | `int` | XYZ tiles read from the [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz) instead of downloaded |
@@ -210,7 +227,7 @@ class SplitterConfig(BaseModel):
     val_ratio: float = 0.10            # 0..1, of the remainder
     labeled_ratios: list[float] = [0.10, 0.20, 0.30]   # each in (0, 1]
     seed: int = 42
-    strategy: Literal["spatial", "stratified", "random"] = "spatial"
+    strategy: Literal["spatial", "stratified", "random", "region"] = "spatial"
     block_size: int | None = None      # >= 1; default 4 x patch size (auto-shrunk)
     sample_limit: int | None = None    # >= 1
 ```
@@ -236,7 +253,7 @@ def predict_raster(
 ) -> Path
 ```
 
-Predicts every pixel of the config's region (first imagery source, `sampler.patch_size`) and writes one GeoTIFF on the imagery's grid. `fn` gets `(N, C, P, P)` patches as read (the source's dtype; normalise inside it) and returns `(N, K, P, P)` scores or `(N, P, P)` values. Patches overlap by `overlap` (0 to < 1) and their predictions are averaged with Hann (cosine) weights, `sin²` at pixel centres, so every pixel keeps some weight. `"argmax"` writes the best class as `uint8` with 255 (the file's NoData) where there is no imagery; `"scores"` writes the blended scores as `float32` bands with `NaN` there. `progress(done, total)` counts strips of rows. Raises `ValueError` for a bad `overlap`, `output`, `batch_size`, a prediction of the wrong shape, more than 255 classes for `"argmax"`, or imagery without a CRS.
+Predicts every pixel of the config's region (first imagery source, `sampler.patch_size`) and writes one GeoTIFF on the imagery's grid. `fn` gets `(N, C, P, P)` patches as read (the source's dtype; normalise inside it) and returns `(N, K, P, P)` scores or `(N, P, P)` values. Patches overlap by `overlap` (0 to < 1) and their predictions are averaged with Hann (cosine) weights, `sin²` at pixel centres, so every pixel keeps some weight. `"argmax"` writes the best class as `uint8` with 255 (the file's NoData) where there is no imagery; `"scores"` writes the blended scores as `float32` bands with `NaN` there. A prediction of `(N, P, P)` values (or one channel) is written as one `float32` band either way. `progress(done, total)` counts strips of rows. Raises `ValueError` for a bad `overlap`, `output`, `batch_size`, a prediction of the wrong shape, a class index of 255 or more for `"argmax"`, or imagery without a CRS.
 
 ## Reading a dataset
 
@@ -262,24 +279,44 @@ One split (`train`, `val`, `test`, `10/labeled`, ..., or `all`) of a dataset, as
 | --- | --- | --- |
 | `image` | always | `(C, H, W)` (`(T, C, H, W)` for stacked sources), as stored or, with `normalize`, standardised `float32` |
 | `images` | several sources | Every source's image by name |
-| `mask` | segmentation, change, regression | `(H, W)` class IDs or `float32` values |
+| `mask` | segmentation, change, regression, instance with `id_mask` | `(H, W)` class IDs, instance IDs (`uint16`) or `float32` values |
 | `labels` | classification | The patch's class IDs, `int64` |
 | `boxes`, `categories`, `annotations` | detection, instance | `(N, 4)` `[x, y, width, height]` boxes in pixels, their class IDs, and the COCO records (from the split's COCO files) |
 | `name`, `row`, `col`, `transform`, `crs` | always | The patch's file name, top-left pixel, affine transform and CRS |
 
-`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones).
+`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones), and for a detection dataset written without COCO files.
 
-### `export_hf_parquet`, `terratorch_config`
+### `export_hf_parquet`, `terratorch_config`, `export_webdataset`, `export_zarr`
 
 ```python
 from mapcv.export import export_hf_parquet, export_terratorch, terratorch_config
+from mapcv.shards import export_webdataset, export_zarr
 
 def export_hf_parquet(root: Path, out: Path) -> list[Path]
 def terratorch_config(root: Path, batch_size: int = 8, num_workers: int = 4) -> str
-def export_terratorch(root: Path, out: Path | None = None) -> Path
+def export_terratorch(root: Path, out: Path | None = None) -> Path   # default: root / "terratorch.yaml"
+def export_webdataset(root: Path, out: Path, shard_bytes: int = 1_000_000_000) -> list[Path]
+def export_zarr(root: Path, out: Path) -> Path
 ```
 
 The functions behind [`mapcv export`](/mapcv/reference/cli/#mapcv-export).
+
+### `write_stats`, `write_card`, `verify_dataset`
+
+```python
+from mapcv.stats import dataset_stats, write_stats
+from mapcv.card import card_text, write_card
+from mapcv.verify import verify_dataset, write_checksums
+
+def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]
+def write_stats(staging_dir: Path, split: str = "train") -> tuple[Path, dict[str, Any]]
+def card_text(staging_dir: Path) -> str
+def write_card(staging_dir: Path, overwrite: bool = False) -> Path
+def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport
+def write_checksums(staging_dir: Path) -> Path
+```
+
+The functions behind [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats), [`mapcv card`](/mapcv/reference/cli/#mapcv-card) and [`mapcv verify`](/mapcv/reference/cli/#mapcv-verify). `dataset_stats` and `card_text` return what the other two write. `VerifyReport` has `patches`, `files`, `checked_hashes`, `problems` and `notes` (lists of messages) and `ok` (no problems).
 
 ## Manifests
 
@@ -295,9 +332,10 @@ class Manifest(BaseModel):
     mapcv_version: str | None = None
     task: str = "segmentation"
     sources: list[SourceRecord] = []          # name, source_type, product_id, bands, dtype,
-                                              # crs, transform, patch_shape
+                                              # crs, transform, patch_shape, fingerprint
     target: TargetRecord | None = None        # type, class_map, ignore_index, dtype, labels, options
-    writer: dict[str, Any] | None = None      # layout, image_format, jpg_quality, jpg_subsampling, mask_format (+ world_files when on)
+    writer: dict[str, Any] | None = None      # layout, image_format, jpg_quality, jpg_subsampling,
+                                              # mask_format (+ world_files, stack_sources when on)
     sampler: dict[str, Any] | None = None
     patches: list[ManifestEntry] = []
 
@@ -305,22 +343,27 @@ class Manifest(BaseModel):
     class_map: dict[str, int]                 # target.class_map, or {} (read-only)
     ignore_index: int | None                  # target.ignore_index, or None (read-only)
     upgraded_from: int | None                 # 1 or 2 when loaded from an older version
+    loaded_version: int                       # the version on disk (read-only)
 
     @classmethod
     def load(cls, path: Path) -> Manifest: ...   # version 1, 2 or 3; older ones are upgraded in
                                                  # memory; newer raises ManifestMismatchError
+    @classmethod
+    def from_dict(cls, data: dict) -> Manifest: ...   # like load, from parsed JSON
     def save(self, path: Path) -> None: ...      # atomic write, always version 3
+    def to_json(self) -> str: ...                # what save writes
     def patch_name(self, entry) -> str: ...      # the name split lists use: "patch_0000042.png"
     def patch_transform(self, entry) -> tuple[float, ...]: ...   # affine of the patch's pixels
     def patch_bounds(self, entry) -> tuple[float, float, float, float]: ...
                                                  # (left, bottom, right, top) in the source CRS
+    def transform_at(self, row: int, col: int) -> tuple[float, ...]: ...   # affine of the patch at (row, col)
 ```
 
 `Manifest.load(path).save(path)` converts a 0.1 or 0.2 manifest to version 3 on disk. Unknown keys are kept, so a manifest from a later 0.3 release round-trips unchanged.
 
 ### `ManifestEntry`
 
-A `TypedDict` (plain `dict` at runtime) with `row`, `col`, `padded`, `chunk`, `files` (role → path relative to the dataset folder, for example `{"image": "Images/patch_0000000.png", "mask": "Masks/patch_0000000.png"}`) and `summary` (a `PatchSummary`: `empty_ratio` and, with labels, `class_pixels`). Meanings: [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
+A `TypedDict` (plain `dict` at runtime) with `row`, `col`, `padded`, `chunk`, `files` (role → path relative to the dataset folder, for example `{"image": "Images/patch_0000000.png", "mask": "Masks/patch_0000000.png"}`) and `summary` (a `PatchSummary`: `empty_ratio` and, depending on the task, `class_pixels`, `class_objects`, `class_coverage`, `labels` or `values`, and `region` with an area of interest). Meanings: [Dataset format](/mapcv/reference/dataset-format/#patch-entries).
 
 ### `ManifestMismatchError`
 
@@ -330,7 +373,7 @@ from mapcv import ManifestMismatchError
 class ManifestMismatchError(ValueError): ...
 ```
 
-Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, a version-2 manifest of random sampling, or one created with a different task, source, product, bands, dtype, patch shape, CRS, transform, class map, ignore index, label settings or label-file contents, sampler or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
+Raised by `run_generate` (through `load_or_create_manifest`) when the target folder holds a version-1 manifest, a version-2 manifest of random sampling, or one created with a different task, source, product, bands, dtype, patch shape, CRS, transform, imagery file, class map, ignore index, label settings or label-file contents, task options, area of interest, sampler or writer settings. The message names the fields that differ. `Manifest.load` raises it for a manifest written by a newer mapcv.
 
 ## Building blocks
 
@@ -362,17 +405,20 @@ patches, masks, meta = sample_patches(image, mask, SamplerConfig(patch_size=256,
 ```python
 def load_vector_labels(path: Path, label_field: str | None = None,
                        classes: dict[str, int] | None = None, points: bool = False,
-                       layer: str | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+                       layer: str | None = None,
+                       buffer: tuple[float | None, float | None] | None = None,
+                       ) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
 ```
 
-Read a label **file** of any supported format (chosen by its suffix: `.geojson`/`.json`, `.kml`, `.gpkg`, `.shp`, `.parquet`/`.geoparquet`) into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. GeoPackage, Shapefile and GeoParquet files in another CRS are reprojected with pyproj; a file that does not state its CRS is a `ValueError`. Every format follows the [labels rules](/mapcv/reference/configuration/#labels): `label_field` and `classes` give the IDs, polygons are kept, points only with `points=True`, and other features are skipped with a `UserWarning` that counts them. `layer` picks the table of a GeoPackage with several (an error for other formats). Problems with the file raise `ValueError` with the fix in the message; a missing file raises `FileNotFoundError`. GeoParquet needs the `mapcv[parquet]` extra.
+Read a label **file** of any supported format (chosen by its suffix: `.geojson`/`.json`, `.kml`, `.gpkg`, `.shp`, `.parquet`/`.geoparquet`) into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat, plus the class map. GeoPackage, Shapefile and GeoParquet files in another CRS are reprojected with pyproj; a file that does not state its CRS is a `ValueError`. Every format follows the [labels rules](/mapcv/reference/configuration/#labels): `label_field` and `classes` give the IDs, polygons are kept, points only with `points=True`, and other features are skipped with a `UserWarning` that counts them. `layer` picks the table of a GeoPackage with several (an error for other formats). `buffer` is `(line, point)` in metres, as in [`labels.buffer`](/mapcv/reference/configuration/#polygon-labels-type-vector): lines and points become polygons of that width or diameter. Problems with the file raise `ValueError` with the fix in the message; a missing file raises `FileNotFoundError`. GeoParquet needs the `mapcv[parquet]` extra.
 
 ### `parse_geojson`, `parse_kml`
 
 ```python
 def parse_geojson(data: bytes, label_field: str | None = None,
-                  classes: dict[str, int] | None = None,
-                  points: bool = False) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
+                  classes: dict[str, int] | None = None, points: bool = False,
+                  buffer: tuple[float | None, float | None] | None = None,
+                  ) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
 def parse_kml(data: bytes, label_field: str | None = None,
               classes: dict[str, int] | None = None) -> tuple[list[tuple[BaseGeometry, int]], dict[str, int]]
 ```
@@ -404,7 +450,7 @@ def sample_patches(image: np.ndarray, mask: np.ndarray | None,
                    config: SamplerConfig) -> tuple[np.ndarray, np.ndarray | None, list[PatchMeta]]
 ```
 
-Cuts patches from an in-memory `(H, W)` or `(H, W, C)` image (channels last) following `config` (grid or random, edge strategy, empty and label filters; all-zero pixels count as empty). Returns `(N, ps, ps[, C])` images, `(N, ps, ps)` masks or `None`, and per-patch `{"row", "col", "padded", "empty_ratio"}`. `sample_patches_at_anchors(image, mask, anchors, config, *, row_offset=0, col_offset=0, valid_mask=None)` does the same at explicit top-left anchors.
+Cuts patches from an in-memory `(H, W)` or `(H, W, C)` image (channels last) following `config` (grid or random, edge strategy, empty and label filters; all-zero pixels count as empty). Returns `(N, ps, ps[, C])` images, `(N, ps, ps)` masks or `None`, and per-patch `{"row", "col", "padded", "empty_ratio"}`. `sample_patches_at_anchors(image, mask, anchors, config, *, row_offset=0, col_offset=0, valid_mask=None, ignore_index=None)` does the same at explicit top-left anchors; with `ignore_index`, mask pixels without imagery (padding, and pixels outside `valid_mask`) get that value.
 
 ### `download_region`, `stitch_region`
 
@@ -441,4 +487,4 @@ The built-in XYZ sources and their URL templates. `resolve_url_template(url_temp
 
 ### Writer internals
 
-`load_or_create_manifest(path, expected)` and `write_patches(image_patches, mask_patches, meta, config, manifest, chunk_index=0)` are the functions `run_generate` uses to resume-check and write patches. `expected` is a `Manifest` without patches describing the run (task, sources, target, writer, sampler); the existing manifest at `path` is returned when it matches, `expected` when there is none, and `ManifestMismatchError` is raised otherwise. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.
+`load_or_create_manifest(path, expected)` and `write_patches(image_patches, mask_patches, meta, config, manifest, chunk_index=0, *, images_dir="Images", masks_dir="Masks", image_key="image", source=None, band_names=None, time_steps=None)` are the functions `run_generate` uses to resume-check and write patches. `expected` is a `Manifest` without patches describing the run (task, sources, target, writer, sampler); the existing manifest at `path` is returned when it matches, `expected` when there is none, and `ManifestMismatchError` is raised otherwise. They are exported for custom pipelines that produce their own patches but want a mapcv-compatible manifest.

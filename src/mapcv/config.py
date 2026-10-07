@@ -914,7 +914,7 @@ class LabelFile(BaseModel):
 
 
 class LabelsConfig(BaseModel):
-    """Vector label file settings: polygons burned into the masks (or boxed, for detection).
+    """Vector label settings: polygons burned into masks, or the objects of detection and instance.
 
     The file is GeoJSON, KML, a GeoPackage, a Shapefile or GeoParquet, chosen by its suffix.
     ``layer`` picks the table of a GeoPackage that has several.

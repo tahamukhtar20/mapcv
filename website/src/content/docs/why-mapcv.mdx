@@ -15,14 +15,14 @@ Turning imagery and labels into a training dataset looks like an afternoon's scr
 - **Resumable, byte for byte.** Ctrl-C, a lost connection or a killed process: run the same command and it continues; the finished dataset is identical to an uninterrupted run.
 - **A plan before the download.** `mapcv plan` shows tiles, patches, disk and memory before a single request.
 - **Six tasks from one config.** Segmentation masks, detection boxes (COCO and YOLO), instance masks (COCO RLE), patch classification, change detection and regression targets, with the same imagery, labels and splits.
-- **Many inputs, one wheel, no GDAL.** XYZ tiles, GeoTIFF/COG (local, https, s3), Sentinel-2 (EOPF Zarr, or COGs found in a STAC catalog), Google Earth Engine, several sources on one grid; labels from GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap or label rasters. `pip install mapcv` is the whole setup.
-- **Ready for training.** `mapcv.data.MapcvDataset` loads any task for PyTorch, and `mapcv export` writes Hugging Face Parquet and TerraTorch configs.
+- **Many inputs, one wheel, no GDAL.** XYZ tiles, GeoTIFF/COG (local, https, s3), Sentinel-2 (EOPF Zarr, or COGs found in a STAC catalog), Google Earth Engine, several sources on one grid; labels from GeoJSON, KML, GeoPackage, Shapefile, GeoParquet, OpenStreetMap or label rasters. `pip install mapcv` covers XYZ tiles, GeoTIFF/COG and Sentinel-2 COGs; EOPF Zarr, Earth Engine and GeoParquet each need an [extra](/mapcv/installation/).
+- **Ready for training.** `mapcv.data.MapcvDataset` loads any task for PyTorch, and `mapcv export` writes Hugging Face Parquet, WebDataset shards, Zarr and TerraTorch configs.
 
 ## How it compares
 
 All tools below are good at what they were built for. The question is what you need.
 
-**A hand-written rasterio / geopandas script.** Fully flexible, and the right choice for a one-off on a small area. You own the details mapcv handles: CRS axis order, pixel-centre rules, edge patches, NoData, leakage-safe splits, retries, resuming and memory. Our [reference script](https://github.com/tahamukhtar20/mapcv/blob/main/benchmarks/baseline_scripts/rasterio_script.py), written carefully, matches mapcv's data and is 1.5–4.3× slower.
+**A hand-written rasterio / geopandas script.** Fully flexible, and the right choice for a one-off on a small area. You own the details mapcv handles: CRS axis order, pixel-centre rules, edge patches, NoData, leakage-safe splits, retries, resuming and memory. Our [reference script](https://github.com/tahamukhtar20/mapcv/blob/main/benchmarks/baseline_scripts/rasterio_script.py), written carefully, matches mapcv's data and is 1.5–14× slower (the most with JPEG tiles).
 
 **GDAL's command-line tools** (`gdal_translate`, `gdal_rasterize`). The reference for correctness, and mapcv matches it. Cutting thousands of patches means thousands of processes (30× slower than mapcv on 1,024 patches), and GDAL has to be installed.
 

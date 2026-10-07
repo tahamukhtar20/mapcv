@@ -36,7 +36,8 @@ _T = TypeVar("_T")
 
 _INSTRUCTIONS = """\
 mapcv turns a region, imagery and labels into remote-sensing training datasets
-(segmentation, detection, instance segmentation, classification) without GDAL.
+(segmentation, detection, instance segmentation, classification, change detection,
+regression) without GDAL.
 
 Journey: inspect_labels (what is in the user's label file) -> write the config (see
 describe_config_schema; write_config saves it) -> validate_config -> plan -> show the
@@ -166,7 +167,10 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
         path: Annotated[
             str,
             Field(
-                description="A .geojson, .json, .kml, .gpkg, .shp or .parquet file inside the root."
+                description=(
+                    "A .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file "
+                    "inside the root."
+                )
             ),
         ],
         max_values: Annotated[

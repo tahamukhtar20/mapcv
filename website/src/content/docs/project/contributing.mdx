@@ -16,11 +16,11 @@ mapcv is a Python package with a Rust extension built by [maturin](https://www.m
 1. Fork and clone the repository, then install the development dependencies and build the extension:
 
    ```bash
-   uv sync --extra dev
+   uv sync --all-extras
    uv run maturin develop
    ```
 
-   Re-run `uv run maturin develop` after every change to Rust code (`src/*.rs`). Add `--extra zarr` to work on Sentinel-2 support (Python 3.10–3.13). `rust-toolchain.toml` pins the Rust version CI uses; rustup installs it on first use.
+   Re-run `uv run maturin develop` after every change to Rust code (`src/*.rs`). `--all-extras` installs every optional dependency, so the Sentinel-2, GeoParquet, export and MCP tests run too (the `zarr` extra installs nothing on Python 3.14). `rust-toolchain.toml` pins the Rust version CI uses; rustup installs it on first use.
 
 2. Install the pre-commit hooks (`cargo fmt`, `clippy`, `ruff`, `mypy` and `pytest` run before each commit):
 
@@ -36,7 +36,7 @@ mapcv is a Python package with a Rust extension built by [maturin](https://www.m
 ```bash
 uv run pytest                 # tests
 uv run ruff format . && uv run ruff check .
-uv run mypy --strict .
+uv run mypy src tests         # strict, configured in pyproject.toml
 cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
@@ -46,7 +46,7 @@ The live Sentinel-2 test is opt-in: set `MAPCV_EOPF_URL` to a public product and
 
 ## Conventions in brief
 
-- **Python:** sources in `src/mapcv/`, tests in `tests/test_<module>.py`; every file starts with a one-line docstring and `from __future__ import annotations`; full type annotations with `typing` forms (`Dict`, `List`, `Optional`); plain-prose docstrings; comments explain *why*; `ruff` (line length 100) and `mypy --strict` must pass.
+- **Python:** sources in `src/mapcv/`, tests in `tests/test_<module>.py`; every file starts with a one-line docstring and `from __future__ import annotations`; full type annotations with built-in generics and `X | None` (`dict[str, int]`, `list[Path]`); plain-prose docstrings; comments explain *why*; `ruff` (line length 100) and `mypy --strict` must pass.
 - **Rust:** one module per file with a `//!` header; `///` docs on public items with `# Errors` / `# Panics` sections; public functions return `Result<T, String>`; no `unwrap()`/`expect()` in public functions; named constants instead of magic numbers.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `ci:`, `chore:`, `test:`). They drive the changelog. PRs are squash-merged.
 

@@ -185,7 +185,16 @@ The finished files are in [`examples/sentinel2-landcover`](https://github.com/ta
    rgb = np.clip(np.moveaxis(image[[0, 1, 2]], 0, -1) * 3.5, 0, 1)   # simple true-colour stretch
    ```
 
-   Forest should show the highest NDVI and built-up areas the lowest. Treat `NaN` as no data in anything you compute.
+   On the first patch it prints (order follows the class IDs):
+
+   ```text
+   background mean NDVI 0.75
+   built_up   mean NDVI 0.68
+   farmland   mean NDVI 0.65
+   forest     mean NDVI 0.83
+   ```
+
+   Forest is the greenest. Farmland can be as low as built-up land in summer, when fields are harvested or bare. Treat `NaN` as no data in anything you compute.
 
 </Steps>
 

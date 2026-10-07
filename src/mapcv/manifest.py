@@ -262,7 +262,7 @@ class Manifest(BaseModel):
         return manifest
 
     @classmethod
-    def load(cls, path: Path) -> Manifest:
+    def load(cls, path: str | os.PathLike[str]) -> Manifest:
         """Read a version-1, -2 or -3 manifest; older versions are upgraded in memory.
 
         The file is not modified. A version-1 or -2 manifest becomes version 3
@@ -273,6 +273,7 @@ class Manifest(BaseModel):
             ManifestMismatchError: The manifest was written by a newer mapcv, or is not
                 a readable mapcv manifest (truncated, edited, or another file).
         """
+        path = Path(path)
         try:
             text = path.read_text(encoding="utf-8")
             if _CURRENT_VERSION_FIRST.match(text):
@@ -300,8 +301,9 @@ class Manifest(BaseModel):
         body = f"\n    {rows}\n  " if rows else ""
         return f'{head},\n  "patches": [{body}]\n}}\n'
 
-    def save(self, path: Path) -> None:
+    def save(self, path: str | os.PathLike[str]) -> None:
         """Atomically write the manifest (always as version 3)."""
+        path = Path(path)
         tmp_path = path.with_name(path.name + ".tmp")
         tmp_path.write_text(self.to_json(), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
@@ -491,16 +493,16 @@ def load_or_create_manifest(path: Path, expected: Manifest) -> Manifest:
         )
     mismatches = _resume_mismatches(manifest, expected)
     if mismatches:
-        hint = ""
-        if (
-            manifest.upgraded_from == 2
-            and "ignore_index" in mismatches
-            and manifest.ignore_index is None
-        ):
-            hint = (
-                ". mapcv 0.2 wrote background where there is no imagery: set "
-                "labels.ignore_index: null to resume this dataset"
-            )
+        # What a 0.2 dataset needs to resume (MIGRATION.md), named so one edit fixes it.
+        needs: list[str] = []
+        if manifest.upgraded_from == 2:
+            if "ignore_index" in mismatches and manifest.ignore_index is None:
+                needs.append("labels.ignore_index: null (mapcv 0.2 wrote background there)")
+            old = (manifest.writer or {}).get("jpg_subsampling")
+            new = (expected.writer or {}).get("jpg_subsampling")
+            if "writer" in mismatches and old == "4:4:4" and new != old:
+                needs.append('writer.jpg_subsampling: "4:4:4" (mapcv 0.2 wrote 4:4:4 JPEGs)')
+        hint = f". To resume this mapcv 0.2 dataset, set {' and '.join(needs)}" if needs else ""
         raise ManifestMismatchError(
             f"{path} was generated with a different configuration "
             f"({', '.join(mismatches)}); use a new writer.staging_dir or remove the old "

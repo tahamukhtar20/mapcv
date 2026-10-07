@@ -233,3 +233,80 @@ def test_the_wizard_asks_for_labels_when_the_area_file_is_not_them(tmp_path: Pat
     config = MapcvConfig.from_yaml(out)
     assert isinstance(config.labels, LabelsConfig) and config.labels.path is not None
     assert config.labels.path.name == "roofs.geojson"
+
+
+# ── plan and generate stop early; messages say one thing once ────────────────
+
+
+def _yaml(tmp_path: Path, extra: str = "") -> Path:
+    raster = make_raster(tmp_path, width=320, height=256, count=3)
+    region = raster.region()
+    config = tmp_path / "mapcv.yaml"
+    config.write_text(
+        f"region: {json.dumps(region)}\n"
+        f"imagery: {{type: geotiff, path: '{raster.path.as_posix()}'}}\n"
+        "sampler: {patch_size: 64, edge_strategy: drop}\n"
+        "writer: {staging_dir: out}\n" + extra,
+        encoding="utf-8",
+    )
+    return config
+
+
+@pytest.mark.parametrize("command", ["plan", "generate"])
+def test_a_missing_label_file_stops_plan_and_generate(tmp_path: Path, command: str) -> None:
+    config = _yaml(tmp_path, "labels: {path: nowhere.geojson}\n")
+    result = runner.invoke(
+        app, [command, str(config), "--yes"][: 3 if command == "generate" else 2]
+    )
+    assert result.exit_code == 1
+    flat = " ".join(result.output.split())
+    assert "labels.path not found" in flat and "Looks right" not in flat
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_run_without_patches_fails(tmp_path: Path) -> None:
+    config = _yaml(tmp_path)
+    config.write_text(
+        config.read_text().replace("patch_size: 64", "patch_size: 100000"), encoding="utf-8"
+    )
+    result = runner.invoke(app, ["generate", str(config), "--yes"])
+    assert result.exit_code == 1
+    assert "No patches were written" in result.output
+    assert "Dataset ready" not in result.output
+
+
+def test_a_typo_suggests_the_key(tmp_path: Path) -> None:
+    config = _yaml(tmp_path)
+    config.write_text(
+        config.read_text()
+        .replace("patch_size:", "patch_sise:")
+        .replace("staging_dir", "stagin_dir"),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["validate", str(config)])
+    assert result.exit_code == 1
+    flat = " ".join(result.output.split())
+    assert "sampler.patch_sise: unknown key; did you mean patch_size?" in flat
+    assert "writer.stagin_dir: unknown key; did you mean staging_dir?" in flat
+    assert "Field required" not in flat
+
+
+def test_library_deprecation_warnings_are_not_shown() -> None:
+    import warnings as w
+
+    from mapcv.cli import _show_warnings
+
+    with w.catch_warnings(record=True) as caught:
+        w.simplefilter("always")
+        w.warn("shapely.ops.transform() is deprecated", DeprecationWarning, stacklevel=1)
+        w.warn("a mapcv warning", UserWarning, stacklevel=1)
+    from mapcv import cli
+
+    printed: list[str] = []
+    original = cli._console.print
+    cli._console.print = lambda *args, **kwargs: printed.append(str(args[0]))  # type: ignore[method-assign]
+    try:
+        _show_warnings(caught, set())
+    finally:
+        cli._console.print = original  # type: ignore[method-assign]
+    assert len(printed) == 1 and "a mapcv warning" in printed[0]

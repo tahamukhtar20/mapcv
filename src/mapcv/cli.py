@@ -56,7 +56,6 @@ from mapcv.config import (
     ContinuousLabelsConfig,
     EOPFZarrImageryConfig,
     GeoTiffImageryConfig,
-    LabelsConfig,
     MapcvConfig,
     RasterLabelsConfig,
     StacCogImageryConfig,
@@ -386,17 +385,68 @@ def _validation_items(exc: ValidationError, options: bool = False) -> list[tuple
     """``(field, message)`` per validation error; with ``options``, fields are named as
     the command-line options that set them (``--test-ratio``)."""
     items = []
-    for error in exc.errors():
-        location = ".".join(
-            str(part)
+    errors = exc.errors()
+    paths = [
+        [
+            part
             for part in error["loc"]
             if not str(part).startswith("function-") and part not in UNION_TAGS
-        )
+        ]
+        for error in errors
+    ]
+    # A misspelt required key is reported twice (unknown key, missing field): say it once.
+    replaced: set[tuple[str, ...]] = set()
+    suggestions: dict[int, str] = {}
+    for index, (error, path) in enumerate(zip(errors, paths)):
+        if error["type"] != "extra_forbidden" or not path or options:
+            continue
+        guess = _closest_field(path[:-1], str(path[-1]))
+        if guess is not None:
+            suggestions[index] = guess
+            replaced.add(tuple(str(part) for part in (*path[:-1], guess)))
+    for index, (error, path) in enumerate(zip(errors, paths)):
+        key = tuple(str(part) for part in path)
+        if error["type"] == "missing" and key in replaced:
+            continue
+        location = ".".join(key)
         if options and location:
             location = "--" + location.replace("_", "-")
-        message = str(error["msg"]).removeprefix("Value error, ")
+        if index in suggestions:
+            message = f"unknown key; did you mean {suggestions[index]}?"
+        else:
+            message = str(error["msg"]).removeprefix("Value error, ")
         items.append((location or "config", message))
     return items
+
+
+def _closest_field(parent: list[str | int], key: str) -> str | None:
+    """The config field under ``parent`` whose name is closest to the unknown ``key``."""
+    import difflib
+    import typing
+
+    from pydantic import BaseModel
+
+    def models(annotation: Any) -> list[type[BaseModel]]:
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            return [annotation]
+        found: list[type[BaseModel]] = []
+        for arg in typing.get_args(annotation):
+            found.extend(models(arg))
+        return found
+
+    level: list[type[BaseModel]] = [MapcvConfig]
+    for part in parent:
+        if isinstance(part, int):
+            continue
+        level = [
+            model
+            for current in level
+            if (field := current.model_fields.get(str(part))) is not None
+            for model in models(field.annotation)
+        ]
+    names = {name for model in level for name in model.model_fields}
+    matches = difflib.get_close_matches(key, sorted(names), n=1, cutoff=0.75)
+    return matches[0] if matches else None
 
 
 def _print_items(console: Console, items: list[tuple[str, str]]) -> None:
@@ -470,8 +520,18 @@ def _load_config(config_path: Path) -> MapcvConfig:
 
 
 def _show_warnings(caught: list[warnings.WarningMessage], shown: set[str]) -> None:
-    """Print captured warnings once each, in mapcv's style (also under --quiet)."""
+    """Print captured warnings once each, in mapcv's style (also under --quiet).
+
+    Only user warnings are shown: deprecation and runtime warnings come from libraries
+    (shapely, xarray, NumPy) and say nothing the user can act on, so they go to the
+    debug log.
+    """
     for warning in caught:
+        if not issubclass(warning.category, UserWarning):
+            logging.getLogger("mapcv.cli").debug(
+                "%s: %s", warning.category.__name__, warning.message
+            )
+            continue
         message = str(warning.message)
         if message in shown:
             continue
@@ -627,11 +687,8 @@ def _settings_table(config: MapcvConfig) -> Table:
         table.add_row("Split", "none")
     else:
         split = config.split
-        train = 1 - split.test_ratio
         table.add_row(
-            "Split",
-            f"{split.strategy} · test {split.test_ratio:g} · val {split.val_ratio:g} of the "
-            f"remaining {train:g}",
+            "Split", f"{split.strategy} · test {split.test_ratio:g} · val {split.val_ratio:g}"
         )
     return table
 
@@ -2264,6 +2321,7 @@ def plan(
 ) -> None:
     """Estimate tiles, patches, disk and memory for a config [bold]without downloading[/bold]."""
     config = _load_config(config_path)
+    _require_inputs(config, config_path)
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
     _console.print(
@@ -2293,6 +2351,7 @@ def generate(
     Re-running the same command resumes an interrupted run.
     """
     config = _load_config(config_path)
+    _require_inputs(config, config_path)
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
     if dry_run:
@@ -2336,6 +2395,13 @@ def generate(
             )
     _show_warnings(caught, shown)
     if result is not None:
+        if not result.manifest.patches:
+            _fail(
+                "[red]No patches were written.[/red]",
+                "The region may be smaller than one patch, or every patch was dropped by "
+                "sampler.max_empty_ratio or sampler.min_label_ratio (see the warnings above). "
+                "Check the numbers with mapcv plan.",
+            )
         _print_result(result)
 
 
@@ -2619,43 +2685,52 @@ def validate(
         f"[green]✓[/green] {escape(str(config_path))} is a valid config.", soft_wrap=True
     )
     _console.print(_settings_table(config))
+    for problem in _missing_inputs(config):
+        _console.print(f"[yellow]⚠[/yellow]  {problem}")
+
+
+def _missing_inputs(config: MapcvConfig) -> list[str]:
+    """Local files the config reads that do not exist, as ``"<key> not found: <path>"``."""
+    missing: list[str] = []
+
+    def check(key: str, path: Path | None) -> None:
+        if path is not None and not path.exists():
+            missing.append(f"{key} not found: {path}")
+
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):
-        label_file = eopf_local_path(labels.path)
-        if label_file is not None and not label_file.exists():
-            _console.print(f"[yellow]⚠[/yellow]  labels.path not found: {label_file}")
+        check("labels.path", eopf_local_path(labels.path))
     elif labels is not None:
         for key, path in labels.keyed_files():
-            if not path.exists():
-                _console.print(f"[yellow]⚠[/yellow]  {key} not found: {path}")
-    area = labels.annotated_area if isinstance(labels, LabelsConfig) else None
-    if area is not None and not area.exists():
-        _console.print(f"[yellow]⚠[/yellow]  labels.annotated_area not found: {area}")
+            check(key, path)
+        check("labels.annotated_area", labels.annotated_area)
     change = config.change
     if change is not None:
-        for key, label_set in (
-            ("change.before.path", change.before),
-            ("change.after.path", change.after),
-        ):
+        for prefix, label_set in (("change.before", change.before), ("change.after", change.after)):
             if label_set is not None:
-                prefix = key.rsplit(".", 1)[0]
                 for file_key, path in label_set.keyed_files(prefix):
-                    if not path.exists():
-                        _console.print(f"[yellow]⚠[/yellow]  {file_key} not found: {path}")
-                set_area = label_set.annotated_area
-                if set_area is not None and not set_area.exists():
-                    _console.print(
-                        f"[yellow]⚠[/yellow]  {prefix}.annotated_area not found: {set_area}"
-                    )
+                    check(file_key, path)
+                check(f"{prefix}.annotated_area", label_set.annotated_area)
+    check("region.path", config.region.path)
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
             if imagery.is_pattern:
                 # A mosaic pattern: missing only when it matches no file.
                 local = None if glob.glob(str(local), recursive=True) else local
-            if local is not None and not local.exists():
-                where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
-                _console.print(f"[yellow]⚠[/yellow]  {where} not found: {local}")
+            check(f"imagery '{name}' path" if config.multi_source else "imagery.path", local)
+    return missing
+
+
+def _require_inputs(config: MapcvConfig, config_path: Path) -> None:
+    """Stop before planning when a file the config reads is missing."""
+    missing = _missing_inputs(config)
+    if missing:
+        _fail(
+            "[red]" + escape("\n".join(missing)) + "[/red]",
+            f"Check the paths in {escape(str(config_path))}: relative paths are read from "
+            "the config file's folder.",
+        )
 
 
 @app.command(

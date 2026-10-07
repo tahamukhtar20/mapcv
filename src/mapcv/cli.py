@@ -41,6 +41,7 @@ import mapcv
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.config import (
     EOPFZarrImageryConfig,
+    StacCogImageryConfig,
     GeoTiffImageryConfig,
     LabelsConfig,
     MapcvConfig,
@@ -104,6 +105,8 @@ def _make_output_encodable() -> None:
 
 _make_output_encodable()
 _console = Console()
+# NO_COLOR as the environment set it; --no-color turns colours off for one run.
+_NO_COLOR_FROM_ENV = _console.no_color
 # --quiet: hide the spinner, progress bars and progress messages.
 _quiet = False
 
@@ -197,11 +200,15 @@ def _main(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Hide progress output; still show errors and summaries."
     ),
+    no_color: bool = typer.Option(
+        False, "--no-color", help="Print without colours, as NO_COLOR=1 does."
+    ),
 ) -> None:
     """Turn a region and polygon labels into a ready-to-train segmentation, detection, instance or
     classification dataset."""
     global _quiet
     _quiet = quiet
+    _console.no_color = no_color or _NO_COLOR_FROM_ENV
 
 
 def _format_validation_error(exc: ValidationError) -> List[str]:
@@ -271,6 +278,13 @@ def _imagery_label(config: MapcvConfig) -> str:
 
 
 def _source_label(imagery: Any) -> str:
+    if isinstance(imagery, StacCogImageryConfig):
+        cog = imagery.search
+        masked = f" · SCL mask {imagery.scl_mask}" if imagery.scl_mask else ""
+        return (
+            f"Sentinel-2 COGs · search {cog.collection} {cog.datetime} "
+            f"≤ {cog.max_cloud:g}% cloud · bands {', '.join(imagery.bands)}{masked}"
+        )
     if isinstance(imagery, EOPFZarrImageryConfig):
         if imagery.search is not None:
             search = imagery.search
@@ -473,7 +487,7 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
         )
     elif isinstance(config.imagery, GeoTiffImageryConfig):
         _console.print("[dim]Your own imagery: mapcv reads it as it is, without resampling.[/dim]")
-    elif not isinstance(config.imagery, EOPFZarrImageryConfig):
+    elif not isinstance(config.imagery, (EOPFZarrImageryConfig, StacCogImageryConfig)):
         _console.print(
             "[dim]Imagery terms are your responsibility: check the provider's license, "
             f"attribution and rate limits ({_PROVIDERS_URL}).[/dim]"
@@ -682,12 +696,14 @@ def _print_result(result: GenerateResult) -> None:
         "classification": "tutorials/classification/#train-a-classifier",
     }
     guide = guides.get(manifest.task, "guides/use-your-dataset/")
+    # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  • Inspect it:      [cyan]mapcv info {result.staging_dir}[/cyan]\n"
         f"  • Re-split it:     [cyan]mapcv split {result.staging_dir} --strategy spatial[/cyan]\n"
         f"  • Band stats:      [cyan]mapcv stats {result.staging_dir}[/cyan]\n"
-        f"  • Train on it:     {_DOCS_URL}/{guide}"
+        f"  • Train on it:     {_DOCS_URL}/{guide}",
+        soft_wrap=True,
     )
 
 
@@ -1732,6 +1748,7 @@ def init(
             _console.print(line)
         return
     _console.print(f"\n[green]✓[/green] Wrote [bold]{target}[/bold]")
+    # Not wrapped: a URL broken over two lines can't be clicked or copied.
     _console.print(
         "\n[bold]Next[/bold]\n"
         f"  1. See what it will cost:  [cyan]mapcv plan {target}[/cyan]\n"
@@ -2254,7 +2271,7 @@ def mcp_server(
     try:
         from mapcv.mcp_server import serve
     except ImportError as exc:
-        err = Console(stderr=True)
+        err = Console(stderr=True, no_color=_console.no_color)
         err.print("[red]The MCP server needs the optional 'mcp' extra.[/red]")
         err.print('Install it with [bold]pip install "mapcv\\[mcp]"[/bold], then run this again.')
         err.print(f"[dim]{escape(str(exc))} (mapcv needs mcp 2.x)[/dim]")

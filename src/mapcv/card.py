@@ -54,7 +54,7 @@ _ATTRIBUTION = {
 
 
 def _attribution(record: SourceRecord) -> Optional[str]:
-    if record.source_type == "eopf_zarr":
+    if record.source_type in ("eopf_zarr", "stac_cog"):
         return "Contains modified Copernicus Sentinel data"
     return _ATTRIBUTION.get(record.product_id or "")
 

@@ -854,6 +854,9 @@ def test_cli_validate_plan_generate_info(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert flat("Dataset ready") in flat(result.output)
     assert flat("geotiff") in flat(result.output) and flat("scene.tif") in flat(result.output)
+    # The guide's URL stays on one line at 80 columns, so it can be clicked and copied.
+    train = next(line for line in result.output.splitlines() if "Train on it:" in line)
+    assert train.rstrip().endswith("/guides/use-your-dataset/")
 
     result = runner.invoke(app, ["info", str(tmp_path / "out")])
     assert result.exit_code == 0, result.output
@@ -946,3 +949,21 @@ def test_init_wizard_asks_again_when_the_file_cannot_be_read(tmp_path: Path) -> 
     assert flat("Cannot read that file") in flat(result.output)
     config = MapcvConfig.from_yaml(out)
     assert config.writer.image_format == "npy"
+
+
+@pytest.mark.parametrize(
+    ("task", "outcome"),
+    [
+        ("segmentation", "every mask will be background"),
+        ("detection", "no patch will have objects"),
+    ],
+)
+def test_generate_warns_about_an_empty_label_file(tmp_path: Path, task: str, outcome: str) -> None:
+    raster = make_raster(tmp_path)
+    labels = tmp_path / "empty.geojson"
+    labels.write_text('{"type": "FeatureCollection", "features": []}')
+    config = config_for(tmp_path, {"path": str(raster.path)}, raster.region(), labels=labels)
+    config = config.model_copy(update={"task": task})
+    what = "polygon" if task == "segmentation" else "feature"
+    with pytest.warns(UserWarning, match=f"no usable label {what} in the label file, so {outcome}"):
+        run_generate(config)

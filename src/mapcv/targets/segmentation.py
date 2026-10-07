@@ -27,10 +27,23 @@ from mapcv.manifest import TargetRecord
 from mapcv.rasterizer import rasterize
 from mapcv.targets.base import Transform, WindowTarget
 
-LABELS_MISS_MESSAGE = (
-    "no label polygon intersects the imagery extent, so every mask will be background. "
-    "Check that labels are longitude/latitude (not swapped) and cover the configured region."
-)
+
+def labels_miss_message(what: str, outcome: str) -> str:
+    """The warning for label features that all fall outside the imagery."""
+    return (
+        f"no label {what} intersects the imagery extent, so {outcome}. Check that the region "
+        "and the labels are longitude/latitude (not swapped) and that the labels cover the "
+        "region."
+    )
+
+
+def labels_empty_message(what: str, outcome: str) -> str:
+    """The warning for a label file without a feature mapcv can use."""
+    return (
+        f"no usable label {what} in the label file, so {outcome}. Check labels.path, "
+        "labels.label_field and labels.classes (and labels.layer for a GeoPackage with "
+        "several layers)."
+    )
 
 
 def label_buffer(labels: Any) -> Optional[Tuple[Optional[float], Optional[float]]]:
@@ -170,14 +183,18 @@ def _raster_bounds(source: RasterMetadata) -> Tuple[float, float, float, float]:
 
 
 def _warn_if_labels_miss_raster(
-    geometries: List[GeomWithClass], source: RasterMetadata, message: str = LABELS_MISS_MESSAGE
+    geometries: List[GeomWithClass],
+    source: RasterMetadata,
+    what: str = "polygon",
+    outcome: str = "every mask will be background",
 ) -> None:
+    # Attribute the warnings to the caller of the target's prepare().
     if not geometries:
+        warnings.warn(labels_empty_message(what, outcome), UserWarning, stacklevel=3)
         return
     extent = box(*_raster_bounds(source))
     if not any(geometry.intersects(extent) for geometry, _ in geometries):
-        # Attribute the warning to the caller of the target's prepare().
-        warnings.warn(message, UserWarning, stacklevel=3)
+        warnings.warn(labels_miss_message(what, outcome), UserWarning, stacklevel=3)
 
 
 def _label_bounds(geometries: List[GeomWithClass]) -> npt.NDArray[np.float64]:

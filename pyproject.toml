@@ -90,6 +90,9 @@ zarr = [
     "zarr>=2.18,<3; python_version < '3.14'",
     "pyproj>=3.6; python_version < '3.14'",
     "s3fs>=2024.10; python_version < '3.14'",
+    # xarray-eopf imports pystac_client when it registers the eopf-zarr engine but does
+    # not declare it; without it the engine fails to load.
+    "pystac-client>=0.8; python_version < '3.14'",
 ]
 
 # The MCP server for AI agents (`mapcv mcp`); the official MCP Python SDK (MIT).

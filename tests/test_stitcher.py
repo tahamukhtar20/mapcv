@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from mapcv._mapcv_rs import PyTileIndex, stitch_tiles, tile_transform
+from mapcv._mapcv_rs import TileIndex, stitch_tiles, tile_transform
 
 
 def _make_tile(r: int, g: int, b: int) -> bytes:
@@ -37,14 +37,14 @@ def test_empty_returns_empty() -> None:
 
 
 def test_single_tile_shape() -> None:
-    t = PyTileIndex(10, 20, 16)
+    t = TileIndex(10, 20, 16)
     arr, min_x, min_y = stitch_tiles([(t, RED)])
     assert arr.shape == (256, 256, 3)
     assert min_x == 10 and min_y == 20
 
 
 def test_single_tile_colour() -> None:
-    t = PyTileIndex(0, 0, 0)
+    t = TileIndex(0, 0, 0)
     arr, _, _ = stitch_tiles([(t, RED)])
     assert arr[0, 0].tolist() == [255, 0, 0]
     assert arr[255, 255].tolist() == [255, 0, 0]
@@ -52,8 +52,8 @@ def test_single_tile_colour() -> None:
 
 def test_two_tiles_horizontal() -> None:
     """Two tiles side-by-side: (tx=5,ty=3) left, (tx=6,ty=3) right."""
-    tl = PyTileIndex(5, 3, 16)
-    tr = PyTileIndex(6, 3, 16)
+    tl = TileIndex(5, 3, 16)
+    tr = TileIndex(6, 3, 16)
     arr, min_x, min_y = stitch_tiles([(tl, RED), (tr, GREEN)])
     assert arr.shape == (256, 512, 3)
     assert min_x == 5 and min_y == 3
@@ -63,8 +63,8 @@ def test_two_tiles_horizontal() -> None:
 
 def test_two_tiles_vertical() -> None:
     """Two tiles stacked: top (ty=10), bottom (ty=11)."""
-    top = PyTileIndex(0, 10, 16)
-    bot = PyTileIndex(0, 11, 16)
+    top = TileIndex(0, 10, 16)
+    bot = TileIndex(0, 11, 16)
     arr, min_x, min_y = stitch_tiles([(top, BLUE), (bot, WHITE)])
     assert arr.shape == (512, 256, 3)
     assert min_x == 0 and min_y == 10
@@ -74,10 +74,10 @@ def test_two_tiles_vertical() -> None:
 
 def test_2x2_grid() -> None:
     """2×2 tile grid → 512×512 canvas with correct quadrant colours."""
-    tl = PyTileIndex(0, 0, 1)
-    tr = PyTileIndex(1, 0, 1)
-    bl = PyTileIndex(0, 1, 1)
-    br = PyTileIndex(1, 1, 1)
+    tl = TileIndex(0, 0, 1)
+    tr = TileIndex(1, 0, 1)
+    bl = TileIndex(0, 1, 1)
+    br = TileIndex(1, 1, 1)
     arr, min_x, min_y = stitch_tiles(
         [
             (tl, RED),
@@ -95,28 +95,28 @@ def test_2x2_grid() -> None:
 
 def test_order_independent() -> None:
     """Tiles supplied in reverse order should produce the same canvas."""
-    tl = PyTileIndex(5, 5, 10)
-    tr = PyTileIndex(6, 5, 10)
+    tl = TileIndex(5, 5, 10)
+    tr = TileIndex(6, 5, 10)
     arr1, _, _ = stitch_tiles([(tl, RED), (tr, GREEN)])
     arr2, _, _ = stitch_tiles([(tr, GREEN), (tl, RED)])
     np.testing.assert_array_equal(arr1, arr2)
 
 
 def test_dtype_is_uint8() -> None:
-    t = PyTileIndex(0, 0, 0)
+    t = TileIndex(0, 0, 0)
     arr, _, _ = stitch_tiles([(t, RED)])
     assert arr.dtype == np.uint8
 
 
 def test_tiles_on_both_sides_of_the_antimeridian_are_rejected() -> None:
     # Columns 0 and 7 at zoom 3 are neighbours across 180°, not 8 tiles apart.
-    tiles = [(PyTileIndex(0, 3, 3), RED), (PyTileIndex(7, 3, 3), GREEN)]
+    tiles = [(TileIndex(0, 3, 3), RED), (TileIndex(7, 3, 3), GREEN)]
     with pytest.raises(ValueError, match="antimeridian"):
         stitch_tiles(tiles)
 
 
 def test_whole_world_row_with_a_missing_tile_still_stitches() -> None:
-    tiles = [(PyTileIndex(x, 0, 2), RED) for x in (0, 2, 3)]
+    tiles = [(TileIndex(x, 0, 2), RED) for x in (0, 2, 3)]
     arr, min_x, _ = stitch_tiles(tiles)
     assert arr.shape == (256, 4 * 256, 3)
     assert min_x == 0
@@ -124,7 +124,7 @@ def test_whole_world_row_with_a_missing_tile_still_stitches() -> None:
 
 
 def test_corrupt_png_raises() -> None:
-    t = PyTileIndex(0, 0, 0)
+    t = TileIndex(0, 0, 0)
     with pytest.raises(BaseException):
         stitch_tiles([(t, b"not a png")])
 

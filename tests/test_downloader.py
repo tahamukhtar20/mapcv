@@ -7,7 +7,7 @@ from typing import Any, List, Tuple
 import pytest
 
 from mapcv import downloader
-from mapcv._mapcv_rs import PyTileIndex
+from mapcv._mapcv_rs import TileIndex
 from mapcv.downloader import download_region, resolve_url_template, stitch_region
 
 
@@ -50,8 +50,8 @@ def _png(value: int) -> bytes:
 
 def _fake_fetch(calls: List[Tuple[int, str]]) -> Any:
     def fetch(
-        requested: List[PyTileIndex], template: str, **kwargs: Any
-    ) -> Tuple[List[Tuple[PyTileIndex, bytes]], int, Any]:
+        requested: List[TileIndex], template: str, **kwargs: Any
+    ) -> Tuple[List[Tuple[TileIndex, bytes]], int, Any]:
         calls.append((len(requested), template))
         return [(tile, _png(tile.x % 200)) for tile in requested], 0, ([], None)
 

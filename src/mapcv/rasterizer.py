@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Tuple, cast
+from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -60,7 +60,4 @@ def rasterize(
             raise ValueError("class_id must be in 1..=255 (0 is reserved for background)")
         polygons.extend(_flatten(geom, cid_int))
 
-    return cast(
-        npt.NDArray[np.uint8],
-        _rasterize_rs(polygons, height, width, transform, all_touched),
-    )
+    return _rasterize_rs(polygons, height, width, transform, all_touched)

@@ -47,7 +47,7 @@ from pydantic import ValidationError
 from shapely.geometry import shape
 
 from mapcv import planning
-from mapcv._mapcv_rs import parse_kml_rs
+from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url, _task_label
 from mapcv.config import (
     MULTI_SOURCE_TASKS,
@@ -844,7 +844,7 @@ def _scan_kml(data: bytes) -> _Scan:
     text = data.decode("utf-8", errors="replace")
     names = sorted(set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text)))
     scan = _Scan()
-    polygons, other = parse_kml_rs(data, None)
+    polygons, other = _parse_kml_bytes(data, None)
     scan.features = len(polygons) + other
     for group, _ in polygons:
         scan.geometry["MultiPolygon" if len(group) > 1 else "Polygon"] += 1
@@ -856,7 +856,7 @@ def _scan_kml(data: bytes) -> _Scan:
     for geometry, _ in geometries:
         scan.extend(cast(Tuple[float, float, float, float], geometry.bounds))
     for name in names:
-        labeled, _ = parse_kml_rs(data, name)
+        labeled, _ = _parse_kml_bytes(data, name)
         counter: Counter[str] = Counter()
         for _, label in labeled:
             normalized = _normalize_label(label)

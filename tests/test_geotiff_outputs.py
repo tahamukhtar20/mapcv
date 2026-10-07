@@ -22,7 +22,7 @@ import pytest
 import yaml
 from PIL import Image
 
-from mapcv._mapcv_rs import write_geotiffs_rs
+from mapcv._mapcv_rs import write_geotiffs
 from mapcv.config import MapcvConfig
 from mapcv.imagery import RasterMetadata
 from mapcv.manifest import (
@@ -564,7 +564,7 @@ def _write_raw(
     array = np.ascontiguousarray(array)
     n, h, w = array.shape[:3]
     c = array.shape[3] if array.ndim == 4 else 1
-    write_geotiffs_rs(
+    write_geotiffs(
         array.reshape(-1).view(np.uint8),
         array.dtype.name,
         (n, h, w, c),
@@ -644,17 +644,17 @@ def test_non_epsg_crs_is_rejected(tmp_path: Path) -> None:
 
 def test_unsupported_dtype_and_bad_arguments_are_errors(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="float16"):
-        write_geotiffs_rs(
+        write_geotiffs(
             np.zeros(8, np.uint8), "float16", (1, 2, 2, 1), [(1, 0, 0, 0, -1, 0)], ["a.tif"],
             str(tmp_path), 3857, False,
         )  # fmt: skip
     with pytest.raises(RuntimeError, match="pixel buffer"):
-        write_geotiffs_rs(
+        write_geotiffs(
             np.zeros(7, np.uint8), "uint8", (1, 2, 2, 2), [(1, 0, 0, 0, -1, 0)], ["a.tif"],
             str(tmp_path), 3857, False,
         )  # fmt: skip
     with pytest.raises(RuntimeError, match="plain file name"):
-        write_geotiffs_rs(
+        write_geotiffs(
             np.zeros(4, np.uint8), "uint8", (1, 2, 2, 1), [(1, 0, 0, 0, -1, 0)], ["../a.tif"],
             str(tmp_path), 3857, False,
         )  # fmt: skip

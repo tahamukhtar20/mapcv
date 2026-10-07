@@ -297,7 +297,7 @@ def download_region(west: float, south: float, east: float, north: float, zoom: 
                     url_template: str | None = None, source: str | None = None,
                     max_connections: int = 16, policy: str = "lenient",
                     snap_to_tiles: bool = True, max_failed_ratio: float = 0.05,
-                    ) -> list[tuple[PyTileIndex, bytes]]
+                    ) -> list[tuple[TileIndex, bytes]]
 
 def stitch_region(west: float, south: float, east: float, north: float, zoom: int,
                   url_template: str | None = None, source: str | None = None,

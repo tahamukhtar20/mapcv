@@ -130,7 +130,6 @@ exclude = ["tests/generate_golden\\.py", "tests/generate_vector_fixtures\\.py"]
 
 [[tool.mypy.overrides]]
 module = [
-    "mapcv._mapcv_rs",
     "mercantile",
     "shapely",
     "shapely.*",

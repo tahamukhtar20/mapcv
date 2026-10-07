@@ -65,6 +65,24 @@ imagery:
 
 The template needs `{z}`, `{x}` and `{y}` and nothing else in braces: replace `{s}` subdomains with one fixed subdomain, and `{r}` retina markers with an empty string. TMS servers with a flipped `{-y}` are not supported. Use either `source` or `url_template`, not both.
 
+### Google Earth Engine
+
+Any image or collection in the [Earth Engine catalog](https://developers.google.com/earth-engine/datasets) (Sentinel-2, Landsat, NAIP, elevation and many more) can be read as XYZ tiles that Earth Engine renders for you: install `pip install "mapcv[gee]"`, log in once with `earthengine authenticate`, and describe the image under `imagery.earth_engine`:
+
+```yaml
+imagery:
+  type: xyz
+  zoom: 15
+  earth_engine:
+    collection: COPERNICUS/S2_SR_HARMONIZED
+    start: "2024-06-01"
+    end: "2024-09-01"
+    vis: {bands: [B4, B3, B2], min: 0, max: 3000}
+    project: my-cloud-project
+```
+
+The tiles are 8-bit RGB renderings (`vis`), not the raw band values; for reflectance values use [Sentinel-2 L2A](#sentinel-2-l2a). Requests count against your own Earth Engine quota and project, under Earth Engine's terms. All fields: [configuration reference](/mapcv/reference/configuration/#google-earth-engine-imageryearth_engine).
+
 ### Keep API keys out of YAML
 
 Many commercial tile services put a key in the URL. mapcv never writes `url_template` into the manifest (it records only `custom-xyz:<hostname>`) and shows only the host in its output, but your YAML file is yours to protect. Two patterns:

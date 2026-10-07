@@ -262,6 +262,7 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 | `zoom` | int, 1–22 | required | Tile zoom level. Pixel size ≈ 156 543 × cos(latitude) / 2<sup>zoom</sup> m |
 | `source` | string | — | A built-in source: `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, `cartodb_dark_matter` |
 | `url_template` | string | — | Your own `http://` or `https://` URL with `{z}`, `{x}` and `{y}` |
+| `earth_engine` | block | — | Tiles rendered by Google Earth Engine (see [below](#google-earth-engine-imageryearth_engine)) |
 | `max_connections` | int ≥ 1 | `16` | Concurrent tile requests. Keep this low for shared servers; `mapcv init` writes `4` |
 | `policy` | `strict` \| `lenient` \| `ignore` | `lenient` | What happens to a tile that still fails after retries (see below) |
 | `max_failed_ratio` | float, 0–1 | `0.05` | Under `lenient`, the run stops if more than this fraction of a chunk's tiles fail |
@@ -270,7 +271,7 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 
 **Validation:**
 
-- Exactly one of `source` or `url_template` is required; setting both is an error.
+- Exactly one of `source`, `url_template` or `earth_engine` is required; setting two is an error.
 - `source` must be a built-in name. The 0.1 presets `google_satellite` and `osm` were removed and fail with an explanation ([why](/mapcv/project/migration/#google-imagery-preset)).
 - `url_template` must be `http(s)`, must contain `{x}`, `{y}` and `{z}`, and may contain no other placeholder. A `{s}` subdomain placeholder is rejected: replace it with one subdomain, for example `a`.
 - Tiles must decode to 256 × 256 images (PNG, JPEG, WebP or GIF).
@@ -292,6 +293,37 @@ Requests identify themselves with the user agent `mapcv/<version> (+https://gith
 - Tiles are filed under a hash of `url_template`: the template, and any key in it, is never written to disk.
 - `cache: false` downloads every tile and keeps none. [`mapcv cache`](/mapcv/reference/cli/#mapcv-cache) shows the cache's size and clears it.
 - The MCP server never uses the cache, because it writes only inside its `--root`.
+
+#### Google Earth Engine (`imagery.earth_engine`)
+
+Any Earth Engine image, or a collection reduced to one image, rendered as RGB tiles by Earth Engine and read like other XYZ tiles. Needs `pip install "mapcv[gee]"` and a one-time `earthengine authenticate` with an account registered for Earth Engine.
+
+```yaml
+imagery:
+  type: xyz
+  zoom: 15                          # ≈ 4.8 m/px; Earth Engine renders any zoom
+  earth_engine:
+    collection: COPERNICUS/S2_SR_HARMONIZED
+    start: "2024-06-01"
+    end: "2024-09-01"
+    reducer: median                 # median | mean | mosaic | min | max
+    vis: {bands: [B4, B3, B2], min: 0, max: 3000}
+    project: my-cloud-project       # the Cloud project requests are made (and counted) for
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `image` | string | — | An `ee.Image` asset ID, for example `USGS/SRTMGL1_003` |
+| `collection` | string | — | An `ee.ImageCollection` asset ID, reduced to one image with `reducer` |
+| `start`, `end` | date | — | Filter the collection to `[start, end)` (`YYYY-MM-DD`); collection only |
+| `reducer` | `median` \| `mean` \| `mosaic` \| `min` \| `max` | `median` | How the collection becomes one image |
+| `vis.bands` | 1 or 3 band names | required | Rendered as grey or a palette (one band) or RGB (three) |
+| `vis.min`, `vis.max` | number or one per band | `0`, `1` | Values mapped to 0 and 255 |
+| `vis.gamma` | number or one per band | — | Gamma correction |
+| `vis.palette` | list of colours | — | Colours from `min` to `max`, for one band only |
+| `project` | string | — | Your Cloud project registered for Earth Engine |
+
+Set exactly one of `image` or `collection`. Each time it opens the imagery, mapcv asks Earth Engine for a tile URL (`getMapId`) with your credentials. That URL holds a short-lived map ID, so it is never written to the config, the manifest, the tile cache or messages. The manifest records `earth-engine:<asset>` and the rendering settings (not `project`), so a resumed run must ask for the same image and rendering. Earth Engine's terms, quotas and any billing are yours; see [Providers & licensing](/mapcv/project/providers/).
 
 <Aside type="caution">
 Built-in names are conveniences, not licences. Check the provider's terms before downloading; see [Providers & licensing](/mapcv/project/providers/). Keep API keys out of committed YAML: mapcv never writes `url_template` into the manifest, but your config file is your responsibility.

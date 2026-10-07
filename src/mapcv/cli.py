@@ -300,6 +300,9 @@ def _source_label(imagery: Any) -> str:
         selected = f"bands {imagery.bands}" if imagery.bands else "all bands"
         overview = f" · overview {imagery.overview}" if imagery.overview else ""
         return f"GeoTIFF {where} · {selected}{overview}"
+    if imagery.earth_engine is not None:
+        engine = imagery.earth_engine
+        return f"Earth Engine {engine.image or engine.collection} · zoom {imagery.zoom}"
     source = imagery.source or _redact_url(imagery.url_template or "")
     return f"XYZ {source} · zoom {imagery.zoom}"
 

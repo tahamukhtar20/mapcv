@@ -337,7 +337,11 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: List[str]) ->
     region = config.region
     if isinstance(imagery, XYZImageryConfig):
         height, width, tiles = _xyz_raster(config, imagery)
-        name = imagery.source or "custom XYZ template"
+        if imagery.earth_engine is not None:
+            engine = imagery.earth_engine
+            name = f"Earth Engine {engine.image or engine.collection}"
+        else:
+            name = imagery.source or "custom XYZ template"
         return _SourceSize(
             height,
             width,

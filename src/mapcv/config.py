@@ -339,6 +339,80 @@ class RegionConfig(BaseModel):
         return self
 
 
+class EarthEngineVis(BaseModel):
+    """How Earth Engine renders the image into RGB tiles (``getMapId`` visualization)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bands: List[str] = Field(min_length=1, max_length=3)
+    min: Union[float, List[float]] = 0.0
+    max: Union[float, List[float]] = 1.0
+    gamma: Optional[Union[float, List[float]]] = None
+    # Colours for a one-band image, from min to max (hex like "ff0000" or names).
+    palette: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def _check_bands(self) -> "EarthEngineVis":
+        if len(self.bands) == 2:
+            raise ValueError("imagery.earth_engine.vis.bands takes 1 or 3 bands")
+        if self.palette is not None and len(self.bands) != 1:
+            raise ValueError("imagery.earth_engine.vis.palette needs exactly one band")
+        return self
+
+    def params(self) -> Dict[str, Any]:
+        """The visualization parameters Earth Engine's ``getMapId`` takes."""
+
+        def text(value: Union[float, List[float]]) -> str:
+            values = value if isinstance(value, list) else [value]
+            return ",".join(repr(float(v)) for v in values)
+
+        params: Dict[str, Any] = {
+            "bands": ",".join(self.bands),
+            "min": text(self.min),
+            "max": text(self.max),
+        }
+        if self.gamma is not None:
+            params["gamma"] = text(self.gamma)
+        if self.palette is not None:
+            params["palette"] = ",".join(self.palette)
+        return params
+
+
+class EarthEngineImageryConfig(BaseModel):
+    """An Earth Engine image or collection composite, rendered as XYZ tiles.
+
+    mapcv asks Earth Engine for a tile URL (``getMapId``) every time it opens the
+    imagery, with the credentials of ``earthengine authenticate``; the URL holds a
+    short-lived map ID, so it is never written to the config, manifest or logs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # An ee.Image asset ID, or an ee.ImageCollection reduced to one image.
+    image: Optional[str] = None
+    collection: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    reducer: Literal["median", "mean", "mosaic", "min", "max"] = "median"
+    vis: EarthEngineVis
+    # The Google Cloud project the requests are made (and counted) for.
+    project: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_image(self) -> "EarthEngineImageryConfig":
+        if (self.image is None) == (self.collection is None):
+            raise ValueError("imagery.earth_engine: set 'image' or 'collection', not both")
+        if self.image is not None and (self.start is not None or self.end is not None):
+            raise ValueError("imagery.earth_engine: 'start'/'end' filter a 'collection'")
+        for name in ("start", "end"):
+            value = getattr(self, name)
+            if value is not None and not _STAC_TIME.fullmatch(value):
+                raise ValueError(
+                    f"imagery.earth_engine.{name} must be a date like 2024-06-01, got {value!r}"
+                )
+        return self
+
+
 class XYZImageryConfig(BaseModel):
     """XYZ tile imagery source and fetch settings."""
 
@@ -351,6 +425,8 @@ class XYZImageryConfig(BaseModel):
     zoom: int = Field(ge=1, le=22)
     source: Optional[str] = None
     url_template: Optional[str] = None
+    # Tiles rendered by Google Earth Engine (needs mapcv[gee] and an Earth Engine login).
+    earth_engine: Optional[EarthEngineImageryConfig] = None
     max_connections: int = Field(default=16, ge=1)
     policy: Literal["strict", "lenient", "ignore"] = "lenient"
     max_failed_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
@@ -365,10 +441,16 @@ class XYZImageryConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_source_or_template(self) -> "XYZImageryConfig":
-        if self.source is None and self.url_template is None:
-            raise ValueError("imagery: provide either 'source' or 'url_template'")
-        if self.source is not None and self.url_template is not None:
-            raise ValueError("imagery: set 'source' or 'url_template', not both")
+        given = [
+            name
+            for name in ("source", "url_template", "earth_engine")
+            if getattr(self, name) is not None
+        ]
+        if not given:
+            raise ValueError("imagery: provide either 'source', 'url_template' or 'earth_engine'")
+        if len(given) > 1:
+            names = [repr(name) for name in given]
+            raise ValueError(f"imagery: set {', '.join(names[:-1])} or {names[-1]}, not both")
         return self
 
 

@@ -136,13 +136,20 @@ impl FailureSummary {
 }
 
 /// Remove credentials, query parameters, and fragments before a URL is logged.
+/// A tile URL safe to show: scheme, host and the last three path segments (the tile's
+/// `z/x/y`). User info, the query and the rest of the path go, since providers put keys
+/// and short-lived tokens there (`/v1/<key>/...`, Earth Engine's `/maps/<map id>/...`).
 fn sanitize_url(url: &str) -> String {
-    if let Ok(mut parsed) = Url::parse(url) {
-        let _ = parsed.set_username("");
-        let _ = parsed.set_password(None);
-        parsed.set_query(None);
-        parsed.set_fragment(None);
-        return parsed.to_string();
+    if let Ok(parsed) = Url::parse(url) {
+        let segments: Vec<&str> = parsed
+            .path_segments()
+            .map(|parts| parts.filter(|part| !part.is_empty()).collect())
+            .unwrap_or_default();
+        let tail = segments[segments.len().saturating_sub(3)..].join("/");
+        let elided = if segments.len() > 3 { "/…" } else { "" };
+        let host = parsed.host_str().unwrap_or("");
+        let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+        return format!("{}://{host}{port}{elided}/{tail}", parsed.scheme());
     }
 
     url.split(['?', '#']).next().unwrap_or(url).to_owned()
@@ -462,7 +469,26 @@ pub fn fetch_tiles(
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, FailureSummary};
+    use super::{sanitize_url, Failure, FailureSummary};
+
+    #[test]
+    fn sanitized_urls_keep_only_the_host_and_the_tile() {
+        assert_eq!(
+            sanitize_url("https://user:pw@tiles.example.com/v1/SECRETKEY/3/4/5.png?key=abc#x"),
+            "https://tiles.example.com/…/3/4/5.png"
+        );
+        assert_eq!(
+            sanitize_url(
+                "https://earthengine.googleapis.com/v1/projects/p/maps/abc123-def/tiles/16/1/2"
+            ),
+            "https://earthengine.googleapis.com/…/16/1/2"
+        );
+        assert_eq!(
+            sanitize_url("http://127.0.0.1:8000/16/33660/21555.png"),
+            "http://127.0.0.1:8000/16/33660/21555.png"
+        );
+        assert_eq!(sanitize_url("not a url?token=1"), "not a url");
+    }
 
     fn failure(kind: &str, message: &str) -> Failure {
         Failure {

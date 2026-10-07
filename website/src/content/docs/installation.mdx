@@ -46,6 +46,7 @@ The base install is small: Pillow, NumPy, Shapely, Pydantic, Typer, Rich, PyYAML
 | `zarr` | `pip install "mapcv[zarr]"` | Sentinel-2 L2A EOPF Zarr input: xarray-eopf, xarray, Dask, zarr 2, numba (≥ 0.68), pyproj, s3fs | 3.10 – 3.13 |
 | `parquet` | `pip install "mapcv[parquet]"` | GeoParquet label files (`.parquet`, `.geoparquet`): pyarrow | 3.10 – 3.14 |
 | `export` | `pip install "mapcv[export]"` | `mapcv export --format hf-parquet` (Hugging Face Parquet): pyarrow | 3.10 – 3.14 |
+| `gee` | `pip install "mapcv[gee]"` | Google Earth Engine imagery (`imagery.earth_engine`): the [earthengine-api](https://github.com/google/earthengine-api) client. Log in once with `earthengine authenticate` | 3.10 – 3.14 |
 | `mcp` | `pip install "mapcv[mcp]"` | The MCP server for AI agents (`mapcv mcp`): the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) and its dependencies. See [Use mapcv with AI agents](/mapcv/guides/use-with-ai-agents/) | 3.10 – 3.14 |
 
 <Aside type="caution" title="Sentinel-2 and Python 3.14">

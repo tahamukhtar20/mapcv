@@ -54,7 +54,7 @@ def _read(path: Path) -> npt.NDArray[Any]:
         data, _ = tif.read_window(0, tif.info.height, 0, tif.info.width)
         return np.moveaxis(data, -1, 0)
     with Image.open(path) as image:
-        loaded = np.asarray(image)
+        loaded = np.array(image)  # writable, unlike np.asarray of a Pillow image
     return loaded[np.newaxis] if loaded.ndim == 2 else np.moveaxis(loaded, -1, 0)
 
 
@@ -251,7 +251,9 @@ def _to_tensors(item: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, np.ndarray):
             if value.dtype == np.uint16:  # torch has no general uint16 support
                 value = value.astype(np.int32)
-            return torch.from_numpy(np.ascontiguousarray(value))
+            value = np.ascontiguousarray(value)
+            # torch warns about (and must not write to) read-only arrays.
+            return torch.from_numpy(value if value.flags.writeable else value.copy())
         if isinstance(value, dict):
             return {key: convert(each) for key, each in value.items()}
         return value

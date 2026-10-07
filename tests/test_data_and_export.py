@@ -258,6 +258,13 @@ def test_tensors_and_transforms(
 ) -> None:
     root = _generate(tmp_path, scene, "d")
     fake = SimpleNamespace(from_numpy=lambda array: ("tensor", array.dtype, array.shape))
+    seen: List[bool] = []
+    record = SimpleNamespace(from_numpy=lambda array: seen.append(array.flags.writeable))
+    monkeypatch.setitem(sys.modules, "torch", record)
+    read_only = np.zeros(3)
+    read_only.flags.writeable = False
+    _to_tensors({"image": read_only})
+    assert seen == [True] and not read_only.flags.writeable  # torch gets a writable copy
     monkeypatch.setitem(sys.modules, "torch", fake)
     item = _to_tensors(
         {
@@ -288,6 +295,7 @@ def test_read_helpers(tmp_path: Path) -> None:
     gray = tmp_path / "g.png"
     Image.fromarray(np.arange(16, dtype=np.uint8).reshape(4, 4)).save(gray)
     assert read_image(gray).shape == (1, 4, 4) and read_mask(gray).shape == (4, 4)
+    assert read_image(gray).flags.writeable  # augmentations may write in place
     np.save(tmp_path / "m.npy", np.zeros((3, 3), np.uint8))
     assert read_image(tmp_path / "m.npy").shape == (1, 3, 3)
 

@@ -8,8 +8,7 @@ use pyo3::prelude::*;
 use reqwest::{Client, Url};
 use std::collections::BTreeMap;
 use std::io::Cursor;
-use std::sync::mpsc;
-use std::thread;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 /// How tile fetch failures are handled.
@@ -310,6 +309,55 @@ async fn fetch_single_tile(
     }
 }
 
+/// The process's Tokio runtime and HTTP client, made on first use and shared by every
+/// fetch so connections (and TLS sessions) carry over from one chunk to the next.
+/// Keyed by process ID: a child made by `fork` (multiprocessing, `DataLoader` workers)
+/// inherits none of the parent's runtime threads, so it builds its own; the parent's
+/// runtime is leaked rather than dropped, since dropping would wait for those threads.
+struct Shared {
+    pid: u32,
+    runtime: &'static tokio::runtime::Runtime,
+    client: Client,
+}
+
+static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
+
+fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
+    let mut guard = SHARED
+        .lock()
+        .map_err(|_| "the shared fetch runtime lock is poisoned".to_owned())?;
+    let pid = std::process::id();
+    if let Some(found) = guard.as_ref().filter(|found| found.pid == pid) {
+        return Ok((found.runtime, found.client.clone()));
+    }
+    let runtime: &'static tokio::runtime::Runtime = Box::leak(Box::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("mapcv-fetch")
+            .build()
+            .map_err(|e| format!("Failed to create tokio runtime: {e}"))?,
+    ));
+    let client = {
+        let _context = runtime.enter();
+        Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .user_agent(concat!(
+                "mapcv/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/tahamukhtar20/mapcv)"
+            ))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?
+    };
+    *guard = Some(Shared {
+        pid,
+        runtime,
+        client: client.clone(),
+    });
+    Ok((runtime, client))
+}
+
 /// Returns `(results, failed_count, failures)`: each result is a tile, its bytes and
 /// its caching headers (`None` for a black fill);  `failed_count` includes both
 /// omitted tiles (Lenient) and black-fill tiles (Ignore), and `failures` groups them
@@ -337,76 +385,52 @@ pub fn fetch_tiles(
         return Err(PyValueError::new_err("max_connections must be at least 1"));
     }
 
+    let (runtime, client) = shared().map_err(PyRuntimeError::new_err)?;
     let (tx, rx) = mpsc::channel();
 
-    let _ = thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                let _ = tx.send(Event::Error(format!("Failed to create tokio runtime: {e}")));
+    // The task reports through the channel; its join handle is not needed (dropping
+    // it detaches the task).
+    drop(runtime.spawn(async move {
+        let mut stream = stream::iter(tiles)
+            .map(|tile| {
+                let client_clone = client.clone();
+                let url_clone = url_template.clone();
+                async move { fetch_single_tile(client_clone, tile, url_clone, policy).await }
+            })
+            .buffer_unordered(max_connections);
+
+        let mut results = Vec::new();
+        let mut completed: usize = 0;
+        let mut failed: usize = 0;
+        let mut failures = FailureSummary::default();
+
+        while let Some(res) = stream.next().await {
+            match res {
+                Ok((tile, TileOutcome::Success(bytes, headers))) => {
+                    results.push((tile, bytes, Some(headers)));
+                }
+                Ok((tile, TileOutcome::BlackFill(bytes, failure))) => {
+                    results.push((tile, bytes, None));
+                    failed += 1;
+                    failures.add(failure);
+                }
+                Ok((_tile, TileOutcome::Missing(failure))) => {
+                    failed += 1;
+                    failures.add(failure);
+                }
+                Err(e) => {
+                    let _ = tx.send(Event::Error(e));
+                    return;
+                }
+            }
+            completed += 1;
+            if tx.send(Event::Progress(completed)).is_err() {
                 return;
             }
-        };
+        }
 
-        rt.block_on(async {
-            let client = match Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(30))
-                .user_agent(concat!(
-                    "mapcv/",
-                    env!("CARGO_PKG_VERSION"),
-                    " (+https://github.com/tahamukhtar20/mapcv)"
-                ))
-                .build()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(Event::Error(format!("Failed to build HTTP client: {e}")));
-                    return;
-                }
-            };
-
-            let mut stream = stream::iter(tiles)
-                .map(|tile| {
-                    let client_clone = client.clone();
-                    let url_clone = url_template.clone();
-                    async move { fetch_single_tile(client_clone, tile, url_clone, policy).await }
-                })
-                .buffer_unordered(max_connections);
-
-            let mut results = Vec::new();
-            let mut completed: usize = 0;
-            let mut failed: usize = 0;
-            let mut failures = FailureSummary::default();
-
-            while let Some(res) = stream.next().await {
-                match res {
-                    Ok((tile, TileOutcome::Success(bytes, headers))) => {
-                        results.push((tile, bytes, Some(headers)));
-                    }
-                    Ok((tile, TileOutcome::BlackFill(bytes, failure))) => {
-                        results.push((tile, bytes, None));
-                        failed += 1;
-                        failures.add(failure);
-                    }
-                    Ok((_tile, TileOutcome::Missing(failure))) => {
-                        failed += 1;
-                        failures.add(failure);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Event::Error(e));
-                        return;
-                    }
-                }
-                completed += 1;
-                if tx.send(Event::Progress(completed)).is_err() {
-                    return;
-                }
-            }
-
-            let _ = tx.send(Event::Done(results, failed, failures));
-        });
-    });
+        let _ = tx.send(Event::Done(results, failed, failures));
+    }));
 
     let rx = std::sync::Mutex::new(rx);
 

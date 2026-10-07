@@ -15,6 +15,7 @@ Safety rules enforced here, not in the protocol layer:
 
 from __future__ import annotations
 
+import glob
 import inspect
 import json
 import os
@@ -736,6 +737,9 @@ def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> list[str]:
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
+            if glob.has_magic(imagery.path):
+                # A mosaic pattern: missing only when it matches no file.
+                local = None if glob.glob(str(local), recursive=True) else local
             if local is not None and not local.exists():
                 where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
                 messages.append(f"{where} not found: {state.sandbox.rel(local)}")

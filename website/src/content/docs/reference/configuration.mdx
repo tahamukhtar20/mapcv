@@ -405,12 +405,12 @@ A catalog may point only to `https://` or `s3://` COGs (local files only from a 
 
 ### GeoTIFF and Cloud Optimized GeoTIFF (`type: geotiff`)
 
-Needs no extra install. Reads one file as it is: patches keep the file's CRS, pixel grid, band count and data type, and nothing is resampled. A guide with examples: [Use your own GeoTIFF](/mapcv/guides/use-your-own-geotiff/).
+Needs no extra install. Reads one file, or a mosaic of local files, as it is: patches keep the file's CRS, pixel grid, band count and data type, and nothing is resampled. A guide with examples: [Use your own GeoTIFF](/mapcv/guides/use-your-own-geotiff/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `"geotiff"` | required | Selects one GeoTIFF or COG |
-| `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder |
+| `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder. A local glob pattern (`tiles/*.tif`, `survey/**/*.tif`) reads every matching file as one mosaic |
 | `bands` | list of ints ≥ 1 | all bands | **1-based** band numbers to read, **in output order**: `[3, 2, 1]` reverses the bands of a BGR file. Band names in the manifest keep the file's numbering (`b3`, `b2`, `b1`) |
 | `overview` | int ≥ 0 | `0` | Overview level: `0` is the full resolution, `1` the first (largest) overview, and so on. Fails when the file has fewer levels |
 | `nodata` | number \| `.nan` | file's value | NoData value that overrides (or supplies) the file's. Pixels where every selected band equals it have no imagery |
@@ -420,6 +420,7 @@ Needs no extra install. Reads one file as it is: patches keep the file's CRS, pi
 
 - `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`), for a local test server. Windows paths work.
 - `bands` must be non-empty and without duplicates.
+- A glob pattern (`*`, `?`, `[...]`; `**` also matches folders) is for local files only and must match at least one file. The files form one mosaic: they must share the CRS, data type, band count, NoData value (or set `nodata` for all of them), pixel size and pixel grid (pixel corners line up), and have the overview level asked for. Where files overlap, the first file in sorted path order that has data at a pixel wins; gaps between files are no imagery. `bands`, `overview` and `nodata` apply to every file. The manifest records each file's name and fingerprint, so resuming after adding, removing or changing a file is refused.
 - The file must have a CRS that is an EPSG code and a pixel transform, and its compression must be one the reader supports (none, Deflate, LZW, PackBits, ZSTD, JPEG, WebP); the error names the problem. The region must intersect the file.
 - `writer.image_format`: `png` or `jpg` need `uint8` data in **1 or 3** selected bands (a single band is written as gray, repeated into three channels); any other data type or band count needs `npy` or `tif` (both keep the file's data type and band count; `tif` also writes georeferenced patches). A selection that cannot fit PNG/JPG is rejected when the config is loaded; the data type is checked when the file is opened (`mapcv plan` does that, without reading pixels).
 

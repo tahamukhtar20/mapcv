@@ -246,6 +246,30 @@ with rasterio.open("prediction_0000000.tif", "w", **profile) as dst:
 
 For PNG or NPY patches take `rasterio.transform.Affine(*manifest.patch_transform(entry))` and the manifest's `crs` instead.
 
+### Predict a whole region
+
+To map a trained model over a whole region, not just the dataset's patches, `mapcv.infer.predict_raster` reads the config's imagery patch by patch, calls your model on batches and blends the overlapping predictions into one georeferenced GeoTIFF:
+
+```python
+import numpy as np
+import torch
+
+from mapcv.infer import predict_raster
+
+model.eval()
+
+
+def predict(batch: np.ndarray) -> np.ndarray:          # (N, C, P, P) as read
+    with torch.no_grad():
+        x = torch.from_numpy(batch.astype(np.float32) / 255.0)
+        return model(x).softmax(dim=1).numpy()         # (N, K, P, P)
+
+
+predict_raster("mapcv.yaml", predict, "prediction.tif", overlap=0.5)   # uint8 classes, 255 = no imagery
+```
+
+It uses the config's first imagery source, `region` and `sampler.patch_size`. Neighbouring patches overlap by `overlap` and are blended with a cosine window, so the borders of a patch, where models are least sure, count least and there are no seams. `output="scores"` writes the blended scores as `float32` bands instead of the class; a model that returns `(N, P, P)` values (regression) gives one `float32` band. Only one strip of rows is held at a time besides the output itself. See the [Python API](/mapcv/reference/python-api/#predict_raster).
+
 <Aside type="tip">
 Training on a dataset someone else generated? Run `mapcv info <folder>` first: it shows the source, bands, shape, class balance and splits in one screen.
 </Aside>

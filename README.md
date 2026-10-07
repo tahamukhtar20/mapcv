@@ -74,7 +74,7 @@ mapcv init my_dataset.yaml
 
 In a terminal this asks a few questions (imagery, area, labels, patches) and writes a working config; `mapcv init my_dataset.yaml --template xyz` writes a commented example to fill in instead. Everything else has sensible defaults.
 
-> **Note:** XYZ sources must return standard **256x256 pixel** tiles. mapcv does not provide imagery; see [PROVIDERS.md](PROVIDERS.md) for how it treats imagery and how to credit each source.
+> **Note:** XYZ sources must return standard **256x256 pixel** tiles. mapcv does not provide imagery; see [PROVIDERS.md](https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md) for how it treats imagery and how to credit each source.
 
 ### 2. Generate the dataset
 
@@ -129,7 +129,7 @@ Contributions are welcome. Please review the [Contributing Guide](https://github
 
 ## Citation
 
-Every release is archived on Zenodo: [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) resolves to the latest version and lists the DOI of each one. GitHub's "Cite this repository" button gives APA and BibTeX from [`CITATION.cff`](CITATION.cff); see [Citing mapcv](https://tahamukhtar20.github.io/mapcv/project/citing/) for crediting the data sources too.
+Every release is archived on Zenodo: [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) resolves to the latest version and lists the DOI of each one. GitHub's "Cite this repository" button gives APA and BibTeX from [`CITATION.cff`](https://github.com/tahamukhtar20/mapcv/blob/main/CITATION.cff); see [Citing mapcv](https://tahamukhtar20.github.io/mapcv/project/citing/) for crediting the data sources too.
 
 ## Author
 

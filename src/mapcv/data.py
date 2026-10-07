@@ -104,6 +104,13 @@ class MapcvDataset:
             raise FileNotFoundError(f"No manifest found at {manifest_path}")
         self.manifest = Manifest.load(manifest_path)
         self.split = split
+        # A Zarr export (mapcv export --format zarr) holds the patches as arrays.
+        self._zarr: Any = None
+        if (self.root / ".zgroup").exists():
+            import zarr
+
+            self._zarr = zarr.open_group(str(self.root), mode="r")
+        self._positions = {id(entry): index for index, entry in enumerate(self.manifest.patches)}
         self.entries = self._entries(split)
         self.transform = transform
         torch_available = importlib.util.find_spec("torch") is not None
@@ -193,6 +200,16 @@ class MapcvDataset:
         result = (image.astype(np.float32) - mean.reshape(shape)) / std.reshape(shape)
         return np.nan_to_num(result, nan=0.0).astype(np.float32)
 
+    def _image(self, key: str, entry: ManifestEntry) -> npt.NDArray[Any]:
+        if self._zarr is not None:
+            return np.asarray(self._zarr["images"][key][self._positions[id(entry)]])
+        return read_image(self.root / entry["files"][key])
+
+    def _mask(self, entry: ManifestEntry) -> npt.NDArray[Any]:
+        if self._zarr is not None:
+            return np.asarray(self._zarr["masks"][self._positions[id(entry)]])
+        return read_mask(self.root / entry["files"]["mask"])
+
     def __getitem__(self, index: int) -> Any:
         entry = self.entries[index]
         files = entry["files"]
@@ -207,7 +224,7 @@ class MapcvDataset:
         }
         stacked = bool((manifest.writer or {}).get("stack_sources"))
         if stacked:
-            image = read_image(self.root / files["image"])
+            image = self._image("image", entry)
             if self._stats is not None:
                 image = np.stack([self._normalised(name, image[t]) for t, name in enumerate(names)])
             item["image"] = image
@@ -215,13 +232,13 @@ class MapcvDataset:
             images = {}
             for name in names:
                 key = name if name in files else "image"
-                image = read_image(self.root / files[key])
+                image = self._image(key, entry)
                 images[name] = self._normalised(name, image) if self._stats is not None else image
             item["image"] = images[names[0]]
             if len(images) > 1:
                 item["images"] = images
         if "mask" in files:
-            item["mask"] = read_mask(self.root / files["mask"])
+            item["mask"] = self._mask(entry)
         task = manifest.task
         if task == "classification":
             labels = entry["summary"].get("labels") or []

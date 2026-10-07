@@ -304,17 +304,44 @@ Requires `pip install "mapcv[zarr]"` (Python 3.10–3.13).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `"eopf_zarr"` | required | Selects one EOPF Sentinel-2 L2A product |
-| `path` | string | required | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
+| `path` | string | — | Local path, `file://` URL, or anonymous `https://` or `s3://` URL of the `.zarr` product. A relative local path is resolved against the config file's folder |
+| `search` | mapping | — | Find the product in a STAC catalog instead of naming it ([below](#find-the-product-imagerysearch)); set `path` or `search`, not both |
 | `resolution` | `10` \| `20` \| `60` | `10` | Output grid in metres; every band is harmonised onto it |
 | `bands` | list of strings | all 12 | Variables to read, **in output order**. Default: `b01 b02 b03 b04 b05 b06 b07 b08 b8a b09 b11 b12` |
 | `chunk_rows` | int ≥ 1 | `1024` | Raster rows per processing chunk |
+| `scl_mask` | list of ints 0–11 | none | Scene classification (SCL) classes whose pixels count as having no imagery, such as `[3, 8, 9, 10]` (cloud shadows, medium and high probability clouds, cirrus) |
 
 **Validation:**
 
+- Exactly one of `path` and `search`.
 - `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Windows paths (`C:\data\S2.zarr`, `file:///C:/data/S2.zarr`) work.
 - `bands` must be non-empty and without duplicates; names are lower-cased (`B04` → `b04`). Unknown band names fail when the product is opened, with a list of what is available.
 - `writer.image_format` must be `npy` or `tif`.
 - The region must intersect the product.
+
+#### Find the product (`imagery.search`)
+
+```yaml
+imagery:
+  type: eopf_zarr
+  search:
+    datetime: 2025-05-01/2025-05-31
+    max_cloud: 10
+  bands: [b02, b03, b04, b08]
+  scl_mask: [3, 8, 9, 10]
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `datetime` | string | required | A date (`2025-05-13`), an RFC 3339 time, or an interval `start/end` (`..` for an open end); dates cover whole days |
+| `max_cloud` | number 0–100 | `20` | Highest `eo:cloud_cover` (percent) of an acceptable product |
+| `catalog` | URL | `https://stac.core.eopf.eodc.eu` | A STAC API (`https://`; `http://` only for `localhost`) |
+| `collection` | string | `sentinel-2-l2a` | The collection to search |
+| `asset` | string | `product` | The item asset holding the whole EOPF Zarr product |
+
+When the run starts, mapcv searches the catalog for the region's bounding box and picks, among the items whose footprint covers the **whole** region with at most `max_cloud` percent cloud, the least cloudy one; ties go to the earlier acquisition, then to the item ID, so the same catalog gives the same product every time. The manifest's `sources[0].fingerprint` records the catalog, collection and item, and `product_id` the product's name: resuming refuses to continue with another product if the search later finds a different one. `mapcv plan` estimates without contacting the catalog. When no item qualifies, the run stops and says how many items were found and how many covered the region.
+
+**`scl_mask`** reads the product's scene classification layer (20 m, nearest-neighbour onto the output grid) and treats pixels of the listed classes as pixels without imagery: their band values become `NaN`, segmentation masks mark them with `labels.ignore_index`, and they count towards `sampler.max_empty_ratio`, so `max_empty_ratio: 0.2` drops patches that are more than a fifth cloud. Values outside 0–11 (the fill at product edges) also count as no imagery.
 
 ### GeoTIFF and Cloud Optimized GeoTIFF (`type: geotiff`)
 

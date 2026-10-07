@@ -272,9 +272,14 @@ def _imagery_label(config: MapcvConfig) -> str:
 
 def _source_label(imagery: Any) -> str:
     if isinstance(imagery, EOPFZarrImageryConfig):
+        if imagery.search is not None:
+            search = imagery.search
+            where = f"search {search.collection} {search.datetime} ≤ {search.max_cloud:g}% cloud"
+        else:
+            where = _redact_url(imagery.path or "")
+        masked = f" · SCL mask {imagery.scl_mask}" if imagery.scl_mask else ""
         return (
-            f"Sentinel-2 EOPF {_redact_url(imagery.path)} · {imagery.resolution} m · "
-            f"{len(imagery.bands)} bands"
+            f"Sentinel-2 EOPF {where} · {imagery.resolution} m · {len(imagery.bands)} bands{masked}"
         )
     if isinstance(imagery, GeoTiffImageryConfig):
         where = _redact_url(imagery.path) if "://" in imagery.path else imagery.path

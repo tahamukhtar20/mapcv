@@ -21,7 +21,7 @@ The sections below reproduce [`MIGRATION.md`](https://github.com/tahamukhtar20/m
 
 ### Manifest version 3
 
-New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that the detection, instance, classification, change and regression tasks and other output layouts planned for 0.3 fit without another format change. Images, masks and split lists are byte-for-byte what 0.2 wrote for the same config; only `manifest.json` changes.
+New datasets are written with manifest version 3. It records what the dataset is for (`task`), the imagery as a list of `sources`, the annotation as a `target`, and for each patch the paths of its files and a summary of its annotation, so that every task (segmentation, detection, instance, classification, change, regression) and output layout fits one format. Images, masks and split lists are byte-for-byte what 0.2 wrote for the same config; only `manifest.json` changes.
 
 | Version 2 (mapcv 0.2) | Version 3 (mapcv 0.3) |
 | --- | --- |
@@ -69,6 +69,14 @@ Python API changes: `Manifest` has `task`, `sources`, `target` (`SourceRecord`, 
 JPEG patches are encoded with 4:2:0 chroma subsampling by default (`writer.jpg_subsampling: "4:2:0"`), as Pillow and libjpeg do, which makes them up to half the size of 0.2's 4:4:4 patches at the same quality. A 0.2 dataset written as JPEG resumes only with **`writer.jpg_subsampling: "4:4:4"`**, so that old and new patches match; without it, generation stops and names the `writer` settings. New datasets need no change.
 
 Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1 datasets (as in 0.2), and 0.2 datasets made with `sampler.mode: random`, because 0.3 draws random positions without repeats and would mix two different samples. Both can still be split and inspected.
+
+### Pixels without imagery
+
+Masks now mark pixels without imagery (padding, failed tiles, NoData, the area outside a GeoTIFF) with `labels.ignore_index`, `255` by default, instead of background `0`. Pass the same value to your loss (`ignore_index=255` in PyTorch's `CrossEntropyLoss`), or set `labels.ignore_index: null` to keep 0.2's behaviour. The manifest records it as `target.ignore_index`.
+
+### Removed 0.1 config keys
+
+`tiles:` and `region.zoom`, deprecated in 0.2, are no longer accepted: a config that still has them fails validation and says what to change. Move them into the `imagery` block as described under [Imagery configuration](#imagery-configuration) below.
 
 ### The `task` setting
 

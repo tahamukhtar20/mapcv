@@ -293,7 +293,7 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
     region = config.region
     area = box(region.west, region.south, region.east, region.north)
     in_region = sum(1 for geometry, _ in geometries if geometry.intersects(area))
-    if geometries and not in_region:
+    if not in_region:
         if config.task == "detection":
             what, outcome = "feature", "no patch would have objects"
         elif config.task == "instance":
@@ -304,10 +304,18 @@ def _summarize_vector(config: MapcvConfig, labels: LabelsConfig) -> LabelSummary
             what, outcome = "polygon", "no patch would show a change"
         else:
             what, outcome = "polygon", "every mask would be background"
-        messages.append(
-            f"no label {what} intersects the region, so {outcome}. "
-            "Check that labels are longitude/latitude (not swapped) and cover the region."
-        )
+        if not geometries:
+            messages.append(
+                f"no usable label {what} in {where}, so {outcome}. Check labels.path, "
+                "labels.label_field and labels.classes (and labels.layer for a GeoPackage "
+                "with several layers)."
+            )
+        else:
+            messages.append(
+                f"no label {what} intersects the region, so {outcome}. Check that the "
+                "region and the labels are longitude/latitude (not swapped) and that the "
+                "labels cover the region."
+            )
     return LabelSummary(where, len(geometries), class_map, messages, in_region)
 
 

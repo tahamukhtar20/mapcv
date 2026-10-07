@@ -116,6 +116,18 @@ def test_labels_outside_the_region_are_flagged(tmp_path: Path) -> None:
     )
     estimate = plan(_config(labels={"path": str(labels)}))
     assert any("no label polygon intersects the region" in w for w in estimate.warnings)
+    assert any("the region and the labels are longitude/latitude" in w for w in estimate.warnings)
+
+
+def test_an_empty_label_file_is_flagged(tmp_path: Path) -> None:
+    labels = tmp_path / "empty.geojson"
+    labels.write_text('{"type":"FeatureCollection","features":[]}')
+    estimate = plan(_config(labels={"path": str(labels)}))
+    assert any(
+        f"no usable label polygon in {labels}, so every mask would be background" in w
+        for w in estimate.warnings
+    )
+    assert not any("intersects the region" in w for w in estimate.warnings)
 
 
 def test_output_estimate_follows_the_writer_formats() -> None:

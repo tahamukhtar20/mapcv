@@ -5,7 +5,7 @@ description: Every field of the mapcv YAML config, with types, defaults, allowed
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, `task: instance` or `task: classification`, an optional `detection`, `instance` or `classification` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance`, `classification` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`labels.path`, `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
+A mapcv config is one YAML file with six top-level blocks, an optional `task` and, for `task: detection`, `task: instance` or `task: classification`, an optional `detection`, `instance` or `classification` block. `region`, `imagery`, `sampler` and `writer` are required; `task`, `labels`, `detection`, `instance`, `classification` and `split` are optional. Unknown keys are errors, reported with their path (for example `sampler.stide: Extra inputs are not permitted`), so typos never pass silently. Relative paths (`region.path`; `path`, `files[].path` and `annotated_area` of `labels` and of `change.before`/`change.after`; `writer.staging_dir` and a local `imagery.path`) are resolved against the folder that contains the config file, so a config works from any working directory. `mapcv validate <file>` checks a config; `mapcv plan <file>` also reads the labels and estimates the run.
 
 ```yaml
 task: segmentation  # what the dataset is for: segmentation (default), detection, instance or classification
@@ -183,7 +183,7 @@ The mask comes from one of two places:
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `change_value` | int, 1–255 | `1` | Mask value of changed pixels; unchanged pixels are `0`. Use `255` (with `labels.ignore_index: null`) for loaders that expect LEVIR-CD's 0/255 masks |
-| `before`, `after` | vector labels | — | The two label sets to compare, instead of `labels`. Relative paths resolve against the config's folder |
+| `before`, `after` | vector labels | — | The two label sets to compare, instead of `labels`: a file (`path`), several (`files`) or [OpenStreetMap](#labels-from-openstreetmap-labelsosm) (`osm`, queried over the region unless it sets `bbox`). Relative paths, `annotated_area` included, resolve against the config's folder |
 
 ```yaml
 task: change
@@ -195,9 +195,9 @@ change:
   after: {path: buildings_2025.geojson}
 ```
 
-Pixels without imagery in either image get the ignore value (`labels.ignore_index`, or the label sets' shared `ignore_index`; default 255), as in segmentation masks.
+Pixels without imagery in either image get the ignore value (`labels.ignore_index`, or the label sets' shared `ignore_index`; default 255), as in segmentation masks. So do pixels outside either label set's `annotated_area`: nothing was labeled there in that set, so whether the pixel changed is unknown, and it is neither change nor no change. For example, with the same buildings in both sets but `before.annotated_area` covering the west half, the east half is ignored, not change.
 
-**Validation** (with `task: change`): exactly two imagery sources; either `labels` or both `change.before` and `change.after`, not both; the two label sets need the same `ignore_index`, and comparing classes needs `label_field` and an identical `classes` mapping in both; `change_value` must differ from the ignore value. A resumed run must use the same labels (their files' hashes are recorded) and `change_value`.
+**Validation** (with `task: change`): exactly two imagery sources; either `labels` or both `change.before` and `change.after`, not both; the two label sets need the same `ignore_index` (not `null` when either has an `annotated_area`), and comparing classes needs `label_field` and an identical `classes` mapping in both; `change_value` must differ from the ignore value. A resumed run must use the same labels (their files' hashes are recorded) and `change_value`.
 
 ## `region`
 
@@ -328,7 +328,7 @@ imagery:
 | `vis.palette` | list of colours | — | Colours from `min` to `max`, for one band only |
 | `project` | string | — | Your Cloud project registered for Earth Engine |
 
-Set exactly one of `image` or `collection`. A collection is filtered to the region, the dates and `max_cloud`, masked with `cloud_score_plus`, then reduced. Without cloud settings a summer median in a cloudy climate is mostly cloud; `max_cloud` alone is enough where clear scenes are common, and `cloud_score_plus` also keeps the clear parts of partly cloudy scenes. `mapcv init --template earth-engine` writes this recipe, and the guided `mapcv init` offers Sentinel-2, Landsat 8 and NAIP with colours that suit them, or any asset. Each time it opens the imagery, mapcv asks Earth Engine for a tile URL (`getMapId`) with your credentials. That URL holds a short-lived map ID, so it is never written to the config, the manifest, the tile cache or messages. The manifest records `earth-engine:<asset>` and the rendering settings (not `project`), so a resumed run must ask for the same image and rendering. Earth Engine's terms, quotas and any billing are yours; see [Providers & licensing](/mapcv/project/providers/).
+Set exactly one of `image` or `collection`. A collection is filtered to the scenes over the tiles the dataset reads (the region snapped outward to whole tiles, so pixels at the edge get all their scenes too), the dates and `max_cloud`, masked with `cloud_score_plus`, then reduced. Without cloud settings a summer median in a cloudy climate is mostly cloud; `max_cloud` alone is enough where clear scenes are common, and `cloud_score_plus` also keeps the clear parts of partly cloudy scenes. `mapcv init --template earth-engine` writes this recipe, and the guided `mapcv init` offers Sentinel-2, Landsat 8 and NAIP with colours that suit them, or any asset. Each time it opens the imagery, mapcv asks Earth Engine for a tile URL (`getMapId`) with your credentials. That URL holds a short-lived map ID, so it is never written to the config, the manifest, the tile cache or messages. Cached tiles of a collection are kept per tile area, since another area filters other scenes into the composite: a run over another region never reuses them, so the output does not depend on what ran before. The manifest records `earth-engine:<asset>` and the rendering settings (not `project`), so a resumed run must ask for the same image and rendering. Earth Engine's terms, quotas and any billing are yours; see [Providers & licensing](/mapcv/project/providers/).
 
 <Aside>
 Each source's license and credit line: [Providers & licensing](/mapcv/project/providers/). mapcv never writes `url_template` into the manifest, but a key in a config file you commit is in your repository; see [Keep API keys out of YAML](/mapcv/guides/choose-imagery-and-zoom/#keep-api-keys-out-of-yaml).

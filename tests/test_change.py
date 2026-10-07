@@ -260,6 +260,34 @@ def test_label_set_paths_resolve_against_the_config_folder(tmp_path: Path) -> No
     assert options.after.path == folder / "b.geojson"
 
 
+def test_every_label_set_path_resolves_against_the_config_folder(tmp_path: Path) -> None:
+    # annotated_area and files[].path of a label set are files too, read from the
+    # config's folder like change.before.path, whatever the working directory.
+    folder = tmp_path / "project"
+    folder.mkdir()
+    (folder / "mapcv.yaml").write_text(
+        "task: change\n"
+        "region: {west: 4.9, south: 52.3, east: 4.91, north: 52.31}\n"
+        "imagery:\n"
+        "  - {type: xyz, name: before, zoom: 18, source: esri_satellite}\n"
+        "  - {type: xyz, name: after, zoom: 18, source: esri_satellite}\n"
+        "change:\n"
+        "  before: {path: a.geojson, annotated_area: areas/a.geojson}\n"
+        "  after:\n"
+        "    files: [{path: sets/b.geojson, class: house}]\n"
+        "    annotated_area: areas/b.geojson\n"
+        "sampler: {patch_size: 256}\n"
+        "writer: {staging_dir: out}\n"
+    )
+    config = MapcvConfig.from_yaml(folder / "mapcv.yaml")
+    options = config.change_options
+    assert options.before is not None and options.after is not None
+    assert options.before.annotated_area == folder / "areas" / "a.geojson"
+    assert options.after.annotated_area == folder / "areas" / "b.geojson"
+    assert options.after.files is not None
+    assert options.after.files[0].path == folder / "sets" / "b.geojson"
+
+
 # ── Datasets ─────────────────────────────────────────────────────────────────
 
 
@@ -308,6 +336,89 @@ def test_before_and_after_label_sets_differ_where_objects_change(
         np.testing.assert_array_equal(mask, want, err_msg=f"{entry['row']},{entry['col']}")
         changed += int(want.any())
     assert changed > 0
+
+
+def _burn_area(path: Path, transform: Affine) -> npt.NDArray[np.bool_]:
+    """rasterio's pixels (centres) inside an annotated-area file on a patch grid."""
+    return _burn(path, transform).astype(bool)
+
+
+def _west_part(tmp_path: Path, region: dict[str, float], name: str, fx: float) -> Path:
+    """An annotated area covering the part of the region west of ``fx`` (0..1)."""
+    ring = _polygon(region, (-1.0, -1.0), (fx, -1.0), (fx, 2.0), (-1.0, 2.0))
+    return write_features(tmp_path / name, [(ring, None)])
+
+
+def test_an_unlabeled_area_is_unknown_not_change(tmp_path: Path, scene: dict[str, Any]) -> None:
+    # The same objects before and after, but only the west half was labeled before: no
+    # pixel changed. Outside the before set's annotated area nothing is known, so the
+    # change mask holds the ignore value there, never "change".
+    area = _west_part(tmp_path, scene["region"], "west.geojson", 0.5)
+    config = change_config(
+        tmp_path,
+        scene["region"],
+        change={
+            "before": {"path": str(scene["before_set"]), "annotated_area": str(area)},
+            "after": {"path": str(scene["before_set"])},
+        },
+    )
+    manifest = run_generate(config).manifest
+    counts = {0: 0, 1: 0, 255: 0}
+    for entry in manifest.patches:
+        transform = Affine(*manifest.patch_transform(entry))
+        want = np.where(_burn_area(area, transform), 0, 255).astype(np.uint8)
+        mask = _mask(config.writer.staging_dir, entry)
+        np.testing.assert_array_equal(mask, want, err_msg=f"{entry['row']},{entry['col']}")
+        for value in counts:
+            counts[value] += int(np.count_nonzero(mask == value))
+    assert counts[1] == 0
+    assert counts[0] > 0 and counts[255] > 0, "the area must split the patches"
+
+
+def test_pixels_outside_either_annotated_area_are_ignored(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    before_area = _west_part(tmp_path, scene["region"], "before_area.geojson", 0.7)
+    east = _polygon(scene["region"], (0.3, -1.0), (2.0, -1.0), (2.0, 2.0), (0.3, 2.0))
+    after_area = write_features(tmp_path / "after_area.geojson", [(east, None)])
+    config = change_config(
+        tmp_path,
+        scene["region"],
+        change={
+            "before": {"path": str(scene["before_set"]), "annotated_area": str(before_area)},
+            "after": {"path": str(scene["after_set"]), "annotated_area": str(after_area)},
+        },
+    )
+    manifest = run_generate(config).manifest
+    changed = ignored = 0
+    for entry in manifest.patches:
+        transform = Affine(*manifest.patch_transform(entry))
+        before = _burn(scene["before_set"], transform)
+        after = _burn(scene["after_set"], transform)
+        known = _burn_area(before_area, transform) & _burn_area(after_area, transform)
+        want = np.where(known, (before != after).astype(np.uint8), 255).astype(np.uint8)
+        mask = _mask(config.writer.staging_dir, entry)
+        np.testing.assert_array_equal(mask, want, err_msg=f"{entry['row']},{entry['col']}")
+        changed += int((want == 1).any())
+        ignored += int((want == 255).any())
+    assert changed > 0 and ignored > 0
+
+
+def test_an_annotated_label_set_needs_an_ignore_index() -> None:
+    with pytest.raises(ValidationError, match=r"change.before.annotated_area needs"):
+        MapcvConfig.model_validate(
+            {
+                **BASE,
+                "change": {
+                    "before": {
+                        "path": "a.geojson",
+                        "annotated_area": "area.geojson",
+                        "ignore_index": None,
+                    },
+                    "after": {"path": "b.geojson", "ignore_index": None},
+                },
+            }
+        )
 
 
 def test_classes_compare_object_kinds_too(tmp_path: Path, scene: dict[str, Any]) -> None:
@@ -536,9 +647,10 @@ def test_mcp_sandbox_checks_both_label_sets(tmp_path: Path, scene: dict[str, Any
         scene["region"],
         change={
             "before": {"path": str(scene["before_set"])},
-            "after": {"path": "/etc/passwd.geojson"},
+            "after": {"path": "/etc/passwd.geojson", "annotated_area": "/etc/area.geojson"},
         },
     )
     keys = dict(config_paths(config))
     assert keys["change.before.path"] == scene["before_set"]
     assert keys["change.after.path"] == Path("/etc/passwd.geojson")
+    assert keys["change.after.annotated_area"] == Path("/etc/area.geojson")

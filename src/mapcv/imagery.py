@@ -306,6 +306,22 @@ def _safe_product_id(path_or_url: str) -> str:
     return name or parsed.hostname or "imagery-product"
 
 
+def _tile_range_bounds(
+    min_x: int, min_y: int, max_x: int, max_y: int, zoom: int
+) -> tuple[float, float, float, float]:
+    """(west, south, east, north) in degrees of the XYZ tiles ``min_x..max_x`` by
+    ``min_y..max_y``: their outer edges, a meridian or parallel each."""
+    count = 2.0**zoom
+
+    def lon(x: int) -> float:
+        return x / count * 360.0 - 180.0
+
+    def lat(y: int) -> float:
+        return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / count))))
+
+    return lon(min_x), lat(max_y + 1), lon(max_x + 1), lat(min_y)
+
+
 def _xyz_product_id(url_template: str) -> str:
     # Custom templates can embed secrets in the path or query (e.g. an instance
     # ID), so only the hostname is recorded.
@@ -334,17 +350,29 @@ class XYZRasterSource:
             raise ValueError("XYZ imagery returned no tiles for the requested region")
 
         self._config = config
+        self._min_x = min(tile.x for tile in target_tiles)
+        self._max_x = max(tile.x for tile in target_tiles)
+        self._min_y = min(tile.y for tile in target_tiles)
+        self._max_y = max(tile.y for tile in target_tiles)
         engine = config.earth_engine
         fingerprint: dict[str, Any] | None = None
         if engine is not None:
             from mapcv import earth_engine
 
-            # A fresh map URL each time; it holds a short-lived map ID, so the cache and
-            # the manifest key on the image and its rendering instead.
-            self._template = earth_engine.tile_url(
-                engine, (region.west, region.south, region.east, region.north)
+            # A collection is filtered to the scenes over the tiles the raster covers (not
+            # just the region), so every pixel gets all its scenes. Which scenes go into
+            # the composite decides the rendered pixels, so those bounds are part of the
+            # cache key: tiles rendered for another area are never reused.
+            bounds = _tile_range_bounds(
+                self._min_x, self._min_y, self._max_x, self._max_y, config.zoom
             )
+            # A fresh map URL each time; it holds a short-lived map ID, so the cache and
+            # the manifest key on the image and its rendering instead. The manifest needs
+            # no bounds: the region and the grid it records decide them.
+            self._template = earth_engine.tile_url(engine, bounds)
             cache_key = "earth-engine:" + engine.model_dump_json(exclude={"project"})
+            if engine.collection is not None:
+                cache_key += f"|bounds:{','.join(repr(value) for value in bounds)}"
             product_id = earth_engine.product_id(engine)
             fingerprint = {"earth_engine": engine.model_dump(mode="json", exclude={"project"})}
         else:
@@ -363,10 +391,6 @@ class XYZRasterSource:
         self.tiles_failed = 0
         self.failure_causes: Counter[str] = Counter()
         self.failure_example: str | None = None
-        self._min_x = min(tile.x for tile in target_tiles)
-        self._max_x = max(tile.x for tile in target_tiles)
-        self._min_y = min(tile.y for tile in target_tiles)
-        self._max_y = max(tile.y for tile in target_tiles)
 
         self.metadata = RasterMetadata(
             source_type="xyz",

@@ -180,7 +180,9 @@ fn sanitize_url(url: &str) -> String {
 }
 
 fn network_error_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_redirect() {
+    if crate::http_policy::address_refusal(error).is_some() {
+        "address refused"
+    } else if error.is_redirect() {
         "redirect refused"
     } else if error.is_timeout() {
         "request timed out"
@@ -196,6 +198,9 @@ fn network_error_kind(error: &reqwest::Error) -> &'static str {
 fn network_error_message(error: &reqwest::Error, url: &str) -> String {
     if let Some(reason) = crate::http_policy::redirect_refusal(error) {
         return format!("Redirect refused for {}: {reason}", sanitize_url(url));
+    }
+    if let Some(reason) = crate::http_policy::address_refusal(error) {
+        return format!("Refused {}: {reason}", sanitize_url(url));
     }
     format!(
         "Network error for {}: {}",
@@ -368,8 +373,8 @@ async fn fetch_single_tile(
                     false,
                 )
             }
-            // Asking again gives the same redirect: fail without retrying.
-            Err(e) if e.is_redirect() => {
+            // Asking again gives the same redirect (or address): fail without retrying.
+            Err(e) if e.is_redirect() || crate::http_policy::address_refusal(&e).is_some() => {
                 let message = network_error_message(&e, &url);
                 return on_failure(tile, policy, network_error_kind(&e).to_owned(), message);
             }
@@ -401,49 +406,97 @@ async fn fetch_single_tile(
 struct Shared {
     pid: u32,
     runtime: &'static tokio::runtime::Runtime,
-    client: Client,
+    /// For templates that may reach this machine or a private network.
+    local: Client,
+    /// For templates on a host name: connects to that host wherever it resolves, and
+    /// to public addresses only elsewhere. Keyed by the host name ("" trusts none).
+    trusting: BTreeMap<String, Client>,
 }
+
+/// The most clients kept for different template hosts (a process uses a few).
+const MAX_TRUSTING_CLIENTS: usize = 32;
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 
-fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
+fn build_client(public: bool, trusted: Option<String>) -> Result<Client, String> {
+    let builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        // A Referer would carry the previous URL, key included, to a redirect target.
+        .referer(false)
+        .redirect(crate::http_policy::tile_redirect_policy())
+        .user_agent(concat!(
+            "mapcv/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://github.com/tahamukhtar20/mapcv)"
+        ));
+    let builder = if public {
+        builder.dns_resolver(crate::http_policy::PublicResolver::new().trusting(trusted))
+    } else {
+        builder
+    };
+    builder
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+/// The shared runtime and the client for tiles that start at `start`
+/// (see [`crate::http_policy::may_reach_internal`]).
+fn shared(start: Option<&Url>) -> Result<(&'static tokio::runtime::Runtime, Client), String> {
     let mut guard = SHARED
         .lock()
         .map_err(|_| "the shared fetch runtime lock is poisoned".to_owned())?;
     let pid = std::process::id();
-    if let Some(found) = guard.as_ref().filter(|found| found.pid == pid) {
-        return Ok((found.runtime, found.client.clone()));
+    if guard.as_ref().is_none_or(|found| found.pid != pid) {
+        let runtime: &'static tokio::runtime::Runtime = Box::leak(Box::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("mapcv-fetch")
+                .build()
+                .map_err(|e| format!("Failed to create tokio runtime: {e}"))?,
+        ));
+        let local = {
+            let _context = runtime.enter();
+            build_client(false, None)?
+        };
+        *guard = Some(Shared {
+            pid,
+            runtime,
+            local,
+            trusting: BTreeMap::new(),
+        });
     }
-    let runtime: &'static tokio::runtime::Runtime = Box::leak(Box::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("mapcv-fetch")
-            .build()
-            .map_err(|e| format!("Failed to create tokio runtime: {e}"))?,
-    ));
+    let found = guard
+        .as_mut()
+        .ok_or_else(|| "the shared fetch runtime is missing".to_owned())?;
+    if start.is_some_and(crate::http_policy::may_reach_internal) {
+        return Ok((found.runtime, found.local.clone()));
+    }
+    // The host the template names is the user's: it is connected wherever it resolves.
+    let trusted = start.and_then(crate::http_policy::trusted_name);
+    let key = trusted.clone().unwrap_or_default();
+    if let Some(client) = found.trusting.get(&key) {
+        return Ok((found.runtime, client.clone()));
+    }
+    if found.trusting.len() >= MAX_TRUSTING_CLIENTS {
+        found.trusting.clear();
+    }
     let client = {
-        let _context = runtime.enter();
-        Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            // A Referer would carry the previous URL, key included, to a redirect target.
-            .referer(false)
-            .redirect(crate::http_policy::tile_redirect_policy())
-            .user_agent(concat!(
-                "mapcv/",
-                env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/tahamukhtar20/mapcv)"
-            ))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {e}"))?
+        let _context = found.runtime.enter();
+        build_client(true, trusted)?
     };
-    *guard = Some(Shared {
-        pid,
-        runtime,
-        client: client.clone(),
-    });
-    Ok((runtime, client))
+    found.trusting.insert(key, client.clone());
+    Ok((found.runtime, client))
+}
+
+/// The URL of one tile of a template, to check where the fetch starts.
+fn first_tile_url(url_template: &str) -> Option<Url> {
+    let url = url_template
+        .replace("{z}", "0")
+        .replace("{x}", "0")
+        .replace("{y}", "0");
+    Url::parse(&url).ok()
 }
 
 /// The error for a fetch that gave up because more than `max_failed_ratio` of its tiles
@@ -515,7 +568,13 @@ pub fn fetch_tiles(
         return Err(PyValueError::new_err("max_connections must be at least 1"));
     }
 
-    let (runtime, client) = shared().map_err(PyRuntimeError::new_err)?;
+    let start = first_tile_url(&url_template);
+    if let Some(reason) = start.as_ref().and_then(crate::http_policy::start_refusal) {
+        return Err(PyValueError::new_err(format!(
+            "Refused to fetch tiles from imagery.url_template: {reason}"
+        )));
+    }
+    let (runtime, client) = shared(start.as_ref()).map_err(PyRuntimeError::new_err)?;
     let (tx, rx) = mpsc::channel();
     let total = tiles.len();
     let unanswered_limit = unanswered_limit(max_connections);

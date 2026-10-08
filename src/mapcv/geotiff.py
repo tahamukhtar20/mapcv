@@ -94,7 +94,9 @@ class GeoTiff:
 
     ``source`` is a local path, an ``http(s)://`` URL or ``s3://bucket/key``
     for a public bucket. ``cache_bytes`` bounds the memory kept between reads
-    for a remote file.
+    for a remote file. A URL's host is connected wherever it resolves; with
+    ``trust_host=False`` (a URL the user did not write, such as one a STAC catalog
+    names) it must resolve to a public address, as a redirect target must.
 
     Raises ``FileNotFoundError`` for a missing local file, ``ValueError`` for a
     file that is not a GeoTIFF the reader supports (unsupported compression,
@@ -106,11 +108,12 @@ class GeoTiff:
         source: str | os.PathLike[str],
         *,
         cache_bytes: int = DEFAULT_CACHE_BYTES,
+        trust_host: bool = True,
     ) -> None:
         path = os.fspath(source)
         if "://" not in path and not os.path.exists(path):
             raise FileNotFoundError(f"No such file: {path}")
-        self._inner = _RustGeoTiff(path, cache_bytes)
+        self._inner = _RustGeoTiff(path, cache_bytes, trust_host)
         meta = self._inner.metadata()
         self.info = GeoTiffInfo(
             width=meta["width"],

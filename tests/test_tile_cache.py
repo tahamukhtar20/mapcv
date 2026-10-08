@@ -385,7 +385,7 @@ def test_mcp_generate_never_uses_the_cache(server: TileServer, tmp_path: Path) -
     (tmp_path / "one.yaml").write_text(yaml.safe_dump(data))
     data["imagery"] = [{**data["imagery"], "name": "x"}, {**data["imagery"], "name": "y"}]
     (tmp_path / "two.yaml").write_text(yaml.safe_dump(data))
-    state = ToolState(Sandbox(tmp_path, allow_write=True))
+    state = ToolState(Sandbox(tmp_path, allow_write=True, allow_local_urls=True))
     one = prepare_generate(state, "one.yaml").config
     assert one.primary_imagery.cache is False  # type: ignore[union-attr]
     two = prepare_generate(state, "two.yaml").config

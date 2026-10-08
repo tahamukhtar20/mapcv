@@ -165,8 +165,14 @@ def project(tmp_path: Path, tile_server: str) -> Path:
     return root
 
 
-def run_client(root: Path, scenario: Callable[[Client], Awaitable[T]], write: bool = True) -> T:
-    server = build_server(root, allow_write=write)
+def run_client(
+    root: Path,
+    scenario: Callable[[Client], Awaitable[T]],
+    write: bool = True,
+    local_urls: bool = True,
+) -> T:
+    # The tests' tile and STAC servers run on this machine: --allow-local-urls.
+    server = build_server(root, allow_write=write, allow_local_urls=local_urls)
 
     async def main() -> T:
         async with Client(server) as client:
@@ -766,7 +772,7 @@ def test_mapcv_mcp_serves_over_stdio(project: Path) -> None:
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-c", "from mapcv.cli import app; app()", "mcp", "--root", str(project)]
-        + ["--allow-write"],
+        + ["--allow-write", "--allow-local-urls"],
     )
 
     async def main() -> None:
@@ -850,7 +856,9 @@ def test_serve_runs_over_stdio(project: Path, monkeypatch: pytest.MonkeyPatch) -
         def run(self, transport: str) -> None:
             seen.append(transport)
 
-    monkeypatch.setattr(mcp_server, "build_server", lambda root, allow_write: _Server())
+    monkeypatch.setattr(
+        mcp_server, "build_server", lambda root, allow_write, allow_local_urls: _Server()
+    )
     mcp_server.serve(project, allow_write=True)
     # stdout carries the protocol; the library never prints (tests/test_python_api.py).
     assert seen == ["stdio"]

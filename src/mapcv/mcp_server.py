@@ -48,7 +48,8 @@ agrees and you pass confirm_large=true.
 
 Rules: every path must be inside the folder the server was started with (relative
 paths are relative to it). Do not invent a url_template, and never put credentials in a
-config you show or log.
+config you show or log. URLs on this machine or a private network are refused unless the
+user started the server with --allow-local-urls.
 """
 
 _MODE_WRITE = (
@@ -140,9 +141,14 @@ async def _run(state: ToolState, func: Callable[..., ToolResult], *args: Any) ->
     return await anyio.to_thread.run_sync(partial(_guard, state, partial(func, state, *args)))
 
 
-def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer:
-    """Create the server for a folder; write tools exist only with ``allow_write``."""
-    state = ToolState(tools.Sandbox(root, allow_write))
+def build_server(
+    root: str | Path = ".", allow_write: bool = False, allow_local_urls: bool = False
+) -> MCPServer:
+    """Create the server for a folder; write tools exist only with ``allow_write``.
+
+    Tools connect to public addresses only unless ``allow_local_urls``.
+    """
+    state = ToolState(tools.Sandbox(root, allow_write, allow_local_urls))
     server = MCPServer(
         "mapcv",
         title="mapcv",
@@ -418,12 +424,14 @@ def _guard_job(state: ToolState, func: Callable[..., _T], *args: Any) -> _T:
         raise _Refused(_failure(state, exc)) from None
 
 
-def serve(root: str | Path = ".", allow_write: bool = False) -> None:
+def serve(
+    root: str | Path = ".", allow_write: bool = False, allow_local_urls: bool = False
+) -> None:
     """Run the server over stdio until the client disconnects.
 
     stdout carries the protocol: the library never prints, and its log messages
     (resuming, nothing left to do) go to stderr with this server's own.
     """
-    server = build_server(root, allow_write)
+    server = build_server(root, allow_write, allow_local_urls)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="mapcv mcp: %(message)s")
     server.run("stdio")

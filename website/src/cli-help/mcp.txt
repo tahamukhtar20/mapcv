@@ -6,13 +6,17 @@
  validate and plan.
 
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
-│ --root                 <path>  The only folder the server may read or write          │
-│                                (default: the current folder).                        │
-│                                [default: .]                                          │
-│ --allow-write                  Also offer the tools that write: write_config,        │
-│                                generate and split.                                   │
-│                                [env var: MAPCV_MCP_ALLOW_WRITE]                      │
-│ --help         -h              Show this message and exit.                           │
+│ --root                      <path>  The only folder the server may read or write     │
+│                                     (default: the current folder).                   │
+│                                     [default: .]                                     │
+│ --allow-write                       Also offer the tools that write: write_config,   │
+│                                     generate and split.                              │
+│                                     [env var: MAPCV_MCP_ALLOW_WRITE]                 │
+│ --allow-local-urls                  Let the tools connect to this machine and        │
+│                                     private networks (a local tile or GeoTIFF        │
+│                                     server). Without it they reach public addresses  │
+│                                     only.                                            │
+│ --help              -h              Show this message and exit.                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 
  Examples:
@@ -20,5 +24,8 @@
  mapcv mcp                         read-only, in this folder
 
  mapcv mcp --root ~/work --allow-write   may write datasets under ~/work
+
+ mapcv mcp --allow-local-urls      may also read a tile or GeoTIFF server on this
+ machine or a private network
 
 

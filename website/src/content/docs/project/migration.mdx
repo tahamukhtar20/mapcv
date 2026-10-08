@@ -127,6 +127,8 @@ A key written twice in the same mapping of a config (for example `stride` twice 
 
 A dataset folder that holds a symbolic link pointing outside it is refused by `generate`, `split`, `stats`, `card`, `verify` and `export` (they would write or read through it); replace the link with the file itself. A manifest whose patch files are absolute paths or contain `..` no longer loads. Tile and GeoTIFF requests send no `Referer` header, and a redirect is checked like the configured URL: a `url_template` with a query string follows redirects only within its own host, so if your tile server sends tiles from another host, put that final URL in `url_template`. The query values of `labels.osm.overpass_url` are recorded in the manifest as `***`.
 
+The host a URL in your config names is still connected wherever it resolves (a docker-compose service or an on-prem server works as before). Another host, reached through a redirect or named by a STAC catalog, may not be on this machine or a private network (`10.x`, `192.168.x`, `127.x`, link-local, ...) by its address or by the addresses its name resolves to; neither may another port of your host that resolves there. Put the final URL in the config if a server sends you on to such a host.
+
 ## Migrating to 0.2
 
 ### Checklist

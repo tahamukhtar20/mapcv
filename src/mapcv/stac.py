@@ -22,6 +22,7 @@ from urllib.parse import urljoin, urlsplit
 
 from shapely.geometry import box, shape
 
+from mapcv._net import urlopen
 from mapcv.config import StacSearchBase, StacSearchConfig, eopf_local_path
 
 _TIMEOUT_S = 60
@@ -113,12 +114,12 @@ def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json", "Accept": "application/geo+json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as response:
+    with urlopen(request, timeout=_TIMEOUT_S) as response:
         return _read_json(response, url)
 
 
 def _get(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=_TIMEOUT_S) as response:
+    with urlopen(url, timeout=_TIMEOUT_S) as response:
         return _read_json(response, url)
 
 

@@ -23,6 +23,6 @@ You should get a reply within 7 days. Once the issue is confirmed, a fix is rele
 
 ## Scope
 
-mapcv downloads imagery from the URLs in your config and parses label files you give it. Reports are in scope when crafted input (a label file, a tile response, a Zarr product or a manifest) makes mapcv crash, hang, use unbounded memory, write outside `writer.staging_dir`, or leak credentials from `url_template` into output files or logs.
+mapcv downloads imagery from the URLs in your config and parses label files you give it. Reports are in scope when crafted input (a label file, a tile response, a Zarr product or dataset, or a manifest) makes mapcv crash, hang, use unbounded memory, run code, write outside `writer.staging_dir`, leak credentials from `url_template` into output files or logs, or connect to this machine or a private network through a redirect or a catalog link from a public host (or, for `mapcv mcp` without `--allow-local-urls`, through any URL).
 
 Provider terms of service and imagery licensing are not security issues; see [PROVIDERS.md](PROVIDERS.md).

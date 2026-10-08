@@ -321,6 +321,7 @@ Runs an [MCP](https://modelcontextprotocol.io/) server over stdio so an AI agent
 
 - **Read-only by default.** Without `--allow-write` the tools `write_config`, `generate` and `split` do not exist on the server; with it they are offered (and `stats` and `verify` may write `stats.json` and `SHA256SUMS`). The environment variable `MAPCV_MCP_ALLOW_WRITE=true` does the same, for clients that configure servers through the environment.
 - **`--root`** is the only folder the server reads or writes (default: the current folder). Paths outside it, including the ones a config resolves to, are refused.
+- **Public addresses only by default.** The tools do not connect to this machine or a private network: a URL in a config that names one (`localhost`, `127.0.0.1`, `10.x`, `169.254.169.254`, ...), a host name that resolves to one, and a redirect to one are refused with the same message, whatever is listening there. **`--allow-local-urls`** lifts this, for a tile or GeoTIFF server you run yourself.
 - Progress bars are silenced, because stdout carries the protocol; logs go to stderr.
 
 Install snippets for Claude Code, Claude Desktop, Cursor and VS Code, the tool list and the safety model are in [Use mapcv with AI agents](/mapcv/guides/use-with-ai-agents/).

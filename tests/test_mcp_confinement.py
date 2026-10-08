@@ -96,6 +96,15 @@ def test_a_url_template_on_a_metadata_address_is_flagged(tmp_path: Path) -> None
             data(await call(client, "validate_config", yaml_text=ordinary)),
         ]
 
+    # By default the server connects to public addresses only: an error.
+    refused, plain = run_client(tmp_path, scenario, write=False, local_urls=False)
+    assert refused["valid"] is False
+    assert any(
+        "169.254.169.254" in error["message"] and "--allow-local-urls" in error["message"]
+        for error in refused["errors"]
+    )
+    assert not any("private network" in error["message"] for error in plain["errors"])
+    # With --allow-local-urls it may be a local tile server, but not a metadata service.
     flagged, plain = run_client(tmp_path, scenario, write=False)
     assert flagged["valid"] is True  # a warning, not a refusal
     assert any("169.254.169.254" in warning for warning in flagged["warnings"])

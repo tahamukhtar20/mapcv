@@ -920,7 +920,7 @@ def test_info_lists_every_source_and_whether_the_dataset_is_complete(project: Pa
         assert [source["name"] for source in found["sources"]][1] == "after"
         assert found["source"] == found["sources"][0]
         assert found["complete"] is False
-        assert "INCOMPLETE" in text_of(result) and "resume" in text_of(result)
+        assert "Incomplete" in text_of(result) and "call generate again" in text_of(result)
 
     run_client(project, scenario, write=False)
 

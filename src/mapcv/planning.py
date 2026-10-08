@@ -12,6 +12,7 @@ import shapely
 from shapely.geometry import box
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
+from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
     EOPFZarrImageryConfig,
@@ -54,6 +55,11 @@ _FILE_OVERHEAD_BYTES = {"png": 80, "jpg": 600, "tif": 700, "npy": 128}
 # Many tiny files make a dataset slow to write and to read; warn above this many.
 MANY_FILES = 1_000_000
 
+
+def _is_user_warning(warning: warnings.WarningMessage) -> bool:
+    return issubclass(warning.category, UserWarning)
+
+
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
 LARGE_JOB_BYTES = 5 * 1024**3
@@ -90,6 +96,8 @@ class Plan:
     chunk_memory_bytes: int
     labels: LabelSummary | None
     warnings: list[str] = field(default_factory=list)
+    # Problems that make generate stop (also listed in ``warnings``).
+    blocking: list[str] = field(default_factory=list)
     # Detection and instance segmentation: label features in the region, each one object
     # (``None`` for other tasks).
     objects: int | None = None
@@ -180,15 +188,14 @@ def _pixel_size_m(crs: str, transform: tuple[float, float, float, float, float, 
 
 def _geotiff_raster(
     config: MapcvConfig, imagery: GeoTiffImageryConfig, warned: list[str]
-) -> tuple[int, int, float, int, int, str]:
+) -> tuple[int, int, float, int, int, str, str]:
     """Open the file's header and size the region's window: ``(height, width, metres per
-    pixel, channels, bytes per value, description)``."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", UserWarning)
+    pixel, channels, bytes per value, description, dtype)``."""
+    with capture_warnings() as caught:
         source = open_geotiff_source(
             config.region, imagery, image_format=config.writer.image_format
         )
-    warned.extend(str(warning.message) for warning in caught)
+    warned.extend(str(warning.message) for warning in caught if _is_user_warning(warning))
     meta = source.metadata
     source.close()
     resolution = _pixel_size_m(meta.crs, meta.transform)
@@ -201,6 +208,7 @@ def _geotiff_raster(
         len(meta.bands),
         int(np.dtype(meta.dtype).itemsize),
         description,
+        str(meta.dtype),
     )
 
 
@@ -303,10 +311,9 @@ def _summarize_vector(
     if missing:
         return LabelSummary(where, 0, {}, [f"label file not found: {path}" for path in missing])
     points = config.task == "detection" and config.detection_options.point_box_size is not None
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", UserWarning)
+    with capture_warnings() as caught:
         geometries, class_map = load_labels(labels, points)
-    messages = [str(warning.message) for warning in caught]
+    messages = [str(warning.message) for warning in caught if _is_user_warning(warning)]
     if labels.annotated_area is not None and not labels.annotated_area.exists():
         messages.append(f"{key}.annotated_area not found: {labels.annotated_area}")
     region = config.region
@@ -350,6 +357,7 @@ class _SourceSize:
     bytes_per_value: int
     description: str
     chunk_rows: int
+    dtype: str = ""
 
 
 def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) -> _SourceSize:
@@ -370,9 +378,10 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) ->
             1,
             f"{name} · zoom {imagery.zoom}",
             imagery.strip_rows * _TILE_PX,
+            "uint8",
         )
     if isinstance(imagery, GeoTiffImageryConfig):
-        height, width, resolution, channels, bytes_per_value, description = _geotiff_raster(
+        height, width, resolution, channels, bytes_per_value, description, dtype = _geotiff_raster(
             config, imagery, plan_warnings
         )
         return _SourceSize(
@@ -384,6 +393,7 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) ->
             bytes_per_value,
             description,
             imagery.chunk_rows,
+            dtype,
         )
     if isinstance(imagery, StacCogImageryConfig):
         # The finest Sentinel-2 bands are 10 m; the product's UTM grid, as for EOPF.
@@ -397,6 +407,7 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) ->
             2,
             f"Sentinel-2 COGs (STAC search) · {len(imagery.bands)} bands",
             imagery.chunk_rows,
+            "uint16",
         )
     height, width = _eopf_raster(config, imagery)
     return _SourceSize(
@@ -408,6 +419,7 @@ def _source_size(config: MapcvConfig, imagery: Any, plan_warnings: list[str]) ->
         4,
         f"Sentinel-2 L2A (EOPF) · {len(imagery.bands)} bands",
         imagery.chunk_rows,
+        "float32",
     )
 
 
@@ -438,6 +450,18 @@ def plan(config: MapcvConfig) -> Plan:
 
     sizes = [_source_size(config, imagery, plan_warnings) for imagery in config.sources]
     primary = sizes[0]
+    blocking: list[str] = []
+    if config.writer.stack_sources:
+        for name, size in list(zip(config.source_names, sizes))[1:]:
+            if (size.channels, size.dtype) != (primary.channels, primary.dtype):
+                blocking.append(
+                    "writer.stack_sources needs every source to have the same bands and data "
+                    f"type to stack them: '{config.source_names[0]}' has {primary.channels} "
+                    f"band(s) of {primary.dtype}, '{name}' {size.channels} of {size.dtype}; "
+                    "select matching bands or write the sources as separate files"
+                )
+                break
+        plan_warnings.extend(blocking)
     height, width, resolution = primary.height, primary.width, primary.resolution
     tile_counts = [size.tiles for size in sizes if size.tiles is not None]
     tiles: int | None = sum(tile_counts) if tile_counts else None
@@ -540,6 +564,7 @@ def plan(config: MapcvConfig) -> Plan:
         chunk_memory_bytes=chunk_memory,
         labels=labels,
         warnings=plan_warnings,
+        blocking=blocking,
         objects=labels.in_region
         if labels is not None and config.task in ("detection", "instance")
         else None,

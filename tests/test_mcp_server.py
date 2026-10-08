@@ -31,7 +31,15 @@ T = TypeVar("T")
 
 ZOOM = 18
 X0, Y0, NX, NY = 134_700, 86_100, 6, 5  # 30 tiles near Amsterdam, as in tests/e2e/journey.py
-READ_TOOLS = {"describe_config_schema", "validate_config", "inspect_labels", "plan", "info"}
+READ_TOOLS = {
+    "describe_config_schema",
+    "validate_config",
+    "inspect_labels",
+    "plan",
+    "info",
+    "stats",
+    "verify",
+}
 WRITE_TOOLS = {"write_config", "generate", "split"}
 
 
@@ -212,7 +220,8 @@ def test_write_mode_offers_every_tool_with_annotations(project: Path) -> None:
         for name in READ_TOOLS | WRITE_TOOLS:
             annotations = tools[name].annotations
             assert annotations is not None
-            assert annotations.read_only_hint is (name in READ_TOOLS)
+            # stats and verify can also write (stats.json, SHA256SUMS) when writing is allowed.
+            assert annotations.read_only_hint is (name in READ_TOOLS - {"stats", "verify"})
         assert tools["generate"].input_schema["properties"]["confirm_large"]["default"] is False
 
     run_client(project, scenario)
@@ -370,7 +379,9 @@ def test_write_config_validates_then_writes(project: Path) -> None:
         # Paths in a config written to sub/ resolve against sub/, so labels.path leaves nothing
         # behind: it points at sub/labels.geojson, which does not exist yet.
         checked = data(await call(client, "validate_config", path="sub/new.yaml"))
-        assert any("labels.path not found" in w for w in checked["warnings"])
+        assert checked["valid"] is False
+        assert checked["errors"][0]["field"] == "labels.path"
+        assert "file not found: sub/labels.geojson" in checked["errors"][0]["message"]
 
     run_client(project, scenario)
 
@@ -647,7 +658,7 @@ def test_schema_tool_has_every_config_field(project: Path) -> None:
     from mapcv.config import MapcvConfig
 
     async def scenario(client: Client) -> dict[str, Any]:
-        result = await call(client, "describe_config_schema")
+        result = await call(client, "describe_config_schema", full_schema=True)
         assert not result.is_error
         return data(result)
 
@@ -843,3 +854,195 @@ def test_serve_runs_over_stdio(project: Path, monkeypatch: pytest.MonkeyPatch) -
     mcp_server.serve(project, allow_write=True)
     # stdout carries the protocol; the library never prints (tests/test_python_api.py).
     assert seen == ["stdio"]
+
+
+# ── Agent usability ──────────────────────────────────────────────────────────
+
+
+def test_plan_runs_while_a_generate_is_running(project: Path) -> None:
+    _Tiles.delay = 0.1
+    text = (project / "mapcv.yaml").read_text().replace("max_connections: 4", "strip_rows: 1")
+    (project / "mapcv.yaml").write_text(text)
+    (project / "other.yaml").write_text(text.replace("staging_dir: dataset", "staging_dir: other"))
+    outcome: dict[str, Any] = {}
+
+    async def scenario(client: Client) -> None:
+        started = anyio.Event()
+        finished = anyio.Event()
+
+        async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+            started.set()
+
+        async def generate() -> None:
+            outcome["generate"] = await client.call_tool(
+                "generate", {"config": "mapcv.yaml"}, progress_callback=on_progress
+            )
+            finished.set()
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(generate)
+            with anyio.fail_after(60):
+                await started.wait()
+            planned = await call(client, "plan", config="other.yaml")
+            outcome["plan"] = planned
+            outcome["generate_running"] = not finished.is_set()
+            # The other quick tools were never blocked.
+            assert not (await call(client, "validate_config", path="other.yaml")).is_error
+
+    run_client(project, scenario)
+    assert not outcome["plan"].is_error, text_of(outcome["plan"])
+    assert "busy" not in text_of(outcome["plan"])
+    assert data(outcome["plan"])["tiles"] == NX * NY
+    assert outcome["generate_running"] is True
+    assert not outcome["generate"].is_error, text_of(outcome["generate"])
+    assert data(outcome["generate"])["patches"] == NX * NY
+
+
+def _generated(project: Path) -> None:
+    async def scenario(client: Client) -> None:
+        assert not (await call(client, "generate", config="mapcv.yaml")).is_error
+
+    run_client(project, scenario)
+
+
+def test_info_lists_every_source_and_whether_the_dataset_is_complete(project: Path) -> None:
+    _generated(project)
+    manifest_path = project / "dataset" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    second = dict(manifest["sources"][0], name="after")
+    manifest["sources"].append(second)
+    manifest["complete"] = False
+    manifest_path.write_text(json.dumps(manifest))
+
+    async def scenario(client: Client) -> None:
+        result = await call(client, "info", dataset="dataset")
+        found = data(result)
+        assert [source["name"] for source in found["sources"]][1] == "after"
+        assert found["source"] == found["sources"][0]
+        assert found["complete"] is False
+        assert "Incomplete" in text_of(result) and "call generate again" in text_of(result)
+
+    run_client(project, scenario, write=False)
+
+
+def test_stats_and_verify_over_a_read_only_server(project: Path) -> None:
+    _generated(project)
+    before = tree(project / "dataset")
+
+    async def scenario(client: Client) -> None:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        assert tools["stats"].annotations is not None and tools["stats"].annotations.read_only_hint
+        stats = data(await call(client, "stats", dataset="dataset", split="all"))
+        assert stats["patches"] == NX * NY and stats["saved"] is None
+        weights = stats["classes"]["median_frequency_weights"]
+        assert {"background", "building", "water"} <= set(weights)
+        verified = data(await call(client, "verify", dataset="dataset", deep=True))
+        assert verified["ok"] is True and verified["patches"] == NX * NY
+        refused = await call(client, "stats", dataset="dataset", save=True)
+        assert refused.is_error and "read-only" in text_of(refused)
+        sums = await call(client, "verify", dataset="dataset", write_sums=True)
+        assert sums.is_error and "--allow-write" in text_of(sums)
+
+    run_client(project, scenario, write=False)
+    assert tree(project / "dataset") == before  # nothing written: no stats.json, no SHA256SUMS
+
+
+def test_stats_and_verify_write_only_when_asked_and_allowed(project: Path) -> None:
+    _generated(project)
+
+    async def scenario(client: Client) -> None:
+        assert (project / "dataset" / "stats.json").exists() is False
+        saved = data(await call(client, "stats", dataset="dataset", save=True))
+        assert saved["saved"] == "dataset/stats.json"
+        summed = data(await call(client, "verify", dataset="dataset", write_sums=True))
+        assert summed["ok"] and summed["checksums_written"] == "dataset/SHA256SUMS"
+        # A deleted patch is reported with its name.
+        victim = next((project / "dataset" / "Images").iterdir())
+        victim.unlink()
+        broken = data(await call(client, "verify", dataset="dataset"))
+        assert broken["ok"] is False and broken["problem_count"] >= 1
+        assert any(victim.name in problem for problem in broken["problems"])
+
+    run_client(project, scenario)
+    assert (project / "dataset" / "stats.json").exists()
+    assert (project / "dataset" / "SHA256SUMS").exists()
+
+
+def test_stats_and_verify_refuse_manifests_that_point_outside(project: Path) -> None:
+    _generated(project)
+    manifest_path = project / "dataset" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = manifest["patches"][0]
+    entry["files"]["image"] = "../../outside.png"
+    manifest_path.write_text(json.dumps(manifest))
+
+    async def scenario(client: Client) -> None:
+        for tool in ("stats", "verify"):
+            result = await call(client, tool, dataset="dataset")
+            assert result.is_error and "leaves its folder" in text_of(result)
+
+    run_client(project, scenario, write=False)
+
+
+def test_instructions_say_which_mode_the_server_is_in(project: Path) -> None:
+    async def scenario(client: Client) -> tuple[str, str]:
+        instructions = client.instructions
+        assert instructions is not None
+        return instructions, ""
+
+    read_only, _ = run_client(project, scenario, write=False)
+    writing, _ = run_client(project, scenario, write=True)
+    assert "read-only" in read_only and "do not exist" in read_only
+    assert "--allow-write" in read_only
+    assert "read and write" in writing and "do not exist" not in writing
+
+
+def test_a_config_error_is_not_repeated_as_json(project: Path) -> None:
+    broken = (project / "mapcv.yaml").read_text().replace("zoom: 18", "zoom: 99")
+
+    async def scenario(client: Client) -> None:
+        result = await call(client, "write_config", path="b.yaml", yaml_text=broken)
+        assert result.is_error
+        text = "\n".join(block.text for block in result.content if hasattr(block, "text"))
+        assert text.count("imagery.zoom") == 1 and '"valid"' not in text
+        assert data(result)["errors"][0]["field"] == "imagery.zoom"  # still structured
+
+    run_client(project, scenario)
+
+
+def test_osm_labels_validate_with_a_warning_and_plan_still_refuses(project: Path) -> None:
+    osm = (project / "mapcv.yaml").read_text()
+    start = osm.index("labels:")
+    osm = (
+        osm[:start]
+        + ("labels:\n  osm:\n    classes:\n      - {name: building, tags: {building: '*'}}\n")
+        + osm[osm.index("sampler:") :]
+    )
+
+    async def scenario(client: Client) -> None:
+        checked = data(await call(client, "validate_config", yaml_text=osm))
+        assert checked["valid"] is True and "labels.osm" in checked["warnings"][0]
+        refused = await call(client, "plan", yaml_text=osm)
+        assert refused.is_error and "labels.osm" in text_of(refused)
+
+    run_client(project, scenario, write=False)
+
+
+def test_a_single_class_is_named_with_a_label_file_class(project: Path) -> None:
+    text = (project / "mapcv.yaml").read_text()
+    named = text.replace(
+        "labels:\n  path: labels.geojson\n  label_field: class",
+        "labels:\n  files:\n    - {path: labels.geojson, class: building}",
+    )
+    assert named != text
+    (project / "named.yaml").write_text(named.replace("staging_dir: dataset", "staging_dir: named"))
+
+    async def scenario(client: Client) -> None:
+        planned = data(await call(client, "plan", config="named.yaml"))
+        assert planned["labels"]["classes"] == {"building": 1}
+        assert not (await call(client, "generate", config="named.yaml")).is_error
+        found = data(await call(client, "info", dataset="named"))
+        assert found["classes"] == {"building": 1}
+        assert {row["name"] for row in found["class_balance"]} == {"background", "building"}
+
+    run_client(project, scenario)

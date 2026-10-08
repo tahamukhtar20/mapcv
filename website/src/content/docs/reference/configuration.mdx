@@ -448,7 +448,7 @@ Optional. Without it you get an image-only dataset (no `Masks/`). `labels.type` 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `vector` | `vector` | Polygon labels |
-| `path` | path | required | A `.geojson`, `.json`, `.kml`, `.gpkg`, `.shp`, `.parquet` or `.geoparquet` file. GeoJSON and KML are WGS-84 longitude/latitude; the others may use any CRS they state and are reprojected. A relative path is resolved against the config file's folder |
+| `path` | path | required | A `.geojson`, `.json`, `.kml`, `.gpkg`, `.shp`, `.parquet` or `.geoparquet` file. GeoJSON and KML are WGS-84 longitude/latitude; the others may use any CRS they state and are reprojected. A relative path is resolved against the config file's folder. A local file only: `file://` and `https://` URLs are for `imagery.path` and are refused here |
 | `layer` | string \| null | `null` | GeoPackage only: the layer (table) to read. Required when the file has several; leave unset with one. An error for other formats |
 | `label_field` | string \| null | `null` | Feature property (GeoJSON, KML) or column (the other formats) holding the class. `null`: every polygon is class `1` |
 | `classes` | map label → int | `null` | Fixed class IDs, each 1–255, for example `{building: 1, road: 2}`. Requires `label_field`. Labels not in the map are skipped |

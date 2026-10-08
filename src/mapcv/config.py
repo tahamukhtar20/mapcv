@@ -249,7 +249,9 @@ def _resolve_label_paths(labels: object, base: Path) -> None:
     files = labels.get("files")
     for file in files if isinstance(files, list) else []:
         if isinstance(file, dict) and "path" in file:
-            file["path"] = _join(base, file["path"])
+            path = file["path"]
+            if not isinstance(path, str) or urlsplit(path).scheme == "":
+                file["path"] = _join(base, path)
 
 
 def _resolve_relative_paths(data: dict[str, Any], base: Path) -> None:
@@ -830,7 +832,15 @@ class BufferConfig(BaseModel):
         return self
 
 
+_URL_START = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:[/\\]")
+
+
 def _check_vector_suffix(path: Path, key: str) -> Path:
+    if _URL_START.match(str(path)):  # Path() collapses the "//" of file:// and https://
+        raise ValueError(
+            f"{key} must be a file in the project folder, not a URL: file:// and https:// "
+            f"work only for imagery.path. Download the labels and point {key} at the copy"
+        )
     if path.suffix.lower() in _RASTER_LABEL_SUFFIXES:
         raise ValueError(
             f"{key} '{path.name}' is a raster: set labels.type: raster and map its "

@@ -17,7 +17,7 @@ mapcv is a fast Python and Rust library and CLI. It turns a **region**, **imager
 
 ## Two ways to drive mapcv
 
-**With the MCP server** (tools named below): `mapcv mcp` over stdio. It is read-only unless the user started it with `--allow-write`; then `write_config`, `generate` and `split` also exist. Every path must be inside the folder the server was started in. If a tool says it is read-only or a path is outside the root, tell the user how to restart the server; do not look for a way around it.
+**With the MCP server** (tools named below): `mapcv mcp` over stdio. It is read-only unless the user started it with `--allow-write`. In read-only mode the tools `write_config`, `generate` and `split` **do not exist** (calling one fails in your client; the server's instructions say which mode it is in), and `stats` and `verify` only read. Tell the user to restart the server with `mapcv mcp --allow-write`, or give them the config to save and the CLI commands to run. Every path must be inside the folder the server was started in; if a path is outside the root, say so and do not look for a way around it.
 
 **With the CLI**, when no MCP tools are available: the same steps as `mapcv init`, `validate`, `plan`, `generate`, `info`, `split` (add `--yes` to `generate` only after the user agreed to a large job).
 
@@ -25,21 +25,24 @@ mapcv is a fast Python and Rust library and CLI. It turns a **region**, **imager
 
 | Step | MCP tool | CLI |
 |---|---|---|
-| 1. Learn the schema (once) | `describe_config_schema` | `mapcv init --template xyz --stdout`, docs page *Configuration* |
+| 1. Learn the schema (once) | `describe_config_schema` (short; `section='labels'` narrows it, `full_schema=true` adds the raw JSON schema) | `mapcv init --template xyz --stdout`, docs page *Configuration* |
 | 2. Look at the labels | `inspect_labels(path)`: fields, values and counts, extent | open the file; the wizard lists fields |
 | 3. Write the config | `write_config(path, yaml_text)` (validates first) | write `mapcv.yaml`, or `mapcv init` |
-| 4. Check it | `validate_config(path or yaml_text)` | `mapcv validate mapcv.yaml` |
-| 5. Cost it | `plan(config)` | `mapcv plan mapcv.yaml` |
+| 4. Check it | `validate_config(path or yaml_text)`: also checks that the files exist and that `label_field` is in the label file | `mapcv validate mapcv.yaml` |
+| 5. Cost it | `plan(config)` (read-only: runs while a `generate` runs) | `mapcv plan mapcv.yaml` |
 | 6. Build it | `generate(config, confirm_large=false)` | `mapcv generate mapcv.yaml` |
-| 7. Check the result | `info(dataset)` | `mapcv info dataset/` |
+| 7. Check the result | `info(dataset)`: `complete` is `false` for an interrupted run, every source is listed | `mapcv info dataset/` |
 | 8. Re-split if needed | `split(dataset, ...)` | `mapcv split dataset/ --strategy spatial` |
-| 9. Prepare to train or share | (CLI only) | `mapcv stats dataset/` (band mean/std, class weights), `mapcv card dataset/`, `mapcv verify dataset/ --write-checksums` |
+| 9. Prepare to train or share | `stats(dataset, split)` (band mean/std, class weights; `save=true` writes `stats.json`) and `verify(dataset, deep)` (`write_sums=true` writes `SHA256SUMS`); both writes need `--allow-write`. `card` is CLI only | `mapcv stats dataset/`, `mapcv card dataset/`, `mapcv verify dataset/ --write-checksums` |
 
 Tips:
 
 - **Pick the class field from the data.** `inspect_labels` lists each field with its distinct values and says which can be `labels.label_field` (at most 255 distinct values; ID-like fields cannot be classes). Its `extent` is a ready-made `region`.
 - **Choose the zoom by pixel size** (XYZ): zoom 18 is about 0.36 m/px at 52°N, each level halves it. Plan shows `resolution_m`.
-- **`generate` resumes.** Calling it again on the same config continues an interrupted run; a finished run is a no-op. Cancelling keeps the finished chunks.
+- **`generate` resumes.** Calling it again on the same config continues an interrupted run; a finished run is a no-op. Cancelling keeps the finished chunks, but the server finishes the chunk it is on first, which can take minutes for a big region on one connection. There is no progress tool: the call reports progress per chunk.
+- **`plan` cannot estimate what it does not download.** For GeoTIFF/COG files, STAC and Sentinel-2, `download_bytes` is `null` (only the windows the patches cover are read, at most the file sizes) and remote reads can take minutes. For `stac_cog` the scene is chosen when `generate` runs (the least cloudy that covers the region); `info` then shows its id in `source.product`. For classification, `patches` is an upper bound.
+- **Name a single class** with `labels: {files: [{path: buildings.geojson, class: building}]}`. Without `label_field` and without `class`, every polygon is class 1 and detection names it `object`.
+- **Object counts differ from `plan`.** Detection and instance datasets count an object once per patch that shows it, so `info` can report more objects than the label file has features (`plan.objects` counts features in the region).
 - **A changed config does not resume into the same folder.** Use a new `writer.staging_dir` (see troubleshooting).
 - **Do not read the dataset into your context.** Use `info`; patches are image files.
 
@@ -87,6 +90,17 @@ labels:
       - {name: water, tags: {natural: water}}
 ```
 
+`validate_config` and `write_config` accept `labels.osm` but warn that `plan` and `generate` refuse it over MCP, because the Overpass answer is cached outside the server's root. Over MCP, save an OSM extract as GeoJSON and use `labels.path`. One way, with `curl` and `jq` (Overpass answers HTTP 406 without a `User-Agent`, and under load it can answer HTTP 200 with an HTML error page: retry later, use a smaller box, or try the mirror `https://overpass.kumi.systems/api/interpreter`):
+
+```bash
+curl -s -A "my-project/1.0 (me@example.com)" --data-urlencode \
+  'data=[out:json][timeout:60];way["building"](52.37,4.93,52.38,4.95);out geom;' \
+  https://overpass-api.de/api/interpreter -o buildings.osm.json
+jq '{type:"FeatureCollection",features:[.elements[]|select(.type=="way" and .geometry)|{type:"Feature",properties:(.tags//{}),geometry:{type:"Polygon",coordinates:[[.geometry[]|[.lon,.lat]]]}}]}' buildings.osm.json > buildings.geojson
+```
+
+This keeps closed ways only (buildings, most land use); relations (multipolygons) need a converter such as `osmtogeojson`. Labels must be local files: `file://` and `https://` work for `imagery.path`, not for `labels.path`.
+
 `region` can also be polygons in a file: `region: {path: sites.geojson, name_field: site}` makes patches only over the polygons, and `split: {strategy: region}` sends whole sites to one split each.
 
 ### Object detection (boxes, COCO and YOLO)
@@ -114,7 +128,7 @@ labels: {path: buildings.geojson, label_field: class}
 instance:
   min_visible: 0.3
   min_area: 4
-  id_mask: false          # true also writes a 16-bit instance-id PNG per patch (masks/)
+  id_mask: false          # true also writes a 16-bit instance-id PNG per patch (masks/): 0 = none, then 1, 2, ... for that patch's first, second, ... instance (a per-patch number, not the COCO annotation id, which is global; COCO image ids start at 1)
 sampler: {patch_size: 256, edge_strategy: drop}
 writer: {staging_dir: masks, image_format: png}
 ```
@@ -146,9 +160,11 @@ imagery:                         # exactly two sources on one grid: before, then
 labels: {path: changes.geojson}  # every feature marks change ...
 # ... or compare two label sets instead of labels:
 # change: {before: {path: buildings_2023.geojson}, after: {path: buildings_2025.geojson}}
-change: {change_value: 1}        # 255 (with labels.ignore_index: null) for 0/255 masks
+change: {change_value: 1}        # 255 for 0/255 masks: see below
 writer: {staging_dir: dataset, image_format: png}
 ```
+
+For 0/255 masks with `change.before`/`change.after`, turn the ignore value off on both sets (there is no `labels` block to hold it): `change: {before: {path: a.geojson, ignore_index: null}, after: {path: b.geojson, ignore_index: null}, change_value: 255}`.
 
 Output: `A/` (before), `B/` (after) and `label/` (0 = no change, `change_value` = change, 255 = no imagery) with the same file names, plus `splits/`.
 
@@ -272,7 +288,12 @@ labels:
 | `task: detection needs labels` / `needs vector labels ... not a label raster` | Add vector labels; label rasters work for segmentation, classification and change |
 | `labels.ignore_index ... detection writes no masks; remove it` (also `mask_format`, `all_touched`) | Remove the option that only applies to masks |
 | `... is outside the folder this server may use` | The path is outside `--root`; use a path inside it or ask the user to restart with another `--root` |
-| `... writes files, and this server is read-only` | Ask the user to restart `mapcv mcp --allow-write` |
+| `... writes files, and this server is read-only` (`save`/`write_sums` of `stats`/`verify`) | Ask the user to restart `mapcv mcp --allow-write`. The tools `write_config`, `generate` and `split` are not offered at all by a read-only server |
+| `file not found: ...` at `labels.path` / `imagery.path` | The file is not where the config says; paths are relative to the config's folder. `write_config` still saves the draft |
+| `'x' is not an attribute with values in ... Did you mean 'y'?` | `labels.label_field` is misspelt; the message lists the file's fields (or use `inspect_labels`) |
+| `labels.osm is fetched from Overpass ...` (warning) | Not plannable over MCP: save an OSM extract as GeoJSON (see above) or use the CLI |
+| `writer.stack_sources needs every source to have the same bands and data type` | Select matching `bands` on each source, or write the sources as separate files |
+| `labels.path must be a file in the project folder, not a URL` | Download the labels; only imagery takes URLs |
 | `no label polygon intersects the region, so every mask would be background` (plan warning) | Region and labels do not overlap: swapped lon/lat, labels not in EPSG:4326, or wrong region. Compare `inspect_labels.extent` with `region` |
 | `skipped N without polygon geometry` / `without a label value` | Some features were not used; check `label_field` spelling; with `classes`, unlisted values are skipped |
 | `labels.label_field '...' has N distinct values; masks support at most 255 classes` | Pick a category field, not an id, or map values with `labels.classes` |

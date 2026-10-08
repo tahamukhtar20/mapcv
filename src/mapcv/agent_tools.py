@@ -15,7 +15,8 @@ Safety rules enforced here, not in the protocol layer:
 
 from __future__ import annotations
 
-import inspect
+import copy
+import difflib
 import json
 import os
 import re
@@ -23,10 +24,10 @@ import tempfile
 import threading
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import (
     Any,
     Literal,
@@ -41,6 +42,7 @@ from shapely.geometry import shape
 
 from mapcv import planning
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._warnings import capture as _capture
 from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url, _task_label
 from mapcv.config import (
     MULTI_SOURCE_TASKS,
@@ -54,6 +56,7 @@ from mapcv.config import (
     LabelsConfig,
     MapcvConfig,
     RasterLabelsConfig,
+    StacCogImageryConfig,
     XYZImageryConfig,
     _resolve_relative_paths,
     eopf_local_path,
@@ -67,12 +70,14 @@ from mapcv.labels import (
     parse_kml,
 )
 from mapcv.locking import DatasetBusyError, StagingDirError
-from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
+from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
+from mapcv.stats import dataset_stats, write_stats
 from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
+from mapcv.verify import verify_dataset, write_checksums
 from mapcv.writer import WriterConfig
 from mapcv.writers.detection import categories
 
@@ -90,8 +95,6 @@ _PROVIDERS_URL = "https://github.com/tahamukhtar20/mapcv/blob/main/PROVIDERS.md"
 #: Config files and label files larger than this are refused instead of read into memory.
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_LABEL_BYTES = 256 * 1024 * 1024
-#: Seconds a quick tool waits for a running generation to release the warning capture.
-_WARNING_LOCK_WAIT = 15.0
 
 
 class ToolFailure(Exception):
@@ -356,27 +359,13 @@ def config_paths(config: MapcvConfig) -> list[tuple[str, Path]]:
 
 # ── Shared state ─────────────────────────────────────────────────────────────
 
-_WARNINGS_LOCK = threading.Lock()
 
+def capture_warnings(broad: bool = False) -> AbstractContextManager[list[warnings.WarningMessage]]:
+    """Record the warnings raised inside the block; captures of different tools can overlap.
 
-@contextmanager
-def capture_warnings(wait: float = _WARNING_LOCK_WAIT) -> Iterator[list[warnings.WarningMessage]]:
-    """Record the warnings raised inside the block.
-
-    ``warnings.catch_warnings`` changes process-wide state, so only one capture runs
-    at a time; a tool that finds a generation running waits, then gives up with a message.
+    ``broad`` also takes warnings from threads the block started (a generation's workers).
     """
-    if not _WARNINGS_LOCK.acquire(timeout=wait):
-        raise ToolFailure(
-            "Another long operation (probably a running `generate`) is busy; try again when "
-            "it has finished."
-        )
-    try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            yield caught
-    finally:
-        _WARNINGS_LOCK.release()
+    return _capture(broad)
 
 
 class _Jobs:
@@ -421,17 +410,107 @@ def _warning_texts(caught: list[warnings.WarningMessage]) -> list[str]:
 # ── Config loading ───────────────────────────────────────────────────────────
 
 
+def _format_error(error: Any) -> dict[str, str]:
+    location = ".".join(
+        str(part)
+        for part in error["loc"]
+        if not str(part).startswith("function-") and part not in UNION_TAGS
+    )
+    message = str(error["msg"]).removeprefix("Value error, ")
+    return {"field": location or "config", "message": message}
+
+
 def format_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
     """Validation problems as ``{field, message}``: the ones ``mapcv validate`` lists."""
+    return [_format_error(error) for error in exc.errors()]
+
+
+def _json_schema() -> dict[str, Any]:
+    if "schema" not in _SCHEMA_CACHE:
+        _SCHEMA_CACHE["schema"] = MapcvConfig.model_json_schema()
+    schema: dict[str, Any] = _SCHEMA_CACHE["schema"]
+    return schema
+
+
+def _schema_variants(node: dict[str, Any], defs: dict[str, Any]) -> list[dict[str, Any]]:
+    while "$ref" in node:
+        node = defs[node["$ref"].rsplit("/", 1)[-1]]
+    for key in ("anyOf", "oneOf"):
+        if key in node:
+            return [found for sub in node[key] for found in _schema_variants(sub, defs)]
+    return [node]
+
+
+def _known_keys(path: list[str | int], parent: dict[str, Any]) -> list[str]:
+    """The keys the config accepts in the mapping at ``path`` (``parent`` is that mapping)."""
+    schema = _json_schema()
+    defs = schema.get("$defs", {})
+    nodes = _schema_variants(schema, defs)
+    for part in path:
+        found: list[dict[str, Any]] = []
+        for node in nodes:
+            if isinstance(part, int):
+                if "items" in node:
+                    found.extend(_schema_variants(node["items"], defs))
+            elif part in node.get("properties", {}):
+                found.extend(_schema_variants(node["properties"][part], defs))
+        nodes = found
+    kind = parent.get("type")
+    typed = [n for n in nodes if n.get("properties", {}).get("type", {}).get("const") == kind]
+    names: set[str] = set()
+    for node in typed or nodes:
+        names.update(node.get("properties", {}))
+    return sorted(names)
+
+
+def _walk(data: Any, loc: tuple[Any, ...]) -> tuple[Any, list[str | int]]:
+    """The container that holds the last key of an error ``loc`` and the data path to it;
+    the union tags pydantic adds to a ``loc`` are skipped."""
+    current = data
+    path: list[str | int] = []
+    for part in loc[:-1]:
+        in_dict = isinstance(current, dict) and part in current
+        in_list = isinstance(current, list) and isinstance(part, int) and part < len(current)
+        if in_dict or in_list:
+            current = current[part]
+            path.append(part)
+    return current, path
+
+
+def _all_validation_errors(data: dict[str, Any], first: ValidationError) -> list[dict[str, str]]:
+    """Every problem of an invalid config that can be found in one pass.
+
+    Pydantic runs the checks that compare several fields only when each field is valid on
+    its own, so one misspelt key hides them. Misspelt keys are reported (with the closest
+    valid key) and left out, then the config is checked again.
+    """
+    work = copy.deepcopy(data)
     errors: list[dict[str, str]] = []
-    for error in exc.errors():
-        location = ".".join(
-            str(part)
-            for part in error["loc"]
-            if not str(part).startswith("function-") and part not in UNION_TAGS
-        )
-        message = str(error["msg"]).removeprefix("Value error, ")
-        errors.append({"field": location or "config", "message": message})
+    exc: ValidationError | None = first
+    for _ in range(6):
+        if exc is None:
+            break
+        dropped = 0
+        for error in exc.errors():
+            item = _format_error(error)
+            if error["type"] == "extra_forbidden":
+                parent, path = _walk(work, error["loc"])
+                key = error["loc"][-1]
+                if isinstance(parent, dict) and key in parent:
+                    close = difflib.get_close_matches(str(key), _known_keys(path, parent), n=1)
+                    if close:
+                        item["message"] += f". Did you mean '{close[0]}'?"
+                    del parent[key]
+                    dropped += 1
+            if item not in errors:
+                errors.append(item)
+        if not dropped:
+            break
+        try:
+            MapcvConfig.model_validate(work)
+            exc = None
+        except ValidationError as again:
+            exc = again
     return errors
 
 
@@ -480,7 +559,7 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
     try:
         config = MapcvConfig.model_validate(data)
     except ValidationError as exc:
-        errors = format_validation_errors(exc)
+        errors = _all_validation_errors(data, exc)
         raise ConfigInvalid("the config has errors", errors) from None
     # Every source's template: a second source's credentials must be redacted too.
     for imagery in config.sources:
@@ -610,35 +689,140 @@ def _probed_rules() -> dict[str, Any]:
         "image_formats_per_imagery": formats_per_imagery,
         "xyz_sources": sorted(URL_TEMPLATES),
         "invalid_combinations": invalid,
-        "relative_paths": inspect.getdoc(MapcvConfig.from_yaml),
+        "relative_paths": _RELATIVE_PATHS,
     }
 
 
-def _required_fields(schema: dict[str, Any]) -> dict[str, list[str]]:
-    required = {"MapcvConfig": list(schema.get("required", []))}
-    for name, definition in schema.get("$defs", {}).items():
-        required[name] = list(definition.get("required", []))
-    return required
+_RELATIVE_PATHS = (
+    "Relative paths in a config file are relative to that file's folder; in `yaml_text` "
+    "they are relative to the server's root folder."
+)
 
 
-def describe_config_schema(state: ToolState) -> ToolResult:
-    """The JSON schema of the config, generated from the pydantic models, plus the rules."""
-    if not _SCHEMA_CACHE:
-        schema = MapcvConfig.model_json_schema()
-        _SCHEMA_CACHE.update(
-            schema=schema, required=_required_fields(schema), rules=_probed_rules()
-        )
-    data = dict(_SCHEMA_CACHE)
-    data["notes"] = [
-        "Unknown keys are errors. Region is a WGS-84 lon/lat box (west, south, east, north).",
-        "Paths in a config file are relative to the file's folder.",
-        "Imagery sources, their licenses and credit lines: " + _PROVIDERS_URL,
-    ]
-    rules = data["rules"]
+def _compact_type(node: dict[str, Any]) -> str:
+    """A field's type in a few words: ``int 1..255``, ``list[LabelFile]``, ``'png'|'jpg'``."""
+    if "$ref" in node:
+        return str(node["$ref"]).rsplit("/", 1)[-1]
+    if "const" in node:
+        return repr(node["const"])
+    if "enum" in node:
+        return "|".join(repr(value) for value in node["enum"])
+    for key in ("anyOf", "oneOf"):
+        if key in node:
+            parts: list[str] = []
+            for sub in node[key]:
+                text = _compact_type(sub)
+                if text != "null" and text not in parts:
+                    parts.append(text)
+            return " | ".join(parts)
+    kind = node.get("type")
+    if kind == "array":
+        return f"list[{_compact_type(node.get('items', {}))}]"
+    if kind == "object":
+        extra = node.get("additionalProperties")
+        return f"map[{_compact_type(extra)}]" if isinstance(extra, dict) else "object"
+    text = str(kind or "any")
+    low, high = node.get("minimum", node.get("exclusiveMinimum")), node.get("maximum")
+    if low is not None or high is not None:
+        text += f" {'' if low is None else low}..{'' if high is None else high}"
+    return text
+
+
+def _compact_model(name: str, node: dict[str, Any]) -> dict[str, Any]:
+    required = set(node.get("required", []))
+    fields: dict[str, str] = {}
+    for field_name, prop in node.get("properties", {}).items():
+        text = _compact_type(prop)
+        if field_name in required:
+            text += " (required)"
+        elif prop.get("default") is not None:
+            text += f" = {json.dumps(prop['default'], separators=(',', ':'))}"
+        fields[field_name] = text
+    summary = (node.get("description") or "").strip().split("\n\n")[0].replace("\n", " ")
+    model: dict[str, Any] = {"fields": fields}
+    if summary:
+        model["about"] = summary if len(summary) <= 300 else summary[:299] + "…"
+    return model
+
+
+def _section_models(schema: dict[str, Any], section: str) -> set[str]:
+    """The model names reachable from a top-level key (or the model named ``section``)."""
+    defs = schema.get("$defs", {})
+    start: Any = schema["properties"].get(section) if section in schema["properties"] else None
+    if start is None:
+        if section not in defs and section != "MapcvConfig":
+            raise ToolFailure(
+                f"Unknown section '{section}'. Use a top-level key "
+                f"({', '.join(schema['properties'])}) or a model name."
+            )
+        start = {"$ref": f"#/$defs/{section}"} if section in defs else schema
+    seen: set[str] = set()
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                name = ref.rsplit("/", 1)[-1]
+                if name not in seen:
+                    seen.add(name)
+                    visit(defs[name])
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(start)
+    return seen
+
+
+def describe_config_schema(
+    state: ToolState, section: str | None = None, full_schema: bool = False
+) -> ToolResult:
+    """A short description of the config (each model's fields with type and default) and the
+    rules between fields. ``section`` narrows it to one top-level key or model; ``full_schema``
+    adds the raw JSON schema, generated from the pydantic models."""
+    schema = _json_schema()
+    if "rules" not in _SCHEMA_CACHE:
+        _SCHEMA_CACHE["rules"] = _probed_rules()
+    defs = schema.get("$defs", {})
+    wanted = _section_models(schema, section) if section else None
+    models: dict[str, Any] = {}
+    if wanted is None or section == "MapcvConfig":
+        models["MapcvConfig"] = _compact_model("MapcvConfig", schema)
+    for name, node in defs.items():
+        if wanted is None or name in wanted:
+            models[name] = _compact_model(name, node)
+    rules = _SCHEMA_CACHE["rules"]
+    data: dict[str, Any] = {
+        "models": models,
+        "required": {
+            name: list(node.get("required", []))
+            for name, node in {"MapcvConfig": schema, **defs}.items()
+            if wanted is None or name in models
+        },
+        "rules": rules,
+        "notes": [
+            "Unknown keys are errors. Region is a WGS-84 lon/lat box (west, south, east, north).",
+            _RELATIVE_PATHS,
+            (
+                "To name the class of a label file without a label_field, list it under "
+                "labels.files with `class: <name>`."
+            ),
+            (
+                "labels.osm is accepted by validation, but `plan` and `generate` refuse it over "
+                "MCP: use the CLI, or save an OSM extract as GeoJSON."
+            ),
+            "Imagery sources, their licenses and credit lines: " + _PROVIDERS_URL,
+        ],
+        "more": "describe_config_schema(section='labels') narrows this to one key; "
+        "full_schema=true adds the raw JSON schema.",
+    }
+    if full_schema:
+        data["schema"] = schema
     return ToolResult(
-        f"Config schema: tasks {', '.join(rules['tasks'])}; imagery "
-        f"{', '.join(rules['imagery_types'])}. `rules.invalid_combinations` lists what does "
-        "not validate, with the exact message.",
+        f"Config: tasks {', '.join(rules['tasks'])}; imagery {', '.join(rules['imagery_types'])}. "
+        "`rules.invalid_combinations` lists what does not validate, with the exact message.",
         data,
     )
 
@@ -720,72 +904,203 @@ def config_summary(state: ToolState, config: MapcvConfig) -> dict[str, Any]:
     }
 
 
-def _missing_file_warnings(state: ToolState, config: MapcvConfig) -> list[str]:
-    """The same missing-file warnings ``mapcv validate`` prints."""
-    messages: list[str] = []
+def _missing_files(state: ToolState, config: MapcvConfig) -> list[tuple[str, Path]]:
+    """Local inputs the config names that do not exist, as ``(config key, path)``."""
+    missing: list[tuple[str, Path]] = []
+
+    def check(key: str, path: Path | None) -> None:
+        if path is not None and not path.exists():
+            missing.append((key, path))
+
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):
-        label_file = eopf_local_path(labels.path)
-        if label_file is not None and not label_file.exists():
-            messages.append(f"labels.path not found: {state.sandbox.rel(label_file)}")
+        check("labels.path", eopf_local_path(labels.path))
     elif labels is not None:
         for key, path in labels.keyed_files():
-            if not path.exists():
-                messages.append(f"{key} not found: {state.sandbox.rel(path)}")
-    area = labels.annotated_area if isinstance(labels, LabelsConfig) else None
-    if area is not None and not area.exists():
-        messages.append(f"labels.annotated_area not found: {state.sandbox.rel(area)}")
+            check(key, path)
+        check("labels.annotated_area", labels.annotated_area)
     change = config.change
     if change is not None:
-        for key, label_set in (
-            ("change.before.path", change.before),
-            ("change.after.path", change.after),
-        ):
+        for prefix, label_set in (("change.before", change.before), ("change.after", change.after)):
             if label_set is not None:
-                prefix = key.rsplit(".", 1)[0]
                 for file_key, path in label_set.keyed_files(prefix):
-                    if not path.exists():
-                        messages.append(f"{file_key} not found: {state.sandbox.rel(path)}")
-                set_area = label_set.annotated_area
-                if set_area is not None and not set_area.exists():
-                    messages.append(
-                        f"{prefix}.annotated_area not found: {state.sandbox.rel(set_area)}"
-                    )
+                    check(file_key, path)
+                check(f"{prefix}.annotated_area", label_set.annotated_area)
     for name, imagery in zip(config.source_names, config.sources):
         if isinstance(imagery, GeoTiffImageryConfig):
             local = eopf_local_path(imagery.path)
             if imagery.is_pattern:
                 # A mosaic pattern: missing only when it matches no file.
                 local = None if imagery.matching_files() else local
-            if local is not None and not local.exists():
-                where = f"imagery '{name}' path" if config.multi_source else "imagery.path"
-                messages.append(f"{where} not found: {state.sandbox.rel(local)}")
-    return messages
+            check(f"imagery '{name}' path" if config.multi_source else "imagery.path", local)
+    return missing
+
+
+#: Label files larger than this are not opened to check `label_field` while validating.
+_FIELD_CHECK_BYTES = 64 * 1024 * 1024
+
+
+def _file_fields(file: Path, layer: str | None) -> list[str] | None:
+    """The attributes that hold values in a vector label file, or ``None`` when the file
+    cannot be read here (too big, an unknown format, or a read error that `plan` will name)."""
+    suffix = file.suffix.lower()
+    try:
+        if not file.is_file() or file.stat().st_size > _FIELD_CHECK_BYTES:
+            return None
+        if suffix == ".kml":
+            scan = _scan_kml(file.read_bytes())
+        elif suffix in (".geojson", ".json"):
+            scan = _scan_geojson(file.read_bytes())
+        elif suffix in (".gpkg", ".shp", ".parquet", ".geoparquet"):
+            scan = _scan_table(file, layer if suffix == ".gpkg" else None)
+        else:
+            return None
+    except (ToolFailure, ValueError, RuntimeError, OSError, ImportError):
+        return None
+    return sorted(scan.fields)
+
+
+def _label_field_problems(state: ToolState, config: MapcvConfig) -> list[dict[str, str]]:
+    """A ``label_field`` the label file does not have, with the closest field name."""
+    problems: list[dict[str, str]] = []
+    sets: list[tuple[str, LabelsConfig]] = []
+    if isinstance(config.labels, LabelsConfig):
+        sets.append(("labels", config.labels))
+    if config.change is not None:
+        sets.extend(
+            (prefix, label_set)
+            for prefix, label_set in (
+                ("change.before", config.change.before),
+                ("change.after", config.change.after),
+            )
+            if label_set is not None
+        )
+    for prefix, labels in sets:
+        for index, entry in enumerate(labels.label_files):
+            if entry.label_field is None:
+                continue
+            fields = _file_fields(entry.path, entry.layer)
+            if fields is None or entry.label_field in fields:
+                continue
+            key = (
+                f"{prefix}.files[{index}].label_field" if labels.files else f"{prefix}.label_field"
+            )
+            close = difflib.get_close_matches(entry.label_field, fields, n=1, cutoff=0.6)
+            close = close or [f for f in fields if f.lower() == entry.label_field.lower()]
+            hint = f" Did you mean '{close[0]}'?" if close else ""
+            have = ", ".join(fields[:12]) + (", ..." if len(fields) > 12 else "")
+            problems.append(
+                {
+                    "field": key,
+                    "message": (
+                        f"'{entry.label_field}' is not an attribute with values in "
+                        f"{state.sandbox.rel(entry.path)} (it has: {have or 'none'}).{hint}"
+                    ),
+                }
+            )
+    return problems
+
+
+def _declared_bands(imagery: Any) -> tuple[int | None, str | None]:
+    """Band count and data type of a source as far as its config alone says."""
+    if isinstance(imagery, XYZImageryConfig):
+        return 3, "uint8"
+    if isinstance(imagery, StacCogImageryConfig):
+        return len(imagery.bands), "uint16"
+    if isinstance(imagery, EOPFZarrImageryConfig):
+        return len(imagery.bands), "float32"
+    if isinstance(imagery, GeoTiffImageryConfig) and imagery.bands:
+        return len(imagery.bands), None
+    return None, None
+
+
+def _stack_problems(config: MapcvConfig) -> list[dict[str, str]]:
+    """``writer.stack_sources`` with sources whose declared bands or data types differ."""
+    if not config.writer.stack_sources:
+        return []
+    known = [
+        (name, *_declared_bands(imagery))
+        for name, imagery in zip(config.source_names, config.sources)
+    ]
+    counted = [(name, count, dtype) for name, count, dtype in known if count is not None]
+    problems: list[dict[str, str]] = []
+    for name, count, dtype in counted[1:]:
+        first, first_count, first_dtype = counted[0]
+        if count != first_count or (dtype and first_dtype and dtype != first_dtype):
+            problems.append(
+                {
+                    "field": "writer.stack_sources",
+                    "message": (
+                        "needs every source to have the same bands and data type to stack them: "
+                        f"'{first}' has {first_count} band(s), '{name}' {count}; select matching "
+                        "`bands` or write the sources as separate files"
+                    ),
+                }
+            )
+            break
+    return problems
+
+
+_OSM_WARNING = (
+    "labels.osm is fetched from Overpass and cached outside this server's root, so `plan` and "
+    "`generate` refuse it over MCP: run `mapcv plan` / `mapcv generate` in a terminal, or save "
+    "an OSM extract as GeoJSON and point labels.path at it"
+)
+
+
+def config_problems(
+    state: ToolState, config: MapcvConfig
+) -> tuple[list[dict[str, str]], list[str]]:
+    """What is wrong with a config that validates: ``(errors, warnings)``.
+
+    Errors would make `plan` or `generate` fail (a missing input, a ``label_field`` the file
+    does not have, sources that cannot be stacked); warnings are about this server.
+    """
+    errors = [
+        {
+            "field": key,
+            "message": f"file not found: {state.sandbox.rel(path)}. Fix the path or create "
+            "the file first",
+        }
+        for key, path in _missing_files(state, config)
+    ]
+    errors.extend(_label_field_problems(state, config))
+    errors.extend(_stack_problems(config))
+    label_sets = [config.labels] + (
+        [config.change.before, config.change.after] if config.change is not None else []
+    )
+    uses_osm = any(isinstance(item, LabelsConfig) and item.osm is not None for item in label_sets)
+    return errors, [_OSM_WARNING] if uses_osm else []
+
+
+def _problem_lines(errors: list[dict[str, str]]) -> str:
+    return "; ".join(f"{e['field']}: {e['message']}" for e in errors)
 
 
 def validate_config(
     state: ToolState, path: str | None = None, yaml_text: str | None = None
 ) -> ToolResult:
-    """Check a config like ``mapcv validate``: no labels or imagery are read."""
+    """Check a config like ``mapcv validate``, and that the files it names exist and have
+    the ``label_field`` it asks for. Imagery is not read."""
     try:
         config, file = load_config(state, path, yaml_text, "path")
     except ConfigInvalid as exc:
-        lines = "; ".join(f"{e['field']}: {e['message']}" for e in exc.errors)
         return ToolResult(
-            f"Invalid config: {lines}", {"valid": False, "errors": exc.errors, "warnings": []}
+            f"Invalid config: {_problem_lines(exc.errors)}",
+            {"valid": False, "errors": exc.errors, "warnings": []},
         )
-    warns = _missing_file_warnings(state, config)
+    errors, warns = config_problems(state, config)
     where = state.sandbox.rel(file) if file is not None else "the config"
+    data = {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warns,
+        "summary": config_summary(state, config),
+    }
+    if errors:
+        return ToolResult(f"Invalid config: {_problem_lines(errors)}", data)
     suffix = f" Warnings: {'; '.join(warns)}." if warns else ""
-    return ToolResult(
-        f"{where} is a valid config.{suffix}",
-        {
-            "valid": True,
-            "errors": [],
-            "warnings": warns,
-            "summary": config_summary(state, config),
-        },
-    )
+    return ToolResult(f"{where} is a valid config.{suffix}", data)
 
 
 # ── inspect_labels ───────────────────────────────────────────────────────────
@@ -1045,6 +1360,28 @@ def large_reason(estimate: Plan) -> str | None:
     return "; ".join(reasons) or None
 
 
+def _plan_notes(config: MapcvConfig, estimate: Plan) -> list[str]:
+    """What this plan does not say, so a missing number is not read as zero."""
+    notes: list[str] = []
+    if estimate.download_bytes is None:
+        notes.append(
+            "download_bytes is null: imagery read from files or a catalog is not estimated "
+            "(only the windows the patches cover are read, so it is at most the file sizes)."
+        )
+    if any(
+        isinstance(source, StacCogImageryConfig)
+        or (isinstance(source, EOPFZarrImageryConfig) and source.search is not None)
+        for source in config.sources
+    ):
+        notes.append(
+            "The Sentinel-2 scene is chosen when `generate` runs (the least cloudy that covers "
+            "the region); `info` then shows its id in source.product."
+        )
+    if config.task == "classification":
+        notes.append("patches is an upper bound: patches no class qualifies for are skipped.")
+    return notes
+
+
 def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> dict[str, Any]:
     """A plan as structured data, with ``large`` and the reason."""
     labels = estimate.labels
@@ -1078,6 +1415,8 @@ def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> dict[str
         "chunk_memory_bytes": estimate.chunk_memory_bytes,
         "labels": labels_data,
         "warnings": list(estimate.warnings),
+        "blocking": list(estimate.blocking),
+        "notes": _plan_notes(config, estimate),
         "large": large,
         "large_reason": large_reason(estimate) if large else None,
         "large_limits": {
@@ -1166,11 +1505,24 @@ def write_config(
     except OSError as exc:
         Path(temp_name).unlink(missing_ok=True)
         raise ToolFailure(f"Cannot write {sandbox.rel(target)}: {exc}") from None
+    errors, warns = config_problems(state, config)
+    # The file is saved either way (a draft may name labels not downloaded yet), but `plan`
+    # and `generate` fail until the problems are fixed.
+    text_out = f"Wrote {sandbox.rel(target)}. Next: plan it, then generate."
+    if errors:
+        text_out = (
+            f"Wrote {sandbox.rel(target)}, but it has problems that make plan and generate "
+            f"fail: {_problem_lines(errors)}"
+        )
+    elif warns:
+        text_out += f" Warnings: {'; '.join(warns)}."
     return ToolResult(
-        f"Wrote {sandbox.rel(target)}. Next: plan it, then generate.",
+        text_out,
         {
             "written": sandbox.rel(target),
-            "valid": True,
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warns,
             "overwritten": overwrite,
             "summary": config_summary(state, config),
         },
@@ -1202,6 +1554,10 @@ def prepare_generate(state: ToolState, config: str, confirm_large: bool = False)
     estimate, extra = make_plan_for(state, loaded)
     data = plan_data(state, loaded, estimate)
     data["warnings"] = [*data["warnings"], *extra]
+    if estimate.blocking:
+        raise ToolFailure(
+            f"{estimate.blocking[0]}. Nothing was started.", {"errors": estimate.blocking}
+        )
     sandbox.check_tree(loaded.writer.staging_dir, "writer.staging_dir")
     if estimate.is_large and not confirm_large:
         raise ToolFailure(
@@ -1242,7 +1598,7 @@ def execute_generate(
         on_chunk(done, total)
 
     try:
-        with capture_warnings(wait=60.0) as caught:
+        with capture_warnings(broad=True) as caught:
             try:
                 result = run_generate(config, hook)
             except GenerationCancelled:
@@ -1380,6 +1736,18 @@ def _split_counts(sandbox: Sandbox, dataset: Path) -> dict[str, int] | None:
     return counts
 
 
+def _source_data(record: SourceRecord) -> dict[str, Any]:
+    return {
+        "name": record.name,
+        "type": record.source_type,
+        "product": record.product_id,
+        "bands": list(record.bands),
+        "crs": record.crs,
+        "dtype": record.dtype,
+        "patch_shape": list(record.patch_shape),
+    }
+
+
 def info(state: ToolState, dataset: str) -> ToolResult:
     """Summarize a generated dataset like ``mapcv info``."""
     sandbox = state.sandbox
@@ -1392,22 +1760,20 @@ def info(state: ToolState, dataset: str) -> ToolResult:
         manifest = Manifest.load(manifest_path)
     except ManifestMismatchError as exc:
         raise ToolFailure(str(exc)) from None
-    source = manifest.source
     target = manifest.target
     ignore = target.ignore_index if target is not None else None
     splits = _split_counts(sandbox, folder)
+    sources = [_source_data(record) for record in manifest.sources] or [
+        _source_data(manifest.source)
+    ]
     data: dict[str, Any] = {
         "dataset": sandbox.rel(folder),
         "task": manifest.task,
         "image_only": target is None,
-        "source": {
-            "type": source.source_type,
-            "product": source.product_id,
-            "bands": list(source.bands),
-            "crs": source.crs,
-            "dtype": source.dtype,
-            "patch_shape": list(source.patch_shape),
-        },
+        # The first source's grid is the dataset's; `sources` lists every one (change
+        # detection and multi-source datasets have several).
+        "source": sources[0],
+        "sources": sources,
         "patches": len(manifest.patches),
         # False: generate stopped before it finished; None: made before mapcv recorded it.
         "complete": manifest.complete,
@@ -1431,11 +1797,11 @@ def info(state: ToolState, dataset: str) -> ToolResult:
         if manifest.complete is False
         else ""
     )
-    return ToolResult(
+    text = (
         f"{sandbox.rel(folder)}: {manifest.task} dataset, {len(manifest.patches):,} patch(es), "
-        f"{split_text}.{unfinished}",
-        data,
+        f"{split_text}.{unfinished}"
     )
+    return ToolResult(text, data)
 
 
 def split(
@@ -1486,4 +1852,113 @@ def split(
             "strategy": config.strategy,
             "warnings": _warning_texts(caught),
         },
+    )
+
+
+# ── stats and verify ─────────────────────────────────────────────────────────
+
+_MAX_PROBLEMS_SHOWN = 50
+
+
+def _checked_dataset(state: ToolState, dataset: str) -> tuple[Path, Manifest]:
+    """The dataset folder and its manifest, after checking that nothing the dataset names
+    (a patch file, a link in the folder) leads outside the root."""
+    sandbox = state.sandbox
+    folder = sandbox.resolve(dataset, "dataset")
+    manifest_path = folder / "manifest.json"
+    if not manifest_path.is_file():
+        raise ToolFailure(f"No manifest found at {sandbox.rel(manifest_path)}")
+    sandbox.inside(manifest_path.resolve(), "dataset", dataset)
+    try:
+        manifest = Manifest.load(manifest_path)
+    except (ManifestMismatchError, ValueError, OSError) as exc:
+        raise ToolFailure(f"Cannot read the dataset: {exc}") from None
+    sandbox.check_tree(folder, "dataset")
+    listed = [rel for entry in manifest.patches for rel in entry["files"].values()]
+    checksums = folder / "SHA256SUMS"
+    if checksums.is_file():
+        try:
+            for line in checksums.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    listed.append(line.partition("  ")[2])
+        except (OSError, UnicodeDecodeError):
+            pass
+    for rel in listed:
+        path = PurePosixPath(rel)
+        if not rel or path.is_absolute() or ".." in path.parts or "\\" in rel:
+            raise ToolFailure(
+                f"The dataset lists a file path that leaves its folder ({rel[:80]!r}); "
+                "mapcv does not read it."
+            )
+    return folder, manifest
+
+
+def stats(state: ToolState, dataset: str, split: str = "train", save: bool = False) -> ToolResult:
+    """Band mean/std, class balance and class weights of a dataset, like ``mapcv stats``.
+
+    Read-only: ``stats.json`` is written only with ``save`` (which needs ``--allow-write``).
+    """
+    if split not in ("train", "val", "test", "all"):
+        raise ToolFailure("`split` must be train, val, test or all.")
+    sandbox = state.sandbox
+    if save:
+        sandbox.require_write("stats with save=true")
+    folder, _ = _checked_dataset(state, dataset)
+    try:
+        if save:
+            path, values = write_stats(folder, split)
+        else:
+            path, values = None, dataset_stats(folder, split)
+    except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
+        raise ToolFailure(f"Cannot compute the statistics: {exc}") from None
+    weights = (values.get("classes") or {}).get("median_frequency_weights")
+    text = (
+        f"{sandbox.rel(folder)}: statistics of {values['patches']:,} patch(es), "
+        f"split {values['split']}"
+    )
+    if weights:
+        text += "; class weights " + ", ".join(f"{k} {v:.3g}" for k, v in weights.items())
+    out = {"dataset": sandbox.rel(folder), **values, "saved": sandbox.rel(path) if path else None}
+    return ToolResult(text + ".", out)
+
+
+def verify(
+    state: ToolState, dataset: str, deep: bool = False, write_sums: bool = False
+) -> ToolResult:
+    """Check that every file of a dataset is present and intact, like ``mapcv verify``.
+
+    Read-only: ``SHA256SUMS`` is written only with ``write_sums`` (needs ``--allow-write``).
+    """
+    sandbox = state.sandbox
+    if write_sums:
+        sandbox.require_write("verify with write_sums=true")
+    folder, _ = _checked_dataset(state, dataset)
+    report = verify_dataset(folder, deep=deep)
+    written: str | None = None
+    if write_sums and report.ok:
+        try:
+            written = sandbox.rel(write_checksums(folder))
+        except OSError as exc:
+            raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
+    out = {
+        "dataset": sandbox.rel(folder),
+        "ok": report.ok,
+        "patches": report.patches,
+        "files": report.files,
+        "hashes_checked": report.checked_hashes,
+        "deep": deep,
+        "problem_count": len(report.problems),
+        "problems": report.problems[:_MAX_PROBLEMS_SHOWN],
+        "notes": report.notes,
+        "incomplete": getattr(report, "incomplete", False),
+        "checksums_written": written,
+    }
+    where = sandbox.rel(folder)
+    if report.ok:
+        summary = f"{where}: {report.patches:,} patch(es), {report.files:,} file(s) present"
+        if report.checked_hashes:
+            summary += f", {report.checked_hashes:,} hash(es) match"
+        return ToolResult(summary + ".", out)
+    return ToolResult(
+        f"{where}: {len(report.problems):,} problem(s), first: {report.problems[0]}", out
     )

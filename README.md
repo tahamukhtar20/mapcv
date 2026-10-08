@@ -5,7 +5,7 @@
 <h1 align="center">mapcv</h1>
 
 <p align="center">
-    <em>Turn imagery and labels into ready-to-train remote-sensing datasets, fast. Exact, resumable, one <code>pip install</code>.</em>
+    <em>Turn imagery and labels into ready-to-train remote-sensing datasets, fast.</em>
 </p>
 
 <p align="center">

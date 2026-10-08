@@ -1062,6 +1062,26 @@ def test_32_bit_labels_are_classified_without_a_lookup_table(tmp_path: Path) -> 
         np.testing.assert_array_equal(mask, expected_mask(raw, classes, nodata=9))
 
 
+def test_a_class_in_labels_classes_wins_over_the_files_nodata_tag(tmp_path: Path) -> None:
+    # The file tags 20 as NoData, but labels.classes maps 20 to class 2: the class is kept
+    # (it used to become ignore_index silently), with a warning naming both.
+    transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
+    path = make_labels(tmp_path, transform, 40, 30, values=(0, 10, 20), nodata=20)
+    with pytest.warns(UserWarning, match="tags 20 as NoData, but labels.classes maps 20"):
+        sampler = _sampler(path)
+    mask = sampler.sample(six(transform), 30, 40)
+    with rasterio.open(path) as src:
+        assert src.nodata == 20
+        raw = src.read(1).astype(np.int64)
+    assert (raw == 20).any()
+    np.testing.assert_array_equal(mask, expected_mask(raw, CLASSES, nodata=None))
+    # labels.nodata still decides when it is set (to a value not in labels.classes).
+    np.testing.assert_array_equal(
+        _sampler(path, nodata=10, classes={0: 0, 20: 2}).sample(six(transform), 30, 40),
+        expected_mask(raw, {0: 0, 20: 2}, nodata=10),
+    )
+
+
 def test_windows_off_the_label_raster_are_ignored(tmp_path: Path) -> None:
     transform = Affine(1.0, 0.0, 500_000.0, 0.0, -1.0, 5_400_000.0)
     labels = make_labels(tmp_path, transform, 40, 30)

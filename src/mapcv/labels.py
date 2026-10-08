@@ -4,13 +4,16 @@ shapely geometries with class IDs."""
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import math
+import re
 import warnings
 from collections.abc import Sequence
 from functools import lru_cache
 from math import pi
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -86,10 +89,33 @@ def _mercator_coords(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]
     return np.column_stack((mx, my))
 
 
+#: Latitude limit of Web Mercator, where the square world map ends (``atan(sinh(pi))``).
+MERCATOR_MAX_LATITUDE: float = math.degrees(math.atan(math.sinh(math.pi)))
+
+
+def _clip_to_mercator(array: npt.NDArray[np.object_]) -> npt.NDArray[np.object_]:
+    """The geometries cut to latitudes +/-:data:`MERCATOR_MAX_LATITUDE`, beyond which
+    Web Mercator is infinite (at the poles) and a geometry would not project. Geometries
+    within the limit (nearly all) are returned as they are."""
+    bounds = shapely.bounds(array)
+    beyond = (bounds[:, 1] < -MERCATOR_MAX_LATITUDE) | (bounds[:, 3] > MERCATOR_MAX_LATITUDE)
+    if not beyond.any():
+        return array
+    clipped = array.copy()
+    for index in np.flatnonzero(beyond):
+        west, _, east, _ = bounds[index]
+        clipped[index] = shapely.clip_by_rect(
+            array[index], west - 1.0, -MERCATOR_MAX_LATITUDE, east + 1.0, MERCATOR_MAX_LATITUDE
+        )
+    return clipped
+
+
 def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry:
-    """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857); Z is dropped."""
-    result: BaseGeometry = shapely.transform(geom, _mercator_coords)
-    return result
+    """Reproject a shapely geometry from WGS-84 to Web Mercator (EPSG:3857); Z is dropped.
+
+    The part beyond latitude +/-85.0511 (where Web Mercator ends) is cut off first.
+    """
+    return transform_all_to_mercator([geom])[0]
 
 
 def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> list[BaseGeometry]:
@@ -103,7 +129,7 @@ def transform_all_to_mercator(geometries: Sequence[BaseGeometry]) -> list[BaseGe
 
     array = np.empty(len(geometries), dtype=object)
     array[:] = list(geometries)
-    return list(shapely.transform(array, _mercator_coords))
+    return list(shapely.transform(_clip_to_mercator(array), _mercator_coords))
 
 
 MAX_CLASS_ID = 255
@@ -119,6 +145,13 @@ _WGS84_CRS_NAMES = frozenset(
 )
 
 
+# A label written as a number in ASCII digits ("3", "-2", "3.0", "1e3"); Python's float()
+# and int() also take full-width and other Unicode digits and underscores, which a label
+# file means as different text.
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_INTEGER = re.compile(r"[0-9]+")
+
+
 def _normalize_label(value: Any) -> str | None:
     """Return a stable string form of a label value, or ``None`` when missing."""
     if value is None:
@@ -130,11 +163,19 @@ def _normalize_label(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
-    try:
-        number = float(text)
-    except ValueError:
+    if not _NUMBER.fullmatch(text):
         return text
+    number = float(text)
     return str(int(number)) if number.is_integer() and "." in text else text
+
+
+def _label_order(label: str) -> tuple[int, float, str]:
+    """Sort key of a label: numbers by value, before every other label (by text)."""
+    if _NUMBER.fullmatch(label):
+        number = float(label)
+        if math.isfinite(number):
+            return (0, number, label)
+    return (1, 0.0, label)
 
 
 def assign_class_ids(
@@ -146,9 +187,10 @@ def assign_class_ids(
 
     Without ``label_field`` every geometry is class 1 and the class map is
     empty. With an explicit ``classes`` map, labels missing from it get 0
-    (skipped). Otherwise labels that are all integers in 1..255 are used as
-    their own IDs, and any other labels get IDs 1..N in sorted order, so IDs
-    do not depend on the order of features in the file.
+    (skipped). Otherwise labels that are all integers in 1..255 (in ASCII
+    digits) are used as their own IDs, and any other labels get IDs 1..N in
+    sorted order: numbers by value, then text. IDs do not depend on the order
+    of features in the file.
 
     Returns one class ID per label (0 = skip) and the class map.
 
@@ -158,10 +200,12 @@ def assign_class_ids(
     if label_field is None:
         return [1] * len(labels), {}
 
-    present = sorted({label for label in labels if label is not None})
+    present = sorted({label for label in labels if label is not None}, key=_label_order)
     if classes is not None:
         class_map = dict(classes)
-    elif present and all(label.isdigit() and 1 <= int(label) <= MAX_CLASS_ID for label in present):
+    elif present and all(
+        _INTEGER.fullmatch(label) and 1 <= int(label) <= MAX_CLASS_ID for label in present
+    ):
         class_map = {label: int(label) for label in present}
     else:
         if len(present) > MAX_CLASS_ID:
@@ -176,9 +220,19 @@ def assign_class_ids(
 
 
 def _warn_skipped(
-    source: str, unlabeled: int, unmapped: int, non_polygon: int, points: bool = False
+    source: str,
+    unlabeled: int,
+    unmapped: int,
+    non_polygon: int,
+    points: bool = False,
+    invalid: int = 0,
 ) -> None:
     reasons = []
+    if invalid:
+        reasons.append(
+            f"{invalid} with invalid coordinates (not a finite number, or a latitude beyond "
+            "±90: the file must hold longitude, latitude)"
+        )
     if non_polygon:
         kinds = "lines" if points else "points/lines"
         reasons.append(f"{non_polygon} without polygon geometry ({kinds})")
@@ -198,13 +252,40 @@ def _with_class_ids(
     classes: ClassMap | None,
     non_polygon: int,
     points: bool = False,
+    invalid: int = 0,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     ids, class_map = assign_class_ids(labels, label_field, classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
-    _warn_skipped(source, unlabeled, unmapped, non_polygon, points)
+    _warn_skipped(source, unlabeled, unmapped, non_polygon, points, invalid)
     return result, class_map
+
+
+def _invalid_coordinates(geometries: Sequence[BaseGeometry | None]) -> set[int]:
+    """The indices of the geometries with a vertex that is not a finite longitude and
+    latitude: a NaN or infinite coordinate, or a latitude beyond +/-90. Such a geometry
+    cannot be projected (it would vanish from the masks, or break buffering), so it is
+    skipped and counted."""
+    if not geometries:
+        return set()
+    array = np.empty(len(geometries), dtype=object)
+    array[:] = list(geometries)
+    coords, owner = shapely.get_coordinates(array, return_index=True)
+    bad_vertex = ~np.isfinite(coords).all(axis=1) | (np.abs(coords[:, 1]) > 90.0)
+    return set(np.unique(owner[bad_vertex]).tolist())
+
+
+def _drop_invalid(
+    geometries: list[BaseGeometry], labels: list[str | None]
+) -> tuple[list[BaseGeometry], list[str | None], int]:
+    """The geometries (and their labels) without :func:`_invalid_coordinates`, and how
+    many were dropped."""
+    bad = _invalid_coordinates(geometries)
+    if not bad:
+        return geometries, labels, 0
+    kept = [index for index in range(len(geometries)) if index not in bad]
+    return [geometries[i] for i in kept], [labels[i] for i in kept], len(bad)
 
 
 def parse_kml(
@@ -226,14 +307,42 @@ def parse_kml(
         parts = [ShapelyPolygon(rings[0], rings[1:]) for rings in poly_group]
         geometries.append(parts[0] if len(parts) == 1 else MultiPolygon(parts))
         labels.append(_normalize_label(label))
-    return _with_class_ids("KML", geometries, labels, label_field, classes, non_polygon)
+    if label_field and raw_polys and all(label is None for _, label in raw_polys):
+        fields = _kml_field_names(data)
+        if label_field not in fields:
+            raise ValueError(
+                _missing_field_message(label_field, fields, "in the file")
+                + " KML labels are read from <ExtendedData> <Data name=...> or <SimpleData "
+                "name=...> fields, not from the placemark's <name>."
+            )
+    geometries, labels, invalid = _drop_invalid(geometries, labels)
+    return _with_class_ids(
+        "KML", geometries, labels, label_field, classes, non_polygon, invalid=invalid
+    )
 
 
-def _check_geojson_crs(obj: Any) -> None:
+_KML_FIELD = re.compile(rb"<(?:[\w.-]+:)?(?:Simple)?Data\b[^>]*?\bname\s*=\s*(\"[^\"]*\"|'[^']*')")
+
+
+def _kml_field_names(data: bytes) -> list[str]:
+    """The names of the ``<Data>`` and ``<SimpleData>`` fields of a KML file, in order of
+    first appearance (for the message about a ``label_field`` that is not one of them)."""
+    names: dict[str, None] = {}
+    for match in _KML_FIELD.finditer(data):
+        raw = match.group(1)[1:-1].decode("utf-8", errors="replace")
+        names[html.unescape(raw)] = None
+    return list(names)
+
+
+def _check_geojson_crs(obj: dict[str, Any]) -> None:
     crs = obj.get("crs")
     if not crs:
         return
-    name = str((crs.get("properties") or {}).get("name", "")).lower()
+    if isinstance(crs, dict):
+        properties = crs.get("properties")
+        name = str(properties.get("name", "") if isinstance(properties, dict) else "").lower()
+    else:  # some tools write the name alone, such as "EPSG:4326"
+        name = str(crs).lower()
     if name not in _WGS84_CRS_NAMES:
         raise ValueError(
             f"GeoJSON 'crs' {name or crs!r} is not supported; mapcv reads GeoJSON as WGS-84 "
@@ -241,19 +350,91 @@ def _check_geojson_crs(obj: Any) -> None:
         )
 
 
+def _collect_polygons(geom: BaseGeometry, parts: list[ShapelyPolygon]) -> None:
+    if geom.geom_type == "Polygon":
+        parts.append(cast(ShapelyPolygon, geom))
+    elif geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+        for part in getattr(geom, "geoms", []):
+            _collect_polygons(part, parts)
+
+
 def _polygon_parts(geom: BaseGeometry) -> BaseGeometry | None:
+    """The polygon(s) of a geometry, also from (nested) GeometryCollections, or ``None``."""
     if geom.geom_type in _POLYGON_TYPES:
         return geom
     if geom.geom_type == "GeometryCollection":
         parts: list[ShapelyPolygon] = []
-        for part in getattr(geom, "geoms", []):
-            if part.geom_type == "Polygon":
-                parts.append(part)
-            elif part.geom_type == "MultiPolygon":
-                parts.extend(part.geoms)
+        _collect_polygons(geom, parts)
         if parts:
             return parts[0] if len(parts) == 1 else MultiPolygon(parts)
     return None
+
+
+_GEOJSON_GEOMETRY_TYPES = frozenset(
+    {
+        "Point",
+        "MultiPoint",
+        "LineString",
+        "MultiLineString",
+        "Polygon",
+        "MultiPolygon",
+        "GeometryCollection",
+    }
+)
+
+
+def _json_kind(value: Any) -> str:
+    """How a JSON value reads in a message: ``a list``, ``the number 5``, ..."""
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, str):
+        return f"the text {value[:40]!r}"
+    if isinstance(value, bool) or value is None:
+        return json.dumps(value)
+    if isinstance(value, (int, float)):
+        return f"the number {value!r}"
+    return "an object"
+
+
+def _geojson_geometry(value: Any, where: str) -> BaseGeometry:
+    """A shapely geometry from a GeoJSON geometry object, or a ``ValueError`` that says
+    what is wrong with it."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{where}: 'geometry' must be a GeoJSON geometry object or null, not "
+            f"{_json_kind(value)}"
+        )
+    kind = value.get("type")
+    if not isinstance(kind, str) or kind not in _GEOJSON_GEOMETRY_TYPES:
+        shown = repr(kind) if isinstance(kind, str) else "missing"
+        raise ValueError(
+            f"{where}: the geometry type is {shown}; GeoJSON geometries are "
+            f"{', '.join(sorted(_GEOJSON_GEOMETRY_TYPES))}"
+        )
+    if kind == "GeometryCollection":
+        members = value.get("geometries")
+        if not isinstance(members, list):
+            raise ValueError(f"{where}: a GeometryCollection needs a 'geometries' list")
+        parts = [_geojson_geometry(member, where) for member in members]
+        return shapely.GeometryCollection(parts)
+    if "coordinates" not in value:
+        raise ValueError(f"{where}: the {kind} has no 'coordinates'")
+    try:
+        geometry: BaseGeometry = shape(value)
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError) as exc:
+        raise ValueError(f"{where}: the {kind} coordinates are malformed ({exc})") from None
+    except shapely.errors.ShapelyError as exc:
+        raise ValueError(f"{where}: the {kind} coordinates are malformed ({exc})") from None
+    return geometry
+
+
+def _missing_field_message(label_field: str, fields: Sequence[str], where: str) -> str:
+    """The error for a ``label_field`` that no feature has, with the fields there are."""
+    shown = ", ".join(repr(name) for name in fields) or "none"
+    return (
+        f"labels.label_field '{label_field}' is not a property of any feature {where}. "
+        f"The features have these properties: {shown}.{vector_files.did_you_mean(label_field, fields)}"
+    )
 
 
 def parse_geojson(
@@ -272,9 +453,18 @@ def parse_geojson(
     :func:`assign_class_ids` for class IDs. Returns (geometries, class_map).
     """
     obj: Any = json.loads(data.decode("utf-8"))
-    top_type: str = obj.get("type", "")
+    if not isinstance(obj, dict):
+        raise ValueError(
+            f"Expected FeatureCollection or Feature, got {_json_kind(obj)}: a GeoJSON file "
+            "holds one JSON object"
+        )
+    top_type = obj.get("type", "")
     if top_type == "FeatureCollection":
-        features: list[Any] = obj.get("features") or []
+        features: Any = obj.get("features") or []
+        if not isinstance(features, list):
+            raise ValueError(
+                f"the FeatureCollection's 'features' must be a list, not {_json_kind(features)}"
+            )
     elif top_type == "Feature":
         features = [obj]
     else:
@@ -283,11 +473,22 @@ def parse_geojson(
 
     geometries: list[BaseGeometry | None] = []
     raw_labels: list[Any] = []
-    for feat in features:
+    fields: dict[str, None] = {}
+    for index, feat in enumerate(features):
+        where = f"feature {index}"
+        if not isinstance(feat, dict):
+            raise ValueError(f"{where} is not a GeoJSON Feature object but {_json_kind(feat)}")
         geom_dict: Any = feat.get("geometry")
-        geometries.append(shape(geom_dict) if geom_dict is not None else None)
-        props: dict[str, Any] = feat.get("properties") or {}
+        geometries.append(_geojson_geometry(geom_dict, where) if geom_dict is not None else None)
+        props: Any = feat.get("properties")
+        if props is None:
+            props = {}
+        elif not isinstance(props, dict):
+            raise ValueError(f"{where}: 'properties' must be an object, not {_json_kind(props)}")
+        fields.update(dict.fromkeys(props))
         raw_labels.append(props.get(label_field) if label_field else None)
+    if label_field and features and label_field not in fields:
+        raise ValueError(_missing_field_message(label_field, list(fields), "in the file"))
     return _polygon_features(
         "GeoJSON", geometries, raw_labels, label_field, classes, points, buffer=buffer
     )
@@ -315,10 +516,13 @@ def _polygon_features(
     kept: list[BaseGeometry] = []
     labels: list[str | None] = []
     non_polygon = 0
+    invalid = _invalid_coordinates(geometries)
     for index, parsed in enumerate(geometries):
         if parsed is None:
             if unreadable is not None and index in unreadable:
                 non_polygon += 1
+            continue
+        if index in invalid:
             continue
         geom = _polygon_parts(parsed)
         if geom is None and not parsed.is_empty:
@@ -333,7 +537,9 @@ def _polygon_features(
             continue
         kept.append(geom)
         labels.append(_normalize_label(raw_labels[index]) if label_field else None)
-    return _with_class_ids(source, kept, labels, label_field, classes, non_polygon, points)
+    return _with_class_ids(
+        source, kept, labels, label_field, classes, non_polygon, points, len(invalid)
+    )
 
 
 #: File suffixes (lower case) of the vector label formats, by format.
@@ -344,12 +550,21 @@ _GEOJSON_SUFFIXES = frozenset({".geojson", ".json"})
 _PARQUET_SUFFIXES = frozenset({".parquet", ".geoparquet"})
 
 
+def label_suffix_hint(suffix: str) -> str:
+    """A next step for a label file of an unsupported type, by its (lower-case) suffix."""
+    if suffix == ".kmz":
+        return " (a KMZ is a zipped KML: unzip it and use the .kml inside)"
+    if suffix == ".zip":
+        return " (unzip it first, then point at the .shp, .gpkg or .geojson inside)"
+    return ""
+
+
 def _format_name(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix not in VECTOR_LABEL_SUFFIXES:
         raise ValueError(
             f"Cannot read '{path.name}' as vector labels: the file type must be one of "
-            f"{', '.join(sorted(VECTOR_LABEL_SUFFIXES))} (convert KMZ to KML first)."
+            f"{', '.join(sorted(VECTOR_LABEL_SUFFIXES))}{label_suffix_hint(suffix)}."
         )
     if suffix in _GEOJSON_SUFFIXES:
         return "GeoJSON"
@@ -437,6 +652,10 @@ def load_vector_labels(
             raise ValueError(
                 f"{path.name} is not valid GeoJSON ({exc}). Check that the file is complete."
             ) from exc
+        except ValueError as exc:
+            if str(exc).startswith(path.name):
+                raise
+            raise ValueError(f"{path.name}: {exc}") from None
     fields = [label_field] if label_field else []
     table = _read_table(path, kind, layer, fields)
     raw_labels: list[Any] = table.columns[label_field] if label_field else []

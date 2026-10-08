@@ -297,6 +297,8 @@ def fake_eopf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
     )
+    # The labels hold metres, which are no longitudes and latitudes.
+    monkeypatch.setattr("mapcv.labels._invalid_coordinates", lambda geometries: set())
 
 
 @pytest.mark.usefixtures("fake_eopf")

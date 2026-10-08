@@ -5,14 +5,24 @@ from __future__ import annotations
 import json
 import math
 import warnings
+from pathlib import Path
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 import pytest
+import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
 from mapcv._mapcv_rs import xy as rust_xy
 from mapcv.config import LabelsConfig
-from mapcv.labels import assign_class_ids, parse_geojson, parse_kml, transform_to_mercator
+from mapcv.labels import (
+    assign_class_ids,
+    load_vector_labels,
+    parse_geojson,
+    parse_kml,
+    transform_to_mercator,
+)
 
 _KML_HEADER = b'<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2">'
 _KML_FOOTER = b"</kml>"
@@ -302,10 +312,11 @@ def test_parse_kml_skips_empty_placemarks() -> None:
     assert len(geoms) == 1  # only the one with a Polygon
 
 
-def test_parse_kml_skips_missing_label_field() -> None:
-    geoms, class_map = parse_kml(MISSING_FIELD_KML, label_field="land_use")
-    assert len(geoms) == 0
-    assert class_map == {}
+def test_parse_kml_rejects_a_label_field_no_placemark_has() -> None:
+    # A misspelled field used to build an all-background dataset; GeoPackage and
+    # Shapefile already refused it.
+    with pytest.raises(ValueError, match="'land_use' is not a property.*'other_field'"):
+        parse_kml(MISSING_FIELD_KML, label_field="land_use")
 
 
 def test_parse_kml_skips_non_polygon_geometries() -> None:
@@ -535,8 +546,13 @@ def test_labels_config_normalizes_classes_and_checks_suffix() -> None:
         config(path="labels.geojson", label_field="cls", classes={"a": 256})
     with pytest.raises(ValueError, match="requires labels.label_field"):
         config(path="labels.geojson", classes={"a": 1})
-    with pytest.raises(ValueError, match="convert KMZ"):
+    with pytest.raises(ValueError, match="KMZ is a zipped KML"):
         config(path="labels.kmz")
+    # The KMZ hint is for .kmz files only.
+    with pytest.raises(ValueError, match=r"got 'labels.fgb' \["):
+        config(path="labels.fgb")
+    with pytest.raises(ValueError, match="unzip it first"):
+        config(path="labels.zip")
 
 
 def test_transform_all_to_mercator_matches_per_geometry() -> None:
@@ -559,3 +575,218 @@ def test_transform_all_to_mercator_matches_per_geometry() -> None:
     for fast, slow in zip(vectorized, (transform_to_mercator(g) for g in geometries)):
         assert fast.equals_exact(slow, tolerance=0)
     assert transform_all_to_mercator([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Class IDs of numeric and non-ASCII labels
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_labels_are_numbered_by_value_not_as_text() -> None:
+    # 0 is not a class ID, so all labels are numbered in sorted order: numbers by value
+    # (as text, "10" sorted before "2" and became ID 2).
+    _, class_map = assign_class_ids(["10", "0", "2"], "cls")
+    assert class_map == {"0": 1, "2": 2, "10": 3}
+    _, class_map = assign_class_ids(["-1", "b", "10", "a", "2.5", "3"], "cls")
+    assert class_map == {"-1": 1, "2.5": 2, "3": 3, "10": 4, "a": 5, "b": 6}
+
+
+def test_only_ascii_digits_are_integer_ids() -> None:
+    # "²" passes str.isdigit() and broke int(); a full-width "１" became ID 1 like "1".
+    _, class_map = assign_class_ids(["1", "\u00b2"], "cls")
+    assert class_map == {"1": 1, "\u00b2": 2}
+    _, class_map = assign_class_ids(["1", "\uff11"], "cls")
+    assert class_map == {"1": 1, "\uff11": 2}
+    geoms, class_map = parse_geojson(
+        _fc(_feat(_SQUARE, {"c": "1"}), _feat(_SQUARE2, {"c": "\uff11.\uff10"})), "c"
+    )
+    assert class_map == {"1": 1, "\uff11.\uff10": 2}
+    assert [cid for _, cid in geoms] == [1, 2]
+
+
+def test_number_spellings_of_one_value_are_one_class() -> None:
+    _, class_map = parse_geojson(
+        _fc(_feat(_SQUARE, {"c": 3}), _feat(_SQUARE, {"c": "3.0"}), _feat(_SQUARE, {"c": 3.0})),
+        "c",
+    )
+    assert class_map == {"3": 3}
+
+
+# ---------------------------------------------------------------------------
+# Malformed GeoJSON: a message naming the file and the feature
+# ---------------------------------------------------------------------------
+
+_POLYGON = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ([{"type": "Feature", "geometry": _POLYGON}], r"got a list"),
+        ({"type": "FeatureCollection", "features": 5}, r"'features' must be a list"),
+        ({"type": "FeatureCollection", "features": [5]}, r"feature 0 is not a GeoJSON Feature"),
+        (
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    _feat(_SQUARE, {}),
+                    {"type": "Feature", "properties": [1], "geometry": _POLYGON},
+                ],
+            },
+            r"feature 1: 'properties' must be an object, not a list",
+        ),
+        (_feat(_SQUARE, {}) | {"crs": "EPSG:3857"}, r"'crs' 'epsg:3857' is not supported"),
+        (
+            {"type": "Feature", "geometry": {"type": "Banana", "coordinates": []}},
+            r"feature 0: the geometry type is 'Banana'",
+        ),
+        ({"type": "Feature", "geometry": {"coordinates": [0, 0]}}, r"geometry type is missing"),
+        ({"type": "Feature", "geometry": "x"}, r"'geometry' must be a GeoJSON geometry object"),
+        ({"type": "Feature", "geometry": {"type": "Polygon"}}, r"the Polygon has no 'coordinates'"),
+        (
+            {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[0, 0], [1, 1]]}},
+            r"feature 0: the Polygon coordinates are malformed",
+        ),
+        (
+            {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}},
+            r"feature 0: the Polygon coordinates are malformed",
+        ),
+        (
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0, 0, 0, 0]}},
+            r"feature 0: the Point coordinates are malformed",
+        ),
+        (
+            {"type": "Feature", "geometry": {"type": "GeometryCollection", "geometries": None}},
+            r"needs a 'geometries' list",
+        ),
+    ],
+)
+def test_malformed_geojson_is_a_message_not_a_traceback(
+    tmp_path: Path, document: Any, message: str
+) -> None:
+    path = tmp_path / "labels.geojson"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"^labels\.geojson: .*" + message):
+        load_vector_labels(path)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf, 91.0, -90.5])
+def test_features_with_invalid_coordinates_are_skipped_and_counted(bad: float) -> None:
+    broken = [[0.0, 0.0], [1.0, 0.0], [1.0, bad], [0.0, 0.0]]
+    feature = {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [broken]}}
+    data = _fc(_feat(_SQUARE), feature)
+    with pytest.warns(UserWarning, match="skipped 1 with invalid coordinates"):
+        geoms, _ = parse_geojson(data)
+    # Only the valid polygon is kept (and counted by plan); it used to keep both.
+    assert len(geoms) == 1
+    # Lines and points to buffer are checked before buffering, which they would break.
+    line = {"type": "Feature", "geometry": {"type": "LineString", "coordinates": broken[:3]}}
+    with pytest.warns(UserWarning, match="skipped 1 with invalid coordinates"):
+        geoms, _ = parse_geojson(_fc(_feat(_SQUARE), line), buffer=(5.0, 5.0))
+    assert len(geoms) == 1
+
+
+def test_polygons_in_nested_geometry_collections_are_kept() -> None:
+    nested = {
+        "type": "GeometryCollection",
+        "geometries": [
+            {
+                "type": "GeometryCollection",
+                "geometries": [{"type": "Polygon", "coordinates": [_SQUARE]}],
+            },
+            {"type": "Point", "coordinates": [5, 5]},
+        ],
+    }
+    data = json.dumps(
+        {
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "properties": {}, "geometry": nested}],
+        }
+    ).encode()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        geoms, _ = parse_geojson(data)
+    assert len(geoms) == 1 and geoms[0][0].equals(Polygon(_SQUARE))
+
+
+# ---------------------------------------------------------------------------
+# A label_field that no feature has
+# ---------------------------------------------------------------------------
+
+
+def test_a_label_field_no_geojson_feature_has_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "labels.geojson"
+    path.write_bytes(_fc(_feat(_SQUARE, {"kind": "a"}), _feat(_SQUARE2, {"Klass": "b"})))
+    with pytest.raises(
+        ValueError, match=r"'klass' is not a property.*'kind', 'Klass'.*Did you mean 'Klass'"
+    ):
+        load_vector_labels(path, "klass")
+    # A field that some features have is fine; the others are skipped with a warning.
+    with pytest.warns(UserWarning, match="skipped 1 without a label value"):
+        geoms, _ = load_vector_labels(path, "kind")
+    assert len(geoms) == 1
+
+
+def test_a_kml_label_field_that_is_the_placemark_name_says_where_labels_come_from() -> None:
+    with pytest.raises(
+        ValueError, match=r"'name' is not a property.*not from the placemark's <name>"
+    ):
+        parse_kml(MISSING_FIELD_KML, label_field="name")
+
+
+# ---------------------------------------------------------------------------
+# Web Mercator ends at +/-85.0511 degrees
+# ---------------------------------------------------------------------------
+
+
+def test_polygons_reaching_the_poles_are_cut_at_the_mercator_limit() -> None:
+    from pyproj import Transformer
+
+    limit = math.degrees(math.atan(math.sinh(math.pi)))
+    to_mercator = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    world = Polygon([(-180, -90), (180, -90), (180, 90), (-180, 90)])
+    strip = Polygon([(74.305, 31.485), (74.309, 31.485), (74.309, 90), (74.305, 90)])
+    for geometry in (world, strip):
+        west, south, east, north = geometry.bounds
+        # The reference: the polygon cut at the limit, projected by PROJ.
+        x0, y0 = to_mercator.transform(west, max(south, -limit))
+        x1, y1 = to_mercator.transform(east, min(north, limit))
+        projected = transform_to_mercator(geometry)
+        assert projected.is_valid and not projected.is_empty
+        assert projected.bounds == pytest.approx((x0, y0, x1, y1), rel=1e-12, abs=1e-6)
+        # It used to have infinite coordinates, and the rasterizer dropped it.
+        assert all(math.isfinite(value) for value in projected.bounds)
+
+
+def test_polygons_within_the_mercator_limit_are_projected_as_before() -> None:
+    inside = Polygon([(10, -85), (11, -85), (11, 85), (10, 85)])
+    raw = shapely.transform(inside, _mercator)
+    assert transform_to_mercator(inside).equals_exact(raw, tolerance=0)
+
+
+def _mercator(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Web Mercator by its formula, written independently of mapcv's."""
+    x = 6_378_137.0 * np.radians(coords[:, 0])
+    y = 6_378_137.0 * np.log(np.tan(np.pi / 4 + np.radians(coords[:, 1]) / 2))
+    return np.column_stack((x, y))
+
+
+def test_a_polygon_reaching_a_pole_is_burned_into_the_mask_like_rasterio() -> None:
+    rasterio_features = pytest.importorskip("rasterio.features")
+    from rasterio.transform import Affine
+
+    from mapcv.rasterizer import rasterize
+
+    # The region of the report (74.30, 31.48 -> 74.31, 31.49) at about zoom 17 pixels.
+    origin = transform_to_mercator(Polygon([(74.30, 31.49), (74.31, 31.49), (74.31, 31.48)]))
+    west, _, _, north = origin.bounds
+    transform = (1.19, 0.0, west, 0.0, -1.19, north)
+    strip = Polygon([(74.305, 31.485), (74.309, 31.485), (74.309, 90), (74.305, 90)])
+    projected = transform_to_mercator(strip)
+    mask = rasterize([(projected, 1)], (1000, 1000), transform)
+    reference = rasterio_features.rasterize(
+        [(projected, 1)], out_shape=(1000, 1000), transform=Affine(*transform), dtype="uint8"
+    )
+    # Masks used to be all background: the polygon had infinite coordinates.
+    assert mask.any()
+    np.testing.assert_array_equal(mask, reference)

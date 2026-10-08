@@ -13,9 +13,9 @@ mapcv burns **polygons** from a label file (or [several](/mapcv/reference/config
 | --- | --- |
 | File type | `.geojson`, `.json`, `.kml`, `.gpkg` (GeoPackage), `.shp` (Shapefile) or `.parquet`/`.geoparquet` (GeoParquet). Not `.kmz` (unzip it, below). The suffix picks the reader |
 | Coordinates | GeoJSON and KML are WGS-84 **longitude, latitude** (EPSG:4326), in that order, as RFC 7946 requires. GeoPackage, Shapefile and GeoParquet may be in **any CRS** they state; mapcv reprojects them to lon/lat |
-| Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection`. Points and lines are skipped with a warning (points are kept for [detection](/mapcv/tutorials/object-detection/) with `point_box_size`) |
+| Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection` (nested ones too). Points and lines are skipped with a warning (points are kept for [detection](/mapcv/tutorials/object-detection/) with `point_box_size`) |
 | GeoJSON shape | A `FeatureCollection` or a single `Feature`. A `crs` member is allowed only if it names WGS-84 (`CRS84`, `EPSG:4326`); projected CRSs are rejected |
-| KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write) |
+| KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write), not from the placemark's `<name>` |
 | GeoPackage | One feature table (a *layer*). With several, set `labels.layer`. The layer's CRS comes from `gpkg_spatial_ref_sys`; a layer without one (`srs_id` 0 or -1) is an error |
 | Shapefile | The `.shp` with its `.dbf` (attributes) next to it. The CRS comes from the `.prj`: **without one mapcv stops** rather than guess. Text attributes are read as UTF-8 unless a `.cpg` file names another encoding. The reader is pure Python: a Shapefile with hundreds of thousands of features loads in tens of seconds, so for very large layers a GeoPackage or GeoParquet is faster |
 | GeoParquet | WKB geometry (the default of geopandas and GDAL), with the standard `geo` metadata. Needs `pip install "mapcv[parquet]"`. A missing `crs` means WGS-84 (`OGC:CRS84`, as the specification says); `crs: null` is an error. Native (GeoArrow) encodings are not read |
@@ -49,14 +49,14 @@ labels:
 ### How class IDs are chosen
 
 1. **No `label_field`:** every polygon is `1`; `class_map` in the manifest is empty. Good for one-class problems such as buildings.
-2. **`label_field` with integer labels 1–255:** the integers are the IDs. `"3"`, `3` and `3.0` are the same class.
-3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`. The result does not depend on feature order, so two files with the same classes get the same IDs.
+2. **`label_field` with integer labels 1–255:** the integers are the IDs. `"3"`, `3` and `3.0` are the same class. Only the digits 0–9 make a number: a full-width `１` or a superscript `²` is a name.
+3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`: numbers by value (`2` before `10`), then names in alphabetical order. The result does not depend on feature order, so two files with the same classes get the same IDs.
 4. **`classes` given:** exactly those IDs (1–255); features whose label is not listed are skipped. Use it to merge classes (`{house: 1, apartments: 1}`), to keep IDs stable across datasets, or to match an existing model.
 
 The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
 
 <Aside type="caution" title="A label of 0 changes the numbering">
-Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`. Remove such features or set `classes` explicitly.
+Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`, and `0, 2, 10` too. Remove such features or set `classes` explicitly.
 </Aside>
 
 Always check the result with `mapcv plan`, which prints the class map and any skipped features before anything is downloaded:
@@ -68,13 +68,13 @@ Always check the result with `mapcv plan`, which prints the class map and any sk
 
 ### Skipped features
 
-Features are skipped, and counted in a warning, when they have no polygon geometry, no value in `label_field`, or a value missing from `classes`:
+Features are skipped, and counted in a warning, when they have no polygon geometry, no value in `label_field`, a value missing from `classes`, or a coordinate that is not a number (`NaN`, infinite) or a latitude beyond ±90°:
 
 ```text
 ⚠  GeoJSON: skipped 1 without polygon geometry (points/lines), 1 without a label value.
 ```
 
-The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`, `GeoParquet`). A feature with no geometry at all (a null geometry) is ignored without being counted. A `label_field` that is not a column of a GeoPackage, Shapefile or GeoParquet file is an error that lists the columns, since for a table it can only be a typo (in GeoJSON and KML a missing property just means "no label").
+The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`, `GeoParquet`). A feature with no geometry at all (a null geometry) is ignored without being counted. A `label_field` that no feature has (not a column of a GeoPackage, Shapefile or GeoParquet file, or a property of no GeoJSON or KML feature) is an error that lists the fields there are and suggests the closest, since it can only be a typo; a feature without the property is skipped as having no label. A GeoJSON file that is not valid GeoJSON (a feature that is not an object, an unknown geometry type, coordinates nested wrongly) is an error that names the feature.
 
 ### Roads, rivers and trees: buffer lines and points
 
@@ -238,7 +238,7 @@ labels:
 
 - **Class IDs.** `classes` maps each raster value to a mask ID from 0 to 255; `0` is background. Several values can share an ID (to merge classes); the short form `10: 1` names the class `value_10`. The names become the manifest's `class_map`.
 - **Values not listed** become background (`unmapped: background`, the default, as features missing from `classes` do with polygon labels) or `ignore_index` (`unmapped: ignore`), so a loss skips them.
-- **No label.** The file's NoData value, `ignore_values` (for example a "not classified" code) and every pixel outside the raster get `ignore_index` (255), like pixels without imagery. Set `nodata:` to override the file's NoData value.
+- **No label.** The file's NoData value, `ignore_values` (for example a "not classified" code) and every pixel outside the raster get `ignore_index` (255), like pixels without imagery. Set `nodata:` to override the file's NoData value. A value that `classes` maps to a class is that class even when the file tags it as NoData (with a warning).
 - **Integer values only.** `uint8`, `uint16`, `int16`, … in one band (`band:` picks another). A float raster (probabilities) must be turned into classes first.
 
 `mapcv plan` opens the raster's header (no pixels) and prints its CRS, size and pixel size with the class map, and warns when it does not overlap the region. `mapcv init` recognises a `.tif` label file, lists the values under your area and writes a `classes` block to rename.
@@ -265,7 +265,7 @@ Land-cover products have their own terms: ESA WorldCover is CC BY 4.0 (credit "�
 
 - **All masks are background** and `generate` warns *"no label polygon intersects the imagery extent"*: the polygons are outside the region, or longitude and latitude are swapped (coordinates like `[52.37, 4.94]` instead of `[4.94, 52.37]`). Check in QGIS or [geojson.io](https://geojson.io/).
 - **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326, or save it as a GeoPackage, Shapefile or GeoParquet, which carry their CRS.
-- **`labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file`**: unzip a KMZ to its KML, or convert other formats as shown above.
+- **`labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file`**: unzip a KMZ to its KML (or a `.zip` to the file inside), or convert other formats as shown above.
 - **`… has no .prj file, so its CRS is unknown`**: the Shapefile lacks its projection file; see [Labels in another CRS](#labels-in-another-crs).
 - **`… has 3 layers: …`**: set `labels.layer`.
 - **`GeoParquet labels need the pyarrow package`**: `pip install "mapcv[parquet]"`.

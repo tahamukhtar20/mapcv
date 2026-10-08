@@ -306,3 +306,18 @@ def test_the_region_covering_most_of_a_patch_names_it(tmp_path: Path) -> None:
     # An exact tie goes to the region listed first in the file.
     assert aoi.region_of(0, 32, 32) == "left"
     assert aoi.region_of(0, 200, 32) == ""
+
+
+def test_a_polygon_without_a_region_name_is_an_error(tmp_path: Path) -> None:
+    from mapcv.config import area_polygons
+
+    # It used to drop out of the area of interest with a warning about "label values".
+    path = _write_aoi(
+        tmp_path / "aoi.geojson",
+        [(_lonlat(0, 0, 10, 10), {"zone": "a"}), (_lonlat(10, 0, 20, 10), {})],
+    )
+    with pytest.raises(ValueError, match=r"1 polygon\(s\) of aoi.geojson have no 'zone' value"):
+        area_polygons(path, "zone")
+    with pytest.raises(ValueError, match=r"region\.name_field 'zon' is not a property.*'zone'"):
+        area_polygons(path, "zon")
+    assert [name for _, name in area_polygons(path)] == ["1", "2"]

@@ -979,7 +979,8 @@ def test_stats_and_verify_refuse_manifests_that_point_outside(project: Path) -> 
     async def scenario(client: Client) -> None:
         for tool in ("stats", "verify"):
             result = await call(client, tool, dataset="dataset")
-            assert result.is_error and "leaves its folder" in text_of(result)
+            # Manifest.load refuses it already (the dataset path rule of mapcv._confine).
+            assert result.is_error and "not a path inside the dataset folder" in text_of(result)
 
     run_client(project, scenario, write=False)
 

@@ -128,3 +128,29 @@ def test_a_catalog_cannot_point_outside_the_root(
     shown = run_client(root, scenario)
     assert "a file named by the STAC catalog" in shown and "outside the folder" in shown
     assert not (root / "dataset" / "Images").exists()
+
+
+def test_stats_and_verify_keep_to_the_root(tmp_path: Path) -> None:
+    """The read tools refuse a dataset with a link out, or a checksum line out."""
+    root = tmp_path / "root"
+    staging = _dataset(root)
+    (tmp_path / "outside.txt").write_text("OUTSIDE-FILE-CONTENT\n")
+
+    async def scenario(client: Client) -> list[str]:
+        shown = []
+        (staging / "stats.json").symlink_to(tmp_path / "outside.txt")
+        for tool, arguments in (("stats", {"save": True}), ("verify", {"write_sums": True})):
+            result = await call(client, tool, dataset="dataset", **arguments)
+            assert result.is_error
+            shown.append(text_of(result))
+        (staging / "stats.json").unlink()
+        (staging / "SHA256SUMS").write_text("0000  ../outside.txt\n")
+        result = await call(client, "verify", dataset="dataset")
+        assert result.is_error
+        shown.append(text_of(result))
+        return shown
+
+    stats_text, verify_text, sums_text = run_client(root, scenario)
+    assert "outside the folder" in stats_text and "outside the folder" in verify_text
+    assert "leaves its folder" in sums_text
+    assert (tmp_path / "outside.txt").read_text() == "OUTSIDE-FILE-CONTENT\n"

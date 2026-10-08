@@ -40,19 +40,32 @@ mapcv turns a region, imagery and labels into remote-sensing training datasets
 regression).
 
 Journey: inspect_labels (what is in the user's label file) -> write the config (see
-describe_config_schema; write_config saves it) -> validate_config -> plan -> show the
-user the plan -> generate -> info. Always plan before generate and show the user what
-it will cost. If plan says `large`, generate refuses until the user agrees and you pass
-confirm_large=true.
+describe_config_schema) -> validate_config -> plan -> show the user the plan ->
+generate -> info (is it complete?) -> stats, verify. Always plan before generate and
+show the user what it will cost. If plan says `large`, generate refuses until the user
+agrees and you pass confirm_large=true.
 
 Rules: every path must be inside the folder the server was started with (relative
-paths are relative to it). Tools that write exist only if the user started the server
-with --allow-write. Do not invent a url_template, and never put credentials in a config
-you show or log.
+paths are relative to it). Do not invent a url_template, and never put credentials in a
+config you show or log.
 """
+
+_MODE_WRITE = (
+    "Mode: read and write (started with --allow-write). write_config, generate and split "
+    "are available."
+)
+_MODE_READ_ONLY = (
+    "Mode: read-only. The tools write_config, generate and split do not exist on this "
+    "server, so you can inspect, validate, plan, read a dataset, and compute stats and "
+    "verify, but not create files. To build a dataset, ask the user to restart the server "
+    "with `mapcv mcp --allow-write` (or run the CLI), or give them the config to save."
+)
 
 _READ = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
+_WRITE_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
 # Planning opens the header of a remote GeoTIFF or label raster when the config names one.
 _READ_NETWORK = ToolAnnotations(
@@ -82,8 +95,10 @@ def _fail(state: ToolState, message: str, data: dict[str, Any] | None = None) ->
     )
     if "error" not in clean.data:
         clean.data["error"] = clean.summary
+    # A message that already lists the errors needs no second copy as JSON in the text.
+    text = clean.summary if set(clean.data) <= {"valid", "errors", "error"} else _content(clean)
     return CallToolResult(
-        content=[TextContent(type="text", text=_content(clean))],
+        content=[TextContent(type="text", text=text)],
         structured_content=clean.data,
         is_error=True,
     )
@@ -131,18 +146,26 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
         "mapcv",
         title="mapcv",
         description="Build remote-sensing training datasets from a region, imagery and labels.",
-        instructions=_INSTRUCTIONS,
+        instructions=f"{_INSTRUCTIONS}\n{_MODE_WRITE if allow_write else _MODE_READ_ONLY}\n",
         version=mapcv.__version__,
         website_url="https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
     )
 
     @server.tool(title="Describe the config schema", annotations=_READ)
-    async def describe_config_schema() -> CallToolResult:
-        """The JSON schema of a mapcv config (every field with type and default, generated
-        from the real models) and the rules between fields: which tasks need labels, which
-        image formats each imagery type accepts, and the exact message of every invalid
-        combination. Read it before writing a config."""
-        return await _run(state, tools.describe_config_schema)
+    async def describe_config_schema(
+        section: Annotated[
+            str | None,
+            Field(description="One key (labels, imagery, writer, ...) or model name to narrow to."),
+        ] = None,
+        full_schema: Annotated[
+            bool, Field(description="Also return the raw JSON schema (large).")
+        ] = False,
+    ) -> CallToolResult:
+        """Every config model's fields with type and default (from the real models) and the
+        rules between fields: which tasks need labels, which image formats each imagery type
+        accepts, and the exact message of every invalid combination. Read it before writing
+        a config."""
+        return await _run(state, tools.describe_config_schema, section, full_schema)
 
     @server.tool(title="Validate a config", annotations=_READ)
     async def validate_config(
@@ -157,9 +180,11 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
             ),
         ] = None,
     ) -> CallToolResult:
-        """Check a config with the checks and messages of `mapcv validate`. Reads neither
-        labels nor imagery. Give `path` or `yaml_text`. A config with mistakes returns
-        `valid: false` and the list of errors, each naming the field."""
+        """Check a config with the checks and messages of `mapcv validate`, plus that the
+        files it names exist and its label_field is in the label file. Reads no imagery.
+        Give `path` or `yaml_text`. A config with mistakes returns `valid: false` and the
+        list of errors, each naming the field. `warnings` say what this server cannot do
+        with it (labels.osm)."""
         return await _run(state, tools.validate_config, path, yaml_text)
 
     @server.tool(title="Inspect a label file", annotations=_READ)
@@ -197,7 +222,8 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
     ) -> CallToolResult:
         """Estimate tiles, patches, disk, memory and warnings for a config without
         downloading imagery, like `mapcv plan`. `large` says whether `generate` will ask for
-        confirmation, and `large_reason` why. Always run this before `generate`."""
+        confirmation, and `large_reason` why. `notes` say what is not estimated. Safe to run
+        while a `generate` is running."""
         return await _run(state, tools.plan, config, yaml_text)
 
     @server.tool(title="Show a dataset", annotations=_READ)
@@ -206,9 +232,38 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
             str, Field(description="A dataset folder (the config's writer.staging_dir).")
         ],
     ) -> CallToolResult:
-        """Summarize a generated dataset like `mapcv info`: task, source, shapes, class
-        balance and split sizes."""
+        """Summarize a generated dataset like `mapcv info`: task, every source, shapes, class
+        balance, split sizes, and whether it is complete."""
         return await _run(state, tools.info, dataset)
+
+    # They only read, unless the caller asks for a file and the server may write it.
+    checks = _WRITE_IDEMPOTENT if allow_write else _READ
+
+    @server.tool(title="Dataset statistics", annotations=checks)
+    async def stats(
+        dataset: Annotated[str, Field(description="A dataset folder inside the root.")],
+        split: Annotated[
+            Literal["train", "val", "test", "all"], Field(description="Patches to count.")
+        ] = "train",
+        save: Annotated[
+            bool, Field(description="Also write stats.json (needs --allow-write).")
+        ] = False,
+    ) -> CallToolResult:
+        """Band mean/std, class balance and class weights, like `mapcv stats`. Writes
+        nothing unless `save` is true."""
+        return await _run(state, tools.stats, dataset, split, save)
+
+    @server.tool(title="Verify a dataset", annotations=checks)
+    async def verify(
+        dataset: Annotated[str, Field(description="A dataset folder inside the root.")],
+        deep: Annotated[bool, Field(description="Also decode every image.")] = False,
+        write_sums: Annotated[
+            bool, Field(description="Write SHA256SUMS if the check passes (needs --allow-write).")
+        ] = False,
+    ) -> CallToolResult:
+        """Check that every file is present and intact, like `mapcv verify`. Writes nothing
+        unless `write_sums` is true."""
+        return await _run(state, tools.verify, dataset, deep, write_sums)
 
     if not allow_write:
         return server

@@ -60,7 +60,7 @@ def test_config_loading_failures(tmp_path: Path) -> None:
     assert listed.data["valid"] is False and "mapping" in listed.data["errors"][0]["message"]
 
 
-def test_validate_warns_about_files_that_do_not_exist(tmp_path: Path) -> None:
+def test_validate_reports_files_that_do_not_exist(tmp_path: Path) -> None:
     state = _state(tmp_path)
     vector = CONFIG + "labels: {path: nope.geojson}\n"
     raster = CONFIG + "labels: {type: raster, path: nope.tif, classes: {1: 1}}\n"
@@ -68,14 +68,16 @@ def test_validate_warns_about_files_that_do_not_exist(tmp_path: Path) -> None:
         "{type: xyz, zoom: 16, source: esri_satellite}", "{type: geotiff, path: nope.tif}"
     )
     expected = (
-        (vector, "labels.path not found: nope.geojson"),
-        (raster, "labels.path not found: nope.tif"),
-        (tif, "imagery.path not found: nope.tif"),
+        (vector, "labels.path", "nope.geojson"),
+        (raster, "labels.path", "nope.tif"),
+        (tif, "imagery.path", "nope.tif"),
     )
-    for text, warning in expected:
+    for text, key, name in expected:
         result = validate_config(state, None, text)
-        assert result.data["valid"] is True
-        assert result.data["warnings"] == [warning]
+        # A missing input makes plan and generate fail, so it is an error, not a warning.
+        assert result.data["valid"] is False and result.data["warnings"] == []
+        (error,) = result.data["errors"]
+        assert error["field"] == key and f"file not found: {name}" in error["message"]
     assert validate_config(state, None, raster).data["summary"]["labels"]["type"] == "raster"
 
 

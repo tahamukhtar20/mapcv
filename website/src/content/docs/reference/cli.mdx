@@ -317,7 +317,7 @@ $ mapcv cache --clear --expired
 
 Runs an [MCP](https://modelcontextprotocol.io/) server over stdio so an AI agent can inspect labels, validate a config, plan, generate and inspect a dataset. It needs the `mcp` extra (`pip install "mapcv[mcp]"`); without it the command prints the install command and exits with code 1.
 
-- **Read-only by default.** `--allow-write` also offers `write_config`, `generate` and `split`. The environment variable `MAPCV_MCP_ALLOW_WRITE=true` does the same, for clients that configure servers through the environment.
+- **Read-only by default.** Without `--allow-write` the tools `write_config`, `generate` and `split` do not exist on the server; with it they are offered (and `stats` and `verify` may write `stats.json` and `SHA256SUMS`). The environment variable `MAPCV_MCP_ALLOW_WRITE=true` does the same, for clients that configure servers through the environment.
 - **`--root`** is the only folder the server reads or writes (default: the current folder). Paths outside it, including the ones a config resolves to, are refused.
 - Progress bars are silenced, because stdout carries the protocol; logs go to stderr.
 

@@ -772,7 +772,9 @@ def test_a_missing_annotated_area_of_a_label_set_is_reported(
     estimate = plan(MapcvConfig.from_yaml(path))
     assert any(message in warning for warning in estimate.warnings)
     answer = validate_config(ToolState(Sandbox(tmp_path)), "change.yaml")
-    assert f"{message}: gone.geojson" in answer.data["warnings"]
+    assert answer.data["valid"] is False
+    assert [e["field"] for e in answer.data["errors"]] == ["change.before.annotated_area"]
+    assert "file not found: gone.geojson" in answer.data["errors"][0]["message"]
 
 
 def test_mcp_sandbox_checks_both_label_sets(tmp_path: Path, scene: dict[str, Any]) -> None:

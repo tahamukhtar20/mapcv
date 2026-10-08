@@ -267,10 +267,10 @@ def test_mcp_summaries_and_warnings_for_new_label_forms(tmp_path: Path) -> None:
     assert values["summary"]["labels"]["type"] == "continuous"
     files = validate_config(state, "files.yaml").data
     assert [f["class"] for f in files["summary"]["labels"]["files"]] == ["a", "b"]
-    assert any("labels.files[1].path not found" in text for text in files["warnings"])
-    assert any("labels.annotated_area not found" in text for text in files["warnings"])
+    missing = {error["field"] for error in files["errors"]}
+    assert {"labels.files[1].path", "labels.annotated_area"} <= missing
     change = validate_config(state, "change.yaml").data
-    assert any("change.after.path not found" in text for text in change["warnings"])
+    assert "change.after.path" in {error["field"] for error in change["errors"]}
 
 
 def test_aoi_helpers(tmp_path: Path) -> None:

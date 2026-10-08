@@ -108,6 +108,8 @@ A key written twice in the same mapping of a config (for example `stride` twice 
 
 A dataset folder that holds a symbolic link pointing outside it is refused by `generate`, `split`, `stats`, `card`, `verify` and `export` (they would write or read through it); replace the link with the file itself. A manifest whose patch files are absolute paths or contain `..` no longer loads. Tile and GeoTIFF requests send no `Referer` header, and a redirect is checked like the configured URL: a `url_template` with a query string follows redirects only within its own host, so if your tile server sends tiles from another host, put that final URL in `url_template`. The query values of `labels.osm.overpass_url` are recorded in the manifest as `***`.
 
+A host *name* in a URL (`url_template`, a remote GeoTIFF, a STAC catalog, `labels.osm.overpass_url`) is now judged by the addresses it resolves to: a name that resolves only to this machine or a private network (`10.x`, `192.168.x`, `127.x`, link-local, ...) is refused, as a redirect there already was. A server on your own network keeps working when the URL names it by its IP address (or `localhost`), or with the environment variable `MAPCV_ALLOW_LOCAL_URLS=1`.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

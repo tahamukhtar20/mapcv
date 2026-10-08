@@ -322,11 +322,16 @@ impl HttpSource {
     pub fn open(url: &str, cache_bytes: usize) -> Result<Self> {
         let resolved = resolve_url(url)?;
         let display = sanitize_url(resolved.as_str());
+        if let Some(reason) = crate::http_policy::start_refusal(&resolved) {
+            return Err(GeoTiffError::Io(format!(
+                "request to {display} refused: {reason}"
+            )));
+        }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| GeoTiffError::Io(format!("cannot start the HTTP runtime: {e}")))?;
-        let client = Client::builder()
+        let builder = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             // Every redirect target is checked like the configured URL.
@@ -336,7 +341,9 @@ impl HttpSource {
                 "mapcv/",
                 env!("CARGO_PKG_VERSION"),
                 " (+https://github.com/tahamukhtar20/mapcv)"
-            ))
+            ));
+        // Names are judged by the addresses they resolve to, when connecting.
+        let client = crate::http_policy::with_resolver(builder, &resolved)
             .build()
             .map_err(|e| GeoTiffError::Io(format!("cannot build the HTTP client: {e}")))?;
         let mut source = HttpSource {
@@ -402,6 +409,10 @@ impl HttpSource {
             .map_err(|e| {
                 if let Some(reason) = crate::http_policy::redirect_refusal(&e) {
                     let message = format!("request to {} failed: {reason}", self.display);
+                    return (GeoTiffError::Io(message), false);
+                }
+                if let Some(reason) = crate::http_policy::address_refusal(&e) {
+                    let message = format!("request to {} refused: {reason}", self.display);
                     return (GeoTiffError::Io(message), false);
                 }
                 let retry = e.is_timeout() || e.is_connect() || e.is_request();

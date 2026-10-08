@@ -26,7 +26,7 @@ import threading
 import warnings
 from collections import Counter
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -44,6 +44,7 @@ from shapely.geometry import shape
 from mapcv import planning
 from mapcv._confine import first_outside_path
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._net import is_internal_host, public_addresses_only
 from mapcv._redact import Redactor
 from mapcv._redact import redact_url as _redact_url
 from mapcv._warnings import capture as _capture
@@ -133,12 +134,41 @@ class ToolResult:
 class Sandbox:
     """The folder tools may use, and whether they may write there."""
 
-    def __init__(self, root: str | os.PathLike[str], allow_write: bool = False) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        allow_write: bool = False,
+        allow_local_urls: bool = False,
+    ) -> None:
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"--root {root} is not a folder")
         self.root = resolved
         self.allow_write = allow_write
+        self.allow_local_urls = allow_local_urls
+
+    def network(self) -> AbstractContextManager[None]:
+        """Where requests may connect while a tool reads imagery: public addresses only,
+        redirects and the addresses names resolve to included, unless the server was
+        started with ``--allow-local-urls``."""
+        return nullcontext() if self.allow_local_urls else public_addresses_only()
+
+    def url_problems(self, config: MapcvConfig) -> list[dict[str, str]]:
+        """An error per URL of ``config`` that names this machine or a private network,
+        when this server connects to public addresses only. Only the URL's text is
+        judged here, so nothing is resolved or sent."""
+        if self.allow_local_urls:
+            return []
+        return [
+            {
+                "field": key,
+                "message": f"{_shown_origin(url)} is on this machine or a private network, and "
+                "this server connects to public addresses only. Use a public URL, or ask the "
+                "user to restart the server with `mapcv mcp --allow-local-urls`",
+            }
+            for key, url in config_urls(config)
+            if is_internal_host(urlsplit(url).hostname)
+        ]
 
     def resolve(self, value: str, what: str = "path") -> Path:
         """An absolute path inside the root; relative paths are relative to the root."""
@@ -236,6 +266,34 @@ def _vector_label_paths(key: str, path: Path) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = [(key, path)]
     if path.suffix.lower() == ".shp" and path.is_file():
         found.extend((f"{key} (sidecar)", file) for file in shapefile_files(path)[1:])
+    return found
+
+
+def _shown_origin(url: str) -> str:
+    """``scheme://host[:port]`` of a URL: no user info, path or query."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
+
+
+def config_urls(config: MapcvConfig) -> list[tuple[str, str]]:
+    """The http(s) URLs a config makes mapcv connect to, named by their config key."""
+    found: list[tuple[str, str]] = []
+
+    def add(key: str, value: str | None) -> None:
+        if value is not None and urlsplit(value).scheme in ("http", "https"):
+            found.append((key, value))
+
+    if isinstance(config.labels, RASTER_LABEL_TYPES):
+        add("labels.path", config.labels.path)
+    for name, imagery in zip(config.source_names, config.sources):
+        where = f"imagery '{name}' " if config.multi_source else "imagery."
+        if isinstance(imagery, XYZImageryConfig):
+            add(f"{where}url_template", imagery.url_template)
+        if isinstance(imagery, (EOPFZarrImageryConfig, GeoTiffImageryConfig)):
+            add(f"{where}path", imagery.path)
+        search = getattr(imagery, "search", None)
+        if search is not None:
+            add(f"{where}search.catalog", search.catalog)
     return found
 
 
@@ -999,6 +1057,7 @@ def config_problems(
     ]
     errors.extend(_label_field_problems(state, config))
     errors.extend(_stack_problems(config))
+    errors.extend(state.sandbox.url_problems(config))
     label_sets = [config.labels] + (
         [config.change.before, config.change.after] if config.change is not None else []
     )
@@ -1420,9 +1479,14 @@ def make_plan_for(state: ToolState, config: MapcvConfig) -> tuple[Plan, list[str
             "root, so plan and generate are not available for it here. Run `mapcv plan` / "
             "`mapcv generate` in a terminal, or point labels.path at an OSM extract."
         )
+    problems = state.sandbox.url_problems(config)
+    if problems:
+        raise ToolFailure(
+            f"Cannot plan this config: {_problem_lines(problems)}", {"errors": problems}
+        )
     with capture_warnings() as caught:
         try:
-            with local_paths_checked(state.sandbox.check_found_path):
+            with local_paths_checked(state.sandbox.check_found_path), state.sandbox.network():
                 estimate = make_plan(config)
         except (ValueError, RuntimeError, OSError) as exc:
             raise ToolFailure(f"Cannot plan this config: {exc}") from None
@@ -1578,7 +1642,7 @@ def execute_generate(
     try:
         with capture_warnings(broad=True) as caught:
             try:
-                with local_paths_checked(state.sandbox.check_found_path):
+                with local_paths_checked(state.sandbox.check_found_path), state.sandbox.network():
                     result = run_generate(config, hook)
             except GenerationCancelled:
                 raise ToolFailure(

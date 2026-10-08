@@ -88,6 +88,8 @@ class MapcvDataset:
 
     Raises:
         FileNotFoundError: No manifest, or no list for ``split``.
+        ValueError: A Zarr store with an array that is not numeric or names a codec other
+            than the plain compressors (reading it could run code).
     """
 
     def __init__(
@@ -110,7 +112,12 @@ class MapcvDataset:
         if (self.root / ".zgroup").exists():
             import zarr
 
-            self._zarr = zarr.open_group(str(self.root), mode="r")
+            from mapcv._zarr_safety import check_group
+
+            group = zarr.open_group(str(self.root), mode="r")
+            # A downloaded store decides how its arrays decode: check before reading any.
+            check_group(group, str(self.root))
+            self._zarr = group
         self._positions = {id(entry): index for index, entry in enumerate(self.manifest.patches)}
         self.entries = self._entries(split)
         self.transform = transform

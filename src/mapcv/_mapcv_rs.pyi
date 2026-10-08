@@ -34,6 +34,7 @@ __all__ = [
     "random_anchor_capacity",
     "random_sample_anchors",
     "rasterize",
+    "set_public_only",
     "snap_bbox",
     "stitch_tiles",
     "tile",
@@ -221,3 +222,4 @@ def write_geotiffs(
 def parse_kml(
     data: bytes, label_field: str | None = None
 ) -> tuple[list[tuple[list[_Ring], str | None]], int]: ...
+def set_public_only(on: bool) -> None: ...

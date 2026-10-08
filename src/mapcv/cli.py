@@ -3107,7 +3107,9 @@ def cache_command(
     epilog=(
         "Examples:\n\n"
         "  [cyan]mapcv mcp[/cyan]                         read-only, in this folder\n\n"
-        "  [cyan]mapcv mcp --root ~/work --allow-write[/cyan]   may write datasets under ~/work"
+        "  [cyan]mapcv mcp --root ~/work --allow-write[/cyan]   may write datasets under ~/work\n\n"
+        "  [cyan]mapcv mcp --allow-local-urls[/cyan]      may also read a tile or GeoTIFF server "
+        "on this machine or a private network"
     ),
 )
 def mcp_server(
@@ -3121,6 +3123,12 @@ def mcp_server(
         "--allow-write",
         envvar="MAPCV_MCP_ALLOW_WRITE",
         help="Also offer the tools that write: write_config, generate and split.",
+    ),
+    allow_local_urls: bool = typer.Option(
+        False,
+        "--allow-local-urls",
+        help="Let the tools connect to this machine and private networks (a local tile or "
+        "GeoTIFF server). Without it they reach public addresses only.",
     ),
 ) -> None:
     """Run an MCP server over stdio so AI agents can build datasets with mapcv."""
@@ -3136,7 +3144,7 @@ def mcp_server(
             f"{escape(str(exc))} (mapcv needs mcp 2.x)",
         )
     try:
-        serve(root, allow_write)
+        serve(root, allow_write, allow_local_urls)
     except ValueError as exc:
         _debug_traceback(exc)
         _fail(f"[red]{escape(str(exc))}[/red]")

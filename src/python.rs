@@ -888,8 +888,18 @@ impl PyGeoTiff {
     }
 }
 
+/// Make every HTTP request of this process connect to public addresses only (`True`),
+/// even one whose URL names this machine, or go back to the default (`False`).
+///
+/// The MCP server sets it unless it was started with `--allow-local-urls`.
+#[pyfunction]
+fn set_public_only(on: bool) {
+    crate::http_policy::set_public_only(on);
+}
+
 #[pymodule]
 fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(set_public_only, m)?)?;
     m.add_function(wrap_pyfunction!(xy, m)?)?;
     m.add_function(wrap_pyfunction!(tile, m)?)?;
     m.add_function(wrap_pyfunction!(tiles, m)?)?;

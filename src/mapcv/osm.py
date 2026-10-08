@@ -41,6 +41,7 @@ from shapely.geometry import LineString, MultiPolygon, Point, Polygon, mapping
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize
 
+from mapcv._net import AddressRefused, urlopen
 from mapcv.config import OsmClass, OsmLabelsSource
 from mapcv.tile_cache import cache_dir
 from mapcv.vector_files import organize_rings
@@ -262,7 +263,7 @@ def _fetch(source: OsmLabelsSource, query: str) -> dict[str, Any]:
     deadline = time.monotonic() + seconds
     what = f"Overpass at {_server(source.overpass_url)}"
     try:
-        with urllib.request.urlopen(request, timeout=seconds) as response:
+        with urlopen(request, timeout=seconds) as response:
             body = _read_answer(response, deadline, what)
     except TimeoutError:
         raise RuntimeError(
@@ -270,6 +271,10 @@ def _fetch(source: OsmLabelsSource, query: str) -> dict[str, Any]:
             f"plus {ANSWER_MARGIN_SECONDS} s for the answer to arrive). The server may be "
             "busy: try again later, use a smaller region or set labels.osm.overpass_url to "
             "another instance"
+        ) from None
+    except AddressRefused as exc:
+        raise RuntimeError(
+            f"Overpass request to {_server(source.overpass_url)} refused: {exc}"
         ) from None
     except OSError as exc:
         raise RuntimeError(

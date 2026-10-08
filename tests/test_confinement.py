@@ -363,7 +363,7 @@ def test_the_overpass_key_is_not_shown_in_errors(monkeypatch: pytest.MonkeyPatch
     def fail(*args: Any, **kwargs: Any) -> None:
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr("urllib.request.urlopen", fail)
+    monkeypatch.setattr("mapcv.osm.urlopen", fail)
     source = _osm("http://127.0.0.1:1/api/interpreter?key=SUPERSECRET123")
     with pytest.raises(RuntimeError) as excinfo:
         osm._fetch(source, "[out:json];")

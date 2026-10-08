@@ -7,11 +7,14 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
 import urllib.request
 import warnings
 from collections import Counter
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -33,6 +36,8 @@ from mapcv._mapcv_rs import (
     tile_transform,
     tiles,
 )
+from mapcv._net import fsspec_options, linked_url_refusal
+from mapcv._net import urlopen as _urlopen
 from mapcv.config import (
     _LOOPBACK_HOSTS,
     EOPFZarrImageryConfig,
@@ -738,6 +743,40 @@ def _check_band_coverage(
             )
 
 
+_fsspec_config_lock = threading.Lock()
+
+
+@contextmanager
+def _eopf_guards(path: str) -> Iterator[None]:
+    """The rules for opening an EOPF product: no ``pickle`` codec (a product names its
+    own codecs, and that one runs code), and, over https, connections to public
+    addresses only (:mod:`mapcv._net`), redirects included.
+
+    xarray-eopf passes no options to fsspec for an https product, so the connection
+    rules go in through fsspec's configuration while the product is opened; the file
+    system created then keeps them for the reads that follow.
+    """
+    from mapcv._zarr_safety import pickle_codec_refused
+
+    options = fsspec_options(path) if urlsplit(path).scheme == "https" else {}
+    with pickle_codec_refused():
+        if not options:
+            yield
+            return
+        import fsspec.config
+
+        with _fsspec_config_lock:
+            saved = fsspec.config.conf.get("https")
+            fsspec.config.conf["https"] = {**(saved or {}), **options}
+            try:
+                yield
+            finally:
+                if saved is None:
+                    fsspec.config.conf.pop("https", None)
+                else:
+                    fsspec.config.conf["https"] = saved
+
+
 class EOPFZarrRasterSource:
     """Lazy window reader for one Sentinel-2 L2A EOPF Zarr product."""
 
@@ -761,6 +800,9 @@ class EOPFZarrRasterSource:
                     f"STAC item {match.item_id} points to a local file ({match.href}); a "
                     "catalog may only point to https:// or s3:// products"
                 )
+            refusal = linked_url_refusal(config.search.catalog, path)
+            if refusal is not None:
+                raise ValueError(f"STAC item {match.item_id}: {refusal}")
             fingerprint["stac"] = {
                 "catalog": config.search.catalog,
                 "collection": config.search.collection,
@@ -794,16 +836,17 @@ class EOPFZarrRasterSource:
         variables = list(config.bands) + (["scl"] if config.scl_mask is not None else [])
 
         def open_dataset(**spatial_options: Any) -> Any:
-            return xr.open_dataset(
-                path,
-                engine="eopf-zarr",
-                op_mode="analysis",
-                variables=variables,
-                resolution=config.resolution,
-                chunks={},
-                storage_options=storage_options,
-                **spatial_options,
-            )
+            with _eopf_guards(path):
+                return xr.open_dataset(
+                    path,
+                    engine="eopf-zarr",
+                    op_mode="analysis",
+                    variables=variables,
+                    resolution=config.resolution,
+                    chunks={},
+                    storage_options=storage_options,
+                    **spatial_options,
+                )
 
         try:
             discovery = open_dataset()
@@ -996,7 +1039,7 @@ def geotiff_fingerprint(location: str) -> dict[str, Any]:
         headers={"Range": f"bytes=0-{_FINGERPRINT_BYTES - 1}", "User-Agent": "mapcv"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:
+        with _urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:
             head = response.read(_FINGERPRINT_BYTES)
             etag = response.headers.get("ETag")
             content_range = response.headers.get("Content-Range", "")
@@ -1588,6 +1631,9 @@ class StacCogRasterSource:
                     f"STAC item {item_id} points to a local file ({location}); a catalog may "
                     "only point to https:// or s3:// files"
                 )
+            refusal = linked_url_refusal(config.search.catalog, location)
+            if refusal is not None:
+                raise ValueError(f"STAC item {item_id} asset '{key}': {refusal}")
             return location
 
         locations = {key: href(key) for key in wanted}

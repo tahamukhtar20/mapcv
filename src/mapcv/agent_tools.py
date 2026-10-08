@@ -24,8 +24,8 @@ import tempfile
 import threading
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import (
@@ -42,6 +42,7 @@ from shapely.geometry import shape
 
 from mapcv import planning
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._warnings import capture as _capture
 from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url, _task_label
 from mapcv.config import (
     MULTI_SOURCE_TASKS,
@@ -359,74 +360,12 @@ def config_paths(config: MapcvConfig) -> list[tuple[str, Path]]:
 # ── Shared state ─────────────────────────────────────────────────────────────
 
 
-class _WarningRouter:
-    """Records warnings for several tools that run at the same time.
-
-    ``warnings.catch_warnings`` changes process-wide state and cannot be nested across
-    threads, so the first capture installs one hook and the last one removes it. The hook
-    hands each warning to the capture of the thread that raised it. A warning from a thread
-    no capture owns (a worker pool) goes to the ``broad`` captures (a generation), or to
-    every capture when there is none.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._captures: list[tuple[int, bool, list[warnings.WarningMessage]]] = []
-        self._context: warnings.catch_warnings | None = None
-
-    def _show(
-        self,
-        message: Warning | str,
-        category: type[Warning],
-        filename: str,
-        lineno: int,
-        file: Any = None,
-        line: str | None = None,
-    ) -> None:
-        record = warnings.WarningMessage(message, category, filename, lineno, file, line)
-        me = threading.get_ident()
-        with self._lock:
-            own = [log for thread, _, log in self._captures if thread == me]
-            if not own:
-                broad = [log for _, wide, log in self._captures if wide]
-                own = broad or [log for _, _, log in self._captures]
-            for log in own:
-                log.append(record)
-
-    @contextmanager
-    def capture(self, broad: bool = False) -> Iterator[list[warnings.WarningMessage]]:
-        log: list[warnings.WarningMessage] = []
-        entry = (threading.get_ident(), broad, log)
-        with self._lock:
-            if not self._captures:
-                self._context = warnings.catch_warnings()
-                self._context.__enter__()
-                warnings.simplefilter("always")
-                warnings.showwarning = self._show
-            self._captures.append(entry)
-        try:
-            yield log
-        finally:
-            with self._lock:
-                self._captures.remove(entry)
-                if not self._captures and self._context is not None:
-                    self._context.__exit__(None, None, None)
-                    self._context = None
-
-
-_ROUTER = _WarningRouter()
-# Planning records warnings itself with ``catch_warnings``, which cannot overlap with
-# another plan; a plan still runs next to a generation.
-_PLAN_LOCK = threading.Lock()
-_PLAN_LOCK_WAIT = 120.0
-
-
 def capture_warnings(broad: bool = False) -> AbstractContextManager[list[warnings.WarningMessage]]:
     """Record the warnings raised inside the block; captures of different tools can overlap.
 
     ``broad`` also takes warnings from threads the block started (a generation's workers).
     """
-    return _ROUTER.capture(broad)
+    return _capture(broad)
 
 
 class _Jobs:
@@ -1510,16 +1449,11 @@ def make_plan_for(state: ToolState, config: MapcvConfig) -> tuple[Plan, list[str
             "root, so plan and generate are not available for it here. Run `mapcv plan` / "
             "`mapcv generate` in a terminal, or point labels.path at an OSM extract."
         )
-    if not _PLAN_LOCK.acquire(timeout=_PLAN_LOCK_WAIT):
-        raise ToolFailure("Another `plan` is still running; try again when it has finished.")
-    try:
-        with capture_warnings() as caught:
-            try:
-                estimate = make_plan(config)
-            except (ValueError, RuntimeError, OSError) as exc:
-                raise ToolFailure(f"Cannot plan this config: {exc}") from None
-    finally:
-        _PLAN_LOCK.release()
+    with capture_warnings() as caught:
+        try:
+            estimate = make_plan(config)
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise ToolFailure(f"Cannot plan this config: {exc}") from None
     texts = _warning_texts(caught)
     extra = [text for text in texts if text not in estimate.warnings]
     return estimate, extra

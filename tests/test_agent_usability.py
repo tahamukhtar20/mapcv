@@ -282,3 +282,47 @@ def test_overlapping_warning_captures_keep_their_own_warnings() -> None:
         warnings.simplefilter("always")
         warnings.warn("outside", UserWarning, stacklevel=1)
     assert [str(w.message) for w in after] == ["outside"]
+
+
+def test_a_plan_does_not_take_the_warnings_of_a_running_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """planning records its own warnings: a generation's warning raised meanwhile stays
+    with the generation (the "tiles failed" warning at the end of a run), and the plan's
+    stay with the plan."""
+    shutil.copy(_VECTOR / "labels.geojson", tmp_path / "labels.geojson")
+    config = BASE + "labels: {path: labels.geojson}\n"
+    inside_plan = threading.Event()
+    generation_warned = threading.Event()
+
+    def load_labels(*args: object) -> tuple[list[object], dict[str, int]]:
+        inside_plan.set()  # the plan is reading the labels, with its capture open
+        assert generation_warned.wait(10)
+        warnings.warn("raised by the plan", UserWarning, stacklevel=1)
+        return [], {}
+
+    monkeypatch.setattr("mapcv.planning.load_labels", load_labels)
+    seen: dict[str, list[str]] = {}
+    started = threading.Event()
+    finish = threading.Event()
+
+    def generation() -> None:
+        with capture_warnings(broad=True) as caught:
+            started.set()
+            assert inside_plan.wait(10)
+            warnings.warn("raised by the generation", UserWarning, stacklevel=1)
+            generation_warned.set()
+            finish.wait(10)
+        seen["generation"] = [str(w.message) for w in caught]
+
+    worker = threading.Thread(target=generation)
+    worker.start()
+    assert started.wait(10)
+    try:
+        planned = plan(_state(tmp_path), None, config).data["warnings"]
+    finally:
+        finish.set()
+        worker.join(10)
+    assert seen["generation"] == ["raised by the generation"]
+    assert any("raised by the plan" in text for text in planned)
+    assert not any("raised by the generation" in text for text in planned)

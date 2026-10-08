@@ -12,6 +12,7 @@ import shapely
 from shapely.geometry import box
 
 from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
+from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
     EOPFZarrImageryConfig,
@@ -53,6 +54,11 @@ _PATCH_RECORD_BYTES = 530
 _FILE_OVERHEAD_BYTES = {"png": 80, "jpg": 600, "tif": 700, "npy": 128}
 # Many tiny files make a dataset slow to write and to read; warn above this many.
 MANY_FILES = 1_000_000
+
+
+def _is_user_warning(warning: warnings.WarningMessage) -> bool:
+    return issubclass(warning.category, UserWarning)
+
 
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
@@ -185,12 +191,11 @@ def _geotiff_raster(
 ) -> tuple[int, int, float, int, int, str, str]:
     """Open the file's header and size the region's window: ``(height, width, metres per
     pixel, channels, bytes per value, description, dtype)``."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", UserWarning)
+    with capture_warnings() as caught:
         source = open_geotiff_source(
             config.region, imagery, image_format=config.writer.image_format
         )
-    warned.extend(str(warning.message) for warning in caught)
+    warned.extend(str(warning.message) for warning in caught if _is_user_warning(warning))
     meta = source.metadata
     source.close()
     resolution = _pixel_size_m(meta.crs, meta.transform)
@@ -306,10 +311,9 @@ def _summarize_vector(
     if missing:
         return LabelSummary(where, 0, {}, [f"label file not found: {path}" for path in missing])
     points = config.task == "detection" and config.detection_options.point_box_size is not None
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", UserWarning)
+    with capture_warnings() as caught:
         geometries, class_map = load_labels(labels, points)
-    messages = [str(warning.message) for warning in caught]
+    messages = [str(warning.message) for warning in caught if _is_user_warning(warning)]
     if labels.annotated_area is not None and not labels.annotated_area.exists():
         messages.append(f"{key}.annotated_area not found: {labels.annotated_area}")
     region = config.region

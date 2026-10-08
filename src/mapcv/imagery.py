@@ -1247,6 +1247,8 @@ class GeoTiffRasterSource:
         self._nodata = config.nodata if config.nodata is not None else info.nodata
         effective_nodata = _json_nodata(self._nodata)
         self._dtype = info.dtype
+        # Where the file the fingerprint describes is, for a message about its times.
+        self.file_locations = {"": location}
         self.metadata = RasterMetadata(
             source_type="geotiff",
             product_id=name,
@@ -1469,6 +1471,7 @@ class GeoTiffMosaicSource:
         ]
         self._dtype = np.dtype(reference.dtype)
         _log.debug("GeoTIFF mosaic of %d file(s), %dx%d px in %s", len(files), width, height, crs)
+        self.file_locations = {name: str(path) for name, path in zip(names, files)}
         self.metadata = RasterMetadata(
             source_type="geotiff",
             product_id=f"{pattern} ({len(files)} files)",

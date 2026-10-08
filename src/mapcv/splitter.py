@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
+from mapcv._numbers import NoBooleanNumbers
 from mapcv.manifest import Manifest, ManifestEntry
 
 
-class SplitterConfig(BaseModel):
+class SplitterConfig(NoBooleanNumbers):
     """Configuration for splitting a manifest into train/val/test subsets.
 
     ``spatial`` (the default) assigns whole square blocks of the raster to one

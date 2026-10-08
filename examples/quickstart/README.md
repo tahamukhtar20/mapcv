@@ -23,7 +23,7 @@ mapcv info dataset              # summarize the result
 │ Region   4.9375, 52.3725 → 4.9515, 52.378  (≈ 1.0 × 0.6 km)                  │
 │ Imagery  esri_satellite · zoom 18 (≈ 0.36 m/px)                              │
 │ Raster   2,816 × 1,792 px · 77 tiles (≈ 1.9 MB to download)                  │
-│ Labels   buildings.geojson · 967 polygon(s) · classes: building → 1          │
+│ Labels   buildings.geojson · 967 polygons · classes: building → 1            │
 │ Patches  ≈ 77 × 256 px (grid, stride 256)                                    │
 │ Output   dataset · png (≈ 8.6 MB)                                            │
 │ Split    spatial · test 0.2 · val 0.1                                        │
@@ -41,7 +41,7 @@ The end of `mapcv generate mapcv.yaml` (timings depend on your connection):
 │ Tiles    77 fetched · 0 failed                                               │
 │ Splits   train 52 (68%) · val 8 (10%) · test 17 (22%)                        │
 │ Time     12s                                                                 │
-│ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                  │
+│ Files    dataset/ (Images/, Masks/, manifest.json, splits/, patches.geojson) │
 ╰──────────────────────────────────────────────────────────────────────────────╯
   class         id    pixels
   background     0     81.0%

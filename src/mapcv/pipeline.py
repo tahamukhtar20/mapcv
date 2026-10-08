@@ -387,7 +387,11 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
 
 # Folders and files a run writes before its first manifest.json, or that are not the
 # dataset's (a lock, a file browser's leftovers): a folder holding only these is a
-# dataset folder whose first run stopped early.
+# dataset folder whose first run stopped early. Hidden entries (a version-control folder,
+# ``.gitkeep``, ``.gitattributes``, ...) and a top-level ``README.md`` are allowed too: a
+# cloned Hugging Face dataset repository is a fine place for a dataset, and generate
+# writes none of them (``mapcv card`` writes README.md, over an existing one only with
+# ``--force``).
 _OWN_BEFORE_MANIFEST = frozenset(
     {
         "Images",
@@ -404,8 +408,13 @@ _OWN_BEFORE_MANIFEST = frozenset(
         ".DS_Store",
         "Thumbs.db",
         "desktop.ini",
+        "README.md",
     }
 )
+
+
+def _is_foreign(name: str) -> bool:
+    return name not in _OWN_BEFORE_MANIFEST and not name.startswith(".")
 
 
 def _check_staging_dir(staging: Path) -> None:
@@ -413,9 +422,7 @@ def _check_staging_dir(staging: Path) -> None:
     for some layouts, remove) files such as ``train.txt`` or ``dataset.yaml`` there."""
     if not staging.is_dir() or (staging / _MANIFEST_FILENAME).exists():
         return
-    foreign = sorted(
-        entry.name for entry in staging.iterdir() if entry.name not in _OWN_BEFORE_MANIFEST
-    )
+    foreign = sorted(entry.name for entry in staging.iterdir() if _is_foreign(entry.name))
     if foreign:
         raise StagingDirError(
             f"writer.staging_dir {staging} already holds files that mapcv did not write "
@@ -537,7 +544,12 @@ def _generate_locked(
             sampler=config.sampler.model_dump(mode="json"),
             **region_record,
         )
-        manifest = load_or_create_manifest(manifest_path, expected)
+        locations = {
+            name: files
+            for name, each in zip(names, opened)
+            if (files := getattr(each, "file_locations", None))
+        }
+        manifest = load_or_create_manifest(manifest_path, expected, locations)
         # Whether the dataset on disk was finished (None: a manifest from before mapcv 0.3).
         was_complete = manifest.complete if manifest_path.exists() else False
         broken = _first_broken_patch(staging, manifest)
@@ -675,6 +687,24 @@ def _generate_locked(
             _patches(counts["no_imagery"]),
         )
 
+    if not manifest.patches:
+        # Nothing was written. An empty dataset is no dataset: it gets no manifest (so
+        # verify, stats, split and export say there is none), no split lists and no
+        # footprints. A manifest of an earlier run that wrote nothing is removed too.
+        manifest_path.unlink(missing_ok=True)
+        _remove_empty_folders(staging)
+        return GenerateResult(
+            staging_dir=staging,
+            manifest=manifest,
+            new_patches=0,
+            split_counts=None,
+            tiles_requested=requested,
+            tiles_failed=failed,
+            seconds=time.monotonic() - started,
+            tiles_cached=cached,
+            patches_without_imagery=counts["no_imagery"],
+        )
+
     split_counts: dict[str, int] | None = None
     split_lists: SplitLists | None = None
     try:
@@ -720,6 +750,19 @@ def _generate_locked(
         tiles_cached=cached,
         patches_without_imagery=counts["no_imagery"],
     )
+
+
+def _remove_empty_folders(staging: Path) -> None:
+    """Remove the empty folders below ``staging`` (those a run that wrote nothing created)."""
+    for folder in sorted(
+        (path for path in staging.rglob("*") if path.is_dir() and not path.is_symlink()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        try:
+            folder.rmdir()
+        except OSError:  # not empty
+            pass
 
 
 def _failed_tile_masks(manifest: Manifest) -> str:

@@ -8,11 +8,12 @@ from typing import Any, Literal
 import numpy as np
 import numpy.typing as npt
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from mapcv._georef import epsg_code, is_geographic, world_file_text
 from mapcv._mapcv_rs import write_geotiffs
 from mapcv._mapcv_rs import write_patches as _write_patch_files
+from mapcv._numbers import NoBooleanNumbers
 from mapcv.manifest import (
     IMAGES_DIR,
     MANIFEST_VERSION,
@@ -56,7 +57,7 @@ _TIF_DTYPES = (
 )
 
 
-class WriterConfig(BaseModel):
+class WriterConfig(NoBooleanNumbers):
     """Configuration for writing patches to disk."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.

@@ -118,7 +118,11 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`… manifest.json cannot be read (…). It may be incomplete or edited by hand: restore it, or generate the dataset again into a new folder`** The manifest is truncated or was edited. Restore it from a copy, or generate again into a new folder.
 
-**`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles or 5 GB without a terminal. Read the plan, then pass `--yes`.
+**`This config would write no patches.`** (`plan` and `generate`, exit code 1) The plan holds no patch: the region is smaller than one `sampler.patch_size`, or `edge_strategy: drop` leaves none. Enlarge the region, lower `patch_size` or set `edge_strategy: pad`. If a run that did start ends with `No patches were written.`, every patch was dropped by `sampler.max_empty_ratio` or `min_label_ratio`; no dataset is left in the folder.
+
+**`patch_size: true is a YAML boolean, not a number`** YAML reads `yes`, `on` and `true` as booleans. Write the number itself.
+
+**`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles, 5 GB or 1,000,000 patches without a terminal. Read the plan, then pass `--yes`.
 
 **`Generation failed: permission denied: …`** mapcv can't create or write files in `writer.staging_dir` (or the folder named). Make it writable, or point `writer.staging_dir` at a folder you own, then run the same command again.
 

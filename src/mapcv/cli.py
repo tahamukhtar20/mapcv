@@ -178,7 +178,18 @@ def _configure_debug(debug: bool, log_file: Path | None) -> None:
         stderr.setFormatter(formatter)
         _debug_handlers.append(stderr)
     if log_file is not None:
-        file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+        try:
+            file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+        except OSError as exc:
+            for handler in _debug_handlers:
+                handler.close()
+            _debug_handlers.clear()
+            _debug = False
+            raise typer.BadParameter(
+                f"cannot write the debug log to {log_file} ({exc.strerror or exc}); "
+                "pass a file path in a folder that exists.",
+                param_hint="'--debug-log'",
+            ) from None
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         _debug_handlers.append(file_handler)
@@ -681,14 +692,14 @@ def _settings_table(config: MapcvConfig) -> Table:
     table.add_column(style="bold cyan", no_wrap=True)
     table.add_column()
     if config.task != "segmentation":
-        table.add_row("Task", _task_label(config))
+        table.add_row("Task", escape(_task_label(config)))
     region = config.region
     area = f"{escape(str(region.path))} · " if region.path is not None else ""
     table.add_row(
         "Region",
         f"{area}{_region_box(config)} (W, S → E, N)",
     )
-    table.add_row("Imagery", _imagery_label(config))
+    table.add_row("Imagery", escape(_imagery_label(config)))
     change = config.change_options
     if config.task == "change" and change.before is not None and change.after is not None:
         table.add_row(
@@ -751,12 +762,14 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
     table.add_column()
     width_km, height_km = estimate.region_km
     if config.task != "segmentation":
-        table.add_row("Task", _task_label(config))
+        table.add_row("Task", escape(_task_label(config)))
     table.add_row(
         "Region",
         f"{_region_box(config)}  [dim](≈ {width_km:.1f} × {height_km:.1f} km)[/dim]",
     )
-    table.add_row("Imagery", f"{estimate.imagery} [dim](≈ {estimate.resolution_m:.2f} m/px)[/dim]")
+    table.add_row(
+        "Imagery", f"{escape(estimate.imagery)} [dim](≈ {estimate.resolution_m:.2f} m/px)[/dim]"
+    )
     width, height = estimate.raster_px
     raster = f"{width:,} × {height:,} px"
     if estimate.tiles is not None and estimate.download_bytes is not None:
@@ -815,11 +828,20 @@ def _make_plan(config: MapcvConfig) -> Plan:
         _fail(f"[red]Cannot plan this config:[/red] {escape(str(exc))}")
 
 
+def _fail_without_patches(estimate: Plan) -> None:
+    """Exit when the plan holds no patch: there is nothing to build, so no 'Looks right?'."""
+    if estimate.patches == 0:
+        _fail(
+            "[red]This config would write no patches.[/red]",
+            "Enlarge the region, lower sampler.patch_size or set sampler.edge_strategy: pad.",
+        )
+
+
 def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
     _console.print(
         Panel(
             _plan_table(config, estimate),
-            title=f"[bold]Plan for {config_path.name}[/bold]",
+            title=f"[bold]Plan for {escape(config_path.name)}[/bold]",
             title_align="left",
             border_style="cyan",
         )
@@ -838,7 +860,7 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
 def _source_line(record: SourceRecord) -> str:
     """One source of a multi-source dataset: type, product, patch shape and its grid."""
     shape = "×".join(str(dim) for dim in record.patch_shape) or "?"
-    line = (
+    line = escape(
         f"{record.source_type} · {record.product_id or 'unknown product'} · "
         f"{shape} {record.dtype or ''}".strip()
     )
@@ -1028,12 +1050,14 @@ def _print_result(result: GenerateResult) -> None:
     table.add_row("Patches", patches)
     if len(manifest.sources) > 1:
         for record in manifest.sources:
-            table.add_row(f"Source {record.name}", _source_line(record))
+            table.add_row(f"Source {escape(record.name)}", _source_line(record))
     else:
         source = manifest.source
-        table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
+        table.add_row(
+            "Source", escape(f"{source.source_type} · {source.product_id or 'unknown product'}")
+        )
         shape = "×".join(str(dim) for dim in source.patch_shape) if source.patch_shape else "?"
-        table.add_row("Shape", f"{shape} {source.dtype or ''}".strip())
+        table.add_row("Shape", escape(f"{shape} {source.dtype or ''}".strip()))
     if result.tiles_requested or result.tiles_cached:
         cached = f" · {result.tiles_cached:,} from the cache" if result.tiles_cached else ""
         table.add_row(
@@ -1537,7 +1561,9 @@ def _ask_layer(path: Path) -> str | None:
         return None  # the caller reads the file next and shows why it cannot
     if len(names) < 2:
         return None
-    _console.print(f"[dim]{path.name} has {len(names)} layers: {', '.join(names)}[/dim]")
+    _console.print(
+        f"[dim]{escape(path.name)} has {len(names)} layers: {escape(', '.join(names))}[/dim]"
+    )
     return Prompt.ask("Layer", choices=names, default=names[0], console=_console)
 
 
@@ -2204,7 +2230,7 @@ def _wizard() -> str:
     labels_layer: str | None = None
     raster_lines: list[str] = []
     if area_file is not None and Confirm.ask(
-        f"Use {area_file.name} as the labels too?", default=True, console=_console
+        f"Use {escape(area_file.name)} as the labels too?", default=True, console=_console
     ):
         labels_path = area_file
         labels_layer = area_layer
@@ -2386,7 +2412,9 @@ def init(
             and not force
             and not (
                 guided
-                and Confirm.ask(f"{target} exists. Overwrite it?", default=False, console=_console)
+                and Confirm.ask(
+                    f"{escape(str(target))} exists. Overwrite it?", default=False, console=_console
+                )
             )
         ):
             _fail(exists, overwrite)
@@ -2445,6 +2473,12 @@ def _require_dataset(staging_dir: Path, files: bool = True) -> None:
     a link that leaves it (a downloaded dataset may carry one).
     """
     manifest = staging_dir / "manifest.json"
+    if staging_dir.is_file():
+        folder = _shell_path(staging_dir.parent)
+        _fail(
+            f"[red]{escape(str(staging_dir))} is a file, not a dataset folder.[/red]",
+            f"Pass the folder that holds it: [bold]{escape(folder)}[/bold].",
+        )
     if not manifest.is_file():
         _fail(
             f"[red]No manifest found at[/red] {escape(str(manifest))}",
@@ -2479,6 +2513,7 @@ def plan(
     _require_inputs(config, config_path)
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
+    _fail_without_patches(estimate)
     _console.print(
         "\nLooks right? Build it with "
         f"[cyan]mapcv generate {escape(_shell_path(config_path))}[/cyan]",
@@ -2509,6 +2544,7 @@ def generate(
     _require_inputs(config, config_path)
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
+    _fail_without_patches(estimate)
     if dry_run:
         return
     if estimate.is_large and not yes:
@@ -2583,23 +2619,25 @@ def info(
     table.add_column()
     target = manifest.target
     task = manifest.task if target is not None else f"{manifest.task} · image only (no labels)"
-    table.add_row("Task", task)
+    table.add_row("Task", escape(task))
     source = manifest.source
     if len(manifest.sources) > 1:
         for record in manifest.sources:
             bands = f" · bands {', '.join(record.bands)}" if record.bands else ""
-            table.add_row(f"Source {record.name}", _source_line(record) + bands)
+            table.add_row(f"Source {escape(record.name)}", _source_line(record) + escape(bands))
         table.add_row("Patches", f"{len(manifest.patches):,} per source")
     else:
-        table.add_row("Source", f"{source.source_type} · {source.product_id or 'unknown product'}")
+        table.add_row(
+            "Source", escape(f"{source.source_type} · {source.product_id or 'unknown product'}")
+        )
         if source.bands:
-            table.add_row("Bands", ", ".join(source.bands))
+            table.add_row("Bands", escape(", ".join(source.bands)))
         shape = "×".join(str(dim) for dim in source.patch_shape) or "?"
         table.add_row(
             "Patches", f"{len(manifest.patches):,} · {shape} {source.dtype or ''}".strip()
         )
     if source.crs:
-        table.add_row("CRS", source.crs)
+        table.add_row("CRS", escape(source.crs))
     if target is not None and target.ignore_index is not None:
         without = "imagery or label" if _raster_labels(manifest) else "imagery"
         if manifest.task == "classification":  # no masks: the value only decides what counts
@@ -2835,14 +2873,23 @@ def verify(
     report = verify_dataset(staging_dir, deep=deep)
     for note in report.notes:
         _console.print(f"[yellow]⚠[/yellow]  {escape(note)}")
-    if not report.ok:
+    if write_checksums_ and report.only_rewritten:
+        # Only files that mapcv's own split, stats and card rewrite differ: the new hashes
+        # are the right record. Patches that changed or went missing still block below.
+        _console.print(
+            f"[yellow]⚠[/yellow]  {_plural(len(report.rewritten), 'file')} changed since "
+            f"{CHECKSUMS_FILENAME} was written (mapcv split, stats and card rewrite them); "
+            "recording the new hashes."
+        )
+        report.checked_hashes -= len(report.rewritten)
+    elif not report.ok:
         for problem in report.problems[:20]:
             _console.print(f"[red]✗[/red] {escape(problem)}")
         if len(report.problems) > 20:
             _console.print(f"[red]… and {len(report.problems) - 20:,} more[/red]")
         if report.incomplete:
             hint = "Run mapcv generate again with the dataset's config to finish it."
-        elif len(report.rewritten) == len(report.problems):
+        elif report.only_rewritten:
             hint = (
                 "If you ran mapcv split, stats or card since SHA256SUMS was written, these "
                 "changes are theirs: record them with mapcv verify --write-checksums."
@@ -2886,7 +2933,7 @@ def validate(
     )
     _console.print(_settings_table(config))
     for problem in _missing_inputs(config):
-        _console.print(f"[yellow]⚠[/yellow]  {problem}")
+        _console.print(f"[yellow]⚠[/yellow]  {escape(problem)}")
 
 
 def _missing_inputs(config: MapcvConfig) -> list[str]:

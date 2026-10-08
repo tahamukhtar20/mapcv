@@ -146,7 +146,8 @@ def test_generate_refuses_an_invalid_config_and_reports_failures(
         execute_generate(state, job, lambda done, total: None, cancelled)
 
     # What a finished run with failed tiles reports (and the folder was released each time).
-    done = GenerateResult(job.config.writer.staging_dir, Manifest(patches=[]), 0, None, 10, 2, 1.0)
+    one = _manifest("segmentation").patches[:1]
+    done = GenerateResult(job.config.writer.staging_dir, Manifest(patches=one), 1, None, 10, 2, 1.0)
     monkeypatch.setattr("mapcv.agent_tools.run_generate", lambda config, hook: done)
     result = execute_generate(state, job, lambda *a: None, Event())
     assert "2 of 10 tiles failed" in result.summary

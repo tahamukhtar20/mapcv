@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import json
 import os
 from collections.abc import Iterator
@@ -106,4 +107,9 @@ def write_footprints(manifest: Manifest, split_lists: SplitLists | None, path: P
             out.write(("\n" if first else ",\n") + feature)
             first = False
         out.write("\n]}\n")
+    if path.is_file() and filecmp.cmp(tmp, path, shallow=False):
+        # Same bytes: leave the file as it is, so a run that changes nothing leaves the
+        # dataset (and its checksums and modification times) untouched.
+        tmp.unlink()
+        return
     os.replace(tmp, path)

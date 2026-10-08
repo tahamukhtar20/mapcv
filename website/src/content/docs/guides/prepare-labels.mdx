@@ -56,7 +56,7 @@ labels:
 The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
 
 <Aside type="caution" title="A label of 0 changes the numbering">
-Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`, and `0, 2, 10` too. Remove such features or set `classes` explicitly.
+Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`, and `0, 2, 10` too. Remove such features or set `classes` explicitly. `plan` and `generate` say so with `label '0' is class 1, not background; set labels.classes to map it differently`.
 </Aside>
 
 Always check the result with `mapcv plan`, which prints the class map and any skipped features before anything is downloaded:

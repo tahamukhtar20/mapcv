@@ -31,7 +31,7 @@ mapcv info dataset
 │ Region   5.4, 51.975 → 5.5, 52.035  (≈ 6.9 × 6.6 km)                         │
 │ Imagery  Sentinel-2 L2A (EOPF) · 4 bands (≈ 10.00 m/px)                      │
 │ Raster   709 × 692 px                                                        │
-│ Labels   landuse.geojson · 643 polygon(s) · classes: built_up → 1, farmland  │
+│ Labels   landuse.geojson · 643 polygons · classes: built_up → 1, farmland    │
 │          → 2, forest → 3, water → 4                                          │
 │ Patches  ≈ 25 × 128 px (grid, stride 128)                                    │
 │ Output   dataset · npy (≈ 6.6 MB)                                            │
@@ -52,7 +52,7 @@ completed run printed:
 │ Shape    4×128×128 float32                                                   │
 │ Splits   train 18 (72%) · val 2 (8%) · test 5 (20%)                          │
 │ Time     11m 07s                                                             │
-│ Files    dataset/ (Images/, Masks/, manifest.json, splits/)                  │
+│ Files    dataset/ (Images/, Masks/, manifest.json, splits/, patches.geojson) │
 ╰──────────────────────────────────────────────────────────────────────────────╯
   class         id    pixels
   background     0     25.7%

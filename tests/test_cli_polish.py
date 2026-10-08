@@ -297,8 +297,9 @@ def test_split_sample_limit_says_how_many_patches_are_in_no_split(tmp_path: Path
 
 
 def test_split_help_explains_sample_limit() -> None:
-    result = runner.invoke(app, ["split", "--help"], terminal_width=120)
-    assert "in no split" in " ".join(result.output.split())
+    result = runner.invoke(app, ["split", "--help"])
+    # the help sits in a box whose border characters differ between platforms
+    assert "nosplit" in re.sub(r"[^a-z]+", "", result.output)
 
 
 # --- F4: extra names ------------------------------------------------------------------

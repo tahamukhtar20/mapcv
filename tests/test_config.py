@@ -276,6 +276,12 @@ def test_nonexistent_file_raises(tmp_path: Path) -> None:
         ("https://{s}.tile.example.com/{z}/{x}/{y}.png", "replace {s} with one subdomain"),
         ("https://tiles.example.com/{z}/{x}.png", "missing {y}"),
         ("ftp://tiles.example.com/{z}/{x}/{y}.png", "http:// or https://"),
+        ("http:///{z}/{x}/{y}.png", "no host"),
+        ("http://127.0.0.1:99999/{z}/{x}/{y}.png", "check its host and port"),
+        ("http://127.0.0.1:0/{z}/{x}/{y}.png", "invalid port"),
+        ("http://127.0.0.1:8701/{{z}}/{x}/{y}", "stray brace"),
+        ("https://tiles.example.com/{z}/{x}/{y}.png?k={key", "stray brace"),
+        ("https://tiles{z}.example.com/{x}/{y}.png", "must not contain"),
     ],
 )
 def test_url_template_is_validated(tmp_path: Path, template: str, message: str) -> None:
@@ -350,3 +356,33 @@ def test_every_planned_task_is_supported(tmp_path: Path) -> None:
 def test_unknown_tasks_are_rejected(tmp_path: Path, task: object) -> None:
     with pytest.raises(ValidationError, match="task"):
         MapcvConfig.from_yaml(_write(tmp_path, f"task: {task}\n" + _MINIMAL))
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "https://tiles.example.com/{z}/{x}/{y}.png",
+        "http://127.0.0.1:8701/{z}/{x}/{y}",
+        "https://t.example.com/v1/KEY/{z}/{x}/{y}.jpg?token=abc",
+        "https://tiles.example.com/{z}/{x}/{y}@2x.png",
+        "http://[::1]:8000/{z}/{x}/{y}.png",
+    ],
+)
+def test_ordinary_url_templates_are_still_accepted(tmp_path: Path, template: str) -> None:
+    content = _MINIMAL.replace("source: esri_satellite", f'url_template: "{template}"')
+    MapcvConfig.from_yaml(_write(tmp_path, content))
+
+
+def test_max_connections_is_capped(tmp_path: Path) -> None:
+    ok = _MINIMAL.replace("source: esri_satellite", "source: esri_satellite\n  max_connections: 64")
+    MapcvConfig.from_yaml(_write(tmp_path, ok))
+    too_many = ok.replace("max_connections: 64", "max_connections: 100000")
+    with pytest.raises(ValueError, match="max_connections"):
+        MapcvConfig.from_yaml(_write(tmp_path, too_many))
+
+
+def test_patch_size_has_an_upper_limit(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="patch_size"):
+        MapcvConfig.from_yaml(
+            _write(tmp_path, _MINIMAL.replace("patch_size: 256", "patch_size: 1000000000000"))
+        )

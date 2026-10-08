@@ -25,7 +25,7 @@ class SamplerConfig(BaseModel):
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
     model_config = ConfigDict(extra="forbid")
 
-    patch_size: int = Field(gt=0)
+    patch_size: int = Field(gt=0, le=16384)
     stride: int = Field(default=0, ge=0)
     mode: Literal["grid", "random"] = "grid"
     edge_strategy: Literal["pad", "drop", "shift"] = "pad"

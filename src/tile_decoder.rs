@@ -118,6 +118,7 @@ fn matches_pillow(format: ImageFormat, color: ExtendedColorType, data: &[u8]) ->
 }
 
 /// Decode `data` to `TILE_PX x TILE_PX` RGB, or `None` when the caller must use Pillow.
+/// Fully transparent pixels come out black (see [`opaque_rgb`]).
 fn decode_tile(data: &[u8]) -> Option<Vec<u8>> {
     let reader = ImageReader::new(Cursor::new(data))
         .with_guessed_format()
@@ -132,8 +133,26 @@ fn decode_tile(data: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let image = DynamicImage::from_decoder(decoder).ok()?;
-    let rgb = image.into_rgb8().into_raw();
+    let rgb = if image.color().has_alpha() {
+        opaque_rgb(&image.into_rgba8().into_raw())
+    } else {
+        image.into_rgb8().into_raw()
+    };
     (rgb.len() == TILE_PX * TILE_PX * RGB_CHANNELS).then_some(rgb)
+}
+
+/// RGB of RGBA pixels, with fully transparent pixels zeroed: a transparent pixel has no
+/// imagery (its hidden colour is arbitrary), and all-zero pixels count as empty.
+fn opaque_rgb(rgba: &[u8]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(rgba.len() / 4 * RGB_CHANNELS);
+    for px in rgba.as_chunks::<4>().0 {
+        if px[3] == 0 {
+            rgb.extend_from_slice(&[0; RGB_CHANNELS]);
+        } else {
+            rgb.extend_from_slice(&px[..RGB_CHANNELS]);
+        }
+    }
+    rgb
 }
 
 /// A tile that intersects the window, with its pixel origin in window coordinates.

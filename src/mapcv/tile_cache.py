@@ -21,6 +21,7 @@ folder: ``$XDG_CACHE_HOME/mapcv`` or ``~/.cache/mapcv`` on Linux,
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import struct
 import sys
@@ -33,6 +34,9 @@ from pathlib import Path
 
 CACHE_ENV = "MAPCV_CACHE_DIR"
 DEFAULT_TTL = 7 * 24 * 3600.0
+#: The longest a tile is kept, whatever the server's headers ask for (RFC 9111 allows a
+#: cache to keep a response for less than it is fresh).
+MAX_TTL = 365 * 24 * 3600.0
 _MAGIC = b"mapcv-tile\x01"
 _HEADER = struct.Struct(">dQ")  # expiry (Unix seconds), payload length
 _SUFFIX = ".tile"
@@ -65,11 +69,11 @@ def _http_time(value: str | None) -> float | None:
         return None
     try:
         parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
+        if parsed.tzinfo is None:  # an HTTP date is always GMT
+            return None
+        return parsed.timestamp()
+    except (TypeError, ValueError, IndexError, OverflowError, OSError):
         return None
-    if parsed.tzinfo is None:  # an HTTP date is always GMT
-        return None
-    return parsed.timestamp()
 
 
 def freshness_lifetime(headers: CacheHeaders, now: float) -> float | None:
@@ -87,7 +91,9 @@ def freshness_lifetime(headers: CacheHeaders, now: float) -> float | None:
         return None
     try:
         current_age = max(0.0, float(age)) if age else 0.0
-    except ValueError:
+    except (ValueError, OverflowError):
+        current_age = 0.0
+    if math.isnan(current_age):
         current_age = 0.0
     lifetime: float | None = None
     if "max-age" in directives:
@@ -95,13 +101,15 @@ def freshness_lifetime(headers: CacheHeaders, now: float) -> float | None:
             lifetime = float(int(directives["max-age"]))
         except ValueError:
             lifetime = 0.0  # an invalid max-age makes the response stale (RFC 9111 4.2.1)
+        except OverflowError:
+            lifetime = MAX_TTL  # too large for a float: as long as a cache may keep it
     elif expires is not None:
         expiry = _http_time(expires)
         # An invalid Expires (such as "0") means already expired.
         lifetime = 0.0 if expiry is None else expiry - (_http_time(date) or now)
     if lifetime is None:
         return DEFAULT_TTL
-    remaining = lifetime - current_age
+    remaining = min(lifetime - current_age, MAX_TTL)
     return remaining if remaining > 0 else None
 
 
@@ -203,6 +211,15 @@ class TileCache:
         if expiry <= self._clock() or len(data) - start != length:
             return None
         return data[start:]
+
+    def discard(self, x: int, y: int, z: int) -> bool:
+        """Remove a tile from the cache (one that turned out not to be a usable image);
+        ``True`` if it was cached."""
+        try:
+            self._path(x, y, z).unlink()
+        except OSError:
+            return False
+        return True
 
     def put(self, x: int, y: int, z: int, payload: bytes, headers: CacheHeaders) -> bool:
         """Cache a tile the server sent, unless its headers forbid it; ``True`` if kept.

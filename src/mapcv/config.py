@@ -28,6 +28,7 @@ from pydantic import (
 )
 
 from mapcv.downloader import URL_TEMPLATES
+from mapcv.filepattern import is_pattern, matching_files
 from mapcv.labels import VECTOR_LABEL_SUFFIXES, _normalize_label, label_suffix_hint
 from mapcv.sampler import SamplerConfig
 from mapcv.splitter import SplitterConfig
@@ -144,13 +145,23 @@ def _validate_tile_source(source: str | None) -> str | None:
     )
 
 
+#: The most tile requests mapcv keeps in flight at once (each holds a socket open).
+MAX_CONNECTIONS = 64
+
 _TEMPLATE_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 
 
 def _validate_url_template(template: str | None) -> str | None:
     if template is None:
         return None
-    if urlsplit(template).scheme not in ("http", "https"):
+    try:
+        parts = urlsplit(template)
+        port = parts.port
+    except ValueError:
+        raise ValueError(
+            "url_template must be a valid http:// or https:// URL; check its host and port"
+        ) from None
+    if parts.scheme not in ("http", "https"):
         raise ValueError("url_template must be an http:// or https:// URL")
     placeholders = set(_TEMPLATE_PLACEHOLDER.findall(template))
     missing = {"x", "y", "z"} - placeholders
@@ -166,6 +177,20 @@ def _validate_url_template(template: str | None) -> str | None:
             f"url_template has unsupported placeholder(s) "
             f"{', '.join('{' + name + '}' for name in sorted(unknown))}{hint}"
         )
+    leftover = _TEMPLATE_PLACEHOLDER.sub("", template)
+    if "{" in leftover or "}" in leftover:
+        raise ValueError(
+            "url_template has a stray brace; write each placeholder once, as {x}, {y} or {z} "
+            "(not {{z}}), and percent-encode any other brace"
+        )
+    if not parts.hostname:
+        raise ValueError(
+            "url_template has no host; it looks like https://tiles.example.com/{z}/{x}/{y}.png"
+        )
+    if "{" in parts.netloc:
+        raise ValueError("url_template: the host and port must not contain {x}, {y} or {z}")
+    if port == 0:
+        raise ValueError("url_template has an invalid port (0)")
     return template
 
 
@@ -490,7 +515,7 @@ class XYZImageryConfig(BaseModel):
     url_template: str | None = None
     # Tiles rendered by Google Earth Engine (needs mapcv[gee] and an Earth Engine login).
     earth_engine: EarthEngineImageryConfig | None = None
-    max_connections: int = Field(default=16, ge=1)
+    max_connections: int = Field(default=16, ge=1, le=MAX_CONNECTIONS)
     policy: Literal["strict", "lenient", "ignore"] = "lenient"
     max_failed_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
     strip_rows: int = Field(default=4, ge=1)
@@ -700,8 +725,27 @@ class GeoTiffImageryConfig(BaseModel):
 
     @property
     def is_pattern(self) -> bool:
-        """``True`` when ``path`` is a local glob pattern (a mosaic), not one file or URL."""
-        return eopf_local_path(self.path) is not None and glob.has_magic(self.path)
+        """``True`` when ``path`` is a local glob pattern (a mosaic), not one file or URL.
+
+        A path that exists as written is that file, even with ``[``, ``*`` or ``?`` in its
+        name; only a path (or a part of it) that does not exist is matched as a pattern.
+        """
+        local = eopf_local_path(self.path)
+        return local is not None and is_pattern(local)
+
+    def matching_files(self) -> list[str]:
+        """The local files a pattern ``path`` matches, sorted, one per real file (``[]``
+        when none match, or when ``path`` is not a pattern). Files under the dataset folder
+        (``writer.staging_dir``) are left out."""
+        local = eopf_local_path(self.path)
+        if local is None or not is_pattern(local):
+            return []
+        matches = matching_files(local)
+        if self._exclude_dir is not None and matches:
+            # A staging_dir inside the pattern's folder holds GeoTIFF patches of its own.
+            excluded = self._exclude_dir.resolve()
+            matches = [found for found in matches if excluded not in Path(found).resolve().parents]
+        return matches
 
     def files(self) -> list[str]:
         """The GeoTIFFs this source reads: ``path``, or the sorted local files its glob
@@ -715,13 +759,7 @@ class GeoTiffImageryConfig(BaseModel):
                     f"mosaic, use a pattern such as {pattern}"
                 )
             return [self.path]
-        matches = sorted(
-            found for found in glob.glob(str(local), recursive=True) if Path(found).is_file()
-        )
-        if self._exclude_dir is not None and matches:
-            # A staging_dir inside the pattern's folder holds GeoTIFF patches of its own.
-            excluded = self._exclude_dir.resolve()
-            matches = [found for found in matches if excluded not in Path(found).resolve().parents]
+        matches = self.matching_files()
         if not matches:
             raise FileNotFoundError(f"imagery.path: no files match {self.path}")
         return matches

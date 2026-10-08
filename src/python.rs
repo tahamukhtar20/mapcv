@@ -271,13 +271,11 @@ fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyResult
 /// With `cache_headers`, each tile is `(PyTileIndex, bytes, headers)`, where `headers`
 /// is `(cache_control, expires, date, age)` (each `None` when absent) for a tile the
 /// server sent and `None` for a black fill.
-/// Under the `lenient` policy, raises `RuntimeError` if the fraction of
-/// failed tiles exceeds `max_failed_ratio`; `ignore` never enforces it.
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::cast_precision_loss,
-    clippy::too_many_arguments
-)]
+/// Under the `lenient` policy, raises `RuntimeError` as soon as the fraction of
+/// failed tiles exceeds `max_failed_ratio` (the rest are not fetched); `ignore` never
+/// enforces it. Under any policy, `RuntimeError` is also raised when the first requests
+/// all went unanswered (timeouts, refused connections, rate limiting, server errors).
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (tiles, url_template, callback=None, max_connections=16, policy="lenient", max_failed_ratio=0.05, cache_headers=false))]
 fn fetch_tiles(
@@ -305,8 +303,8 @@ fn fetch_tiles(
         })
         .collect();
 
-    let total = rust_tiles.len();
-
+    // Only the lenient policy stops a fetch on a share of failed tiles.
+    let lenient = policy.eq_ignore_ascii_case("lenient");
     let (results, failed, failures) = fetcher::fetch_tiles(
         py,
         rust_tiles,
@@ -314,19 +312,8 @@ fn fetch_tiles(
         callback,
         max_connections,
         policy,
+        lenient.then_some(max_failed_ratio),
     )?;
-
-    let lenient = policy.eq_ignore_ascii_case("lenient");
-    if lenient && total > 0 && failed as f64 / total as f64 > max_failed_ratio {
-        return Err(PyRuntimeError::new_err(format!(
-            "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold): {}. \
-             If the provider is busy or rate-limiting, try again later or lower \
-             imagery.max_connections; raise imagery.max_failed_ratio to accept gaps.",
-            100.0 * failed as f64 / total as f64,
-            100.0 * max_failed_ratio,
-            failures.describe(),
-        )));
-    }
 
     let results_py = results
         .into_iter()

@@ -141,3 +141,31 @@ def test_output_estimate_follows_the_writer_formats() -> None:
     npy, tif = output(image_format="npy"), output(image_format="tif")
     assert 0.5 * npy < tif < npy  # deflate takes a fifth off float32 bands
     assert output(image_format="npy", mask_format="npy") == output(image_format="npy")  # no labels
+
+
+def test_memory_estimate_includes_a_patch_larger_than_the_raster() -> None:
+    small = plan(_config(sampler={"patch_size": 256}))
+    huge = plan(_config(sampler={"patch_size": 16384}))
+    # One padded 16384 x 16384 patch of 3 bytes per pixel is held several times over.
+    assert huge.chunk_memory_bytes >= 16384 * 16384 * 3 * 2
+    assert any("mostly padding" in warning for warning in huge.warnings)
+    assert not any("mostly padding" in warning for warning in small.warnings)
+
+
+def test_small_patches_count_their_manifest_and_file_overhead() -> None:
+    tiny = plan(
+        _config(
+            sampler={"patch_size": 8},
+            imagery={"type": "xyz", "zoom": 12, "source": "esri_satellite"},
+        )
+    )
+    # Each patch has a manifest entry, a footprint and an image file's headers on top of
+    # its 8 x 8 x 3 pixels: measured at about 460 bytes per patch for PNG.
+    assert tiny.output_bytes / tiny.patches > 400
+
+
+def test_a_run_of_millions_of_files_is_flagged() -> None:
+    estimate = plan(_config(sampler={"patch_size": 4}))
+    assert estimate.patches > 500_000
+    assert any("files of 4 x 4 px" in warning for warning in estimate.warnings)
+    assert not any("files of" in warning for warning in plan(_config()).warnings)

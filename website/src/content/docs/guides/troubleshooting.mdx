@@ -94,7 +94,11 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Response for … is not an image (23867 bytes); the server may be returning an error page or rate-limiting`** The server answered with HTML or JSON. Common causes: rate limiting, a consent or login page, an expired key, or a template that points at a web page rather than a tile endpoint.
 
-**`XYZ tile sources must return 256x256 RGB-compatible images`** The server sends 512 px ("retina") tiles. Use its 256 px endpoint, or remove an `@2x` / `{r}` marker from the URL.
+**`XYZ tile sources must return 256x256 RGB-compatible images`** The server sends 512 px ("retina") tiles. Use its 256 px endpoint, or remove an `@2x` / `{r}` marker from the URL. The message names the tile and its size. A tile that fails like this is not kept in the tile cache, so a corrected server or URL works on the next run.
+
+**`The tile server is not answering: the first 8 requests all failed (…)`** Timeouts, refused connections or HTTP 429/5xx for every request so far. mapcv stops instead of trying every tile. Check the URL, your network and your quota, or try later.
+
+**`response too large`** A tile body over 4 MiB: the server is not sending map tiles at that URL.
 
 **`⚠  2 of 2 tiles failed; check the tile URL, your network and imagery.policy …`** More than half of the requested tiles failed, but the run finished (usually `policy: ignore`). The dataset is mostly black: fix the URL or network and generate into a new folder.
 

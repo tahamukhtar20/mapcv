@@ -807,7 +807,8 @@ def test_plan_sizes_the_window_on_the_files_grid(tmp_path: Path) -> None:
     # central meridian) makes them a little larger.
     assert estimate.resolution_m == pytest.approx(1.0, rel=1e-3)
     assert estimate.patches == (source.metadata.width // 64) * (source.metadata.height // 64)
-    assert estimate.output_bytes == estimate.patches * 4 * 64 * 64 * 2
+    # The pixels (4 bands of uint16), the npy header and the patch's manifest entries.
+    assert estimate.output_bytes == estimate.patches * (4 * 64 * 64 * 2 + 128 + 530)
     assert "scene.tif" in estimate.imagery and "EPSG:32631" in estimate.imagery
     assert estimate.tiles is None and estimate.download_bytes is None
 

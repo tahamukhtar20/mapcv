@@ -264,7 +264,7 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 | `source` | string | — | A built-in source: `esri_satellite`, `esri_topo`, `esri_street`, `cartodb_positron`, `cartodb_dark_matter` |
 | `url_template` | string | — | Your own `http://` or `https://` URL with `{z}`, `{x}` and `{y}` |
 | `earth_engine` | block | — | Tiles rendered by Google Earth Engine (see [below](#google-earth-engine-imageryearth_engine)) |
-| `max_connections` | int ≥ 1 | `16` | Concurrent tile requests. Keep this low for shared servers; `mapcv init` writes `4` |
+| `max_connections` | int, 1–64 | `16` | Concurrent tile requests. Keep this low for shared servers; `mapcv init` writes `4` |
 | `policy` | `strict` \| `lenient` \| `ignore` | `lenient` | What happens to a tile that still fails after retries (see below) |
 | `max_failed_ratio` | float, 0–1 | `0.05` | Under `lenient`, the run stops if more than this fraction of a chunk's tiles fail |
 | `strip_rows` | int ≥ 1 | `4` | Tile rows per processing chunk (4 rows = 1,024 px). Lower it to reduce memory on very wide regions |
@@ -274,11 +274,14 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 
 - Exactly one of `source`, `url_template` or `earth_engine` is required; setting two is an error.
 - `source` must be a built-in name. The 0.1 presets `google_satellite` and `osm` were removed and fail with an explanation ([why](/mapcv/project/migration/#google-imagery-preset)).
-- `url_template` must be `http(s)`, must contain `{x}`, `{y}` and `{z}`, and may contain no other placeholder. A `{s}` subdomain placeholder is rejected: replace it with one subdomain, for example `a`.
-- Tiles must decode to 256 × 256 images (PNG, JPEG, WebP or GIF).
+- `url_template` must be `http(s)` with a host (and a valid port), must contain `{x}`, `{y}` and `{z}`, and may contain no other placeholder or brace (write `{z}`, not `{{z}}`). The host and port may not hold a placeholder. A `{s}` subdomain placeholder is rejected: replace it with one subdomain, for example `a`.
+- Tiles must decode to 256 × 256 images (PNG, JPEG, WebP or GIF). A 16-bit grayscale PNG is scaled to 8 bits by its high byte, as 16-bit RGB is. Fully transparent pixels (alpha 0) are black and count as empty, so `sampler.max_empty_ratio` drops patches over areas a service leaves transparent.
+- A tile body larger than 4 MiB is not read: that tile fails (`response too large`) and `policy` applies.
 - `writer.image_format` must be `png`, `jpg` or `tif`.
 
-**Failure policy.** Each tile is tried up to four times (three retries with backoff that honours `Retry-After` up to 30 s). Connection errors, timeouts, truncated bodies, HTTP 429 and 5xx are retried; other 4xx responses and non-image bodies (for example an HTML error page) fail immediately. A tile that still fails is then handled by `policy`:
+**Failure policy.** Each tile is tried up to four times (three retries with backoff that honours `Retry-After` up to 30 s); a request that times out is tried twice. A connection must open within 10 s, a response (and each piece of its body) must arrive within 10 s, and a whole tile within 30 s. Connection errors, timeouts, truncated bodies, HTTP 429 and 5xx are retried; other 4xx responses, non-image bodies (for example an HTML error page) and bodies over 4 MiB fail immediately.
+
+A fetch stops as soon as it cannot succeed: under `lenient`, when more than `max_failed_ratio` of a chunk's tiles have failed (the rest are not requested), and under every policy when the first `max(max_connections, 8)` requests all went unanswered (timeouts, refused connections, HTTP 429 or 5xx), which means the server is down or the URL is wrong. A tile that still fails is then handled by `policy`:
 
 | `policy` | Failed tile | `max_failed_ratio` |
 | --- | --- | --- |
@@ -288,7 +291,7 @@ A source on a grid that does not line up (another CRS, a half-pixel shift, a non
 
 Requests identify themselves with the user agent `mapcv/<version> (+https://github.com/tahamukhtar20/mapcv)`.
 
-**Tile cache.** Downloaded tiles are kept on disk, so a second run over the same area (another patch size, a new `staging_dir`, a sweep of settings) reads them from the cache instead of the server. A tile is reused for as long as the server's caching headers allow: `Cache-Control: max-age` (less `Age`), else `Expires`. A response marked `no-store` or `no-cache` is not kept, and one without caching headers is kept for 7 days (the minimum the OpenStreetMap tile usage policy asks clients to cache for). Expired tiles are downloaded again. Failed tiles are never cached.
+**Tile cache.** Downloaded tiles are kept on disk, so a second run over the same area (another patch size, a new `staging_dir`, a sweep of settings) reads them from the cache instead of the server. A tile is reused for as long as the server's caching headers allow: `Cache-Control: max-age` (less `Age`), else `Expires`. A response marked `no-store` or `no-cache` is not kept, and one without caching headers is kept for 7 days (the minimum the OpenStreetMap tile usage policy asks clients to cache for). A header asking for longer than a year is capped at a year. Expired tiles are downloaded again. Failed tiles are never cached, and neither is a tile that does not decode (a wrong size, an image that is cut off): it is cached only after it has been decoded, and a copy an earlier run kept is removed when it fails to decode.
 
 - The cache lives in `~/.cache/mapcv/tiles` on Linux (`$XDG_CACHE_HOME/mapcv/tiles` when that is set), `~/Library/Caches/mapcv/tiles` on macOS and `%LOCALAPPDATA%\mapcv\Cache\tiles` on Windows. Set the environment variable `MAPCV_CACHE_DIR` to put the cache folder elsewhere; tiles then go to its `tiles/` subfolder.
 - Tiles are filed under a hash of `url_template`: the template, and any key in it, is never written to disk.
@@ -416,7 +419,7 @@ Needs no extra install. Reads one file, or a mosaic of local files, as it is: pa
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `type` | `"geotiff"` | required | Selects one GeoTIFF or COG, or a mosaic of local GeoTIFFs |
-| `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder. A local glob pattern (`tiles/*.tif`, `survey/**/*.tif`) reads every matching file as one mosaic |
+| `path` | string | required | Local path, `file://` URL, or `https://` or anonymous `s3://` URL (read with HTTP range requests). A relative local path is resolved against the config file's folder. A local glob pattern (`tiles/*.tif`, `survey/**/*.tif`) reads every matching file as one mosaic. A path that exists is always that file, even with `[`, `*` or `?` in its name (`img[12].tif`, `survey [2024]/ortho.tif`); only a path that does not exist is read as a pattern |
 | `bands` | list of ints ≥ 1 | all bands | **1-based** band numbers to read, **in output order**: `[3, 2, 1]` reverses the bands of a BGR file. Band names in the manifest keep the file's numbering (`b3`, `b2`, `b1`) |
 | `overview` | int ≥ 0 | `0` | Overview level: `0` is the full resolution, `1` the first (largest) overview, and so on. Fails when the file has fewer levels |
 | `nodata` | number \| `.nan` | file's value | NoData value that overrides (or supplies) the file's. Pixels where every selected band equals it have no imagery |
@@ -426,8 +429,10 @@ Needs no extra install. Reads one file, or a mosaic of local files, as it is: pa
 
 - `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`), for a local test server. Windows paths work.
 - `bands` must be non-empty and without duplicates.
-- A glob pattern (`*`, `?`, `[...]`; `**` also matches folders) is for local files only and must match at least one file. The files form one mosaic: they must share the CRS, data type, band count, NoData value (or set `nodata` for all of them), pixel size and pixel grid (pixel corners line up), and have the overview level asked for. Where files overlap, the first file in sorted path order that has data at a pixel wins; gaps between files are no imagery. `bands`, `overview` and `nodata` apply to every file. The manifest records each file's name and fingerprint, so resuming after adding, removing or changing a file is refused.
-- The file must have a CRS that is an EPSG code and a pixel transform, and its compression must be one the reader supports (none, Deflate, LZW, PackBits, ZSTD, JPEG, WebP); the error names the problem. The region must intersect the file.
+- A glob pattern (`*`, `?`, `[...]`; `**` also matches folders) is for local files only and must match at least one file. A part of the path that exists as written is taken literally, so a folder called `survey [2024]` works in `survey [2024]/*.tif`. `**` does not follow links to folders, and a file reached through several links is used once. Dot files and folders are not matched. The files form one mosaic: they must share the CRS, data type, band count, NoData value (or set `nodata` for all of them), pixel size and pixel grid (pixel corners line up), and have the overview level asked for. Where files overlap, the first file in sorted path order that has data at a pixel wins; gaps between files are no imagery. `bands`, `overview` and `nodata` apply to every file. The manifest records each file's name and fingerprint, so resuming after adding, removing or changing a file is refused.
+- `nodata` must be a value the file's data type can hold; otherwise no pixel could equal it, and mapcv warns that it has no effect.
+- With `overview` above 0, the files of a mosaic must also have overviews of one pixel size. Files whose size is not a multiple of the overview factor round it differently; use `overview: 0` for those.
+- The file must have a CRS that is an EPSG code of a map CRS (projected or geographic; a geocentric or vertical code is refused) and a pixel transform, and its compression must be one the reader supports (none, Deflate, LZW, PackBits, ZSTD, JPEG, WebP); the error names the problem. The region must intersect the file.
 - `writer.image_format`: `png` or `jpg` need `uint8` data in **1 or 3** selected bands (a single band is written as gray, repeated into three channels); any other data type or band count needs `npy` or `tif` (both keep the file's data type and band count; `tif` also writes georeferenced patches). A selection that cannot fit PNG/JPG is rejected when the config is loaded; the data type is checked when the file is opened (`mapcv plan` does that, without reading pixels).
 
 **Empty pixels.** A pixel has no imagery when every selected band equals the NoData value, or, for floating-point files, is `NaN` or infinite. They count as empty for `sampler.max_empty_ratio` and are `labels.ignore_index` in masks, like the area outside the raster. A region that extends beyond the file is clipped to it with a warning; one that misses it is an error.
@@ -569,7 +574,7 @@ Target pixels are `NaN` where there is no value: outside the raster, on its NoDa
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `patch_size` | int > 0 | required | Side of each square patch in pixels |
+| `patch_size` | int, 1–16384 | required | Side of each square patch in pixels |
 | `stride` | int ≥ 0 | `0` | Step between grid patches. `0` means `patch_size` (no overlap); smaller values overlap |
 | `mode` | `grid` \| `random` | `grid` | Regular grid, or `random_count` random positions |
 | `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |

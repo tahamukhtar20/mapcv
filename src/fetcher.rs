@@ -39,7 +39,19 @@ impl std::str::FromStr for FailurePolicy {
 
 // 1 initial attempt + MAX_RETRIES retries = MAX_RETRIES + 1 total attempts.
 const MAX_RETRIES: u32 = 3;
+/// A request that timed out is tried once more, not `MAX_RETRIES` times: a server that
+/// does not answer is not going to start in the next half-minute.
+const MAX_TIMEOUT_RETRIES: u32 = 1;
 const RETRY_BACKOFF_MS: u64 = 500;
+/// The largest tile body mapcv reads. Tiles are a few KB to a few hundred KB; a longer
+/// body is a broken or hostile server, not a tile.
+const MAX_TILE_BYTES: usize = 4 * 1024 * 1024;
+/// Connecting must take no longer than this.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A response (or any piece of its body) must start within this.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// A whole tile request, however slowly its body arrives, must finish within this.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The caching headers of a tile response, as sent (`None` when absent or not
 /// valid text), for an on-disk cache to decide how long the tile stays fresh.
@@ -91,6 +103,18 @@ enum TileOutcome {
 struct Failure {
     kind: String,
     message: String,
+}
+
+impl Failure {
+    /// Whether the server did not answer (as opposed to answering that it has no such
+    /// tile): a timeout, a refused connection, or rate-limiting and server errors.
+    fn is_unreachable(&self) -> bool {
+        ["request timed out", "connection failed", "request failed"]
+            .iter()
+            .any(|kind| self.kind == *kind)
+            || self.kind.starts_with("HTTP 429")
+            || self.kind.starts_with("HTTP 5")
+    }
 }
 
 /// Failed tiles grouped by kind, with one example message, for error reports.
@@ -240,6 +264,32 @@ fn retry_delay(retries: u32, retry_after: Option<&reqwest::header::HeaderValue>)
     Duration::from_millis(base + jitter_seed % (base / 2 + 1))
 }
 
+/// Why a response body could not be read.
+enum BodyError {
+    /// The body is longer than [`MAX_TILE_BYTES`].
+    TooLarge,
+    /// The connection failed or timed out while reading it.
+    Network(reqwest::Error),
+}
+
+/// Read a response body, up to [`MAX_TILE_BYTES`]; a longer one is not read further.
+async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, BodyError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_TILE_BYTES as u64)
+    {
+        return Err(BodyError::TooLarge);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(BodyError::Network)? {
+        if body.len() + chunk.len() > MAX_TILE_BYTES {
+            return Err(BodyError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Fetch a single tile with retries, applying *policy* on failure.
 ///
 /// Network errors, truncated bodies, 429 and 5xx responses are retried. A
@@ -258,12 +308,12 @@ async fn fetch_single_tile(
 
     let mut retries: u32 = 0;
     loop {
-        let (kind, retryable_error, retry_after) = match client.get(&url).send().await {
+        let (kind, retryable_error, retry_after, timed_out) = match client.get(&url).send().await {
             Ok(r) if r.status().is_success() => {
                 let headers = CacheHeaders::from_headers(r.headers());
-                match r.bytes().await {
+                match read_body(r).await {
                     Ok(bytes) if looks_like_image(&bytes) => {
-                        return Ok((tile, TileOutcome::Success(bytes.to_vec(), headers)));
+                        return Ok((tile, TileOutcome::Success(bytes, headers)));
                     }
                     Ok(bytes) => {
                         let message = format!(
@@ -279,10 +329,20 @@ async fn fetch_single_tile(
                             message,
                         );
                     }
-                    Err(e) => (
+                    Err(BodyError::TooLarge) => {
+                        let message = format!(
+                            "Response for {} is larger than {} MiB; a tile is a few hundred KB \
+                         at most, so the server is not sending tiles",
+                            sanitize_url(&url),
+                            MAX_TILE_BYTES / (1024 * 1024)
+                        );
+                        return on_failure(tile, policy, "response too large".into(), message);
+                    }
+                    Err(BodyError::Network(e)) => (
                         network_error_kind(&e).to_owned(),
                         network_error_message(&e, &url),
                         None,
+                        e.is_timeout(),
                     ),
                 }
             }
@@ -300,15 +360,22 @@ async fn fetch_single_tile(
                     format!("HTTP {}", r.status()),
                     format!("HTTP {} for URL: {}", r.status(), sanitize_url(&url)),
                     retry_after,
+                    false,
                 )
             }
             Err(e) => (
                 network_error_kind(&e).to_owned(),
                 network_error_message(&e, &url),
                 None,
+                e.is_timeout(),
             ),
         };
-        if retries >= MAX_RETRIES {
+        let allowed = if timed_out {
+            MAX_TIMEOUT_RETRIES
+        } else {
+            MAX_RETRIES
+        };
+        if retries >= allowed {
             return on_failure(tile, policy, kind, retryable_error);
         }
         retries += 1;
@@ -347,8 +414,9 @@ fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
     let client = {
         let _context = runtime.enter();
         Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!(
                 "mapcv/",
                 env!("CARGO_PKG_VERSION"),
@@ -365,6 +433,38 @@ fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
     Ok((runtime, client))
 }
 
+/// The error for a fetch that gave up because more than `max_failed_ratio` of its tiles
+/// failed.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn too_many_failed_message(
+    failed: usize,
+    total: usize,
+    max_failed_ratio: f64,
+    failures: &FailureSummary,
+) -> String {
+    format!(
+        "Too many failed tiles: {failed}/{total} ({:.1}% exceeds {:.1}% threshold): {}. \
+         If the provider is busy or rate-limiting, try again later or lower \
+         imagery.max_connections; raise imagery.max_failed_ratio to accept gaps.",
+        100.0 * failed as f64 / total as f64,
+        100.0 * max_failed_ratio,
+        failures.describe(),
+    )
+}
+
+/// Whether `failed` of `total` tiles is more than `ratio` of them.
+#[allow(clippy::cast_precision_loss)]
+fn exceeds_ratio(failed: usize, total: usize, ratio: f64) -> bool {
+    total > 0 && failed as f64 / total as f64 > ratio
+}
+
+/// Requests that must have completed, none of them answered, before a fetch gives up on
+/// a server that does not answer.
+fn unanswered_limit(max_connections: usize) -> usize {
+    max_connections.max(8)
+}
+
 /// Returns `(results, failed_count, failures)`: each result is a tile, its bytes and
 /// its caching headers (`None` for a black fill);  `failed_count` includes both
 /// omitted tiles (Lenient) and black-fill tiles (Ignore), and `failures` groups them
@@ -375,7 +475,16 @@ fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
 /// background Tokio runtime fails.
 ///
 /// Raises `ValueError` for an unknown policy or zero connections.
-#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+///
+/// With `max_failed_ratio`, the fetch stops as soon as more tiles have failed than that
+/// share of `tiles` allows, without fetching the rest. Whatever the policy, it also
+/// stops when the first `max(max_connections, 8)` requests all went unanswered
+/// (timeouts, refused connections, rate limiting, server errors): the server is down.
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::type_complexity,
+    clippy::too_many_arguments
+)]
 pub fn fetch_tiles(
     py: Python,
     tiles: Vec<TileIndex>,
@@ -383,6 +492,7 @@ pub fn fetch_tiles(
     callback: Option<Py<PyAny>>,
     max_connections: usize,
     policy_str: &str,
+    max_failed_ratio: Option<f64>,
 ) -> PyResult<(Vec<Fetched>, usize, FailureSummary)> {
     let policy = policy_str
         .parse::<FailurePolicy>()
@@ -394,6 +504,8 @@ pub fn fetch_tiles(
 
     let (runtime, client) = shared().map_err(PyRuntimeError::new_err)?;
     let (tx, rx) = mpsc::channel();
+    let total = tiles.len();
+    let unanswered_limit = unanswered_limit(max_connections);
 
     // The task reports through the channel; its join handle is not needed (dropping
     // it detaches the task).
@@ -409,28 +521,46 @@ pub fn fetch_tiles(
         let mut results = Vec::new();
         let mut completed: usize = 0;
         let mut failed: usize = 0;
+        let mut unanswered: usize = 0;
         let mut failures = FailureSummary::default();
 
         while let Some(res) = stream.next().await {
-            match res {
+            let failure = match res {
                 Ok((tile, TileOutcome::Success(bytes, headers))) => {
                     results.push((tile, bytes, Some(headers)));
+                    None
                 }
                 Ok((tile, TileOutcome::BlackFill(bytes, failure))) => {
                     results.push((tile, bytes, None));
-                    failed += 1;
-                    failures.add(failure);
+                    Some(failure)
                 }
-                Ok((_tile, TileOutcome::Missing(failure))) => {
-                    failed += 1;
-                    failures.add(failure);
-                }
+                Ok((_tile, TileOutcome::Missing(failure))) => Some(failure),
                 Err(e) => {
                     let _ = tx.send(Event::Error(e));
                     return;
                 }
-            }
+            };
             completed += 1;
+            if let Some(failure) = failure {
+                failed += 1;
+                unanswered += usize::from(failure.is_unreachable());
+                failures.add(failure);
+            }
+            if let Some(ratio) = max_failed_ratio.filter(|&r| exceeds_ratio(failed, total, r)) {
+                let _ = tx.send(Event::Error(too_many_failed_message(
+                    failed, total, ratio, &failures,
+                )));
+                return;
+            }
+            if completed >= unanswered_limit && unanswered == completed {
+                let _ = tx.send(Event::Error(format!(
+                    "The tile server is not answering: the first {completed} requests all \
+                     failed ({}). Check imagery.url_template and your network, or try again \
+                     later.",
+                    failures.describe()
+                )));
+                return;
+            }
             if tx.send(Event::Progress(completed)).is_err() {
                 return;
             }

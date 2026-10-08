@@ -27,6 +27,9 @@
     <a href="https://codecov.io/gh/tahamukhtar20/mapcv" target="_blank">
         <img src="https://img.shields.io/codecov/c/github/tahamukhtar20/mapcv/main?color=%2334D058&label=coverage" alt="Test coverage">
     </a>
+    <a href="https://doi.org/10.5281/zenodo.23149438" target="_blank">
+        <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23149438.svg" alt="DOI">
+    </a>
     <a href="https://www.bestpractices.dev/projects/15276" target="_blank">
         <img src="https://www.bestpractices.dev/projects/15276/badge" alt="OpenSSF Best Practices">
     </a>
@@ -132,7 +135,22 @@ Contributions are welcome. Please review the [Contributing Guide](https://github
 
 ## Citation
 
-Every release is archived on Zenodo: [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) resolves to the latest version and lists the DOI of each one. GitHub's "Cite this repository" button gives APA and BibTeX from [`CITATION.cff`](https://github.com/tahamukhtar20/mapcv/blob/main/CITATION.cff); see [Citing mapcv](https://tahamukhtar20.github.io/mapcv/project/citing/) for crediting the data sources too.
+If mapcv helped your work, please cite it. The DOI [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) covers every release and always resolves to the latest one:
+
+```bibtex
+@software{mukhtar_mapcv,
+  author  = {Mukhtar, Muhammad Taha},
+  title   = {mapcv: computer-vision datasets from map imagery and geospatial labels},
+  year    = {2026},
+  doi     = {10.5281/zenodo.23149438},
+  url     = {https://github.com/tahamukhtar20/mapcv},
+  license = {MIT}
+}
+```
+
+GitHub's "Cite this repository" button gives the same from [`CITATION.cff`](https://github.com/tahamukhtar20/mapcv/blob/main/CITATION.cff). See [Citing mapcv](https://tahamukhtar20.github.io/mapcv/project/citing/) for the DOI of a single version and for crediting the data sources.
+
+<!-- mcp-name: io.github.tahamukhtar20/mapcv -->
 
 ## Author
 

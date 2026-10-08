@@ -25,11 +25,13 @@ from pydantic import (
     PrivateAttr,
     ValidationError,
     model_serializer,
+    model_validator,
     with_config,
 )
 from pydantic_core import to_json
 from typing_extensions import TypedDict
 
+from mapcv._confine import first_outside_path
 from mapcv.labels import ClassMap
 
 MANIFEST_VERSION: int = 3
@@ -182,6 +184,20 @@ class Manifest(BaseModel):
     patches: list[ManifestEntry] = Field(default_factory=list)
 
     _upgraded_from: int | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _files_inside_the_dataset(self) -> Manifest:
+        # A downloaded dataset is input: its manifest may not send a read (export, stats,
+        # verify) or a write outside its folder.
+        outside = first_outside_path(
+            [rel for entry in self.patches for rel in entry["files"].values()]
+        )
+        if outside is not None:
+            raise ValueError(
+                f"patch file {outside!r} is not a path inside the dataset folder; mapcv "
+                "reads and writes patch files only there"
+            )
+        return self
 
     # ── convenience views ────────────────────────────────────────────────────
 

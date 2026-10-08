@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import ipaddress
 import json
 import os
 import re
@@ -27,7 +28,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import (
     Any,
     Literal,
@@ -41,9 +42,12 @@ from pydantic import ValidationError
 from shapely.geometry import shape
 
 from mapcv import planning
+from mapcv._confine import first_outside_path
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._redact import Redactor
+from mapcv._redact import redact_url as _redact_url
 from mapcv._warnings import capture as _capture
-from mapcv.cli import _class_names, _imagery_label, _raster_labels, _redact_url, _task_label
+from mapcv.cli import _class_names, _imagery_label, _raster_labels, _task_label
 from mapcv.config import (
     MULTI_SOURCE_TASKS,
     PLANNED_TASKS,
@@ -76,6 +80,7 @@ from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, human_bytes
 from mapcv.planning import plan as make_plan
 from mapcv.splitter import SplitterConfig
+from mapcv.stac import local_paths_checked
 from mapcv.stats import dataset_stats, write_stats
 from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
 from mapcv.verify import verify_dataset, write_checksums
@@ -120,101 +125,6 @@ class ToolResult:
 
     summary: str
     data: dict[str, Any] = field(default_factory=dict)
-
-
-# ── Credentials ──────────────────────────────────────────────────────────────
-
-_TEMPLATE_IN_TEXT = re.compile(r"""https?://[^\s"'<>]*\{[xyz]\}[^\s"'<>]*""")
-_URL_IN_TEXT = re.compile(r"""https?://[^\s"'<>)\]]+""")
-_MIN_QUERY_SECRET = 3
-_MIN_PATH_SECRET = 6
-
-
-def _secret_tokens(url: str) -> set[str]:
-    """The parts of a tile URL template that may be credentials."""
-    parts = urlsplit(url)
-    tokens: set[str] = set()
-    for value in (parts.username, parts.password, parts.fragment):
-        if value:
-            tokens.add(value)
-    for pair in parts.query.split("&"):
-        _, _, value = pair.partition("=")
-        if len(value) >= _MIN_QUERY_SECRET and "{" not in value:
-            tokens.add(value)
-    for segment in parts.path.split("/"):
-        if len(segment) >= _MIN_PATH_SECRET and "{" not in segment:
-            tokens.add(segment)
-    return tokens
-
-
-class Redactor:
-    """Removes the credentials of every ``url_template`` the server has seen from text.
-
-    The CLI shows only ``scheme://host/...`` for a template. Results here are built
-    from fields that never carry a template; this is the second line of defence for
-    text the server does not control: error messages and warnings of the libraries.
-    """
-
-    def __init__(self) -> None:
-        self._templates: set[str] = set()
-        self._hosts: set[str] = set()
-        self._tokens: set[str] = set()
-        self._lock = threading.Lock()
-
-    def learn_url(self, template: str) -> None:
-        """Remember a tile URL template so it is hidden from later output."""
-        if not template:
-            return
-        parts = urlsplit(template)
-        with self._lock:
-            self._templates.add(template)
-            if parts.hostname:
-                self._hosts.add(parts.hostname)
-            self._tokens |= _secret_tokens(template)
-
-    def learn_text(self, text: str) -> None:
-        """Remember every tile URL template written in a piece of config text."""
-        for match in _TEMPLATE_IN_TEXT.finditer(text):
-            self.learn_url(match.group(0).rstrip(",;"))
-
-    def learn_data(self, data: Any) -> None:
-        """Remember the templates of a parsed (maybe invalid) config mapping."""
-        imagery = data.get("imagery") if isinstance(data, dict) else None
-        for source in imagery if isinstance(imagery, list) else [imagery]:
-            template = source.get("url_template") if isinstance(source, dict) else None
-            if isinstance(template, str):
-                self.learn_url(template)
-
-    def scrub(self, text: str) -> str:
-        """``text`` without known templates, their secrets, or credentials in URLs."""
-        with self._lock:
-            templates = sorted(self._templates, key=len, reverse=True)
-            hosts = set(self._hosts)
-            tokens = sorted(self._tokens, key=len, reverse=True)
-        for template in templates:
-            text = text.replace(template, _redact_url(template))
-
-        def url(match: re.Match[str]) -> str:
-            found = match.group(0)
-            parts = urlsplit(found)
-            if parts.hostname in hosts or parts.username or parts.password or parts.query:
-                return _redact_url(found)
-            return found
-
-        text = _URL_IN_TEXT.sub(url, text)
-        for token in tokens:
-            text = text.replace(token, "***")
-        return text
-
-    def scrub_data(self, data: Any) -> Any:
-        """:meth:`scrub` applied to every string inside nested lists and dicts."""
-        if isinstance(data, str):
-            return self.scrub(data)
-        if isinstance(data, dict):
-            return {key: self.scrub_data(value) for key, value in data.items()}
-        if isinstance(data, (list, tuple)):
-            return [self.scrub_data(value) for value in data]
-        return data
 
 
 # ── Where the tools may read and write ───────────────────────────────────────
@@ -263,6 +173,10 @@ class Sandbox:
             return str(path)
         return relative.as_posix()
 
+    def check_found_path(self, path: Path) -> None:
+        """Fail if a local file found at run time (a STAC asset) is outside the root."""
+        self.inside(path.resolve(), "a file named by the STAC catalog", str(path))
+
     def require_write(self, tool: str) -> None:
         """Fail unless the server was started with ``--allow-write``."""
         if not self.allow_write:
@@ -283,9 +197,10 @@ class Sandbox:
             self.inside(resolved, what, str(path))
 
     def check_tree(self, directory: Path, what: str) -> None:
-        """Fail if something below an existing ``directory`` is a link that leaves the root.
+        """Fail if something below an existing ``directory`` would let a write leave the root.
 
-        A symlink inside an output folder would let a write land elsewhere.
+        A symlink that resolves outside the root would let a write land elsewhere, and so
+        would a hard link: a file with a second name, which may be outside the root.
         """
         if not directory.is_dir():
             return
@@ -294,13 +209,26 @@ class Sandbox:
             current = stack.pop()
             try:
                 with os.scandir(current) as entries:
-                    for entry in entries:
-                        if entry.is_symlink():
-                            self.inside(Path(entry.path).resolve(), what, entry.path)
-                        elif entry.is_dir(follow_symlinks=False):
-                            stack.append(Path(entry.path))
+                    found = list(entries)
             except OSError:
                 continue
+            for entry in found:
+                if entry.is_symlink():
+                    self.inside(Path(entry.path).resolve(), what, entry.path)
+                elif entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                else:
+                    try:
+                        links = os.lstat(entry.path).st_nlink  # DirEntry.stat has none on Windows
+                    except OSError:
+                        continue
+                    if links > 1:
+                        raise ToolFailure(
+                            f"`{what}` holds {self.rel(entry.path)!r}, a hard link: the same "
+                            "file has another name, possibly outside the folder this server "
+                            f"may use ({self.root}), and writing it would change that file "
+                            "too. Ask the user to replace it with a copy, or use another folder."
+                        )
 
 
 def _vector_label_paths(key: str, path: Path) -> list[tuple[str, Path]]:
@@ -547,16 +475,15 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
         message = "the config must be a YAML mapping with region, imagery, sampler and writer"
         raise ConfigInvalid(message, [{"field": "config", "message": message}])
     _resolve_relative_paths(data, base)
-    # Validation reads region.path (an area of interest) for its bounds: check it is
-    # inside the root first, so a config cannot make the server open a file outside it.
+    # Validation reads region.path (an area of interest) for its bounds: check it, and
+    # a Shapefile's sidecars (.prj, .cpg, ...), are inside the root first, so a config
+    # cannot make the server open a file outside it.
     region = data.get("region")
     if isinstance(region, dict) and isinstance(region.get("path"), str):
         target = Path(region["path"])
-        state.sandbox.inside(
-            (target if target.is_absolute() else Path.cwd() / target).resolve(),
-            "region.path",
-            region["path"],
-        )
+        target = target if target.is_absolute() else Path.cwd() / target
+        for what, path in _vector_label_paths("region.path", target):
+            state.sandbox.inside(path.resolve(), what, str(path))
     try:
         config = MapcvConfig.model_validate(data)
     except ValidationError as exc:
@@ -1078,6 +1005,38 @@ def _problem_lines(errors: list[dict[str, str]]) -> str:
     return "; ".join(f"{e['field']}: {e['message']}" for e in errors)
 
 
+# Cloud metadata services that are not in a link-local range or have a name.
+_METADATA_HOSTS = frozenset(
+    {"metadata.google.internal", "metadata", "instance-data", "100.100.100.200", "fd00:ec2::254"}
+)
+
+
+def _metadata_host_warnings(config: MapcvConfig) -> list[str]:
+    """A warning per ``url_template`` on a link-local or cloud metadata address.
+
+    Tiles are fetched from the machine running this server; such a host is not a tile
+    server (a misread or injected URL), though a refusal would also block odd setups.
+    """
+    messages: list[str] = []
+    for name, imagery in zip(config.source_names, config.sources):
+        if not isinstance(imagery, XYZImageryConfig) or not imagery.url_template:
+            continue
+        host = (urlsplit(imagery.url_template).hostname or "").lower().rstrip(".")
+        try:
+            link_local = ipaddress.ip_address(host).is_link_local
+        except ValueError:
+            link_local = False
+        if link_local or host in _METADATA_HOSTS:
+            where = (
+                f"imagery '{name}' url_template" if config.multi_source else "imagery.url_template"
+            )
+            messages.append(
+                f"{where} points to {host}, a link-local or cloud metadata address rather "
+                "than a tile server; check the URL with the user before generating"
+            )
+    return messages
+
+
 def validate_config(
     state: ToolState, path: str | None = None, yaml_text: str | None = None
 ) -> ToolResult:
@@ -1091,6 +1050,7 @@ def validate_config(
             {"valid": False, "errors": exc.errors, "warnings": []},
         )
     errors, warns = config_problems(state, config)
+    warns = [*warns, *_metadata_host_warnings(config)]
     where = state.sandbox.rel(file) if file is not None else "the config"
     data = {
         "valid": not errors,
@@ -1452,10 +1412,11 @@ def make_plan_for(state: ToolState, config: MapcvConfig) -> tuple[Plan, list[str
         )
     with capture_warnings() as caught:
         try:
-            estimate = make_plan(config)
+            with local_paths_checked(state.sandbox.check_found_path):
+                estimate = make_plan(config)
         except (ValueError, RuntimeError, OSError) as exc:
             raise ToolFailure(f"Cannot plan this config: {exc}") from None
-    texts = _warning_texts(caught)
+    texts = _warning_texts(caught) + _metadata_host_warnings(config)
     extra = [text for text in texts if text not in estimate.warnings]
     return estimate, extra
 
@@ -1601,7 +1562,8 @@ def execute_generate(
     try:
         with capture_warnings(broad=True) as caught:
             try:
-                result = run_generate(config, hook)
+                with local_paths_checked(state.sandbox.check_found_path):
+                    result = run_generate(config, hook)
             except GenerationCancelled:
                 raise ToolFailure(
                     "Generation cancelled. Finished chunks are saved: call generate again with "
@@ -1884,13 +1846,12 @@ def _checked_dataset(state: ToolState, dataset: str) -> tuple[Path, Manifest]:
                     listed.append(line.partition("  ")[2])
         except (OSError, UnicodeDecodeError):
             pass
-    for rel in listed:
-        path = PurePosixPath(rel)
-        if not rel or path.is_absolute() or ".." in path.parts or "\\" in rel:
-            raise ToolFailure(
-                f"The dataset lists a file path that leaves its folder ({rel[:80]!r}); "
-                "mapcv does not read it."
-            )
+    outside = first_outside_path(listed)
+    if outside is not None:
+        raise ToolFailure(
+            f"The dataset lists a file path that leaves its folder ({outside[:80]!r}); "
+            "mapcv does not read it."
+        )
     return folder, manifest
 
 

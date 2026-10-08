@@ -1597,7 +1597,9 @@ class MapcvConfig(BaseModel):
     """Full mapcv pipeline configuration."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
-    model_config = ConfigDict(extra="forbid")
+    # An error's text never repeats the value (a url_template may hold a key); the CLI
+    # and the MCP server write their own messages from the errors' fields.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     # What the dataset is for; decides the target each patch is annotated with.
     task: Literal[

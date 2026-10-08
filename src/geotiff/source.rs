@@ -329,6 +329,9 @@ impl HttpSource {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
+            // Every redirect target is checked like the configured URL.
+            .referer(false)
+            .redirect(crate::http_policy::geotiff_redirect_policy())
             .user_agent(concat!(
                 "mapcv/",
                 env!("CARGO_PKG_VERSION"),
@@ -397,6 +400,10 @@ impl HttpSource {
             .send()
             .await
             .map_err(|e| {
+                if let Some(reason) = crate::http_policy::redirect_refusal(&e) {
+                    let message = format!("request to {} failed: {reason}", self.display);
+                    return (GeoTiffError::Io(message), false);
+                }
                 let retry = e.is_timeout() || e.is_connect() || e.is_request();
                 (
                     GeoTiffError::Io(format!("request to {} failed: {}", self.display, kind(&e))),

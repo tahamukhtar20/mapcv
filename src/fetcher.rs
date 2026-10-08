@@ -180,7 +180,9 @@ fn sanitize_url(url: &str) -> String {
 }
 
 fn network_error_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
+    if error.is_redirect() {
+        "redirect refused"
+    } else if error.is_timeout() {
         "request timed out"
     } else if error.is_connect() {
         "connection failed"
@@ -192,6 +194,9 @@ fn network_error_kind(error: &reqwest::Error) -> &'static str {
 }
 
 fn network_error_message(error: &reqwest::Error, url: &str) -> String {
+    if let Some(reason) = crate::http_policy::redirect_refusal(error) {
+        return format!("Redirect refused for {}: {reason}", sanitize_url(url));
+    }
     format!(
         "Network error for {}: {}",
         sanitize_url(url),
@@ -363,6 +368,11 @@ async fn fetch_single_tile(
                     false,
                 )
             }
+            // Asking again gives the same redirect: fail without retrying.
+            Err(e) if e.is_redirect() => {
+                let message = network_error_message(&e, &url);
+                return on_failure(tile, policy, network_error_kind(&e).to_owned(), message);
+            }
             Err(e) => (
                 network_error_kind(&e).to_owned(),
                 network_error_message(&e, &url),
@@ -417,6 +427,9 @@ fn shared() -> Result<(&'static tokio::runtime::Runtime, Client), String> {
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
+            // A Referer would carry the previous URL, key included, to a redirect target.
+            .referer(false)
+            .redirect(crate::http_policy::tile_redirect_policy())
             .user_agent(concat!(
                 "mapcv/",
                 env!("CARGO_PKG_VERSION"),

@@ -99,3 +99,38 @@ def test_secrets_in_the_tile_url_stay_out_of_the_debug_log(tmp_path: Path, https
     text = result.output + log_file.read_text(encoding="utf-8")
     assert "HTTP 403" in text and "Traceback" in text
     assert "SECRETKEY123" not in text and "QUERYSECRET" not in text
+
+
+@pytest.mark.parametrize(
+    ("imagery", "secret"),
+    [
+        # A typo ({yy}) makes the config invalid; the key sits at the end of the URL.
+        (
+            (
+                "{type: xyz, zoom: 16, url_template: "
+                "'http://127.0.0.1:1/{z}/{x}/{yy}.png?api_key=SUPERSECRETKEY42'}"
+            ),
+            "SUPERSECRETKEY42",
+        ),
+        # Refused for its credentials, which the error must not then repeat.
+        (
+            "{type: geotiff, path: 'https://user:PASSWORDSECRET@example.com/x.tif'}",
+            "PASSWORDSECRET",
+        ),
+    ],
+)
+def test_secrets_of_an_invalid_config_stay_out_of_the_debug_log(
+    tmp_path: Path, imagery: str, secret: str
+) -> None:
+    config = tmp_path / "bad.yaml"
+    config.write_text(
+        REGION + f"imagery: {imagery}\nsampler: {{patch_size: 256}}\n"
+        f"writer: {{staging_dir: {tmp_path / 'dataset'}}}\n",
+        encoding="utf-8",
+    )
+    log_file = tmp_path / "debug.log"
+    result = runner.invoke(app, ["--debug", "--debug-log", str(log_file), "validate", str(config)])
+    assert result.exit_code == 1
+    log = log_file.read_text(encoding="utf-8")
+    assert "Traceback" in log and "ValidationError" in log
+    assert secret not in result.output + log

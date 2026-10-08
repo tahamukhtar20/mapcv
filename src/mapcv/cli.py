@@ -23,7 +23,6 @@ from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
-from urllib.parse import urlsplit
 
 import numpy as np
 import typer
@@ -50,7 +49,10 @@ from typer.core import TyperGroup
 
 import mapcv
 from mapcv import doctor
+from mapcv._confine import LinkEscapeError, check_folder_links
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._redact import REDACTOR, RedactingFormatter
+from mapcv._redact import redact_url as _redact_url
 from mapcv.config import (
     RASTER_LABEL_TYPES,
     UNION_TAGS,
@@ -169,7 +171,8 @@ def _configure_debug(debug: bool, log_file: Path | None) -> None:
     if not _debug:
         logger.setLevel(logging.NOTSET)
         return
-    formatter = logging.Formatter(_DEBUG_FORMAT)
+    # The debug log is meant for bug reports: credentials of the configs loaded are hidden.
+    formatter = RedactingFormatter(_DEBUG_FORMAT)
     if debug:
         stderr = _StderrDebugHandler(logging.DEBUG)
         stderr.setFormatter(formatter)
@@ -498,6 +501,20 @@ def _print_items(console: Console, items: list[tuple[str, str]]) -> None:
 _INIT_HINT = "Fix the fields above, or start from a working config with [bold]mapcv init[/bold]."
 
 
+def _learn_secrets(config_path: Path) -> None:
+    """Teach the redactor the URLs of a config before it is validated, so even the
+    error of an invalid one (shown with --debug or in --debug-log) hides their keys."""
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    REDACTOR.learn_text(text)
+    try:
+        REDACTOR.learn_data(yaml.safe_load(text))
+    except yaml.YAMLError:
+        pass
+
+
 def _load_config(config_path: Path) -> MapcvConfig:
     if not config_path.exists():
         _fail(
@@ -509,6 +526,7 @@ def _load_config(config_path: Path) -> MapcvConfig:
             f"[red]Not a config file:[/red] {escape(str(config_path))} is a folder.",
             "Pass the YAML file, for example [bold]mapcv.yaml[/bold].",
         )
+    _learn_secrets(config_path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -574,14 +592,6 @@ def _show_warnings(caught: list[warnings.WarningMessage], shown: set[str]) -> No
             continue
         shown.add(message)
         _console.print(f"[yellow]⚠[/yellow]  {escape(message)}")
-
-
-def _redact_url(url: str) -> str:
-    """Show only scheme and host of a URL that may embed credentials."""
-    parsed = urlsplit(url)
-    if not parsed.scheme or not parsed.hostname:
-        return url
-    return f"{parsed.scheme}://{parsed.hostname}/..."
 
 
 def _imagery_label(config: MapcvConfig) -> str:
@@ -2428,8 +2438,12 @@ def _fit_title(text: str) -> str:
     return text if len(text) <= room else "…" + text[-(room - 1) :]
 
 
-def _require_dataset(staging_dir: Path) -> None:
-    """Exit with the same message from every dataset command when there is no dataset."""
+def _require_dataset(staging_dir: Path, files: bool = True) -> None:
+    """Exit with the same message from every dataset command when there is no dataset.
+
+    A command that reads or writes the dataset's ``files`` also refuses a folder holding
+    a link that leaves it (a downloaded dataset may carry one).
+    """
     manifest = staging_dir / "manifest.json"
     if not manifest.is_file():
         _fail(
@@ -2437,6 +2451,17 @@ def _require_dataset(staging_dir: Path) -> None:
             "Pass the dataset folder that [bold]mapcv generate[/bold] wrote "
             "(the config's writer.staging_dir).",
         )
+    if files:
+        _check_links(staging_dir, "the dataset folder")
+
+
+def _check_links(folder: Path, what: str) -> None:
+    """Exit if a link below ``folder`` would let mapcv read or write outside it."""
+    try:
+        check_folder_links(folder, what)
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -2494,6 +2519,7 @@ def generate(
             )
         if not Confirm.ask("This is a large job. Start it?", default=False, console=_console):
             _fail("Not started.", "Re-run with [bold]--yes[/bold] to start without asking.")
+    _check_links(config.writer.staging_dir, "writer.staging_dir")
     shown = set(estimate.warnings)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -2546,7 +2572,7 @@ def info(
     ),
 ) -> None:
     """Summarize a generated dataset: source, shapes, class balance and splits."""
-    _require_dataset(staging_dir)
+    _require_dataset(staging_dir, files=False)
     try:
         manifest = Manifest.load(staging_dir / "manifest.json")
     except (ValueError, OSError) as exc:  # ManifestMismatchError and bad JSON are ValueErrors

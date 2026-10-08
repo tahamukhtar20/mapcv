@@ -289,7 +289,7 @@ A fetch stops as soon as it cannot succeed: under `lenient`, when more than `max
 | `lenient` | Left out; its pixels are black and count as empty | enforced per chunk |
 | `ignore` | Filled with a black tile | never enforced |
 
-Requests identify themselves with the user agent `mapcv/<version> (+https://github.com/tahamukhtar20/mapcv)`.
+Requests identify themselves with the user agent `mapcv/<version> (+https://github.com/tahamukhtar20/mapcv)` and send no `Referer` header. A redirect is followed only when it stays on `http(s)`, does not go from `https` to plain `http` and does not go from a public server to this machine or a private network; for a `url_template` with a query string (where providers put keys), only redirects within the same host are followed. A refused redirect fails the tile at once, without retries.
 
 **Tile cache.** Downloaded tiles are kept on disk, so a second run over the same area (another patch size, a new `staging_dir`, a sweep of settings) reads them from the cache instead of the server. A tile is reused for as long as the server's caching headers allow: `Cache-Control: max-age` (less `Age`), else `Expires`. A response marked `no-store` or `no-cache` is not kept, and one without caching headers is kept for 7 days (the minimum the OpenStreetMap tile usage policy asks clients to cache for). A header asking for longer than a year is capped at a year. Expired tiles are downloaded again. Failed tiles are never cached, and neither is a tile that does not decode (a wrong size, an image that is cut off): it is cached only after it has been decoded, and a copy an earlier run kept is removed when it fails to decode.
 
@@ -380,7 +380,7 @@ imagery:
 | `collection` | string | `sentinel-2-l2a` | The collection to search |
 | `asset` | string | `product` | The item asset holding the whole EOPF Zarr product |
 
-When the run starts, mapcv searches the catalog for the region's bounding box and picks, among the items whose footprint covers the **whole** region with at most `max_cloud` percent cloud, the least cloudy one; ties go to the earlier acquisition, then to the item ID, so the same catalog gives the same product every time. The manifest's `sources[0].fingerprint` records the catalog, collection and item, and `product_id` the product's name: resuming refuses to continue with another product if the search later finds a different one. `mapcv plan` estimates without contacting the catalog. When no item qualifies, the run stops and says how many items were found and how many covered the region.
+When the run starts, mapcv searches the catalog for the region's bounding box and picks, among the items whose footprint covers the **whole** region with at most `max_cloud` percent cloud, the least cloudy one; ties go to the earlier acquisition, then to the item ID, so the same catalog gives the same product every time. The manifest's `sources[0].fingerprint` records the catalog, collection and item, and `product_id` the product's name: resuming refuses to continue with another product if the search later finds a different one. `mapcv plan` estimates without contacting the catalog. A page of results may be at most 64 MiB and must arrive within 120 s, and `next` links are followed only on the catalog's own scheme and host. When no item qualifies, the run stops and says how many items were found and how many covered the region.
 
 **`scl_mask`** reads the product's scene classification layer (20 m, nearest-neighbour onto the output grid) and treats pixels of the listed classes as pixels without imagery: their band values become `NaN`, segmentation masks mark them with `labels.ignore_index`, and they count towards `sampler.max_empty_ratio`, so `max_empty_ratio: 0.2` drops patches that are more than a fifth cloud. Values outside 0–11 (the fill at product edges) also count as no imagery.
 
@@ -427,7 +427,7 @@ Needs no extra install. Reads one file, or a mosaic of local files, as it is: pa
 
 **Validation:**
 
-- `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`), for a local test server. Windows paths work.
+- `path` may not contain a username, password, query string or fragment; private-store authentication is not supported. Plain `http://` is accepted only for a loopback host (`localhost`, `127.0.0.1`), for a local test server. A redirect from the server is checked by the same rules: it may not lead to plain `http://` elsewhere, from `https://` to `http://`, to a URL with credentials, or from a public server to this machine or a private network. Windows paths work.
 - `bands` must be non-empty and without duplicates.
 - A glob pattern (`*`, `?`, `[...]`; `**` also matches folders) is for local files only and must match at least one file. A part of the path that exists as written is taken literally, so a folder called `survey [2024]` works in `survey [2024]/*.tif`. `**` does not follow links to folders, and a file reached through several links is used once. Dot files and folders are not matched. The files form one mosaic: they must share the CRS, data type, band count, NoData value (or set `nodata` for all of them), pixel size and pixel grid (pixel corners line up), and have the overview level asked for. Where files overlap, the first file in sorted path order that has data at a pixel wins; gaps between files are no imagery. `bands`, `overview` and `nodata` apply to every file. The manifest records each file's name and fingerprint, so resuming after adding, removing or changing a file is refused.
 - `nodata` must be a value the file's data type can hold; otherwise no pixel could equal it, and mapcv warns that it has no effect.
@@ -498,7 +498,7 @@ labels:
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `classes` | list | required | Each class has a unique `name` and `tags`: a key with `"*"` (any value), one value, or a list of values. A feature belongs to the **first** class whose tags all match. Keys are letters, digits and `_:.-`; values hold no quotes or backslashes |
-| `overpass_url` | URL | `https://overpass-api.de/api/interpreter` | The Overpass API to ask (`https://`; `http://` only for `localhost`). The public server limits heavy use: for large areas, run your own or use an extract with `labels.path` |
+| `overpass_url` | URL | `https://overpass-api.de/api/interpreter` | The Overpass API to ask (`https://`; `http://` only for `localhost`). The public server limits heavy use: for large areas, run your own or use an extract with `labels.path`. A key in the query string is accepted: the manifest records its values as `***`, and messages leave the query out |
 | `timeout` | int seconds, 1–3600 | `180` | The query's time limit on the server. The whole answer must arrive within `timeout` + 60 s, and be at most 512 MiB |
 | `bbox` | `[west, south, east, north]` | the region | The box to query |
 

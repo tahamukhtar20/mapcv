@@ -273,8 +273,9 @@ def _fetch(source: OsmLabelsSource, query: str) -> dict[str, Any]:
         ) from None
     except OSError as exc:
         raise RuntimeError(
-            f"Overpass request to {source.overpass_url} failed: {exc}. The public server "
-            "limits load; try again later or set labels.osm.overpass_url to another instance"
+            f"Overpass request to {_server(source.overpass_url)} failed: {exc}. The public "
+            "server limits load; try again later or set labels.osm.overpass_url to another "
+            "instance"
         ) from exc
     return _decode_answer(body, what)
 

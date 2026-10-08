@@ -60,9 +60,11 @@ def _is_user_warning(warning: warnings.WarningMessage) -> bool:
     return issubclass(warning.category, UserWarning)
 
 
-# Jobs above either threshold ask for confirmation before downloading.
+# Jobs above any threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
 LARGE_JOB_BYTES = 5 * 1024**3
+# Millions of tiny files are slow to write and to read, whatever their total size.
+LARGE_JOB_PATCHES = 1_000_000
 
 
 @dataclass
@@ -105,9 +107,11 @@ class Plan:
     @property
     def is_large(self) -> bool:
         """Whether the job is big enough to confirm before downloading."""
-        return (self.tiles or 0) > LARGE_JOB_TILES or (
-            self.download_bytes or 0
-        ) + self.output_bytes > LARGE_JOB_BYTES
+        return (
+            (self.tiles or 0) > LARGE_JOB_TILES
+            or (self.download_bytes or 0) + self.output_bytes > LARGE_JOB_BYTES
+            or self.patches > LARGE_JOB_PATCHES
+        )
 
 
 def ground_resolution_m(zoom: int, latitude: float) -> float:
@@ -237,11 +241,14 @@ def _summarize_label_raster(
         return LabelSummary(labels.path, 0, classes, [f"label raster not found: {local}"])
     # The same checks generate makes (CRS, band, integer values for classes); the CRS
     # argument only matters for sampling, which planning does not do.
-    sampler: LabelRasterSampler | ValueRasterSampler = (
-        LabelRasterSampler(labels, "EPSG:4326")
-        if isinstance(labels, RasterLabelsConfig)
-        else ValueRasterSampler(labels, "EPSG:4326")
-    )
+    messages: list[str] = []
+    with capture_warnings() as caught:
+        sampler: LabelRasterSampler | ValueRasterSampler = (
+            LabelRasterSampler(labels, "EPSG:4326")
+            if isinstance(labels, RasterLabelsConfig)
+            else ValueRasterSampler(labels, "EPSG:4326")
+        )
+    messages.extend(str(warning.message) for warning in caught if _is_user_warning(warning))
     info = sampler.info
     a, b, c, d, e, f = sampler.transform
     xs = [c + a * col + b * row for col in (0, info.width) for row in (0, info.height)]
@@ -251,7 +258,6 @@ def _summarize_label_raster(
         min(xs), min(ys), max(xs), max(ys), densify_pts=21
     )
     region = config.region
-    messages: list[str] = []
     if not box(west, south, east, north).intersects(
         box(region.west, region.south, region.east, region.north)
     ):
@@ -442,7 +448,19 @@ def plan(config: MapcvConfig) -> Plan:
 
     With several imagery sources the raster and patches are the first source's (its
     grid is the dataset's); tiles, download, output and memory add up over the sources.
+    A warning raised anywhere while planning joins ``Plan.warnings`` (once), so a caller
+    shows it in its own style and no raw Python warning reaches the terminal.
     """
+    with capture_warnings() as caught:
+        estimate = _plan(config)
+    for warning in caught:
+        message = str(warning.message)
+        if _is_user_warning(warning) and message not in estimate.warnings:
+            estimate.warnings.append(message)
+    return estimate
+
+
+def _plan(config: MapcvConfig) -> Plan:
     region = config.region
     region_km = region_size_km(region.west, region.south, region.east, region.north)
     plan_warnings: list[str] = []

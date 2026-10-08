@@ -9,17 +9,18 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import NotRequired, TypedDict
 
 from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
+from mapcv._numbers import NoBooleanNumbers
 from mapcv._patching import MaskWindow, NullWindow, extract_array_patch
 
 if TYPE_CHECKING:  # the targets package imports the config, which imports this module
     from mapcv.targets.base import Annotation, WindowTarget
 
 
-class SamplerConfig(BaseModel):
+class SamplerConfig(NoBooleanNumbers):
     """Configuration for cutting patches from the raster (``sampler`` in the config)."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.

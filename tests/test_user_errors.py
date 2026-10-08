@@ -271,8 +271,8 @@ def test_a_run_without_patches_fails(tmp_path: Path) -> None:
     )
     result = runner.invoke(app, ["generate", str(config), "--yes"])
     assert result.exit_code == 1
-    assert "No patches were written" in result.output
-    assert "Dataset ready" not in result.output
+    assert "no patches" in " ".join(result.output.split())
+    assert "Dataset ready" not in result.output and "Looks right" not in result.output
 
 
 def test_a_typo_suggests_the_key(tmp_path: Path) -> None:

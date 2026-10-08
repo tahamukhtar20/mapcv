@@ -34,7 +34,7 @@ Things to check:
 
 ### Large-job confirmation
 
-If a job has more than **20,000 tiles** or more than **5 GB** of estimated download plus output, `mapcv generate` asks before starting:
+If a job has more than **20,000 tiles**, more than **5 GB** of estimated download plus output, or more than **1,000,000 patches**, `mapcv generate` asks before starting:
 
 ```text
 This is a large job. Start it? [y/n] (n):
@@ -93,7 +93,7 @@ Peak memory therefore grows with the **width** of the region and the chunk heigh
 
 Until a run has finished, splits and annotation files included, the manifest records `"complete": false`. `mapcv info` shows such a dataset as **incomplete** and `mapcv verify` fails on it, so a copy of a half-made dataset is not mistaken for the whole one; the same `mapcv generate` command finishes it.
 
-**One run per folder.** `generate` and `split` lock the dataset folder (`.mapcv.lock`, an operating-system lock that ends with the process, however it ends). A second run into the same folder stops at once with `another mapcv command is writing to dataset`. `generate` also refuses a folder that holds files of its own and no `manifest.json`, so none of them is overwritten or removed: generate into a new or empty folder.
+**One run per folder.** `generate` and `split` lock the dataset folder (`.mapcv.lock`, an operating-system lock that ends with the process, however it ends). A second run into the same folder stops at once with `another mapcv command is writing to dataset`. `generate` also refuses a folder that holds files of its own and no `manifest.json`, so none of them is overwritten or removed: generate into a new or empty folder. Hidden entries (`.git`, `.gitkeep`, `.gitattributes`, ...) and a top-level `README.md` do not count, so a cloned Hugging Face dataset repository or a freshly initialised version-control folder is fine.
 
 ## 4. Resume
 
@@ -123,7 +123,7 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
 | `imagery file, URL template or read settings` | the imagery file itself (a GeoTIFF's size and a hash of its first and last 64 KiB, or a remote file's `ETag`, size and first 64 KiB; every file of a mosaic), a custom `url_template` (another layer, year, style or key on the same host), `overview`, `nodata`, the STAC item, `scl_mask`, or the Earth Engine image and rendering |
-| `imagery file modification time` | a local GeoTIFF's modification time: the file was edited in place (which can keep its size and both ends), re-exported, or copied without its times. Copy with `cp -p` or `rsync -a` to keep them |
+| `imagery file modification time` | a local GeoTIFF's modification time: the file was edited in place (which can keep its size and both ends), re-exported, or copied without its times. Copy with `cp -p` or `rsync -a` to keep them. When the content is unchanged, the message names the recorded time and the command that restores it (`touch -d '2026-10-08T09:14:03.123456789Z' file.tif` on Linux and macOS, a `LastWriteTimeUtc` assignment on Windows); run it and generate again. For a mosaic, only the files whose time changed are named |
 | `sources` | the names of the imagery sources, or their number |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY/TIF and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |

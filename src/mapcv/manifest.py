@@ -13,6 +13,9 @@ import math
 import os
 import posixpath
 import re
+import shlex
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from pathlib import Path
@@ -301,14 +304,24 @@ class Manifest(BaseModel):
         path = Path(path)
         try:
             text = path.read_text(encoding="utf-8")
+            fast: Manifest | None = None
+            data: Any = None
             if _CURRENT_VERSION_FIRST.match(text):
                 # What mapcv writes: validate straight from JSON, the fast path for big manifests.
-                return cls.model_validate_json(text)
-            data = json.loads(text)
+                fast = cls.model_validate_json(text)
+            else:
+                data = json.loads(text)
         except ValueError as exc:  # invalid UTF-8 or JSON, or a pydantic ValidationError
             raise ManifestMismatchError(_unreadable(path, exc)) from exc
+        if fast is not None:
+            if "patches" not in fast.model_fields_set:
+                raise ManifestMismatchError(f"{path} is not a mapcv manifest (it lists no patches)")
+            return fast
         if not isinstance(data, dict):
             raise ManifestMismatchError(f"{path} is not a mapcv manifest")
+        newer = isinstance(data.get("version"), int) and data["version"] > MANIFEST_VERSION
+        if not isinstance(data.get("patches"), list) and not newer:
+            raise ManifestMismatchError(f"{path} is not a mapcv manifest (it lists no patches)")
         try:
             return cls.from_dict(data)
         except ManifestMismatchError as exc:
@@ -527,14 +540,82 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
     return list(dict.fromkeys(mismatches))
 
 
-def load_or_create_manifest(path: Path, expected: Manifest) -> Manifest:
+def _file_times(fingerprint: Any) -> dict[str, int]:
+    """A fingerprint's files and their modification times in nanoseconds: ``""`` for a
+    single file, the file names for a mosaic."""
+    if not isinstance(fingerprint, dict):
+        return {}
+    if isinstance(fingerprint.get("files"), list):
+        return {
+            str(item.get("name")): item["mtime_ns"]
+            for item in fingerprint["files"]
+            if isinstance(item, dict) and isinstance(item.get("mtime_ns"), int)
+        }
+    mtime = fingerprint.get("mtime_ns")
+    return {"": mtime} if isinstance(mtime, int) else {}
+
+
+def format_file_time(mtime_ns: int, path: str, windows: bool | None = None) -> str:
+    """The shell command that sets ``path``'s modification time to ``mtime_ns`` exactly.
+
+    The time is written in UTC with every digit (``touch -d`` on Linux and macOS reads the
+    ISO form with a ``Z``; PowerShell keeps 100-ns ticks, which is what Windows stores).
+    """
+    seconds, nanos = divmod(mtime_ns, 1_000_000_000)
+    moment = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    stamp = moment.strftime("%Y-%m-%dT%H:%M:%S")
+    if (os.name == "nt") if windows is None else windows:
+        quoted = "'" + path.replace("'", "''") + "'"
+        return (
+            f"(Get-Item -LiteralPath {quoted}).LastWriteTimeUtc = "
+            f"[DateTime]::Parse('{stamp}.{nanos // 100:07d}Z').ToUniversalTime()"
+        )
+    return f"touch -d '{stamp}.{nanos:09d}Z' {shlex.quote(path)}"
+
+
+_MOST_FILES_NAMED = 3
+
+
+def _restore_times_hint(
+    manifest: Manifest, expected: Manifest, locations: Mapping[str, Mapping[str, str]]
+) -> str:
+    """How to set back the modification times that make a resume refuse the imagery: the
+    command per changed file (a few, then a count), for a file whose content is unchanged."""
+    commands: list[str] = []
+    for have, want in zip(manifest.sources, expected.sources):
+        if _without_times(have.fingerprint) != _without_times(want.fingerprint):
+            continue
+        recorded, current = _file_times(have.fingerprint), _file_times(want.fingerprint)
+        for key, mtime_ns in recorded.items():
+            where = (locations.get(have.name) or {}).get(key)
+            if where is not None and current.get(key) != mtime_ns:
+                commands.append(format_file_time(mtime_ns, where))
+    if not commands:
+        return ""
+    shown = "; ".join(commands[:_MOST_FILES_NAMED])
+    if len(commands) > _MOST_FILES_NAMED:
+        more = len(commands) - _MOST_FILES_NAMED
+        shown += f" (and {more:,} more {'file' if more == 1 else 'files'})"
+    return (
+        ". If the file's content is unchanged (copied without its times), restore the "
+        f"recorded time with: {shown} and run generate again"
+    )
+
+
+def load_or_create_manifest(
+    path: Path,
+    expected: Manifest,
+    file_locations: Mapping[str, Mapping[str, str]] | None = None,
+) -> Manifest:
     """Load the manifest at ``path`` for resuming, or return ``expected`` when there is none.
 
     ``expected`` describes the run about to start (no patches). An existing
     manifest is resumed only when it records the same task, sources, target,
     sampler and writer. Version-2 manifests (mapcv 0.2) are compared after
     upgrading: mapcv 0.2 had no ignore index, so they resume only with
-    ``labels.ignore_index: null``.
+    ``labels.ignore_index: null``. ``file_locations`` maps a source's name to the local
+    files of its fingerprint (the key ``""`` for one file, else the names in the
+    fingerprint), so a refused modification time names the command that restores it.
 
     Raises:
         ManifestMismatchError: The existing manifest is version 1, a version-2
@@ -568,6 +649,8 @@ def load_or_create_manifest(path: Path, expected: Manifest) -> Manifest:
             if "writer" in mismatches and old == "4:4:4" and new != old:
                 needs.append('writer.jpg_subsampling: "4:4:4" (mapcv 0.2 wrote 4:4:4 JPEGs)')
         hint = f". To resume this mapcv 0.2 dataset, set {' and '.join(needs)}" if needs else ""
+        if any("modification time" in mismatch for mismatch in mismatches):
+            hint += _restore_times_hint(manifest, expected, file_locations or {})
         raise ManifestMismatchError(
             f"{path} was generated with a different configuration "
             f"({', '.join(mismatches)}); use a new writer.staging_dir or remove the old "

@@ -375,6 +375,16 @@ def generate(config: MapcvConfig, source: FakeSource | None = None) -> Manifest:
     return Manifest.load(config.writer.staging_dir / "manifest.json")
 
 
+def generate_nothing(config: MapcvConfig, source: FakeSource | None = None) -> None:
+    """A run that keeps no patch: it leaves no dataset (no manifest, no label tables)."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("mapcv.pipeline.open_raster_source", lambda *a, **k: source or FakeSource())
+        result = run_generate(config)
+    assert result.manifest.patches == [] and result.new_patches == 0
+    folder = config.writer.staging_dir
+    assert not (folder / "manifest.json").exists() and not (folder / "labels.csv").exists()
+
+
 # ── the independent computation (rasterio / GDAL) ───────────────────────────
 
 
@@ -631,8 +641,7 @@ def test_no_label_features_near_the_raster_give_background_or_nothing(tmp_path: 
         [Feature(box(X0 + 5000, Y0 - 5100, X0 + 5100, Y0 - 5000), "tree")],
     )
     with pytest.warns(UserWarning, match="no label polygon intersects the imagery extent"):
-        nothing = generate(config_for(tmp_path), FakeSource())
-    assert nothing.patches == []
+        generate_nothing(config_for(tmp_path), FakeSource())
     with pytest.warns(UserWarning, match="no label polygon intersects"):
         everything = generate(
             config_for(tmp_path, classification={"empty": "background"}, staging="bg"),
@@ -1709,22 +1718,17 @@ def test_a_label_file_without_polygons_labels_every_patch_background_or_nothing(
     )
     source = FakeSource(make_valid_mask("edges"))
     with pytest.warns(UserWarning):
-        nothing = generate(config_for(tmp_path), source)
-    assert nothing.patches == []
-    assert (tmp_path / "dataset" / "labels.csv").read_text() == "image,labels\n"
-    assert (tmp_path / "dataset" / "labels.json").read_text() == (
-        '{\n  "classes": ["object"],\n  "images": {}\n}\n'
-    )
+        generate_nothing(config_for(tmp_path), source)
     with pytest.warns(UserWarning):
         kept = generate(
             config_for(tmp_path, classification={"empty": "background"}, staging="bg"), source
         )
     assert {tuple(e["summary"]["labels"]) for e in kept.patches} == {(0,)}
     assert kept.patches and all(e["summary"]["class_coverage"] == {} for e in kept.patches)
-    # Nothing labeled anywhere: `info` still works, without a table of labels.
-    result = runner.invoke(app, ["info", str(tmp_path / "dataset")])
+    # Nothing labeled anywhere: `info` still works.
+    result = runner.invoke(app, ["info", str(tmp_path / "bg")])
     assert result.exit_code == 0, result.output
-    assert "classification" in result.output and "background" not in result.output
+    assert "classification" in result.output
 
 
 # ── the writer and the factories on their own ───────────────────────────────

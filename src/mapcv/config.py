@@ -15,7 +15,6 @@ from urllib.parse import unquote, urlsplit
 
 import yaml
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Discriminator,
     Field,
@@ -27,6 +26,7 @@ from pydantic import (
     model_validator,
 )
 
+from mapcv._numbers import NoBooleanNumbers
 from mapcv.downloader import URL_TEMPLATES
 from mapcv.filepattern import is_pattern, matching_files
 from mapcv.labels import VECTOR_LABEL_SUFFIXES, _normalize_label, label_suffix_hint
@@ -347,7 +347,7 @@ _TILES_REMOVED = (
 WEB_MERCATOR_MAX_LATITUDE = 85.05112878
 
 
-class RegionConfig(BaseModel):
+class RegionConfig(NoBooleanNumbers):
     """The area of interest: a WGS-84 bounding box, or polygons in a vector file.
 
     With ``path`` (an area-of-interest file, any vector label format) the box is the
@@ -430,7 +430,7 @@ class RegionConfig(BaseModel):
         return self
 
 
-class EarthEngineVis(BaseModel):
+class EarthEngineVis(NoBooleanNumbers):
     """How Earth Engine renders the image into RGB tiles (``getMapId`` visualization)."""
 
     model_config = ConfigDict(extra="forbid")
@@ -469,7 +469,7 @@ class EarthEngineVis(BaseModel):
         return params
 
 
-class EarthEngineImageryConfig(BaseModel):
+class EarthEngineImageryConfig(NoBooleanNumbers):
     """An Earth Engine image or collection composite, rendered as XYZ tiles.
 
     mapcv asks Earth Engine for a tile URL (``getMapId``) every time it opens the
@@ -540,7 +540,7 @@ class EarthEngineImageryConfig(BaseModel):
         return self
 
 
-class XYZImageryConfig(BaseModel):
+class XYZImageryConfig(NoBooleanNumbers):
     """XYZ tile imagery source and fetch settings."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -584,7 +584,7 @@ class XYZImageryConfig(BaseModel):
 _STAC_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2}))?")
 
 
-class StacSearchBase(BaseModel):
+class StacSearchBase(NoBooleanNumbers):
     """Find the item for a region in a STAC catalog (``imagery.search``).
 
     The least cloudy item of ``collection`` whose footprint covers the whole region,
@@ -656,7 +656,7 @@ def _check_scl_mask(value: list[int] | None) -> list[int] | None:
     return sorted(set(value))
 
 
-class EOPFZarrImageryConfig(BaseModel):
+class EOPFZarrImageryConfig(NoBooleanNumbers):
     """One local or anonymous public Sentinel-2 L2A EOPF Zarr product."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -699,7 +699,7 @@ class EOPFZarrImageryConfig(BaseModel):
         return self
 
 
-class StacCogImageryConfig(BaseModel):
+class StacCogImageryConfig(NoBooleanNumbers):
     """Sentinel-2 bands as separate Cloud Optimized GeoTIFFs of a STAC item (``type: stac_cog``),
     such as Element 84's Earth Search catalog of Sentinel-2 L2A.
 
@@ -734,7 +734,7 @@ class StacCogImageryConfig(BaseModel):
         return bands
 
 
-class GeoTiffImageryConfig(BaseModel):
+class GeoTiffImageryConfig(NoBooleanNumbers):
     """One local or remote GeoTIFF / Cloud Optimized GeoTIFF, read as it is (no resampling),
     or a mosaic of local GeoTIFFs: a glob pattern such as ``survey/*.tif`` (``**`` matches
     folders too) whose files share one CRS, pixel size and pixel grid.
@@ -849,7 +849,7 @@ UNION_TAGS = frozenset(
 )
 
 
-class BufferConfig(BaseModel):
+class BufferConfig(NoBooleanNumbers):
     """Distances, in metres on the ground, that turn lines and points into polygons."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.
@@ -894,7 +894,7 @@ def _check_vector_suffix(path: Path, key: str) -> Path:
 _OSM_KEY = re.compile(r"[A-Za-z0-9_:.-]{1,64}")
 
 
-class OsmClass(BaseModel):
+class OsmClass(NoBooleanNumbers):
     """One class of OpenStreetMap labels: the features whose tags match ``tags``.
 
     Each tag is a key with ``"*"`` (any value), one value, or a list of values; a
@@ -932,7 +932,7 @@ class OsmClass(BaseModel):
         return tags
 
 
-class OsmLabelsSource(BaseModel):
+class OsmLabelsSource(NoBooleanNumbers):
     """Labels downloaded from OpenStreetMap through the Overpass API (``labels.osm``)."""
 
     model_config = ConfigDict(extra="forbid")
@@ -962,7 +962,7 @@ class OsmLabelsSource(BaseModel):
         return self
 
 
-class LabelFile(BaseModel):
+class LabelFile(NoBooleanNumbers):
     """One of several vector label files (``labels.files``).
 
     Each feature's class is its ``label_field`` value or, with ``class``, the same
@@ -1018,7 +1018,7 @@ class LabelFile(BaseModel):
         return self
 
 
-class LabelsConfig(BaseModel):
+class LabelsConfig(NoBooleanNumbers):
     """Vector label settings: polygons burned into masks, or the objects of detection and instance.
 
     The file is GeoJSON, KML, a GeoPackage, a Shapefile or GeoParquet, chosen by its suffix.
@@ -1188,7 +1188,7 @@ class LabelsConfig(BaseModel):
         return self
 
 
-class RasterClass(BaseModel):
+class RasterClass(NoBooleanNumbers):
     """Where one label-raster value goes: mask ``id`` (0 = background) and class ``name``."""
 
     model_config = ConfigDict(extra="forbid")
@@ -1197,7 +1197,7 @@ class RasterClass(BaseModel):
     name: str | None = None
 
 
-class RasterLabelsConfig(BaseModel):
+class RasterLabelsConfig(NoBooleanNumbers):
     """A classified label raster (GeoTIFF / COG): land cover, a previous model's output, ...
 
     ``classes`` maps raster values to mask IDs, either as ``value: id`` or as
@@ -1238,14 +1238,6 @@ class RasterLabelsConfig(BaseModel):
                 raise ValueError("labels.classes maps integer raster values to integer IDs")
             expanded[value] = {"id": target} if isinstance(target, int) else target
         return expanded
-
-    @field_validator("nodata", "ignore_values", mode="before")
-    @classmethod
-    def _no_booleans(cls, value: Any) -> Any:
-        values = value if isinstance(value, list) else [value]
-        if any(isinstance(item, bool) for item in values):
-            raise ValueError("raster values must be integers")
-        return value
 
     @model_validator(mode="after")
     def _validate_classes(self) -> RasterLabelsConfig:
@@ -1321,7 +1313,7 @@ class RasterLabelsConfig(BaseModel):
         }
 
 
-class ContinuousLabelsConfig(BaseModel):
+class ContinuousLabelsConfig(NoBooleanNumbers):
     """A raster of continuous values for ``task: regression``: canopy height, biomass,
     elevation, a previous model's scores ...
 
@@ -1396,7 +1388,7 @@ def _all_formats() -> list[DetectionFormat]:
     return list(DETECTION_FORMATS)
 
 
-class DetectionOptions(BaseModel):
+class DetectionOptions(NoBooleanNumbers):
     """Settings of ``task: detection`` (the ``detection:`` block).
 
     One object is one label feature (a MultiPolygon is one object). Its box is the
@@ -1429,7 +1421,7 @@ class DetectionOptions(BaseModel):
         return [name for name in DETECTION_FORMATS if name in formats]
 
 
-class InstanceOptions(BaseModel):
+class InstanceOptions(NoBooleanNumbers):
     """Settings of ``task: instance`` (the ``instance:`` block).
 
     One instance is one label feature (a MultiPolygon is one instance, and so is a
@@ -1450,7 +1442,7 @@ class InstanceOptions(BaseModel):
     id_mask: bool = False
 
 
-class ClassificationOptions(BaseModel):
+class ClassificationOptions(NoBooleanNumbers):
     """Settings of ``task: classification`` (the ``classification:`` block).
 
     A patch's label is decided by how much of it each class covers. Coverage is the
@@ -1474,7 +1466,7 @@ class ClassificationOptions(BaseModel):
     empty: Literal["skip", "background"] = "skip"
 
 
-class ChangeOptions(BaseModel):
+class ChangeOptions(NoBooleanNumbers):
     """Settings of ``task: change`` (the ``change:`` block).
 
     The change mask comes either from ``labels`` (features, or a label raster, that
@@ -1593,7 +1585,7 @@ def _validate_task(task: Any) -> Any:
     raise ValueError(f"unknown task '{task}'; supported: {supported}{planned}")
 
 
-class MapcvConfig(BaseModel):
+class MapcvConfig(NoBooleanNumbers):
     """Full mapcv pipeline configuration."""
 
     # Unknown keys are errors, so typos and newer-version options are not silently ignored.

@@ -214,6 +214,13 @@ def assign_class_ids(
                 f"masks support at most {MAX_CLASS_ID} classes. Map them with labels.classes."
             )
         class_map = {label: index for index, label in enumerate(present, start=1)}
+        if "0" in class_map:
+            warnings.warn(
+                f"label '0' is class {class_map['0']}, not background; set labels.classes to "
+                "map it differently",
+                UserWarning,
+                stacklevel=4,
+            )
 
     ids = [class_map.get(label, 0) if label is not None else 0 for label in labels]
     return ids, class_map

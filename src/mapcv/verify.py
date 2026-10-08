@@ -76,6 +76,12 @@ class VerifyReport:
     def ok(self) -> bool:
         return not self.problems
 
+    @property
+    def only_rewritten(self) -> bool:
+        """True when every problem is a file that ``split``, ``stats`` or ``card`` rewrote
+        since ``SHA256SUMS`` was written, so recording new hashes is the right fix."""
+        return bool(self.rewritten) and len(self.rewritten) == len(self.problems)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()

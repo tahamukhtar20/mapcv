@@ -94,7 +94,11 @@ A patch without a single pixel of imagery (all its tiles failed, or it lies whol
 
 ## Dataset folders
 
-`writer.staging_dir` must be new, empty or a mapcv dataset: `generate` refuses a folder that holds other files and no `manifest.json` (for example the folder of the config, with `staging_dir: .`), so none of them is overwritten or removed. `generate` and `split` lock the folder while they write, and a second run into it stops at once. An interrupted `generate` records `"complete": false` in the manifest until a run finishes it, and `mapcv verify` fails on such a dataset. Resuming also refuses a custom `url_template` other than the dataset's (also on the same host), another region on the same grid, and a local GeoTIFF whose modification time changed: copy imagery with `cp -p` or `rsync -a` to resume with the copy.
+`writer.staging_dir` must be new, empty or a mapcv dataset: `generate` refuses a folder that holds other files and no `manifest.json` (for example the folder of the config, with `staging_dir: .`), so none of them is overwritten or removed. Hidden entries (`.git`, `.gitkeep`, ...) and a top-level `README.md` do not count. `generate` and `split` lock the folder while they write, and a second run into it stops at once. An interrupted `generate` records `"complete": false` in the manifest until a run finishes it, and `mapcv verify` fails on such a dataset. Resuming also refuses a custom `url_template` other than the dataset's (also on the same host), another region on the same grid, and a local GeoTIFF whose modification time changed: copy imagery with `cp -p` or `rsync -a` to resume with the copy.
+
+## Runs that write nothing, and YAML booleans
+
+A `generate` whose plan holds no patch stops before it starts (exit code 1), and one that finds every patch dropped leaves no `manifest.json`, split lists or `patches.geojson`: mapcv 0.2 wrote an empty dataset that `verify`, `stats` and `export` accepted. A number field now refuses a YAML boolean (`patch_size: true`, `zoom: yes`), which mapcv 0.2 read as 1; write the number.
 
 ## Repeated config keys
 

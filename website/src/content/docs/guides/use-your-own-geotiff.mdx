@@ -128,6 +128,7 @@ Rules for remote files:
 - Only `https://` and anonymous `s3://` URLs are accepted. A URL with a username, password, query string or fragment is rejected, so signed (pre-signed, SAS) URLs and private buckets are not supported. `http://` is accepted only for a local test server on `localhost` or `127.0.0.1`.
 - Reads are cached in memory and retried on transient errors. A plain, non-tiled GeoTIFF over HTTP works too, but mapcv then has to fetch whole strips, so a COG is much cheaper.
 - Resuming checks the URL, the server's `ETag` and the file size, so a file replaced on the server is noticed.
+- **A remote read is bound by latency, not bandwidth.** Every tile of the file that the region touches is one range request, so even a small region can take dozens of seconds, depending on how far away the server is and how quickly it answers. `plan` is quick because it reads only the header; `generate` is where the time goes. For a file you will read more than once, download it and point `path` at the local copy.
 
 ## Several co-registered files
 

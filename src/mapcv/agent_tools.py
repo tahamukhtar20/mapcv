@@ -327,6 +327,11 @@ class ToolState:
     jobs: _Jobs = field(default_factory=_Jobs)
 
 
+def _unique(texts: list[str]) -> list[str]:
+    """The texts in order, each once (the plan and the run raise the same warning)."""
+    return list(dict.fromkeys(texts))
+
+
 def _warning_texts(caught: list[warnings.WarningMessage]) -> list[str]:
     texts: list[str] = []
     for warning in caught:
@@ -1318,6 +1323,10 @@ def large_reason(estimate: Plan) -> str | None:
             f"about {human_bytes(total)} to download and write (the limit is "
             f"{human_bytes(planning.LARGE_JOB_BYTES)})"
         )
+    if estimate.patches > planning.LARGE_JOB_PATCHES:
+        reasons.append(
+            f"about {estimate.patches:,} patches (the limit is {planning.LARGE_JOB_PATCHES:,})"
+        )
     return "; ".join(reasons) or None
 
 
@@ -1383,6 +1392,7 @@ def plan_data(state: ToolState, config: MapcvConfig, estimate: Plan) -> dict[str
         "large_limits": {
             "tiles": planning.LARGE_JOB_TILES,
             "download_plus_output_bytes": planning.LARGE_JOB_BYTES,
+            "patches": planning.LARGE_JOB_PATCHES,
         },
         "output": state.sandbox.rel(config.writer.staging_dir),
     }
@@ -1520,6 +1530,12 @@ def prepare_generate(state: ToolState, config: str, confirm_large: bool = False)
         raise ToolFailure(
             f"{estimate.blocking[0]}. Nothing was started.", {"errors": estimate.blocking}
         )
+    if estimate.patches == 0:
+        raise ToolFailure(
+            "This config would write no patches. Nothing was started. Enlarge the region, "
+            "lower sampler.patch_size or set sampler.edge_strategy: pad.",
+            {"plan": data},
+        )
     sandbox.check_tree(loaded.writer.staging_dir, "writer.staging_dir")
     if estimate.is_large and not confirm_large:
         raise ToolFailure(
@@ -1592,10 +1608,19 @@ def _generate_result(
 ) -> ToolResult:
     manifest = result.manifest
     sandbox = state.sandbox
+    if not manifest.patches:
+        raise ToolFailure(
+            "No patches were written, so there is no dataset. The region may be smaller than "
+            "one patch, or every patch was dropped by sampler.max_empty_ratio or "
+            "sampler.min_label_ratio (see the warnings). Check the numbers with plan.",
+            {"warnings": _unique([*job.plan["warnings"], *warns])},
+        )
     files = [f"{folder}/" for folder in patch_folders(manifest)] or ["Images/"]
     files.append("manifest.json")
     if result.split_counts is not None:
         files.append("splits/")
+    if (result.staging_dir / "patches.geojson").is_file():
+        files.append("patches.geojson")
     files.extend(
         name
         for name in ("annotations/", "labels/", "dataset.yaml")
@@ -1614,7 +1639,7 @@ def _generate_result(
         "splits": result.split_counts,
         "seconds": round(result.seconds, 1),
         "files": files,
-        "warnings": [*job.plan["warnings"], *warns],
+        "warnings": _unique([*job.plan["warnings"], *warns]),
         "next": [f"info(dataset='{dataset}')", f"split(dataset='{dataset}', ...) to re-split"],
     }
     summary = f"Dataset ready in {dataset}/: {len(manifest.patches):,} patch(es)"
@@ -1897,11 +1922,14 @@ def verify(
     folder, _ = _checked_dataset(state, dataset)
     report = verify_dataset(folder, deep=deep)
     written: str | None = None
-    if write_sums and report.ok:
+    if write_sums and (report.ok or report.only_rewritten):
+        # Files that split, stats and card rewrite are recorded with their new hashes.
         try:
             written = sandbox.rel(write_checksums(folder))
         except OSError as exc:
             raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
+        if not report.ok:
+            report = verify_dataset(folder, deep=deep)
     out = {
         "dataset": sandbox.rel(folder),
         "ok": report.ok,

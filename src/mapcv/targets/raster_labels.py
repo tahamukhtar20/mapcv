@@ -545,6 +545,19 @@ class LabelRasterSampler(_GridSampler):
         self.nodata = (
             labels.nodata if labels.nodata is not None else integer_nodata(info.nodata, info.dtype)
         )
+        if labels.nodata is None and self.nodata in labels.classes:
+            # labels.classes says what the value means; the file's NoData tag does not
+            # override it (a labels.nodata in labels.classes is a config error).
+            target = labels.classes[self.nodata]
+            meaning = target.name or ("background" if target.id == 0 else f"ID {target.id}")
+            warnings.warn(
+                f"label raster '{self.name}' tags {self.nodata} as NoData, but labels.classes "
+                f"maps {self.nodata} to {meaning}; the mapping is used. "
+                "Set labels.nodata to the value that means 'no label' if there is one.",
+                UserWarning,
+                stacklevel=3,
+            )
+            self.nodata = None
         ignore = labels.ignore_index if labels.ignore_index is not None else 0
         self.ignore = ignore
         ignored = tuple(labels.ignore_values) + (() if self.nodata is None else (self.nodata,))

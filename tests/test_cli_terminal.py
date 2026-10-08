@@ -7,6 +7,7 @@ same as ``mapcv generate x.yaml | cat`` or ``> log.txt``.
 from __future__ import annotations
 
 import errno
+import json
 from pathlib import Path
 from typing import Any
 
@@ -335,3 +336,61 @@ def test_duration(seconds: float, text: str) -> None:
 )
 def test_coordinates_have_six_decimals_at_most(value: float, text: str) -> None:
     assert cli._coordinate(value) == text
+
+
+# Class names from a label file, as written there: Rich markup and terminal control
+# sequences must be printed as text, never interpreted.
+_MARKUP_NAMES = ("road [/]", "building [residential]", "x [link=https://evil.example]y[/link]")
+_CONTROL_NAMES = ("\x1b[31mred", "\x1b]0;pwned\x07")
+
+
+def test_plan_prints_class_names_and_paths_as_text(tmp_path: Path) -> None:
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"cls": name},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[74.3, 31.5], [74.31, 31.5], [74.31, 31.51], [74.3, 31.5]]],
+            },
+        }
+        for name in (*_MARKUP_NAMES, *_CONTROL_NAMES)
+    ]
+    labels = tmp_path / "labels [final].geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    config = _config(tmp_path, tmp_path / "out [v2]")
+    config.write_text(
+        config.read_text() + f"labels: {{path: '{labels.name}', label_field: cls}}\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["plan", str(config)], env={"COLUMNS": "400"})
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.output and "\x07" not in result.output
+    for name in _MARKUP_NAMES:
+        assert name in result.output
+    assert "\\x1b[31mred" in result.output and "\\x1b]0;pwned\\x07" in result.output
+    assert "labels [final].geojson" in result.output and "out [v2]" in result.output
+
+
+def test_info_prints_class_names_as_text(tmp_path: Path) -> None:
+    staging = tmp_path / "dataset"
+    names = (*_MARKUP_NAMES, *_CONTROL_NAMES)
+    manifest = _dataset(staging)
+    manifest.target = TargetRecord(
+        type="segmentation",
+        class_map={name: index for index, name in enumerate(names, start=1)},
+        ignore_index=255,
+    )
+    for entry in manifest.patches:
+        entry["summary"]["class_pixels"] = {str(cid): 1 for cid in range(len(names) + 1)}
+    manifest.save(staging / "manifest.json")
+    result = runner.invoke(app, ["info", str(staging)], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.output and "\x07" not in result.output
+    for name in _MARKUP_NAMES:
+        assert name in result.output
+    assert "\\x1b[31mred" in result.output
+
+
+def test_escape_keeps_newlines_and_shows_other_control_characters() -> None:
+    assert cli.escape("a [b]\n\x1b\u202e") == "a \\[b]\n\\x1b\\u202e"

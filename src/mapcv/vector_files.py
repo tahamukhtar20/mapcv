@@ -14,6 +14,7 @@ with a message that says what to do next.
 from __future__ import annotations
 
 import codecs
+import difflib
 import importlib
 import json
 import sqlite3
@@ -75,9 +76,19 @@ def _require_columns(
             shown = ", ".join(repr(column) for column in available) or "none"
             raise ValueError(
                 f"labels.label_field '{name}' is not a column of {what}. "
-                f"The {kind} has these columns: {shown}. Check the spelling and the case."
+                f"The {kind} has these columns: {shown}.{did_you_mean(name, available)}"
             )
     return list(wanted)
+
+
+def did_you_mean(name: str, choices: Sequence[str]) -> str:
+    """`` Did you mean 'x'?`` for the choice closest to a misspelled ``name`` (also one
+    that differs in case only), else a hint to check the spelling."""
+    close = difflib.get_close_matches(name, list(choices), n=1)
+    if not close:
+        lowered = {choice.lower(): choice for choice in choices}
+        close = [lowered[name.lower()]] if name.lower() in lowered else []
+    return f" Did you mean '{close[0]}'?" if close else " Check the spelling and the case."
 
 
 def _wgs84_lonlat(crs: Any) -> bool:
@@ -159,29 +170,99 @@ def _quote(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def _open_gpkg(path: Path) -> sqlite3.Connection:
+# A GeoPackage is an SQLite database, and its tables may be views: SQL that runs when the
+# layer is read, and that may never end (a recursive view yields rows forever). Reading
+# is bounded by the size of the file: at most this many SQLite instructions (checked
+# every _PROGRESS_STEP) and rows per byte, plus a floor, which is far more than reading
+# any real table takes.
+_PROGRESS_STEP = 10_000
+_INSTRUCTIONS_PER_BYTE = 500
+_INSTRUCTIONS_FLOOR = 20_000_000
+_ROWS_PER_BYTE = 0.25
+_ROWS_FLOOR = 10_000
+
+
+@dataclass
+class _GpkgBudget:
+    """How much work reading a GeoPackage may take, and whether it ran out."""
+
+    instructions: int
+    rows: int
+    exceeded: bool = False
+
+    def tick(self) -> int:
+        """SQLite's progress handler: a non-zero result interrupts the statement."""
+        self.instructions -= _PROGRESS_STEP
+        if self.instructions < 0:
+            self.exceeded = True
+            return 1
+        return 0
+
+
+def _budget_message(what: str) -> str:
+    return (
+        f"{what}: reading it did not finish within the work a file of this size can need, "
+        "so its layer is probably a view whose query does not end. Export the layer to a "
+        "new GeoPackage as a table (QGIS: Export, Save Features As; or ogr2ogr) and read "
+        "that."
+    )
+
+
+def _open_gpkg(path: Path) -> tuple[sqlite3.Connection, _GpkgBudget]:
     _check_file(path)
+    size = path.stat().st_size
+    wal = path.with_name(path.name + "-wal")
+    if wal.is_file():
+        size += wal.stat().st_size
+    budget = _GpkgBudget(
+        instructions=_INSTRUCTIONS_FLOOR + _INSTRUCTIONS_PER_BYTE * size,
+        rows=_ROWS_FLOOR + int(_ROWS_PER_BYTE * size),
+    )
     try:
-        return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     except sqlite3.Error as exc:  # pragma: no cover - connect() is lazy and rarely fails
         raise ValueError(f"{path.name}: cannot open the GeoPackage ({exc}).") from exc
+    connection.set_progress_handler(budget.tick, _PROGRESS_STEP)
+    return connection, budget
 
 
-def _gpkg_layers(connection: sqlite3.Connection, path: Path) -> list[tuple[str, str, int]]:
-    """Feature tables as ``(table, geometry column, srs_id)``, sorted by table name."""
+def _srs_id(value: Any, table: str, path: Path) -> int:
+    """The ``srs_id`` of a layer as an integer; the spec makes it one, but SQLite stores
+    any value."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("+-").isdigit() and value.isascii():
+        return int(value)
+    shown = "missing (NULL)" if value is None else f"{value!r}, not an integer"
+    raise ValueError(
+        f"{path.name} (layer '{table}'): its srs_id in gpkg_geometry_columns is {shown}, so "
+        "the layer's CRS is unknown. Assign the CRS in QGIS (Layer, Set Layer CRS, then "
+        "export again) or with ogr2ogr -a_srs."
+    )
+
+
+def _gpkg_layers(
+    connection: sqlite3.Connection, path: Path, budget: _GpkgBudget
+) -> list[tuple[str, str, Any]]:
+    """Feature tables as ``(table, geometry column, srs_id)``, sorted by table name. The
+    ``srs_id`` is as stored; :func:`_srs_id` checks it for the layer that is read."""
     try:
         rows = connection.execute(
             "SELECT c.table_name, g.column_name, g.srs_id "
             "FROM gpkg_contents AS c JOIN gpkg_geometry_columns AS g "
             "ON c.table_name = g.table_name WHERE c.data_type = 'features' "
             "ORDER BY c.table_name"
-        ).fetchall()
+        ).fetchmany(budget.rows + 1)
     except sqlite3.Error as exc:
+        if budget.exceeded:
+            raise ValueError(_budget_message(path.name)) from None
         raise ValueError(
             f"{path.name} is not a readable GeoPackage ({exc}). Check that the file is a "
             ".gpkg and is not truncated; re-export it from QGIS or ogr2ogr if unsure."
         ) from exc
-    return [(str(name), str(column), int(srs_id)) for name, column, srs_id in rows]
+    if len(rows) > budget.rows:
+        raise ValueError(_budget_message(path.name))
+    return [(str(name), str(column), srs_id) for name, column, srs_id in rows]
 
 
 def gpkg_layer_names(path: Path) -> list[str]:
@@ -190,8 +271,9 @@ def gpkg_layer_names(path: Path) -> list[str]:
     Raises:
         ValueError: The file is not a readable GeoPackage.
     """
-    with closing(_open_gpkg(path)) as connection:
-        return [name for name, _, _ in _gpkg_layers(connection, path)]
+    connection, budget = _open_gpkg(path)
+    with closing(connection):
+        return [name for name, _, _ in _gpkg_layers(connection, path, budget)]
 
 
 def _gpkg_crs(connection: sqlite3.Connection, srs_id: int, what: str) -> Any:
@@ -296,8 +378,9 @@ def read_gpkg(
             an undefined CRS, or a corrupt geometry.
     """
     what = f"{path.name}"
-    with closing(_open_gpkg(path)) as connection:
-        layers = _gpkg_layers(connection, path)
+    connection, budget = _open_gpkg(path)
+    with closing(connection):
+        layers = _gpkg_layers(connection, path, budget)
         names = [name for name, _, _ in layers]
         if not layers:
             raise ValueError(f"{what} has no feature tables, so there are no labels in it.")
@@ -317,7 +400,7 @@ def read_gpkg(
                 )
             table, geometry_column, srs_id = chosen[0]
         what = f"{path.name} (layer '{table}')"
-        crs = _gpkg_crs(connection, srs_id, what)
+        crs = _gpkg_crs(connection, _srs_id(srs_id, table, path), what)
         try:
             info = connection.execute(f"PRAGMA table_info({_quote(table)})").fetchall()
         except sqlite3.Error as exc:  # pragma: no cover - PRAGMA table_info does not fail
@@ -334,11 +417,15 @@ def read_gpkg(
                 rows = cursor.fetchmany(_READ_CHUNK)
                 if not rows:
                     break
+                if len(blobs) + len(rows) > budget.rows:
+                    raise ValueError(_budget_message(what))
                 for row in rows:
                     blobs.append(_gpkg_wkb(row[0], what))
                     for name, value in zip(columns, row[1:]):
                         values[name].append(value)
         except sqlite3.Error as exc:
+            if budget.exceeded:
+                raise ValueError(_budget_message(what)) from None
             raise ValueError(
                 f"{what}: cannot read the features ({exc}). The file may be corrupt."
             ) from exc
@@ -404,7 +491,7 @@ def _parts(record: Any) -> list[npt.NDArray[np.float64]]:
     return [points[start:end] for start, end in zip(starts, ends)]
 
 
-def _organize_rings(rings: list[npt.NDArray[np.float64]]) -> BaseGeometry | None:
+def organize_rings(rings: list[npt.NDArray[np.float64]]) -> BaseGeometry | None:
     """Polygons with holes from the rings of a shapefile polygon shape.
 
     The format only says that exterior rings run clockwise and holes counter-clockwise,
@@ -470,7 +557,7 @@ def _shape_geometry(record: Any) -> BaseGeometry | _SingleRing | None:
         rings = _parts(record)
         if len(rings) == 1 and len(rings[0]) >= 3:
             return _SingleRing(rings[0])
-        polygon = _organize_rings(rings)
+        polygon = organize_rings(rings)
         if polygon is None:
             raise TypeError("a polygon without a ring")
         return polygon
@@ -512,7 +599,8 @@ def read_shapefile(path: Path, fields: Sequence[str] | None = None) -> VectorTab
             "ogr2ogr -a_srs EPSG:xxxx."
         )
     try:
-        wkt = prj.read_text(encoding="utf-8", errors="replace").strip()
+        # utf-8-sig: a .prj saved by a Windows editor may start with a byte-order mark.
+        wkt = prj.read_text(encoding="utf-8-sig", errors="replace").strip()
     except OSError as exc:  # pragma: no cover - the file vanished or is unreadable
         raise ValueError(f"{prj.name}: cannot read it ({exc}).") from exc
     crs = _crs_from(wkt, prj.name)

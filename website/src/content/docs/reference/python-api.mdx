@@ -431,7 +431,7 @@ Parse file **bytes** into `(shapely geometry, class_id)` pairs in WGS-84 lon/lat
 def transform_to_mercator(geom: BaseGeometry) -> BaseGeometry
 ```
 
-Reprojects a WGS-84 shapely geometry to Web Mercator (EPSG:3857), the CRS of XYZ rasters.
+Reprojects a WGS-84 shapely geometry to Web Mercator (EPSG:3857), the CRS of XYZ rasters. The part beyond latitude ±85.0511°, where Web Mercator ends, is cut off first.
 
 ### `rasterize`
 

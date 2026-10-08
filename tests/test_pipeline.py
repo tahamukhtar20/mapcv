@@ -154,6 +154,8 @@ def test_generate_warns_when_labels_miss_the_imagery(
     monkeypatch.setattr(
         "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
     )
+    # The labels hold metres, which are no longitudes and latitudes.
+    monkeypatch.setattr("mapcv.labels._invalid_coordinates", lambda geometries: set())
     config = _config(tmp_path)
     config.labels = LabelsConfig(path=labels)
 
@@ -260,6 +262,8 @@ def test_generated_masks_mark_padding_with_the_ignore_index(
     monkeypatch.setattr(
         "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
     )
+    # The labels hold metres, which are no longitudes and latitudes.
+    monkeypatch.setattr("mapcv.labels._invalid_coordinates", lambda geometries: set())
     config = _labeled_config(tmp_path, _COVER_ALL)
     run_generate(config)
 
@@ -281,6 +285,8 @@ def test_a_class_on_the_ignore_value_is_an_error(
     monkeypatch.setattr(
         "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
     )
+    # The labels hold metres, which are no longitudes and latitudes.
+    monkeypatch.setattr("mapcv.labels._invalid_coordinates", lambda geometries: set())
     config = _labeled_config(tmp_path, _COVER_ALL.replace('"7"', '"255"'), label_field="kind")
     with pytest.raises(ValueError, match="labels.ignore_index"):
         run_generate(config)
@@ -600,6 +606,8 @@ def test_generate_records_the_task_and_the_patch_files(
     monkeypatch.setattr(
         "mapcv.targets.segmentation.transform_geometry_to_crs", lambda geometry, crs: geometry
     )
+    # The labels hold metres, which are no longitudes and latitudes.
+    monkeypatch.setattr("mapcv.labels._invalid_coordinates", lambda geometries: set())
     config = _labeled_config(tmp_path, _COVER_ALL)
     manifest = run_generate(config).manifest
 

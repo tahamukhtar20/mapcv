@@ -94,6 +94,15 @@ Configs take an optional top-level `task`: `segmentation` (the default, so exist
 
 `mapcv generate` saves `manifest.json` every 10 seconds and whenever a run stops (Ctrl-C, an error, a progress callback that raises) instead of after every chunk, which cost more than the chunk itself on large datasets. An interrupted run still resumes after its last finished chunk. A process killed outright (`kill -9`, a power cut) can lose up to the last 10 seconds of chunks; the next run writes them again, and the dataset ends up byte for byte the same.
 
+### Label files read differently
+
+A few label files give other class IDs or masks than with 0.2. `mapcv plan` prints the class map; pin IDs with `labels.classes` to keep the ones a model was trained with.
+
+- **Numbers sort by value.** When the labels are not all integers in 1–255 (for example `0, 2, 10`), they are numbered in sorted order, and numbers now sort by value: `0 → 1, 2 → 2, 10 → 3`. 0.2 sorted them as text (`0 → 1, 10 → 2, 2 → 3`). Only the digits 0–9 make a number: a full-width `１` or a superscript `²` is a name of its own, not the class `1`.
+- **A `label_field` that no feature has is an error** in GeoJSON and KML too, as it was for GeoPackage and Shapefile, instead of a dataset whose masks are all background. KML labels come from `<ExtendedData>` fields, not from the placemark's `<name>`.
+- **A label raster's NoData tag no longer overrides `labels.classes`.** A value the file tags as NoData but `labels.classes` maps to a class is that class (with a warning), not `labels.ignore_index`.
+- **Polygons that reach the poles** are cut at latitude ±85.0511° on XYZ imagery instead of being left out of the masks, and a feature with a coordinate that is not a number (`NaN`, infinite) or a latitude beyond ±90° is skipped and counted in a warning.
+
 ## Migrating to 0.2
 
 ### Checklist

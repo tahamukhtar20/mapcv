@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.parse
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,9 +20,10 @@ from typing import Any
 import numpy as np
 import pytest
 from pydantic import ValidationError
+from shapely import make_valid
 from shapely.geometry import Polygon, shape
 
-from mapcv.config import LabelsConfig, MapcvConfig, OsmLabelsSource
+from mapcv.config import LabelsConfig, MapcvConfig, OsmClass, OsmLabelsSource
 from mapcv.osm import ATTRIBUTION, features_from_overpass, osm_labels_file, overpass_query
 
 pytest.importorskip("rasterio", reason="masks are compared with rasterio")
@@ -94,6 +96,10 @@ class Overpass:
         ]
         self.queries: list[str] = []
         self.status = 200
+        # An answer to send as it is instead of the elements, and a slow server that sends
+        # one byte a second.
+        self.raw: bytes | None = None
+        self.drip = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -104,12 +110,28 @@ class Overpass:
                     self.send_response(owner.status)
                     self.end_headers()
                     return
-                answer = json.dumps(
-                    {
-                        "osm3s": {"timestamp_osm_base": "2026-10-01T12:00:00Z"},
-                        "elements": owner.elements,
-                    }
-                ).encode()
+                if owner.drip:
+                    self.send_response(200)
+                    self.send_header("Content-Length", "1000")
+                    self.end_headers()
+                    try:
+                        for _ in range(1000):
+                            self.wfile.write(b" ")
+                            self.wfile.flush()
+                            time.sleep(1)
+                    except OSError:
+                        pass  # the client gave up
+                    return
+                answer = (
+                    owner.raw
+                    if owner.raw is not None
+                    else json.dumps(
+                        {
+                            "osm3s": {"timestamp_osm_base": "2026-10-01T12:00:00Z"},
+                            "elements": owner.elements,
+                        }
+                    ).encode()
+                )
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(answer)))
@@ -222,6 +244,122 @@ def test_failures(tmp_path: Path, region: dict[str, float], overpass: Overpass) 
             osm_labels_file(labels.osm, tmp_path / "other")
     finally:
         osm._fetch = original
+
+
+_FOREST = [OsmClass(name="forest", tags={"landuse": "*"})]
+
+
+def _relation(*rings: tuple[str, list[tuple[float, float]]]) -> dict[str, Any]:
+    members = [{"type": "way", "role": role, "geometry": _ll(ring)} for role, ring in rings]
+    tags = {"type": "multipolygon", "landuse": "forest"}
+    return {"type": "relation", "id": 7, "tags": tags, "members": members}
+
+
+def _only_geometry(element: dict[str, Any]) -> Any:
+    (feature,) = features_from_overpass({"elements": [element]}, _FOREST)
+    return shape(feature["geometry"])
+
+
+def test_an_island_in_a_lake_of_a_multipolygon_is_kept() -> None:
+    # An outer ring inside an inner ring (an island in a clearing): unioning the outers
+    # and cutting out the inners lost the island.
+    outer, hole, island = _rect(0, 0, 10, 10), _rect(2, 2, 8, 8), _rect(4, 4, 6, 6)
+    got = _only_geometry(_relation(("outer", outer), ("inner", hole), ("outer", island)))
+    expected = Polygon(outer, [hole]).union(Polygon(island))  # shapely, by nesting
+    assert got.equals(expected) and got.area == 68.0
+    # Nesting decides, not the roles: the same rings with the island tagged inner too.
+    swapped = _only_geometry(_relation(("outer", outer), ("inner", hole), ("inner", island)))
+    assert swapped.equals(expected)
+
+
+def test_a_self_intersecting_way_keeps_both_lobes() -> None:
+    # A figure-eight ring: buffer(0) kept one triangle; make_valid keeps both.
+    bowtie = [(74.301, 31.481), (74.309, 31.489), (74.309, 31.481), (74.301, 31.489)]
+    ring = [*bowtie, bowtie[0]]
+    way = {"type": "way", "id": 1, "tags": {"landuse": "x"}, "geometry": _ll(ring)}
+    got = _only_geometry(way)
+    expected = make_valid(Polygon(ring))
+    assert got.is_valid and got.equals(expected)
+    lobe = Polygon([(74.301, 31.481), (74.305, 31.485), (74.301, 31.489)])
+    assert got.area == pytest.approx(2 * lobe.area)  # it was one lobe
+
+
+@pytest.mark.parametrize(
+    "element",
+    [
+        5,
+        {"type": "node", "lat": 1.0, "lon": 1.0, "tags": {"landuse": "a"}},  # no id
+        {"type": "node", "id": 2, "lon": 1.0, "tags": {"landuse": "a"}},  # no lat
+        {"type": "way", "id": 3, "tags": {"landuse": "a"}, "geometry": [{"lat": 1.0}]},
+        {
+            "type": "relation",
+            "id": 4,
+            "tags": {"landuse": "a", "type": "multipolygon"},
+            "members": 5,
+        },
+    ],
+)
+def test_malformed_overpass_elements_are_skipped_with_a_warning(element: Any) -> None:
+    good = {"type": "node", "id": 1, "lat": 1.0, "lon": 1.0, "tags": {"landuse": "a"}}
+    with pytest.warns(UserWarning, match="skipped 1 element"):
+        features = features_from_overpass({"elements": [good, element]}, _FOREST)
+    assert [feature["properties"]["osm_id"] for feature in features] == ["node/1"]
+    # Tags that are null are no tags (the element matches no class).
+    untagged = {"type": "node", "id": 9, "lat": 1.0, "lon": 1.0, "tags": None}
+    assert features_from_overpass({"elements": [untagged]}, _FOREST) == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (b"<html><body>rate limited</body></html>", r"not Overpass JSON \(it starts with '<html>"),
+        (b"[1, 2]", r"JSON that is not an Overpass answer \(not an object\)"),
+        (b'{"elements": 5}', r"JSON that is not an Overpass answer \(its 'elements' is not a list"),
+    ],
+)
+def test_an_answer_that_is_not_overpass_json_is_a_message(
+    tmp_path: Path, region: dict[str, float], overpass: Overpass, raw: bytes, message: str
+) -> None:
+    labels = _config(tmp_path, region, overpass).labels
+    assert isinstance(labels, LabelsConfig) and labels.osm is not None
+    overpass.raw = raw
+    with pytest.raises(
+        RuntimeError, match=r"^Overpass at http://127\.0\.0\.1:\d+/api/interpreter "
+    ):
+        osm_labels_file(labels.osm, tmp_path / "osm")
+    with pytest.raises(RuntimeError, match=message):
+        osm_labels_file(labels.osm, tmp_path / "osm")
+
+
+def test_a_slow_overpass_answer_stops_at_the_deadline(
+    tmp_path: Path, region: dict[str, float], overpass: Overpass, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A server sending one byte a second: each read is quick, so a per-read timeout never
+    # fires; the deadline is for the whole answer.
+    from mapcv import osm
+
+    monkeypatch.setattr(osm, "ANSWER_MARGIN_SECONDS", 2)
+    labels = _config(tmp_path, region, overpass).labels
+    assert isinstance(labels, LabelsConfig) and labels.osm is not None
+    source = labels.osm.model_copy(update={"timeout": 1})
+    overpass.drip = True
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"did not answer within 3 s \(labels\.osm\.timeout 1 s"):
+        osm_labels_file(source, tmp_path / "osm")
+    assert time.monotonic() - started < 6
+
+
+def test_an_answer_larger_than_the_limit_is_an_error(
+    tmp_path: Path, region: dict[str, float], overpass: Overpass, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import osm
+
+    monkeypatch.setattr(osm, "MAX_ANSWER_BYTES", 100)
+    labels = _config(tmp_path, region, overpass).labels
+    assert isinstance(labels, LabelsConfig) and labels.osm is not None
+    overpass.raw = b'{"elements": []' + b" " * 200 + b"}"
+    with pytest.raises(RuntimeError, match="sent more than"):
+        osm_labels_file(labels.osm, tmp_path / "osm")
 
 
 def test_a_mask_from_osm_labels(

@@ -1350,3 +1350,72 @@ def test_manifest_for_geojson_labels_has_no_layer_key(runs: Runs) -> None:
     labels = manifest["target"]["labels"]
     assert set(labels) == {"label_field", "classes", "all_touched", "sha256"}
     assert labels["sha256"] == hashlib.sha256(GEOJSON.read_bytes()).hexdigest()
+
+
+# ── Malformed GeoPackages and sidecars ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("srs_id", "message"),
+    [(None, r"srs_id .* is missing \(NULL\)"), ("abc", r"srs_id .* is 'abc', not an integer")],
+)
+def test_a_geopackage_srs_id_that_is_not_an_integer_is_a_message(
+    tmp_path: Path, srs_id: Any, message: str
+) -> None:
+    path = make_gpkg(tmp_path / "a.gpkg", [(gpkg_blob(SQUARE), "x")], srs_id=srs_id)
+    with pytest.raises(ValueError, match=r"a\.gpkg \(layer 'feat'\): its " + message):
+        load_vector_labels(path, "label")
+    # A layer's srs_id stored as text digits is read (SQLite keeps whatever was written).
+    text_id: Any = "4326"
+    path = make_gpkg(tmp_path / "b.gpkg", [(gpkg_blob(SQUARE), "x")], srs_id=text_id)
+    assert len(load_vector_labels(path, "label")[0]) == 1
+
+
+def _replace_feature_table(path: Path, sql: str) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript(sql)
+    connection.commit()
+    connection.close()
+
+
+@pytest.mark.parametrize("rows", ["", " WHERE x < 0"])
+def test_a_geopackage_view_that_never_ends_is_an_error(tmp_path: Path, rows: str) -> None:
+    # A recursive view yields rows forever (or loops without yielding any); reading used to
+    # hang with growing memory. The work is bounded by the size of the file.
+    path = make_gpkg(tmp_path / "a.gpkg", [])
+    recursive = (
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) "
+        f"SELECT x AS fid, NULL AS geom, 'a' AS label FROM c{rows}"
+    )
+    _replace_feature_table(
+        path, f"ALTER TABLE feat RENAME TO old; CREATE VIEW feat AS {recursive};"
+    )
+    with pytest.raises(ValueError, match="a view whose query does not end"):
+        load_vector_labels(path, "label")
+
+
+def test_a_geopackage_view_over_a_table_is_read(tmp_path: Path) -> None:
+    path = make_gpkg(tmp_path / "a.gpkg", [(gpkg_blob(SQUARE), "x"), (gpkg_blob(HOLED), "y")])
+    _replace_feature_table(
+        path,
+        "CREATE VIEW v AS SELECT fid, geom, label FROM feat WHERE label = 'y';"
+        "UPDATE gpkg_contents SET table_name = 'v';"
+        "UPDATE gpkg_geometry_columns SET table_name = 'v';",
+    )
+    geometries, class_map = load_vector_labels(path, "label")
+    assert class_map == {"y": 1} and geometries[0][0].equals(HOLED)
+
+
+def test_a_prj_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
+    path = copy_shapefile(tmp_path, "polygons_32633")
+    prj = path.with_suffix(".prj")
+    expected = load_vector_labels(path, "class")
+    prj.write_bytes(b"\xef\xbb\xbf" + prj.read_bytes())
+    assert_same(load_vector_labels(path, "class")[0], expected[0])
+
+
+def test_a_misspelled_column_suggests_the_closest_one() -> None:
+    with pytest.raises(ValueError, match=r"'clas' is not a column.*Did you mean 'class'\?"):
+        load_vector_labels(DATA / "labels.gpkg", "clas")
+    with pytest.raises(ValueError, match=r"'zzz' is not a column.*Check the spelling and the case"):
+        load_vector_labels(DATA / "labels.gpkg", "zzz")

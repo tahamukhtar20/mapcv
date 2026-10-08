@@ -30,7 +30,7 @@ import typer
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
-from rich.markup import escape
+from rich.markup import escape as _escape_markup
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -297,6 +297,19 @@ def _version() -> str:
     return mapcv.__version__
 
 
+# Control characters (C0 but newline and tab, DEL, C1) and the bidirectional overrides:
+# from a label file or a dataset they could recolor, retitle or reorder the terminal.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def escape(text: str) -> str:
+    """Text from a file, a dataset or the user (a class name, a path, an error message)
+    made safe to print: square brackets are not read as Rich markup, and control
+    characters are shown as escapes such as ``\\x1b``."""
+    shown = _CONTROL_CHARACTERS.sub(lambda match: repr(match.group())[1:-1], text)
+    return _escape_markup(shown)
+
+
 def _plural(count: int, noun: str, nouns: str | None = None) -> str:
     """``1 patch``, ``1,234 patches``: a count with its noun, never ``patch(es)``."""
     return f"{count:,} {noun if count == 1 else nouns or noun + 's'}"
@@ -536,7 +549,7 @@ def _show_warnings(caught: list[warnings.WarningMessage], shown: set[str]) -> No
         if message in shown:
             continue
         shown.add(message)
-        _console.print(f"[yellow]⚠[/yellow]  {message}")
+        _console.print(f"[yellow]⚠[/yellow]  {escape(message)}")
 
 
 def _redact_url(url: str) -> str:
@@ -636,7 +649,7 @@ def _settings_table(config: MapcvConfig) -> Table:
     if config.task != "segmentation":
         table.add_row("Task", _task_label(config))
     region = config.region
-    area = f"{region.path} · " if region.path is not None else ""
+    area = f"{escape(str(region.path))} · " if region.path is not None else ""
     table.add_row(
         "Region",
         f"{area}{_region_box(config)} (W, S → E, N)",
@@ -644,7 +657,10 @@ def _settings_table(config: MapcvConfig) -> Table:
     table.add_row("Imagery", _imagery_label(config))
     change = config.change_options
     if config.task == "change" and change.before is not None and change.after is not None:
-        table.add_row("Labels", f"before: {change.before.path} · after: {change.after.path}")
+        table.add_row(
+            "Labels",
+            f"before: {escape(str(change.before.path))} · after: {escape(str(change.after.path))}",
+        )
     elif config.labels is None:
         table.add_row("Labels", "none (image-only dataset)")
     elif isinstance(config.labels, RasterLabelsConfig):
@@ -652,7 +668,7 @@ def _settings_table(config: MapcvConfig) -> Table:
         where = _redact_url(raster.path) if "://" in raster.path else raster.path
         table.add_row(
             "Labels",
-            f"{where} · raster band {raster.band} · "
+            f"{escape(where)} · raster band {raster.band} · "
             f"{_plural(len(raster.class_map()), 'class', 'classes')}",
         )
     elif isinstance(config.labels, ContinuousLabelsConfig):
@@ -663,26 +679,28 @@ def _settings_table(config: MapcvConfig) -> Table:
             if (values.scale, values.offset) != (1.0, 0.0)
             else ""
         )
-        table.add_row("Labels", f"{where} · values of band {values.band}{scaling}")
+        table.add_row("Labels", f"{escape(where)} · values of band {values.band}{scaling}")
     elif config.labels.osm is not None:
-        names = ", ".join(entry.name for entry in config.labels.osm.classes)
+        names = ", ".join(escape(entry.name) for entry in config.labels.osm.classes)
         table.add_row("Labels", f"OpenStreetMap (Overpass) · {names}")
     elif config.labels.files is not None:
         for index, file in enumerate(config.labels.files):
             what = f"field: {file.label_field}" if file.label_field else f"class: {file.class_name}"
             layer = f" · layer: {file.layer}" if file.layer else ""
-            table.add_row("Labels" if index == 0 else "", f"{file.path}{layer} · {what}")
+            table.add_row("Labels" if index == 0 else "", escape(f"{file.path}{layer} · {what}"))
     else:
         field = config.labels.label_field or "none — every polygon is class 1"
         layer = f" · layer: {config.labels.layer}" if config.labels.layer else ""
-        table.add_row("Labels", f"{config.labels.path}{layer} · field: {field}")
+        table.add_row("Labels", escape(f"{config.labels.path}{layer} · field: {field}"))
     sampler = config.sampler
     table.add_row(
         "Patches",
         f"{sampler.patch_size} px · {sampler.mode} · stride {sampler.stride} · "
         f"edges: {sampler.edge_strategy}",
     )
-    table.add_row("Output", f"{config.writer.staging_dir} · {config.writer.image_format}")
+    table.add_row(
+        "Output", f"{escape(str(config.writer.staging_dir))} · {config.writer.image_format}"
+    )
     if config.split is None:
         table.add_row("Split", "none")
     else:
@@ -717,15 +735,17 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
     if labels is None:
         table.add_row("Labels", "none (image-only dataset)")
     else:
-        classes = ", ".join(f"{name} → {cid}" for name, cid in sorted(labels.classes.items()))
+        classes = ", ".join(
+            f"{escape(name)} → {cid}" for name, cid in sorted(labels.classes.items())
+        )
         if labels.raster is not None:
             where = _redact_url(labels.path) if "://" in labels.path else labels.path
-            detail = f"{labels.raster} · classes: {classes or 'none (all background)'}"
-            table.add_row("Labels", f"{where} · {detail}")
+            detail = f"{escape(labels.raster)} · classes: {classes or 'none (all background)'}"
+            table.add_row("Labels", f"{escape(where)} · {detail}")
         else:
             detail = _plural(labels.polygons, "polygon")
             detail += f" · classes: {classes}" if classes else " · every polygon is class 1"
-            table.add_row("Labels", f"{labels.path} · {detail}")
+            table.add_row("Labels", f"{escape(labels.path)} · {detail}")
     table.add_row(
         "Patches",
         f"≈ {estimate.patches:,} × {estimate.patch_size} px "
@@ -740,7 +760,7 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         )
     table.add_row(
         "Output",
-        f"{config.writer.staging_dir} · {config.writer.image_format} "
+        f"{escape(str(config.writer.staging_dir))} · {config.writer.image_format} "
         f"[dim](≈ {human_bytes(estimate.output_bytes)})[/dim]",
     )
     if config.split is not None:
@@ -771,7 +791,7 @@ def _print_plan(config_path: Path, config: MapcvConfig, estimate: Plan) -> None:
         )
     )
     for message in estimate.warnings:
-        _console.print(f"[yellow]⚠[/yellow]  {message}")
+        _console.print(f"[yellow]⚠[/yellow]  {escape(message)}")
     if config.multi_source:
         _console.print(
             "[dim]Several sources: each is read on the first source's grid (coarser ones are "
@@ -834,7 +854,7 @@ def _object_table(manifest: Manifest) -> Table | None:
     table.add_column("patches", justify="right")
     for cid in sorted(objects, key=int):
         table.add_row(
-            names.get(cid, f"class {cid}"),
+            escape(names.get(cid, f"class {cid}")),
             cid,
             f"{objects[cid]:,}",
             f"{objects[cid] / total:.1%}",
@@ -860,7 +880,7 @@ def _label_table(manifest: Manifest) -> Table | None:
     table.add_column("share", justify="right")
     for cid in sorted(patches, key=int):
         table.add_row(
-            names.get(cid, f"class {cid}"),
+            escape(names.get(cid, f"class {cid}")),
             cid,
             f"{patches[cid]:,}",
             f"{patches[cid] / total:.1%}",
@@ -915,7 +935,7 @@ def _class_table(manifest: Manifest) -> Table | None:
     table.add_column("id", justify="right")
     table.add_column("pixels", justify="right")
     for cid in sorted(totals, key=int):
-        table.add_row(names.get(cid, f"class {cid}"), cid, f"{totals[cid] / pixels:.1%}")
+        table.add_row(escape(names.get(cid, f"class {cid}")), cid, f"{totals[cid] / pixels:.1%}")
     return table
 
 
@@ -2574,13 +2594,13 @@ def stats(
             summary["bands"], summary["mean"], summary["std"], summary["min"], summary["max"]
         ):
             cells = [f"{v:.6g}" if v is not None else "-" for v in (mean, std, low, high)]
-            table.add_row(source, band, *cells)
+            table.add_row(escape(source), escape(str(band)), *cells)
     _console.print(table)
     weights = (values.get("classes") or {}).get("median_frequency_weights")
     if weights:
         _console.print(
             "Class weights (median frequency): "
-            + ", ".join(f"{name} {weight:.3g}" for name, weight in weights.items())
+            + ", ".join(f"{escape(name)} {weight:.3g}" for name, weight in weights.items())
         )
     counted = _plural(values["patches"], "patch", "patches")
     _console.print(

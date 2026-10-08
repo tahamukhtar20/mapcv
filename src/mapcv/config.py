@@ -7,6 +7,7 @@ import math
 import os
 import re
 import unicodedata
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -26,7 +27,7 @@ from pydantic import (
 )
 
 from mapcv.downloader import URL_TEMPLATES
-from mapcv.labels import VECTOR_LABEL_SUFFIXES, _normalize_label
+from mapcv.labels import VECTOR_LABEL_SUFFIXES, _normalize_label, label_suffix_hint
 from mapcv.sampler import SamplerConfig
 from mapcv.splitter import SplitterConfig
 from mapcv.writer import WriterConfig
@@ -182,14 +183,26 @@ def area_polygons(
     from mapcv.labels import load_vector_labels
 
     try:
-        raw, names = load_vector_labels(path, name_field, layer=layer)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            raw, names = load_vector_labels(path, name_field, layer=layer)
     except ValueError as exc:
         if "distinct values" in str(exc):
             raise ValueError(
                 f"region.name_field '{name_field}' has more than 255 distinct names; give "
                 "polygons of one region the same name, or leave name_field out to number them"
             ) from None
-        raise
+        raise ValueError(str(exc).replace("labels.label_field", "region.name_field")) from None
+    for warning in caught:
+        unnamed = re.search(r"(\d+) without a label value", str(warning.message))
+        if unnamed:
+            # A polygon without a name would silently drop out of the area of interest.
+            raise ValueError(
+                f"region.path: {unnamed.group(1)} polygon(s) of {path.name} have no "
+                f"'{name_field}' value, so they would be left out of the area of interest. "
+                "Give every polygon a name, or leave region.name_field out to number them"
+            )
+        warnings.warn_explicit(warning.message, warning.category, warning.filename, warning.lineno)
     if name_field is None:
         return [(geometry, str(index)) for index, (geometry, _) in enumerate(raw, start=1)]
     by_id = {class_id: name for name, class_id in names.items()}
@@ -781,7 +794,7 @@ def _check_vector_suffix(path: Path, key: str) -> Path:
     if path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
         raise ValueError(
             f"{key} must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or "
-            f".geoparquet file, got '{path.name}' (convert KMZ to KML first)"
+            f".geoparquet file, got '{path.name}'{label_suffix_hint(path.suffix.lower())}"
         )
     return path
 

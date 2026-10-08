@@ -1023,14 +1023,28 @@ def test_init_wizard_offers_label_rasters(tmp_path: Path) -> None:
 def test_init_wizard_writes_an_editable_config_for_an_unreadable_raster(tmp_path: Path) -> None:
     imagery = make_imagery(tmp_path)
     out = tmp_path / "mapcv.yaml"
-    answers = "\n".join(
-        ["geotiff", str(imagery.path), "", str(tmp_path / "missing.tif"), "64", "./ds", "n"]
-    )
+    broken = tmp_path / "broken.tif"
+    broken.write_bytes(b"not a tiff")
+    answers = "\n".join(["geotiff", str(imagery.path), "", str(broken), "64", "./ds", "n"])
     result = runner.invoke(app, ["init", str(out), "--interactive"], input=answers + "\n")
     assert result.exit_code == 0, result.output
     assert flat("Cannot read that file") in flat(result.output)
     config = MapcvConfig.from_yaml(out)
     assert isinstance(config.labels, RasterLabelsConfig)
+
+
+def test_init_wizard_asks_again_for_a_label_raster_that_does_not_exist(tmp_path: Path) -> None:
+    imagery = make_imagery(tmp_path)
+    out = tmp_path / "mapcv.yaml"
+    answers = ["geotiff", str(imagery.path), "", str(tmp_path / "missing.tif"), ""]
+    result = runner.invoke(
+        app,
+        ["init", str(out), "--interactive"],
+        input="\n".join([*answers, "64", "./ds", "n"]) + "\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert flat("File not found") in flat(result.output)
+    assert MapcvConfig.from_yaml(out).labels is None
 
 
 # ── Sampler edge cases ───────────────────────────────────────────────────────

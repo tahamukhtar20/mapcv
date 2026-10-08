@@ -142,6 +142,14 @@ A notebook version is in the repository: [`examples/notebooks/02-train-a-segment
 
 </Steps>
 
+## What to expect
+
+On the 77-patch dataset from the [quickstart](/mapcv/quickstart/) (RGB patches, PyTorch on the CPU of a 4-core machine), step 1 prints the split sizes `52 8 17` first, and the training loop prints one `epoch … loss … val mIoU …` line per epoch.
+
+- **Time:** about one minute per epoch (3 epochs took 2 min 54 s), so the 30 epochs of step 4 take about half an hour on a CPU. A GPU is much faster.
+- **Score:** after 3 epochs the val and test mIoU were both about 0.41, and the IoU of the building class about 0.06, so the model still predicts mostly background. Treat that as a sign that loading, training and scoring work together, not as a result: with 8 val and 17 test patches the numbers move with the split seed, and they improve with more epochs, more patches and a pretrained encoder.
+- **Check the data first** if step 1 prints a split with 0 patches (re-run `mapcv split` and read its warnings) or if the loss is `nan`.
+
 <Aside type="caution" title="Tiny datasets give noisy scores">
 The tutorial datasets have a few dozen patches and only a handful in val and test. They are good for checking that the pipeline works, not for comparing models. Generate a larger region (see [Large regions and resuming](/mapcv/guides/large-regions-and-resuming/)) before drawing conclusions, and try several split seeds (`mapcv split dataset --seed 1`, `--seed 2`, …).
 </Aside>

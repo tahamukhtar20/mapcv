@@ -59,6 +59,10 @@ Even without overlap, adjacent patches share buildings, fields and lighting, so 
 
 Manifests from mapcv 0.1 do not record the patch size. A `spatial` split of such a dataset falls back to `stratified` with a warning unless you pass `--block-size`.
 
+## Empty splits
+
+A `spatial` or `region` split assigns whole blocks or regions, so a small area can leave `val` or `test` without a patch even though its ratio is above 0. mapcv then warns, for example `No patch is left for val (split.val_ratio is 10%): whole regions go to one split; use more regions or a larger val_ratio.` With three regions and the default ratios, none goes to val. Use more regions (or a smaller `block_size` for `spatial`), or set that ratio to 0 when you do not need the split.
+
 ## Re-split without regenerating
 
 ```bash
@@ -90,4 +94,4 @@ Subsets are drawn from the shuffled train list, not spatially. If your semi-supe
 
 ## Sub-sampling
 
-`sample_limit` splits only a sample of the patches, for example to build a small benchmark from a large dataset. For `spatial` and `stratified`, the sample keeps the mix of empty, fully labeled and mixed patches; patches outside the sample appear in no list.
+`sample_limit` splits only a sample of the patches, for example to build a small benchmark from a large dataset. For `spatial` and `stratified`, the sample keeps the mix of empty, fully labeled and mixed patches; patches outside the sample appear in no list (`mapcv split --sample-limit` prints how many).

@@ -22,6 +22,7 @@ import anyio
 import anyio.from_thread
 import anyio.to_thread
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 
@@ -151,6 +152,8 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
         website_url="https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
     )
 
+    _redact_argument_errors(server, state)
+
     @server.tool(title="Describe the config schema", annotations=_READ)
     async def describe_config_schema(
         section: Annotated[
@@ -173,19 +176,19 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
             str | None, Field(description="A YAML config file inside the root.")
         ] = None,
         yaml_text: Annotated[
-            str | None,
+            str,
             Field(
                 description="Config text to check instead of a file; relative paths are "
                 "relative to the root."
             ),
-        ] = None,
+        ] = "",
     ) -> CallToolResult:
         """Check a config with the checks and messages of `mapcv validate`, plus that the
         files it names exist and its label_field is in the label file. Reads no imagery.
         Give `path` or `yaml_text`. A config with mistakes returns `valid: false` and the
         list of errors, each naming the field. `warnings` say what this server cannot do
         with it (labels.osm)."""
-        return await _run(state, tools.validate_config, path, yaml_text)
+        return await _run(state, tools.validate_config, path, yaml_text or None)
 
     @server.tool(title="Inspect a label file", annotations=_READ)
     async def inspect_labels(
@@ -216,15 +219,13 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
         config: Annotated[
             str | None, Field(description="A YAML config file inside the root.")
         ] = None,
-        yaml_text: Annotated[
-            str | None, Field(description="Config text to plan instead of a file.")
-        ] = None,
+        yaml_text: Annotated[str, Field(description="Config text to plan instead of a file.")] = "",
     ) -> CallToolResult:
         """Estimate tiles, patches, disk, memory and warnings for a config without
         downloading imagery, like `mapcv plan`. `large` says whether `generate` will ask for
         confirmation, and `large_reason` why. `notes` say what is not estimated. Safe to run
         while a `generate` is running."""
-        return await _run(state, tools.plan, config, yaml_text)
+        return await _run(state, tools.plan, config, yaml_text or None)
 
     @server.tool(title="Show a dataset", annotations=_READ)
     async def info(
@@ -379,6 +380,26 @@ def build_server(root: str | Path = ".", allow_write: bool = False) -> MCPServer
         )
 
     return server
+
+
+def _redact_argument_errors(server: MCPServer, state: ToolState) -> None:
+    """Pass the SDK's own errors (arguments that fail validation, which it raises before
+    a tool runs) through the redactor too: they may quote the arguments."""
+    call_tool = server.call_tool
+
+    async def redacted_call_tool(
+        name: str, arguments: dict[str, Any], context: Context | None = None
+    ) -> Any:
+        for value in arguments.values():
+            if isinstance(value, str):
+                state.redactor.learn_text(value)
+        state.redactor.learn_data(arguments)
+        try:
+            return await call_tool(name, arguments, context)
+        except ToolError as exc:
+            raise type(exc)(state.redactor.scrub(str(exc))) from exc.__cause__
+
+    server.call_tool = redacted_call_tool  # type: ignore[method-assign]
 
 
 class _Refused(Exception):

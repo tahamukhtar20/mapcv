@@ -106,6 +106,8 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **Too slow / rate limited.** Lower `max_connections`. mapcv already retries with backoff and honours `Retry-After`.
 
+**`Redirect refused for …: the tile server redirected to another host (…); mapcv follows redirects of a url_template with a query string only within its own host. Put the final tile URL in imagery.url_template`** The server sends its tiles from somewhere else. A template with a query string (where keys usually are) is only followed on its own host, so the key goes nowhere else. Open one tile URL in a browser, then use the address it ends up at. Redirects from `https` to plain `http`, or from a public server to this machine or a private network, are refused too.
+
 ## Resuming
 
 **`Cannot resume: … was generated with a different configuration (labels); use a new writer.staging_dir or remove the old dataset`** The folder already holds a dataset built with other settings (the fields in brackets): for example `labels` after editing the label file, `writer` after switching between `png` and `jpg`, `patch_shape, sampler` after changing the patch size. Point `writer.staging_dir` at a new folder or undo the change. Details: [What must stay the same](/mapcv/guides/large-regions-and-resuming/#what-must-stay-the-same).
@@ -123,6 +125,10 @@ Fix the fields above, or start from a working config with mapcv init.
 **`Generation failed: no space left on the disk: …`** The disk filled up while writing patches. Free some space, or set `writer.staging_dir` to another disk and start there; on the same disk, run the same command again and it resumes.
 
 **`Interrupted. Finished chunks are saved; run the same command again to resume.`** (exit code 130) You pressed Ctrl-C. Nothing is lost but the chunk in progress.
+
+**`Unsafe link: … is a link to …, outside … mapcv does not read or write through links that leave the folder`** (from `generate`, `split`, `stats`, `card`, `verify` and `export`) A symbolic link in the dataset folder points outside it, so a write (or an export) would reach a file elsewhere. A dataset copied or unpacked from somewhere else can hold such links. Replace the link with the file itself, or use another folder. Links that stay inside the folder are fine.
+
+**`… manifest.json cannot be read (patch file '…' is not a path inside the dataset folder; …)`** The manifest names a patch file by an absolute path or one with `..`, which mapcv never writes: the manifest was edited. Restore it from where the dataset came from, or generate it again.
 
 **`No manifest found at …/manifest.json`** (from `info`, `split`, `stats`, `card`, `verify` and `export`) The folder is not a dataset: pass the folder `mapcv generate` wrote, the config's `writer.staging_dir`.
 
@@ -164,6 +170,6 @@ Fix the fields above, or start from a working config with mapcv init.
 
 ## Still stuck?
 
-Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, failed tiles and their causes, and why a resume was refused. `--debug-log run.log` writes the same to a file.
+Run the failing command again with `--debug` before the command name, for example `mapcv --debug generate mapcv.yaml`. It prints the full traceback after the error and mapcv's debug log: which imagery was opened, each chunk's size and timing, tile cache hits, failed tiles and their causes, and why a resume was refused. `--debug-log run.log` writes the same to a file. Credentials in the config's URLs (keys in a query string, user information, the path of a tile template) are hidden in both, including in the errors of an invalid config.
 
 Then open an [issue](https://github.com/tahamukhtar20/mapcv/issues) with the output of `mapcv doctor` (or `mapcv doctor --json`; it prints no secrets), `mapcv validate <config>` (it hides URLs and keys) and the `--debug` output or log file. Tile URLs show only their host there; remove any other API keys from anything you paste.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import re
+import time
 from typing import Any
 
 import numpy as np
@@ -74,3 +76,66 @@ def test_stitch_usize_overflow_prevention() -> None:
 
     with pytest.raises(RuntimeError, match="canvas"):
         stitch_tiles([(t1, RED), (t2, RED)])
+
+
+# ── Redirects (a tile server or a GeoTIFF host decides where a redirect goes) ──
+
+
+def _redirecting(httpserver: Any, seen: list[dict[str, str]]) -> None:
+    """``/redir/...`` answers 302 to the same server under another host name (``127.0.0.1``
+    instead of ``localhost``), whose ``/final/...`` records the request headers."""
+    from werkzeug import Request, Response
+
+    port = httpserver.port
+
+    def redirect(request: Request) -> Response:
+        target = f"http://127.0.0.1:{port}/final/" + request.path.removeprefix("/redir/")
+        return Response(status=302, headers={"Location": target})
+
+    def final(request: Request) -> Response:
+        seen.append(dict(request.headers))
+        return Response(RED, content_type="image/png")
+
+    httpserver.expect_request(re.compile("^/redir/")).respond_with_handler(redirect)
+    httpserver.expect_request(re.compile("^/final/")).respond_with_handler(final)
+
+
+def test_a_keyed_tile_url_is_not_redirected_to_another_host(httpserver: Any) -> None:
+    """The key of a url_template never reaches another host: not in a Referer, not at all."""
+    seen: list[dict[str, str]] = []
+    _redirecting(httpserver, seen)
+    template = httpserver.url_for("/redir/{z}/{x}/{y}.png") + "?key=SECRETQ"
+    with pytest.raises(RuntimeError) as excinfo:
+        fetch_tiles(tiles=[TileIndex(0, 0, 0)], url_template=template, policy="strict")
+    message = str(excinfo.value)
+    assert "redirected to another host (http://127.0.0.1:" in message
+    assert "SECRETQ" not in message
+    assert seen == []  # the other host got no request
+
+
+def test_a_tile_redirect_sends_no_referer(httpserver: Any) -> None:
+    seen: list[dict[str, str]] = []
+    _redirecting(httpserver, seen)
+    template = httpserver.url_for("/redir/{z}/{x}/{y}.png")
+    results, failed, _ = fetch_tiles(
+        tiles=[TileIndex(0, 0, 0)], url_template=template, policy="strict"
+    )
+    assert failed == 0 and len(results) == 1
+    assert len(seen) == 1
+    assert not any(name.lower() == "referer" for name in seen[0])
+
+
+def test_a_remote_geotiff_is_not_redirected_to_plain_http_elsewhere(httpserver: Any) -> None:
+    """Plain http is only for this machine: a loopback server may not hand the read to a
+    plain-http host elsewhere (192.0.2.1 is a documentation address, never reached)."""
+    from werkzeug import Response
+
+    from mapcv._mapcv_rs import GeoTiff
+
+    httpserver.expect_request("/remote.tif").respond_with_response(
+        Response(status=302, headers={"Location": "http://192.0.2.1:9/remote.tif"})
+    )
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"redirected to plain http \(http://192\.0\.2\.1:9\)"):
+        GeoTiff(httpserver.url_for("/remote.tif"))
+    assert time.monotonic() - started < 10  # refused, not tried and timed out

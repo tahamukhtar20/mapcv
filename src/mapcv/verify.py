@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 
+from mapcv._confine import is_dataset_path
 from mapcv.locking import LOCK_FILENAME
 from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError, patch_folders
 
@@ -334,6 +335,12 @@ def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport:
             if not line.strip():
                 continue
             expected, _, rel = line.partition("  ")
+            if not is_dataset_path(rel):
+                report.problems.append(
+                    f"{CHECKSUMS_FILENAME} lists {rel!r}, which is not a path inside the "
+                    "dataset folder"
+                )
+                continue
             path = staging_dir / rel
             if not path.is_file():
                 report.problems.append(f"{rel} is listed in {CHECKSUMS_FILENAME} but missing")

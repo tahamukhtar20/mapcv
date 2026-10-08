@@ -100,6 +100,10 @@ A patch without a single pixel of imagery (all its tiles failed, or it lies whol
 
 A key written twice in the same mapping of a config (for example `stride` twice under `sampler`) is now an error that names the key and both lines; YAML used to keep the last one silently. Delete the one you do not mean. An empty `imagery.path` for a Sentinel-2 product is rejected as well.
 
+## Links and redirects
+
+A dataset folder that holds a symbolic link pointing outside it is refused by `generate`, `split`, `stats`, `card`, `verify` and `export` (they would write or read through it); replace the link with the file itself. A manifest whose patch files are absolute paths or contain `..` no longer loads. Tile and GeoTIFF requests send no `Referer` header, and a redirect is checked like the configured URL: a `url_template` with a query string follows redirects only within its own host, so if your tile server sends tiles from another host, put that final URL in `url_template`. The query values of `labels.osm.overpass_url` are recorded in the manifest as `***`.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

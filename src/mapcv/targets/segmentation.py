@@ -13,6 +13,7 @@ import shapely
 from shapely.geometry import box
 
 from mapcv._patching import MaskWindow, NullWindow
+from mapcv._redact import redact_query
 from mapcv.config import LabelsConfig
 from mapcv.imagery import RasterMetadata, transform_geometry_to_crs
 from mapcv.labels import (
@@ -113,8 +114,13 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> tuple[list[GeomWi
 def label_settings(labels: LabelsConfig, exclude: set[str]) -> dict[str, Any]:
     """A labels block as a target record stores it: without paths (machine-specific; the
     files are identified by their hash) and without the ``exclude`` keys. Several files
-    keep their settings in order, with ``class`` as the config writes it."""
+    keep their settings in order, with ``class`` as the config writes it. The query values
+    of an Overpass URL are replaced by ``***``."""
     settings: dict[str, Any] = labels.model_dump(mode="json", exclude=exclude | {"path", "files"})
+    osm = settings.get("osm")
+    if isinstance(osm, dict) and isinstance(osm.get("overpass_url"), str):
+        # A private Overpass instance takes its key in the query: not in the dataset.
+        osm["overpass_url"] = redact_query(osm["overpass_url"])
     if labels.files is not None:
         settings["files"] = [
             file.model_dump(mode="json", by_alias=True, exclude={"path"}) for file in labels.files

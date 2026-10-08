@@ -476,19 +476,23 @@ def test_deep_verify_decodes_and_checks_shapes(dataset: Path) -> None:
     assert verify_dataset(dataset, deep=True).ok
     np.save(dataset / files["image"], np.zeros((4, PATCH, PATCH - 1), dtype=np.uint16))
     (dataset / manifest.patches[1]["files"]["image"]).write_bytes(b"not an array")
-    assert verify_dataset(dataset).ok  # only a deep check reads the files
+    # Without --deep, only what the first and last bytes say is checked.
+    assert verify_dataset(dataset).problems == [
+        f"{manifest.patches[1]['files']['image']} is not an NPY file"
+    ]
     problems = verify_dataset(dataset, deep=True).problems
     assert len(problems) == 2
     assert "has shape (64, 63, 4) (H, W, C), the manifest says (64, 64, 4)" in problems[0]
-    assert "cannot be read" in problems[1]
+    assert "is not an NPY file" in problems[1]
 
 
 def test_verify_split_lists_and_missing_or_broken_manifests(dataset: Path, tmp_path: Path) -> None:
     with (dataset / "splits" / "val.txt").open("a") as handle:
         handle.write("ghost.npy\n")
     problems = verify_dataset(dataset).problems
-    assert len(problems) == 1 and "splits/val.txt names 1 patch the manifest" in problems[0]
+    assert len(problems) == 2 and "splits/val.txt names 1 patch the manifest" in problems[0]
     assert "ghost.npy" in problems[0]
+    assert "splits/val.txt lists" in problems[1] and "split.json says" in problems[1]
 
     assert "no manifest.json" in verify_dataset(tmp_path / "nowhere").problems[0]
     (tmp_path / "broken").mkdir()

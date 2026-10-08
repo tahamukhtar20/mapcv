@@ -1,12 +1,13 @@
- Usage: mapcv verify [OPTIONS] {staging_dir}
+ Usage: mapcv verify [OPTIONS] {STAGING_DIR}
 
  Check that every file is present and intact (and SHA256SUMS, when there is one).
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────╮
-│ *    staging_dir      <path>  Dataset directory containing manifest.json. [required] │
+│ *    STAGING_DIR      <path>  Dataset directory containing manifest.json. [required] │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────╮
-│ --deep                       Also decode every image and check its shape.            │
+│ --deep                       Also decode every image and mask and check them against │
+│                              the manifest.                                           │
 │ --write-checksums            Write SHA256SUMS after a successful check.              │
 │ --help             -h        Show this message and exit.                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯

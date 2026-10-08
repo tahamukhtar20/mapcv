@@ -45,7 +45,9 @@ class Writer(Protocol):
         dataset folder) and a ``summary`` of its annotation. The first new patch is
         numbered ``len(manifest.patches)``, so files of an interrupted run are
         overwritten. The pipeline saves the manifest every few seconds and when
-        the run stops, keeping only the entries of finished chunks.
+        the run stops, keeping only the entries of finished chunks. A resumed run
+        checks that every listed file exists and is not empty, and writes the chunk
+        of the first one that is not again (with every chunk after it).
         """
 
     def finalize(self, manifest: Manifest, split_lists: SplitLists | None) -> None:

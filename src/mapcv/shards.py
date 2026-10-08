@@ -20,13 +20,21 @@ is, so every other command keeps working on it. Re-split the dataset with
     one patch per chunk; a copy of ``manifest.json`` sits next to the arrays (patch
     ``i`` of the arrays is entry ``i``). Random access by index, for NPY-style
     workflows; :class:`mapcv.data.MapcvDataset` reads it like a dataset folder.
+
+``<out>`` must be a new or empty folder, or hold an earlier export of the same format,
+which is replaced (no shard of it is left behind). An export that fails part way
+removes what it wrote.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import re
+import shutil
 import tarfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +74,65 @@ def _split_lists(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry
 def _check_out(root: Path, out: Path) -> None:
     if out.resolve() == root.resolve() or root.resolve() in out.resolve().parents:
         raise ValueError("export to a folder outside the dataset folder")
+
+
+_SHARD_NAME = re.compile(r"(train|val|test|all)-\d{6}\.tar")
+# What a Zarr export holds (zarr 2: .zgroup/.zattrs; a store opened by zarr 3: zarr.json).
+_ZARR_NAMES = frozenset(
+    {".zgroup", ".zattrs", ".zmetadata", "zarr.json", "images", "masks", "split", "row", "col"}
+    | {"manifest.json", "splits", "annotations"}
+)
+
+
+def _is_webdataset_file(name: str) -> bool:
+    return name == "shards.json" or _SHARD_NAME.fullmatch(name) is not None
+
+
+def _is_zarr_file(name: str) -> bool:
+    return name in _ZARR_NAMES
+
+
+def _clear(out: Path, names: list[str]) -> None:
+    for name in names:
+        path = out / name
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _export_folder(
+    out: Path, what: str, owned: Callable[[str], bool], marker: str
+) -> Iterator[None]:
+    """Prepare ``out`` for an export and remove what it wrote when the export fails.
+
+    ``out`` may be missing, empty, or hold an earlier export of the same format (only
+    names ``owned`` accepts, ``marker`` among them), which is removed first; anything
+    else is refused, so no file of the user's is overwritten or left among the shards.
+    """
+    created = not out.exists()
+    if not created:
+        if not out.is_dir():
+            raise ValueError(f"{out} is a file; export to a new or empty folder")
+        names = sorted(entry.name for entry in out.iterdir())
+        foreign = [name for name in names if not owned(name)]
+        if foreign or (names and marker not in names):
+            first = (foreign or names)[0]
+            raise ValueError(
+                f"{out} is not empty (first: {first}) and holds no earlier {what} export; "
+                "export to a new or empty folder"
+            )
+        _clear(out, names)
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        yield
+    except BaseException:
+        if created:
+            shutil.rmtree(out, ignore_errors=True)
+        else:
+            _clear(out, sorted(entry.name for entry in out.iterdir()))
+        raise
 
 
 def _coco_by_image(root: Path) -> dict[str, list[dict[str, Any]]]:
@@ -138,7 +205,17 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> 
     _check_out(root, out)
     manifest = _load(root)
     objects = _coco_by_image(root) if manifest.task in ("detection", "instance") else None
-    out.mkdir(parents=True, exist_ok=True)
+    with _export_folder(out, "WebDataset", _is_webdataset_file, "shards.json"):
+        return _write_shards(root, out, manifest, objects, shard_bytes)
+
+
+def _write_shards(
+    root: Path,
+    out: Path,
+    manifest: Manifest,
+    objects: dict[str, list[dict[str, Any]]] | None,
+    shard_bytes: int,
+) -> list[Path]:
     index: dict[str, Any] = {
         "splits": {},
         "manifest_version": manifest.version,
@@ -179,6 +256,12 @@ def _zarr() -> Any:
         raise RuntimeError(
             "the zarr export needs zarr: pip install 'mapcv[zarr]' (Python 3.10-3.13)"
         ) from exc
+    version = str(getattr(zarr, "__version__", "2"))
+    if not version.split(".")[0].isdigit() or int(version.split(".")[0]) != 2:
+        raise RuntimeError(
+            f"the zarr export writes the zarr 2 format and needs zarr 2.x, but zarr {version} "
+            "is installed: pip install 'mapcv[zarr]' (it installs zarr<3)"
+        )
     return zarr
 
 
@@ -195,6 +278,19 @@ def export_zarr(root: Path, out: Path) -> Path:
     entries = list(manifest.patches)
     if not entries:
         raise ValueError("the dataset has no patches")
+    with _export_folder(out, "Zarr", _is_zarr_file, ".zgroup"):
+        _write_zarr(zarr, root, out, manifest, entries, split_of)
+    return out
+
+
+def _write_zarr(
+    zarr: Any,
+    root: Path,
+    out: Path,
+    manifest: Manifest,
+    entries: list[ManifestEntry],
+    split_of: dict[str, str],
+) -> None:
     group = zarr.open_group(str(out), mode="w")
     count = len(entries)
     first = entries[0]["files"]
@@ -238,4 +334,3 @@ def export_zarr(root: Path, out: Path) -> Path:
     for coco in sorted((root / "annotations").glob("instances_*.json")):
         (out / "annotations").mkdir(exist_ok=True)
         (out / "annotations" / coco.name).write_bytes(coco.read_bytes())
-    return out

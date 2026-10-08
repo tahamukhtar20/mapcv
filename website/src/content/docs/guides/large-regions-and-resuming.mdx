@@ -91,6 +91,10 @@ Peak memory therefore grows with the **width** of the region and the chunk heigh
 
 **Interruptions.** `Ctrl-C`, an error or a lost connection lose at most the chunk in progress: the manifest is written atomically when the run stops (and every 10 seconds while it runs), and any files left over from the unfinished chunk are overwritten on resume. A run killed outright (`kill -9`, a power cut) loses at most the last 10 seconds of chunks.
 
+Until a run has finished, splits and annotation files included, the manifest records `"complete": false`. `mapcv info` shows such a dataset as **incomplete** and `mapcv verify` fails on it, so a copy of a half-made dataset is not mistaken for the whole one; the same `mapcv generate` command finishes it.
+
+**One run per folder.** `generate` and `split` lock the dataset folder (`.mapcv.lock`, an operating-system lock that ends with the process, however it ends). A second run into the same folder stops at once with `another mapcv command is writing to dataset`. `generate` also refuses a folder that holds files of its own and no `manifest.json`, so none of them is overwritten or removed: generate into a new or empty folder.
+
 ## 4. Resume
 
 Run the same command again. Under the plan, mapcv prints `Resuming: <n> patches already written, <m> to go.` and continues.
@@ -101,7 +105,7 @@ If everything is already written, mapcv says so and only refreshes the splits an
 Nothing left to do: all 77 patches are already written.
 ```
 
-mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches.
+mapcv loads `manifest.json` from `writer.staging_dir`, skips every patch already recorded, and only fetches imagery for chunks that still have patches to write. Splits are recomputed at the end over all patches. A patch the manifest lists whose file has gone missing or is empty (a power cut can leave empty files) is written again, with the rest of its chunk and everything after it, so the files match an uninterrupted run.
 
 XYZ tiles that were already downloaded come from the on-disk [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz), also when you start over in a new `staging_dir` with other settings; the summary says how many (`Tiles  0 fetched · 96 from the cache · 0 failed`). `mapcv cache` shows how much space it takes and `mapcv cache --clear --expired` frees the expired part.
 
@@ -118,11 +122,12 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | `ignore_index` | `labels.ignore_index` |
 | `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
-| `imagery file or read settings` | the imagery file itself (a GeoTIFF's size and a hash of its first and last 64 KiB, or a remote file's `ETag`, size and first 64 KiB; every file of a mosaic), `overview`, `nodata`, the STAC item, `scl_mask`, or the Earth Engine image and rendering |
+| `imagery file, URL template or read settings` | the imagery file itself (a GeoTIFF's size and a hash of its first and last 64 KiB, or a remote file's `ETag`, size and first 64 KiB; every file of a mosaic), a custom `url_template` (another layer, year, style or key on the same host), `overview`, `nodata`, the STAC item, `scl_mask`, or the Earth Engine image and rendering |
+| `imagery file modification time` | a local GeoTIFF's modification time: the file was edited in place (which can keep its size and both ends), re-exported, or copied without its times. Copy with `cp -p` or `rsync -a` to keep them |
 | `sources` | the names of the imagery sources, or their number |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY/TIF and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |
-| `region` | the polygons of `region.path` (a hash of the file is recorded), `region.name_field` or `region.layer` |
+| `region` | the region's extent (the raster size it covers, also on the same grid), the polygons of `region.path` (a hash of the file is recorded), `region.name_field` or `region.layer` |
 | `sampler` | any `sampler` field |
 | `writer` | `image_format` (including `png` ↔ `jpg`), `mask_format`, `world_files`, `stack_sources`, `jpg_quality` or `jpg_subsampling` (`footprints` may change) |
 

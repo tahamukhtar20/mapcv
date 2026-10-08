@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections import Counter
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -117,11 +118,14 @@ def sample_annotated_patches(
     row_offset: int = 0,
     col_offset: int = 0,
     valid_mask: npt.NDArray[np.bool_] | None = None,
+    counts: Counter[str] | None = None,
 ) -> tuple[npt.NDArray[Any], list[Annotation], list[PatchMeta]]:
     """Extract configured patches at explicit local anchors, with their annotations.
 
     Each kept patch gets ``window.annotate(...)``; ``sampler.max_empty_ratio`` and
     ``window.accepts(..., sampler.min_label_ratio)`` decide which patches are kept.
+    With ``valid_mask``, a patch without a single pixel of imagery is never kept,
+    whatever ``max_empty_ratio`` is; ``counts["no_imagery"]`` counts them.
     Returns ``(image_patches, annotations, metadata)`` in anchor order; the
     annotations are what the window made of each kept patch, not yet collated.
 
@@ -149,6 +153,11 @@ def sample_annotated_patches(
         else:
             empty_ratio = float(np.count_nonzero(image_patch == 0) / image_patch.size)
 
+        if valid_patch is not None and empty_ratio >= 1.0:
+            # Nothing to learn from: all failed tiles, NoData or outside the imagery.
+            if counts is not None:
+                counts["no_imagery"] += 1
+            continue
         if empty_ratio > config.max_empty_ratio:
             continue
         annotation = window.annotate(row, col, patch_size, config.pad_mode, valid_patch)

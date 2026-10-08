@@ -50,9 +50,25 @@ class Scenario:
         return self.nx * self.ny
 
     def expected_patches(self) -> int:
-        """Patches on the drop-edge grid: the region is a whole number of tiles."""
-        per_axis = [(n * PATCH - PATCH) // self.stride + 1 for n in (self.nx, self.ny)]
-        return per_axis[0] * per_axis[1]
+        """Patches on the drop-edge grid (the region is a whole number of tiles), less those
+        whose tiles all fail: mapcv leaves out a patch without any imagery."""
+        from benchmarks.tileserver import is_failing
+
+        anchors = [
+            [step * self.stride for step in range((n * PATCH - PATCH) // self.stride + 1)]
+            for n in (self.nx, self.ny)
+        ]
+        kept = 0
+        for x in anchors[0]:
+            for y in anchors[1]:
+                tiles = [
+                    (X0 + tx, Y0 + ty)
+                    for tx in range(x // PATCH, (x + PATCH - 1) // PATCH + 1)
+                    for ty in range(y // PATCH, (y + PATCH - 1) // PATCH + 1)
+                ]
+                if not all(is_failing(tx, ty, self.fail_every) for tx, ty in tiles):
+                    kept += 1
+        return kept
 
     def tile_prefix(self) -> str:
         """Server option segment: ``n50/`` 404s every ~50th tile, ``l20/`` adds 20 ms."""

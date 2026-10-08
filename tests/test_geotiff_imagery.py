@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -636,16 +637,20 @@ def test_resume_accepts_the_same_file_and_refuses_another(tmp_path: Path) -> Non
     assert fingerprint is not None and fingerprint["kind"] == "file"
     assert fingerprint["size"] == raster.path.stat().st_size
     assert len(fingerprint["sha256_head_tail"]) == 64
-    assert "mtime" not in fingerprint
+    assert fingerprint["mtime_ns"] == raster.path.stat().st_mtime_ns
 
-    # A copy or touch (new path, new modification time) is still the same file.
+    # A copy that keeps the modification time (cp -p, rsync -a) is the same file.
     copied = tmp_path / "elsewhere" / "scene.tif"
     copied.parent.mkdir()
-    copied.write_bytes(raster.path.read_bytes())
-    os.utime(copied, (1_000_000_000, 1_000_000_000))
-    os.utime(raster.path, (1_100_000_000, 1_100_000_000))
+    shutil.copy2(raster.path, copied)
     moved = config_for(tmp_path, {"path": str(copied)}, region)
     assert run_generate(moved).new_patches == 0
+
+    # One that does not may have been edited: pixels changed in place keep the size and
+    # both ends of the file, so only the time tells.
+    os.utime(copied, (1_000_000_000, 1_000_000_000))
+    with pytest.raises(ManifestMismatchError, match="modification time"):
+        run_generate(moved)
 
     # Same name and size, different pixels.
     other = make_raster(tmp_path, seed=99)
@@ -659,7 +664,7 @@ def test_resume_refuses_changed_read_settings(tmp_path: Path) -> None:
     region = raster.region()
     run_generate(config_for(tmp_path, {"path": str(raster.path)}, region))
     changed = config_for(tmp_path, {"path": str(raster.path), "nodata": 7}, region)
-    with pytest.raises(ManifestMismatchError, match="imagery file or read settings"):
+    with pytest.raises(ManifestMismatchError, match="imagery file, URL template or read"):
         run_generate(changed)
 
 

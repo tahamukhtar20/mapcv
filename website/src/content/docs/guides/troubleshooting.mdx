@@ -98,7 +98,7 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`⚠  2 of 2 tiles failed; check the tile URL, your network and imagery.policy …`** More than half of the requested tiles failed, but the run finished (usually `policy: ignore`). The dataset is mostly black: fix the URL or network and generate into a new folder.
 
-**Black patches.** Under `lenient` or `ignore`, failed tiles become black; some providers also serve black or "no imagery" placeholder tiles at high zooms. Set `sampler.max_empty_ratio` (for example `0.1`) to drop mostly-black patches, and lower the zoom if many are affected.
+**Black patches.** Under `lenient` or `ignore`, failed tiles become black, and their mask pixels hold `labels.ignore_index` (255 by default). A patch whose tiles all failed has no imagery at all and is left out (`generate` says how many); one that is only partly black is kept. Set `sampler.max_empty_ratio` (for example `0.1`) to drop mostly-black patches too. Some providers also serve black or "no imagery" placeholder tiles at high zooms, which are not failures: lower the zoom if many are affected.
 
 **Too slow / rate limited.** Lower `max_connections`. mapcv already retries with backoff and honours `Retry-After`.
 

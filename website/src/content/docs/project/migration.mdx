@@ -34,7 +34,7 @@ New datasets are written with manifest version 3. It records what the dataset is
 | `labels` (settings and `sha256`) | `target.labels`; `labels.ignore_index` is now `target.ignore_index` |
 | `source_type`, `product_id`, `bands`, `dtype`, `crs`, `transform`, `patch_shape` | the same keys in `sources[0]` (named `"image"`) |
 | `writer` | `writer`, plus `layout: files`, `mask_format: png` and `jpg_subsampling` |
-| (none) | `task`, `mapcv_version`, `target.type`, `target.dtype`, `target.options` |
+| (none) | `task`, `mapcv_version`, `complete`, `target.type`, `target.dtype`, `target.options`, and in each source `width`, `height` and `fingerprint` |
 
 An image-only dataset has `"target": null`. Split lists are unchanged: one image file name per line. Each patch is one line of `manifest.json`, which makes large manifests about a third smaller. The full schema is in the [dataset format reference](/mapcv/reference/dataset-format/).
 
@@ -102,6 +102,14 @@ A few label files give other class IDs or masks than with 0.2. `mapcv plan` prin
 - **A `label_field` that no feature has is an error** in GeoJSON and KML too, as it was for GeoPackage and Shapefile, instead of a dataset whose masks are all background. KML labels come from `<ExtendedData>` fields, not from the placemark's `<name>`.
 - **A label raster's NoData tag no longer overrides `labels.classes`.** A value the file tags as NoData but `labels.classes` maps to a class is that class (with a warning), not `labels.ignore_index`.
 - **Polygons that reach the poles** are cut at latitude ±85.0511° on XYZ imagery instead of being left out of the masks, and a feature with a coordinate that is not a number (`NaN`, infinite) or a latitude beyond ±90° is skipped and counted in a warning.
+
+### Patches without imagery
+
+A patch without a single pixel of imagery (all its tiles failed, or it lies wholly in a GeoTIFF's NoData or outside the file) is no longer written, whatever `sampler.max_empty_ratio` is; `generate` says how many were left out. Its image was all black and its mask all `labels.ignore_index`, so it taught a model nothing. A dataset made by 0.3 can therefore have fewer patches than one made by 0.2 from the same config, and a 0.2 dataset resumed by 0.3 keeps the empty patches it already has. Partly empty patches still follow `max_empty_ratio`.
+
+### Dataset folders
+
+`writer.staging_dir` must be new, empty or a mapcv dataset: `generate` refuses a folder that holds other files and no `manifest.json` (for example the folder of the config, with `staging_dir: .`), so none of them is overwritten or removed. `generate` and `split` lock the folder while they write, and a second run into it stops at once. An interrupted `generate` records `"complete": false` in the manifest until a run finishes it, and `mapcv verify` fails on such a dataset. Resuming also refuses a custom `url_template` other than the dataset's (also on the same host), another region on the same grid, and a local GeoTIFF whose modification time changed: copy imagery with `cp -p` or `rsync -a` to resume with the copy.
 
 ## Migrating to 0.2
 

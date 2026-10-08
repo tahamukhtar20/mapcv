@@ -69,6 +69,7 @@ from mapcv.labels import (
     vector_attributes,
     vector_layers,
 )
+from mapcv.locking import DatasetBusyError, StagingDirError
 from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
@@ -2394,6 +2395,10 @@ def generate(
             _debug_traceback(exc)
             _show_warnings(caught, shown)
             _fail(f"[red]Cannot resume:[/red] {escape(str(exc))}")
+        except (DatasetBusyError, StagingDirError) as exc:
+            _debug_traceback(exc)
+            _show_warnings(caught, shown)
+            _fail(f"[red]Cannot generate:[/red] {escape(str(exc))}")
         except KeyboardInterrupt:
             _fail(
                 "\n[yellow]Interrupted.[/yellow] Finished chunks are saved; run the same "
@@ -2480,6 +2485,12 @@ def info(
             text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
             counts[name] = len(text.splitlines()) if text else 0
         table.add_row("Splits", _split_line(counts))
+    if manifest.complete is False:
+        table.add_row(
+            "Status",
+            "[yellow]incomplete[/yellow]: generate stopped before it finished; run "
+            "[bold]mapcv generate[/bold] again with its config to finish it",
+        )
     version = f"version {manifest.loaded_version}"
     if manifest.upgraded_from is not None:
         version += f" (mapcv 0.{manifest.upgraded_from}; read as version {manifest.version})"
@@ -2548,7 +2559,7 @@ def split(
         warnings.simplefilter("always")
         try:
             counts = run_split(staging_dir, cfg)
-        except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
+        except (OSError, ValueError, DatasetBusyError) as exc:  # incl. ManifestMismatchError
             _debug_traceback(exc)
             _fail(f"[red]Cannot split the dataset:[/red] {escape(str(exc))}")
     _show_warnings(caught, set())
@@ -2651,7 +2662,11 @@ def verify(
     staging_dir: Path = typer.Argument(
         ..., metavar="STAGING_DIR", help="Dataset directory containing manifest.json."
     ),
-    deep: bool = typer.Option(False, "--deep", help="Also decode every image and check its shape."),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Also decode every image and mask and check them against the manifest.",
+    ),
     write_checksums_: bool = typer.Option(
         False, "--write-checksums", help="Write SHA256SUMS after a successful check."
     ),
@@ -2668,10 +2683,18 @@ def verify(
             _console.print(f"[red]✗[/red] {escape(problem)}")
         if len(report.problems) > 20:
             _console.print(f"[red]… and {len(report.problems) - 20:,} more[/red]")
-        _fail(
-            f"[red]{_plural(len(report.problems), 'problem')} found.[/red]",
-            "Copy the dataset again from where it came from, or generate it into a new folder.",
-        )
+        if report.incomplete:
+            hint = "Run mapcv generate again with the dataset's config to finish it."
+        elif len(report.rewritten) == len(report.problems):
+            hint = (
+                "If you ran mapcv split, stats or card since SHA256SUMS was written, these "
+                "changes are theirs: record them with mapcv verify --write-checksums."
+            )
+        else:
+            hint = (
+                "Copy the dataset again from where it came from, or generate it into a new folder."
+            )
+        _fail(f"[red]{_plural(len(report.problems), 'problem')} found.[/red]", hint)
     hashes = (
         f", {_plural(report.checked_hashes, 'hash', 'hashes')} match"
         if report.checked_hashes

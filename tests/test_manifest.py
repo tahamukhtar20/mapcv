@@ -186,6 +186,7 @@ def test_generated_manifest_has_the_v3_schema(
     assert list(data) == [
         "version",
         "mapcv_version",
+        "complete",
         "task",
         "sources",
         "target",
@@ -194,6 +195,7 @@ def test_generated_manifest_has_the_v3_schema(
         "patches",
     ]
     assert data["version"] == MANIFEST_VERSION == 3
+    assert data["complete"] is True
     assert data["task"] == "segmentation"
     assert data["sources"] == [
         {
@@ -205,6 +207,8 @@ def test_generated_manifest_has_the_v3_schema(
             "crs": "EPSG:32632",
             "transform": [10.0, 0.0, 500000.0, 0.0, -10.0, 5000000.0],
             "patch_shape": [2, 3, 3],
+            "width": 5,
+            "height": 6,
         }
     ]
     target = data["target"]

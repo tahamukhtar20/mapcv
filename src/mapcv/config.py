@@ -19,6 +19,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    PrivateAttr,
     SerializerFunctionWrapHandler,
     Tag,
     field_validator,
@@ -694,6 +695,8 @@ class GeoTiffImageryConfig(BaseModel):
 
     _check_path = field_validator("path")(_validate_geotiff_path)
     _check_name = field_validator("name")(_validate_source_name)
+    # The dataset folder (writer.staging_dir): a glob never matches mapcv's own patches.
+    _exclude_dir: Path | None = PrivateAttr(default=None)
 
     @property
     def is_pattern(self) -> bool:
@@ -715,6 +718,10 @@ class GeoTiffImageryConfig(BaseModel):
         matches = sorted(
             found for found in glob.glob(str(local), recursive=True) if Path(found).is_file()
         )
+        if self._exclude_dir is not None and matches:
+            # A staging_dir inside the pattern's folder holds GeoTIFF patches of its own.
+            excluded = self._exclude_dir.resolve()
+            matches = [found for found in matches if excluded not in Path(found).resolve().parents]
         if not matches:
             raise FileNotFoundError(f"imagery.path: no files match {self.path}")
         return matches
@@ -1563,6 +1570,13 @@ class MapcvConfig(BaseModel):
                 and labels.osm.bbox is None
             ):
                 labels.osm.bbox = (region.west, region.south, region.east, region.north)
+        return self
+
+    @model_validator(mode="after")
+    def _exclude_staging_dir_from_globs(self) -> MapcvConfig:
+        for source in self.sources:
+            if isinstance(source, GeoTiffImageryConfig):
+                source._exclude_dir = self.writer.staging_dir
         return self
 
     @model_validator(mode="after")

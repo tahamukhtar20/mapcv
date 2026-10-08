@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import warnings
 from collections import defaultdict
@@ -65,9 +66,33 @@ class SplitLists:
     test: list[str]
 
 
-def _write_list(path: Path, names: Sequence[str]) -> None:
+def _list_text(names: Sequence[str]) -> str:
     """One filename per line, newline-terminated."""
-    path.write_text("".join(f"{name}\n" for name in names), encoding="utf-8", newline="\n")
+    return "".join(f"{name}\n" for name in names)
+
+
+def _stage(files: dict[Path, str]) -> dict[Path, Path]:
+    """Write every file next to its place as ``.tmp``; return where each one went.
+
+    Nothing is replaced yet, so a full disk or an interruption while writing leaves the
+    previous files as they were (and no ``.tmp`` file).
+    """
+    temporary = {path: path.with_name(path.name + ".tmp") for path in files}
+    try:
+        for path, text in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary[path].write_text(text, encoding="utf-8", newline="\n")
+    except BaseException:
+        for tmp in temporary.values():
+            tmp.unlink(missing_ok=True)
+        raise
+    return temporary
+
+
+def _commit(temporary: dict[Path, Path]) -> None:
+    """Move staged files into place."""
+    for path, tmp in temporary.items():
+        os.replace(tmp, path)
 
 
 def ratio_dirname(ratio: float) -> str:
@@ -430,20 +455,20 @@ def _split(
     val_files = [manifest.patch_name(entry) for entry in val]
     train_files = [manifest.patch_name(entry) for entry in train]
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _write_list(output_dir / "test.txt", test_files)
-    _write_list(output_dir / "val.txt", val_files)
-    _write_list(output_dir / "train.txt", train_files)
+    files = {
+        output_dir / "test.txt": _list_text(test_files),
+        output_dir / "val.txt": _list_text(val_files),
+        output_dir / "train.txt": _list_text(train_files),
+    }
 
     lists = SplitLists(train=list(train_files), val=val_files, test=test_files)
 
     rng.shuffle(train_files)
     for ratio in config.labeled_ratios:
         ratio_dir = output_dir / ratio_dirname(ratio)
-        ratio_dir.mkdir(parents=True, exist_ok=True)
         l_size = math.ceil(len(train_files) * ratio)
-        _write_list(ratio_dir / "labeled.txt", train_files[:l_size])
-        _write_list(ratio_dir / "unlabeled.txt", train_files[l_size:])
+        files[ratio_dir / "labeled.txt"] = _list_text(train_files[:l_size])
+        files[ratio_dir / "unlabeled.txt"] = _list_text(train_files[l_size:])
 
     counts = {
         "train": len(train_files),
@@ -454,7 +479,13 @@ def _split(
     _warn_about_shares(counts, config, strategy, stacklevel + 1)
     # Record how the lists were made, so a split can be reproduced or audited later.
     record = {"settings": config.model_dump(mode="json"), "strategy_used": strategy, **counts}
-    (output_dir / "split.json").write_text(
-        json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    # Every list is written before any is replaced, and split.json is removed before the
+    # lists are moved into place and written after: lists left by a run stopped while
+    # they were moved have no split.json, so they are known to be unfinished.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    record_path = output_dir / "split.json"
+    staged = _stage(files)
+    record_path.unlink(missing_ok=True)
+    _commit(staged)
+    _commit(_stage({record_path: json.dumps(record, indent=2) + "\n"}))
     return counts, lists

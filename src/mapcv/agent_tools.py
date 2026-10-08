@@ -67,6 +67,7 @@ from mapcv.labels import (
     _normalize_label,
     parse_kml,
 )
+from mapcv.locking import DatasetBusyError, StagingDirError
 from mapcv.manifest import Manifest, ManifestMismatchError, patch_folders
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, human_bytes
@@ -1252,6 +1253,8 @@ def execute_generate(
                 ) from None
             except ManifestMismatchError as exc:
                 raise ToolFailure(f"Cannot resume: {exc}") from None
+            except (DatasetBusyError, StagingDirError) as exc:
+                raise ToolFailure(f"Cannot generate: {exc}") from None
             except ToolFailure:
                 raise
             except Exception as exc:  # noqa: BLE001 - the CLI gives every failure this advice
@@ -1407,6 +1410,8 @@ def info(state: ToolState, dataset: str) -> ToolResult:
             "patch_shape": list(source.patch_shape),
         },
         "patches": len(manifest.patches),
+        # False: generate stopped before it finished; None: made before mapcv recorded it.
+        "complete": manifest.complete,
         "padded_patches": sum(1 for entry in manifest.patches if entry["padded"]),
         "ignore_index": ignore,
         "raster_labels": _raster_labels(manifest),
@@ -1421,9 +1426,15 @@ def info(state: ToolState, dataset: str) -> ToolResult:
         if splits is not None
         else "no splits"
     )
+    unfinished = (
+        " Incomplete: generate stopped before it finished; call generate again with the same "
+        "config to finish it."
+        if manifest.complete is False
+        else ""
+    )
     return ToolResult(
         f"{sandbox.rel(folder)}: {manifest.task} dataset, {len(manifest.patches):,} patch(es), "
-        f"{split_text}.",
+        f"{split_text}.{unfinished}",
         data,
     )
 
@@ -1463,7 +1474,7 @@ def split(
     with capture_warnings() as caught:
         try:
             counts = run_split(folder, config)
-        except (FileNotFoundError, ManifestMismatchError) as exc:
+        except (FileNotFoundError, ManifestMismatchError, DatasetBusyError) as exc:
             raise ToolFailure(str(exc)) from None
     parts = ", ".join(f"{name} {counts[name]:,}" for name in ("train", "val", "test"))
     dropped = counts.get("dropped", 0)

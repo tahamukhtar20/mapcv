@@ -153,7 +153,7 @@ print(result.new_patches, "new patches in", result.staging_dir)
 
 `run_generate(config, on_chunk)` is the same function with a `MapcvConfig` only.
 
-**Output.** The library prints nothing. Messages such as "Resuming: 120 patches already written, 80 to go." go to the `mapcv` logger at `INFO`; show them with `logging.basicConfig(level=logging.INFO)`, or `logging.getLogger("mapcv").setLevel(logging.INFO)` with a handler of your own. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+**Output.** The library prints nothing. Messages such as "Resuming: 120 patches already written, 80 to go." go to the `mapcv` logger at `INFO`; show them with `logging.basicConfig(level=logging.INFO)`, or `logging.getLogger("mapcv").setLevel(logging.INFO)` with a handler of your own. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `mapcv.locking.DatasetBusyError` (a `RuntimeError`) while another `generate` or `split` writes to the folder, `mapcv.locking.StagingDirError` (a `ValueError`) for a folder with other files and no manifest, `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 
@@ -167,6 +167,7 @@ print(result.new_patches, "new patches in", result.staging_dir)
 | `tiles_failed` | `int` | Of those, how many failed |
 | `seconds` | `float` | Wall-clock time |
 | `tiles_cached` | `int` | XYZ tiles read from the [tile cache](/mapcv/reference/configuration/#xyz-tiles-type-xyz) instead of downloaded |
+| `patches_without_imagery` | `int` | Patches left out by this call because they had no pixel of imagery |
 
 ### `iter_patches`
 

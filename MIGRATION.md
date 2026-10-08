@@ -55,6 +55,10 @@ Two kinds of datasets cannot be resumed and need a new `writer.staging_dir`: 0.1
 
 Masks now mark pixels without imagery (padding, failed tiles, NoData, the area outside a GeoTIFF) with `labels.ignore_index`, `255` by default, instead of background `0`. Pass the same value to your loss (`ignore_index=255` in PyTorch's `CrossEntropyLoss`), or set `labels.ignore_index: null` to keep 0.2's behaviour. The manifest records it as `target.ignore_index`.
 
+## Imagery inputs
+
+Imagery settings are checked more strictly. `imagery.max_connections` is at most 64 and `sampler.patch_size` at most 16384 (larger values exhausted sockets or memory). An `imagery.url_template` needs a host, a valid port and each of `{x}`, `{y}` and `{z}` written once, without doubled braces. A GeoTIFF whose CRS is geocentric or vertical is refused, and an `imagery.nodata` its data type cannot hold now warns. An `imagery.path` that exists is read as that file even when its name has `[`, `*` or `?` in it (0.2 read it as a glob pattern, and could pick up a different file); a pattern is used only when no such path exists. XYZ tiles that are fully transparent now count as empty (their pixels are black), and 16-bit grayscale PNG tiles are scaled to 8 bits instead of clipped to white; datasets made from such tiles can differ from 0.2's.
+
 ## Removed 0.1 config keys
 
 `tiles:` and `region.zoom`, deprecated in 0.2, are no longer accepted: a config that still has them fails validation and says what to change. Move them into the `imagery` block as described under [Imagery configuration](#imagery-configuration) below.

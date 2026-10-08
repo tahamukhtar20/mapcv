@@ -61,6 +61,12 @@ def _date(offset: float) -> str:
         ((None, "0", _date(0), None), None),  # invalid Expires: already expired
         ((None, "Tue, 15 Jan 2030 08:00:00", None, None), None),  # no zone: invalid
         ((None, _date(500), "not a date", None), 500.0),
+        # A huge max-age (even beyond float range) is kept for the longest a tile may stay.
+        (("max-age=" + "9" * 30, None, None, None), tile_cache.MAX_TTL),
+        (("max-age=1" + "0" * 400, None, None, None), tile_cache.MAX_TTL),
+        ((None, "Fri, 31 Dec 9999 23:59:59 GMT", _date(0), None), tile_cache.MAX_TTL),
+        (("max-age=100", None, None, "1" + "0" * 400), None),
+        (("max-age=100", None, None, "nan"), 100.0),
     ],
 )
 def test_freshness_lifetime(headers: Any, lifetime: float | None) -> None:

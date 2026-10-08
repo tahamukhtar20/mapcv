@@ -45,7 +45,7 @@ from mapcv.config import (
 )
 from mapcv.downloader import resolve_url_template
 from mapcv.geotiff import GeoTiff
-from mapcv.tile_cache import TileCache
+from mapcv.tile_cache import CacheHeaders, TileCache
 
 Transform = tuple[float, float, float, float, float, float]
 
@@ -329,6 +329,28 @@ def _tile_range_bounds(
     return lon(min_x), lat(max_y + 1), lon(max_x + 1), lat(min_y)
 
 
+_ALPHA_MODES = frozenset({"RGBA", "LA", "PA", "RGBa", "La"})
+
+
+def _rgb_array(image: Image.Image) -> npt.NDArray[np.uint8]:
+    """The RGB pixels of a tile image.
+
+    16-bit grayscale is scaled to 8 bits by its high byte, as 16-bit RGB already is (a
+    plain ``convert("RGB")`` would clip every value above 255 to white). Fully
+    transparent pixels come out black: they have no imagery, and all-black pixels count
+    as empty.
+    """
+    if image.mode.startswith("I"):  # I;16, I;16L, I;16B, I (32-bit)
+        gray = np.clip(np.asarray(image).astype(np.int64) >> 8, 0, 255).astype(np.uint8)
+        return np.repeat(gray[..., np.newaxis], 3, axis=-1)
+    if image.mode in _ALPHA_MODES or "transparency" in image.info:
+        rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+        rgb = np.ascontiguousarray(rgba[..., :3])
+        rgb[rgba[..., 3] == 0] = 0
+        return rgb
+    return np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+
 def _xyz_product_id(url_template: str) -> str:
     # Custom templates can embed secrets in the path or query (e.g. an instance
     # ID), so only the hostname is recorded.
@@ -410,6 +432,8 @@ class XYZRasterSource:
         self._tiles: dict[tuple[int, int], bytes] = {}
         self._attempted: set[tuple[int, int]] = set()
         self._cache = TileCache(cache_key) if config.cache else None
+        # Tiles fetched but not yet decoded: cached only once they decode (see read_window).
+        self._uncached: dict[tuple[int, int], CacheHeaders] = {}
         self.tiles_requested = 0
         self.tiles_cached = 0
         self.tiles_failed = 0
@@ -469,7 +493,21 @@ class XYZRasterSource:
             self._decode_with_pillow(
                 window, valid, undecoded, row_start, row_stop, col_start, col_stop
             )
+        self._cache_decoded()
         return window, valid
+
+    def _cache_decoded(self) -> None:
+        """Cache the fetched tiles of a window that has decoded, and only those: a tile a
+        server answered with something that is not a usable image would otherwise be
+        served from the cache on every later run."""
+        cache = self._cache
+        pending, self._uncached = self._uncached, {}
+        if cache is None:
+            return
+        for (x, y), headers in pending.items():
+            payload = self._tiles.get((x, y))
+            if payload is not None:
+                cache.put(x, y, self._zoom, payload, headers)
 
     def _decode_with_pillow(
         self,
@@ -512,14 +550,30 @@ class XYZRasterSource:
 
     def _decode_tile(self, tile_x: int, tile_y: int) -> npt.NDArray[np.uint8]:
         payload = self._tiles[(tile_x, tile_y)]
+        name = f"{self._zoom}/{tile_x}/{tile_y}"
         try:
             with Image.open(BytesIO(payload)) as image:
-                tile_image = np.asarray(image.convert("RGB"), dtype=np.uint8)
+                tile_image = _rgb_array(image)
         except Exception as exc:
-            raise RuntimeError(f"Unable to decode XYZ tile {tile_x}/{tile_y}") from exc
+            raise RuntimeError(
+                f"Unable to decode XYZ tile {name}: the server did not send a usable image."
+                f"{self._forget_cached(tile_x, tile_y)}"
+            ) from exc
         if tile_image.shape != (256, 256, 3):
-            raise ValueError("XYZ tile sources must return 256x256 RGB-compatible images")
+            height, width = tile_image.shape[:2]
+            raise ValueError(
+                f"XYZ tile sources must return 256x256 RGB-compatible images; tile {name} is "
+                f"{width}x{height}.{self._forget_cached(tile_x, tile_y)}"
+            )
         return tile_image
+
+    def _forget_cached(self, tile_x: int, tile_y: int) -> str:
+        """Drop a tile that did not decode from the cache (an earlier run may have kept
+        it); the sentence to add to the error when it was there."""
+        cache = self._cache
+        if cache is not None and cache.discard(tile_x, tile_y, self._zoom):
+            return " The cached copy was removed; run the same command again to download it."
+        return ""
 
     def _evict_rows_above(self, tile_row: int) -> None:
         for key in [key for key in self._tiles if key[1] < tile_row]:
@@ -565,9 +619,10 @@ class XYZRasterSource:
             self.failure_example = example
         for tile, payload, headers in results:
             self._tiles[(tile.x, tile.y)] = payload
-            # Black fills of failed tiles have no headers and are never cached.
+            # Black fills of failed tiles have no headers and are never cached; the others
+            # are once they have decoded.
             if cache is not None and headers is not None:
-                cache.put(tile.x, tile.y, tile.z, payload, headers)
+                self._uncached[(tile.x, tile.y)] = headers
 
     @property
     def failure_reasons(self) -> str:
@@ -974,6 +1029,31 @@ def _all_equal(data: npt.NDArray[Any], nodata: float | None) -> npt.NDArray[np.b
     return np.asarray(np.all(data == data.dtype.type(nodata), axis=-1), dtype=np.bool_)
 
 
+def _warn_nodata_unreachable(nodata: float | None, dtype: Any, where: str) -> None:
+    """Warn when ``imagery.nodata`` is a value the files' data type cannot hold: no pixel
+    would ever equal it, so it would silently do nothing."""
+    if nodata is None or math.isnan(nodata):
+        return
+    kind = np.dtype(dtype)
+    if np.issubdtype(kind, np.integer):
+        info = np.iinfo(kind)
+        fits = nodata == int(nodata) and info.min <= nodata <= info.max
+        holds = f"whole numbers from {info.min} to {info.max}"
+    elif np.issubdtype(kind, np.floating):
+        limit = float(np.finfo(kind).max)
+        fits = abs(nodata) <= limit
+        holds = f"numbers from -{limit:g} to {limit:g}"
+    else:
+        return
+    if not fits:
+        warnings.warn(
+            f"imagery.nodata {nodata:g} cannot occur in {where}, whose {kind} pixels hold "
+            f"{holds}; no pixel is treated as NoData because of it",
+            UserWarning,
+            stacklevel=4,
+        )
+
+
 def _json_nodata(nodata: float | None) -> Any | None:
     """``nodata`` as a JSON-safe, self-equal value (``NaN != NaN`` would break resuming)."""
     if nodata is None:
@@ -1059,6 +1139,24 @@ def _region_miss_hint(
     return hint
 
 
+def _require_horizontal_crs(epsg: int, name: str) -> None:
+    """Reject a file whose CRS is not a 2-D map CRS (a geocentric or vertical one has no
+    map coordinates to put a region on)."""
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    try:
+        crs = CRS.from_epsg(epsg)
+    except CRSError:
+        return  # an unknown code: the region/extent checks report what they can
+    if not (crs.is_projected or crs.is_geographic):
+        raise ValueError(
+            f"GeoTIFF '{name}' is tagged with EPSG:{epsg} ({crs.name}), which is not a map CRS "
+            "(it is geocentric, vertical or engineering, not projected or geographic); "
+            "re-tag the file with the horizontal CRS of its pixels"
+        )
+
+
 class GeoTiffRasterSource:
     """Windowed reader over one GeoTIFF or COG, on the file's own pixel grid.
 
@@ -1086,6 +1184,7 @@ class GeoTiffRasterSource:
                 f"GeoTIFF '{name}' has no usable CRS: {info.crs_error or 'no CRS in the file'}. "
                 "mapcv reads files whose CRS is an EPSG code; re-project or re-tag the file."
             )
+        _require_horizontal_crs(info.epsg, name)
         if info.transform is None:
             raise ValueError(f"GeoTIFF '{name}' has no georeferencing (no pixel size/origin tags)")
         if config.overview > len(info.overviews):
@@ -1144,6 +1243,7 @@ class GeoTiffRasterSource:
 
         self._overview = config.overview
         self._row0, self._col0 = row0, col0
+        _warn_nodata_unreachable(config.nodata, info.dtype, f"'{name}'")
         self._nodata = config.nodata if config.nodata is not None else info.nodata
         effective_nodata = _json_nodata(self._nodata)
         self._dtype = info.dtype
@@ -1200,6 +1300,10 @@ _MOSAIC_SCALE_TOLERANCE = 1e-9
 _MOSAIC_ALIGN_TOLERANCE_PX = 1e-6
 
 
+def _same_size(first: float, second: float) -> bool:
+    return abs(first - second) <= _MOSAIC_SCALE_TOLERANCE * abs(second)
+
+
 class GeoTiffMosaicSource:
     """Windowed reader over several GeoTIFFs that together cover an area, as one raster.
 
@@ -1230,6 +1334,7 @@ class GeoTiffMosaicSource:
                     f"{info.crs_error or 'no CRS in the file'}. mapcv reads files whose CRS is "
                     "an EPSG code; re-project or re-tag the file."
                 )
+            _require_horizontal_crs(info.epsg, name)
             if info.transform is None:
                 raise ValueError(f"GeoTIFF '{name}' has no georeferencing")
             if config.overview > len(info.overviews):
@@ -1268,17 +1373,27 @@ class GeoTiffMosaicSource:
             )
         a, b, c, d, e, f = transforms[0]
         offsets = []
-        for (ta, tb, tc, td, te, tf), name in zip(transforms, names):
+        full_a, _, _, _, full_e, _ = self._tifs[0].info.transform or (0.0,) * 6
+        for (ta, tb, tc, td, te, tf), name, tif in zip(transforms, names, self._tifs):
             if tb or td or b or d:
                 raise ValueError(
                     f"imagery.path: '{name}' is rotated; a mosaic needs north-up files"
                 )
-            if abs(ta - a) > _MOSAIC_SCALE_TOLERANCE * abs(a) or abs(te - e) > (
-                _MOSAIC_SCALE_TOLERANCE * abs(e)
-            ):
+            file_a, _, _, _, file_e, _ = tif.info.transform or (0.0,) * 6
+            if not (_same_size(file_a, full_a) and _same_size(file_e, full_e)):
                 raise ValueError(
-                    f"imagery.path: '{name}' has pixel size {ta} x {-te} but '{names[0]}' has "
-                    f"{a} x {-e}; resample the files to one pixel size first"
+                    f"imagery.path: '{name}' has pixel size {file_a} x {-file_e} but "
+                    f"'{names[0]}' has {full_a} x {-full_e}; resample the files to one pixel "
+                    "size first"
+                )
+            if not (_same_size(ta, a) and _same_size(te, e)):
+                # Same pixels, but the overviews were not built on a common grid (a file
+                # whose size is not a multiple of the overview factor is rounded).
+                raise ValueError(
+                    f"imagery.path: overview {config.overview} of '{name}' has pixel size "
+                    f"{ta} x {-te} but that of '{names[0]}' has {a} x {-e}, although the files "
+                    "have the same pixel size: their overviews do not share one grid. Use "
+                    "imagery.overview: 0, or build the overviews from one combined file"
                 )
             col, row = (tc - c) / a, (tf - f) / e
             if (
@@ -1347,6 +1462,7 @@ class GeoTiffMosaicSource:
             )
         self._overview = config.overview
         self._row0, self._col0 = row0, col0
+        _warn_nodata_unreachable(config.nodata, reference.dtype, f"the files of {pattern}")
         self._nodata = config.nodata if config.nodata is not None else reference.nodata
         self._file_nodata = [
             config.nodata if config.nodata is not None else tif.info.nodata for tif in self._tifs

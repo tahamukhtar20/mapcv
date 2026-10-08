@@ -267,7 +267,7 @@ def test_a_missing_label_file_stops_plan_and_generate(tmp_path: Path, command: s
 def test_a_run_without_patches_fails(tmp_path: Path) -> None:
     config = _yaml(tmp_path)
     config.write_text(
-        config.read_text().replace("patch_size: 64", "patch_size: 100000"), encoding="utf-8"
+        config.read_text().replace("patch_size: 64", "patch_size: 16384"), encoding="utf-8"
     )
     result = runner.invoke(app, ["generate", str(config), "--yes"])
     assert result.exit_code == 1

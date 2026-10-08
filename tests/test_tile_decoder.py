@@ -14,6 +14,7 @@ import threading
 import time
 import zlib
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -203,8 +204,14 @@ PILLOW_CASES = [
 
 
 def _pillow(data: bytes) -> U8:
+    """Pillow's ``convert("RGB")``, with fully transparent pixels black (they hold no imagery)."""
     with Image.open(io.BytesIO(data)) as image:
-        return np.asarray(image.convert("RGB"), dtype=np.uint8)
+        transparent = image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
+        rgb = np.array(image.convert("RGB"), dtype=np.uint8)
+        if transparent:
+            alpha = np.asarray(image.convert("RGBA"), dtype=np.uint8)[..., 3]
+            rgb[alpha == 0] = 0
+        return rgb
 
 
 @pytest.mark.parametrize("data", RUST_CASES)
@@ -298,7 +305,10 @@ def _reference_window(
 
 
 def _source(
-    monkeypatch: pytest.MonkeyPatch, grid: list[TileIndex], payloads: dict[tuple[int, int], bytes]
+    monkeypatch: pytest.MonkeyPatch,
+    grid: list[TileIndex],
+    payloads: dict[tuple[int, int], bytes],
+    headers: tuple[None, None, None, None] | None = None,
 ) -> XYZRasterSource:
     monkeypatch.setattr(
         "mapcv.imagery.snap_bbox",
@@ -308,7 +318,7 @@ def _source(
     monkeypatch.setattr(
         "mapcv.imagery.fetch_tiles",
         lambda requested, *args, **kwargs: (
-            [(t, payloads[(t.x, t.y)], None) for t in requested if (t.x, t.y) in payloads],
+            [(t, payloads[(t.x, t.y)], headers) for t in requested if (t.x, t.y) in payloads],
             0,
             ([], None),
         ),
@@ -376,7 +386,7 @@ def test_undecodable_tiles_raise_the_same_errors_as_before(
     small = _encode(Image.new("RGB", (128, 128)), "PNG")
 
     source = _source(monkeypatch, grid, {(3, 4): good, (4, 4): broken})
-    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 4/4"):
+    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 12/4/4"):
         source.read_window(0, 256, 0, 512)
 
     source = _source(monkeypatch, grid, {(3, 4): good, (4, 4): small})
@@ -384,7 +394,7 @@ def test_undecodable_tiles_raise_the_same_errors_as_before(
         source.read_window(0, 256, 0, 512)
 
     source = _source(monkeypatch, grid, {(3, 4): good, (4, 4): b"<html>rate limited</html>"})
-    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 4/4"):
+    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 12/4/4"):
         source.read_window(0, 256, 0, 512)
 
 
@@ -396,7 +406,7 @@ def test_first_bad_pillow_tile_raises_when_several_are_decoded_in_threads(
     payloads = {(3, 4): jpeg, (4, 4): jpeg[:100], (5, 4): jpeg, (6, 4): jpeg[:50]}
     source = _source(monkeypatch, grid, payloads)
 
-    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 4/4"):
+    with pytest.raises(RuntimeError, match=r"Unable to decode XYZ tile 12/4/4"):
         source.read_window(0, 256, 0, 1024)
 
 
@@ -444,3 +454,89 @@ def test_decoding_releases_the_gil() -> None:
 def test_window_size_is_bounded() -> None:
     with pytest.raises(ValueError, match="exceeds"):
         decode_tile_window([], 0, 0, 0, 1 << 20, 0, 1 << 20)
+
+
+# 16-bit grayscale, transparency ---------------------------------------------------------
+
+
+def test_16_bit_grayscale_tiles_are_scaled_like_16_bit_rgb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    column = (np.arange(TILE, dtype=np.int64) * 256 + 5)[np.newaxis, :, np.newaxis]
+    gray = np.broadcast_to(column, (TILE, TILE, 1))
+    rgb = np.broadcast_to(column, (TILE, TILE, 3))
+    grid = [TileIndex(3, 4, 12), TileIndex(4, 4, 12)]
+    source = _source(monkeypatch, grid, {(3, 4): _png(gray, 0, 16), (4, 4): _png(rgb, 2, 16)})
+
+    window, valid = source.read_window(0, 256, 0, 512)
+
+    # The high byte of a column's value is the column number: scaled, not clipped to 255.
+    assert np.array_equal(window[10, :256], np.stack([np.arange(TILE)] * 3, axis=-1))
+    assert np.array_equal(window[:, :256], window[:, 256:])  # as the 16-bit RGB tile
+    assert valid[:, 1:256].all() and valid[:, 257:].all()
+
+
+def test_fully_transparent_pixels_are_not_imagery(monkeypatch: pytest.MonkeyPatch) -> None:
+    rgba = np.zeros((TILE, TILE, 4), np.uint8)
+    rgba[..., :3] = 100  # a grey that would pass for imagery
+    rgba[:, 128:, 3] = 255
+    grid = [TileIndex(3, 4, 12)]
+    source = _source(monkeypatch, grid, {(3, 4): _encode(Image.fromarray(rgba), "PNG")})
+
+    window, valid = source.read_window(0, 256, 0, 256)
+
+    assert not valid[:, :128].any() and valid[:, 128:].all()
+    assert not window[:, :128].any()
+    assert (window[:, 128:] == 100).all()
+
+
+def test_a_translucent_pixel_is_imagery(monkeypatch: pytest.MonkeyPatch) -> None:
+    rgba = np.full((TILE, TILE, 4), 100, np.uint8)
+    rgba[..., 3] = 1
+    source = _source(
+        monkeypatch, [TileIndex(3, 4, 12)], {(3, 4): _encode(Image.fromarray(rgba), "PNG")}
+    )
+    window, valid = source.read_window(0, 256, 0, 256)
+    assert valid.all() and (window == 100).all()
+
+
+# Which tiles are cached ----------------------------------------------------------------
+
+NO_HEADERS: tuple[None, None, None, None] = (None, None, None, None)
+
+
+def _cached(source: XYZRasterSource, x: int, y: int) -> bool:
+    assert source._cache is not None
+    return source._cache.get(x, y, 12) is not None
+
+
+def test_only_tiles_that_decoded_are_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MAPCV_CACHE_DIR", str(tmp_path))
+    good = _encode(Image.fromarray(_content("photo")), "PNG")
+    small = _encode(Image.new("RGB", (128, 128)), "PNG")
+    grid = [TileIndex(3, 4, 12), TileIndex(4, 4, 12)]
+
+    source = _source(monkeypatch, grid, {(3, 4): good, (4, 4): small}, NO_HEADERS)
+    with pytest.raises(ValueError, match=r"tile 12/4/4 is 128x128"):
+        source.read_window(0, 256, 0, 512)
+    assert not _cached(source, 3, 4) and not _cached(source, 4, 4)
+
+    source = _source(monkeypatch, grid, {(3, 4): good, (4, 4): good}, NO_HEADERS)
+    source.read_window(0, 256, 0, 512)
+    assert _cached(source, 3, 4) and _cached(source, 4, 4)
+
+
+def test_a_cached_tile_that_does_not_decode_is_dropped_from_the_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MAPCV_CACHE_DIR", str(tmp_path))
+    small = _encode(Image.new("RGB", (128, 128)), "PNG")
+    source = _source(monkeypatch, [TileIndex(3, 4, 12)], {}, NO_HEADERS)
+    assert source._cache is not None
+    source._cache.put(3, 4, 12, small, NO_HEADERS)  # as an older version would have kept it
+
+    with pytest.raises(ValueError, match=r"tile 12/3/4 is 128x128.*cached copy was removed"):
+        source.read_window(0, 256, 0, 256)
+    assert not _cached(source, 3, 4)

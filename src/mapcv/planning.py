@@ -47,6 +47,13 @@ _INSTANCE_BYTES = 500
 # coverage in the manifest.
 _CLASSIFICATION_BYTES = 250
 
+# What a patch adds on top of its pixels: its entries in manifest.json and patches.geojson
+# (about 190 and 340 bytes measured), and the headers of each file written for it.
+_PATCH_RECORD_BYTES = 530
+_FILE_OVERHEAD_BYTES = {"png": 80, "jpg": 600, "tif": 700, "npy": 128}
+# Many tiny files make a dataset slow to write and to read; warn above this many.
+MANY_FILES = 1_000_000
+
 # Jobs above either threshold ask for confirmation before downloading.
 LARGE_JOB_TILES = 20_000
 LARGE_JOB_BYTES = 5 * 1024**3
@@ -469,7 +476,12 @@ def plan(config: MapcvConfig) -> Plan:
     if config.task == "instance" and config.instance_options.id_mask:
         # One 16-bit instance-ID mask per patch (compressed PNG or GeoTIFF, raw as NPY).
         mask_bytes = int(2 * pixels_per_patch * mask_ratio)
-    output = patches * (image_bytes + mask_bytes)
+    image_files = len(sizes)
+    mask_files = 1 if mask_bytes else 0
+    file_overhead = _FILE_OVERHEAD_BYTES.get(config.writer.image_format, 0) * image_files
+    if mask_files:
+        file_overhead += _FILE_OVERHEAD_BYTES.get(config.writer.mask_format, 0)
+    output = patches * (image_bytes + mask_bytes + file_overhead + _PATCH_RECORD_BYTES)
     if config.task == "classification":
         output += patches * _CLASSIFICATION_BYTES
     window_rows = min(height, primary.chunk_rows + patch_size)
@@ -477,8 +489,9 @@ def plan(config: MapcvConfig) -> Plan:
     # A wide chunk is read in column windows that stay below the pipeline's budget.
     window_width = min(width, _max_window_width(window_rows, width, pixel_bytes, patch_size))
     # Window, validity mask, label mask and extracted patches each hold a copy; further
-    # sources are read on the first one's grid, so their windows are as large.
-    chunk_memory = window_rows * window_width * (pixel_bytes * 2 + 2)
+    # sources are read on the first one's grid, so their windows are as large. A patch
+    # larger than the window (padded past the raster's edge) is held whole.
+    chunk_memory = max(window_rows * window_width, patch_size * patch_size) * (pixel_bytes * 2 + 2)
 
     labels = summarize_labels(config)
     if labels is not None:
@@ -497,6 +510,18 @@ def plan(config: MapcvConfig) -> Plan:
         plan_warnings.append(
             "no patch fits the region with these sampler settings; enlarge the region or "
             "use edge_strategy: pad"
+        )
+    if patches * (image_files + mask_files) > MANY_FILES:
+        plan_warnings.append(
+            f"this writes about {patches * (image_files + mask_files):,} files of "
+            f"{patch_size} x {patch_size} px; a larger sampler.patch_size (or stride) makes "
+            "a dataset that is faster to write and to read"
+        )
+    if patches > 0 and (patch_size > height or patch_size > width):
+        plan_warnings.append(
+            f"sampler.patch_size is {patch_size} px but the raster is {width} x {height} px, so "
+            "every patch is mostly padding and needs a lot of memory; lower sampler.patch_size "
+            "or enlarge the region"
         )
     if resolution > patch_size * 10:
         plan_warnings.append("each patch covers more than 10 km; consider a higher zoom")

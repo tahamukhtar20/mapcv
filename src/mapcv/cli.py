@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime
 import errno
-import glob
 import json
 import logging
 import os
@@ -2760,7 +2759,7 @@ def _missing_inputs(config: MapcvConfig) -> list[str]:
             local = eopf_local_path(imagery.path)
             if imagery.is_pattern:
                 # A mosaic pattern: missing only when it matches no file.
-                local = None if glob.glob(str(local), recursive=True) else local
+                local = None if imagery.matching_files() else local
             check(f"imagery '{name}' path" if config.multi_source else "imagery.path", local)
     return missing
 

@@ -468,5 +468,7 @@ def test_a_mosaic_names_a_few_files_then_a_count() -> None:
     locations = {"image": {name: f"/d/{name}" for name in recorded}}
     old, new = Manifest(sources=[source(recorded)]), Manifest(sources=[source(current)])
     hint = _restore_times_hint(old, new, locations)
-    assert hint.count("touch -d") == 3 and "/d/f0.tif" in hint and "/d/f3.tif" in hint
+    # One restore command per named file: `touch -d`, or PowerShell on Windows.
+    assert hint.count("touch -d") + hint.count("LastWriteTimeUtc") == 3
+    assert "/d/f0.tif" in hint and "/d/f3.tif" in hint
     assert "/d/f2.tif" not in hint and "(and 1 more file)" in hint

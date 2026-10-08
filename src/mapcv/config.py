@@ -832,7 +832,7 @@ class BufferConfig(BaseModel):
         return self
 
 
-_URL_START = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:/")
+_URL_START = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:[/\\]")
 
 
 def _check_vector_suffix(path: Path, key: str) -> Path:

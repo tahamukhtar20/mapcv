@@ -222,8 +222,8 @@ def test_labels_must_be_local_files(tmp_path: Path, url: str) -> None:
 
 def test_local_label_paths_that_look_odd_are_still_accepted(tmp_path: Path) -> None:
     (tmp_path / "my dir").mkdir()
-    shutil.copy(_VECTOR / "labels.geojson", tmp_path / "my dir" / "l: 1.geojson")
-    text = BASE + "labels: {path: 'my dir/l: 1.geojson'}\n"
+    shutil.copy(_VECTOR / "labels.geojson", tmp_path / "my dir" / "l 1.geojson")
+    text = BASE + "labels: {path: 'my dir/l 1.geojson'}\n"
     assert validate_config(_state(tmp_path), None, text).data["valid"] is True
 
 

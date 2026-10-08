@@ -24,6 +24,9 @@
     <a href="https://tahamukhtar20.github.io/mapcv/" target="_blank">
         <img src="https://img.shields.io/badge/docs-online-blue" alt="Documentation">
     </a>
+    <a href="https://codecov.io/gh/tahamukhtar20/mapcv" target="_blank">
+        <img src="https://img.shields.io/codecov/c/github/tahamukhtar20/mapcv/main?color=%2334D058&label=coverage" alt="Test coverage">
+    </a>
     <a href="https://www.bestpractices.dev/projects/15276" target="_blank">
         <img src="https://www.bestpractices.dev/projects/15276/badge" alt="OpenSSF Best Practices">
     </a>

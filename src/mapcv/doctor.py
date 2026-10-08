@@ -331,11 +331,21 @@ def _zarr_check(section: str) -> Check:
 
 
 def _simple_extra(
-    section: str, name: str, module: str, dist: str, extra: str, purpose: str
+    section: str,
+    name: str,
+    module: str,
+    dist: str,
+    extra: str,
+    purpose: str,
+    hint: str | None = None,
 ) -> Check:
     if not _installed(module):
         return Check(
-            section, name, "info", f"not installed ({purpose})", f"Install: {_install_hint(extra)}"
+            section,
+            name,
+            "info",
+            f"not installed ({purpose})",
+            f"Install: {hint or _install_hint(extra)}",
         )
     return Check(section, name, "ok", f"{dist} {_dist_version(dist) or 'unknown'}")
 
@@ -371,6 +381,8 @@ def extras_checks() -> list[Check]:
             "pyarrow",
             "parquet",
             "GeoParquet labels and Hugging Face export",
+            hint=f"{_install_hint('parquet')} for GeoParquet labels, or "
+            f"{_install_hint('export')} for the Hugging Face export",
         )
     )
     mcp = _simple_extra(section, "mcp", "mcp", "mcp", "mcp", "the MCP server for AI agents")

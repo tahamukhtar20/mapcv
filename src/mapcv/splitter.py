@@ -373,8 +373,8 @@ def split_manifest(
 def _warn_about_shares(
     counts: dict[str, int], config: SplitterConfig, strategy: str, stacklevel: int
 ) -> None:
-    """Warn when train is empty, or when whole blocks or regions moved the test share far
-    from the one asked for."""
+    """Warn when train, or a val or test split that was asked for, is empty, or when whole
+    blocks or regions moved the test share far from the one asked for."""
     total = counts["train"] + counts["val"] + counts["test"]
     if total == 0:
         return
@@ -386,6 +386,19 @@ def _warn_about_shares(
             stacklevel=stacklevel,
         )
         return
+    for name, ratio in (("val", config.val_ratio), ("test", config.test_ratio)):
+        if counts[name] == 0 and ratio > 0:
+            if strategy in ("spatial", "region"):
+                unit = "regions" if strategy == "region" else "blocks"
+                fix = "more regions" if strategy == "region" else "a smaller split.block_size"
+                reason = f"whole {unit} go to one split; use {fix} or a larger {name}_ratio"
+            else:
+                reason = f"too few patches for a {name}_ratio of {ratio:.0%}; make more patches"
+            warnings.warn(
+                f"No patch is left for {name} (split.{name}_ratio is {ratio:.0%}): {reason}.",
+                UserWarning,
+                stacklevel=stacklevel,
+            )
     share = counts["test"] / total
     if strategy in ("spatial", "region") and total >= 10 and abs(share - config.test_ratio) > 0.1:
         unit = "regions" if strategy == "region" else "blocks"

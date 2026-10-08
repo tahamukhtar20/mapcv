@@ -19,6 +19,7 @@ import sys
 import time
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
@@ -35,6 +36,7 @@ from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
@@ -210,6 +212,36 @@ def _duration(seconds: float) -> str:
     return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
 
 
+def _progress_columns(width: int) -> tuple[ProgressColumn, ...]:
+    """The progress line for a terminal ``width`` columns wide. A narrow terminal loses the
+    long description, then the labels, then the ETA, so nothing is cut off mid-word."""
+    spinner, count = SpinnerColumn(), MofNCompleteColumn()
+    if width >= 110:
+        return (
+            spinner,
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            count,
+            TextColumn("chunks •"),
+            TimeElapsedColumn(),
+            TextColumn("• eta"),
+            TimeRemainingColumn(),
+        )
+    if width >= 64:
+        return (
+            spinner,
+            TextColumn("[progress.description]Writing patches"),
+            BarColumn(bar_width=None),
+            count,
+            TimeElapsedColumn(),
+            TextColumn("eta"),
+            TimeRemainingColumn(),
+        )
+    if width >= 40:
+        return (spinner, BarColumn(bar_width=None), count, TimeElapsedColumn())
+    return (spinner, count)
+
+
 class _GenerateFeedback(logging.Handler):
     """The terminal side of a generation: a spinner while the imagery opens, a progress
     bar over the chunks (it is the ``on_chunk`` callback), and the library's log
@@ -269,17 +301,7 @@ class _GenerateFeedback(logging.Handler):
                 )
             return
         if self._progress is None and total and not _quiet:
-            self._progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TextColumn("chunks •"),
-                TimeElapsedColumn(),
-                TextColumn("• eta"),
-                TimeRemainingColumn(),
-                console=_console,
-            )
+            self._progress = Progress(*_progress_columns(_console.width), console=_console)
             self._progress.start()
             self._task = self._progress.add_task("Reading imagery and writing patches", total=total)
         if self._progress is not None and self._task is not None:
@@ -511,7 +533,9 @@ def _load_config(config_path: Path) -> MapcvConfig:
             _fail(
                 f"[red]Config error[/red] in {escape(str(config_path))}: not valid YAML{where} "
                 f"({escape(str(problem))}).",
-                "Check the indentation, colons and brackets there.",
+                "Remove one of the two."
+                if "twice" in str(problem)
+                else "Check the indentation, colons and brackets there.",
             )
         except UnicodeDecodeError as exc:
             _debug_traceback(exc)
@@ -1507,6 +1531,72 @@ def _ask_layer(path: Path) -> str | None:
     return Prompt.ask("Layer", choices=names, default=names[0], console=_console)
 
 
+def _ask_checked(prompt: str, check: Callable[[str], str | None], **kwargs: Any) -> str:
+    """``Prompt.ask`` again until ``check(answer)`` returns ``None``; its message says why not."""
+    while True:
+        answer = str(Prompt.ask(prompt, console=_console, **kwargs)).strip()
+        problem = check(answer)
+        if problem is None:
+            return answer
+        _console.print(f"[red]{escape(problem)}[/red]")
+
+
+def _ask_zoom(prompt: str, default: int) -> int:
+    """An XYZ zoom level; the config accepts 1 to 22."""
+    while True:
+        zoom = IntPrompt.ask(prompt, default=default, console=_console)
+        if 1 <= zoom <= 22:
+            return zoom
+        _console.print("[red]Enter a zoom level from 1 to 22 (17 or 18 suit most patches).[/red]")
+
+
+def _check_date(answer: str) -> str | None:
+    try:
+        datetime.date.fromisoformat(answer)
+    except ValueError:
+        return "Enter a date like 2025-06-01 (year-month-day)."
+    return None
+
+
+def _check_tile_url(answer: str) -> str | None:
+    from mapcv.config import _validate_url_template
+
+    try:
+        _validate_url_template(answer)
+    except ValueError as exc:
+        return f"{exc}, for example https://tiles.example.com/{{z}}/{{x}}/{{y}}.png"
+    return None
+
+
+def _check_label_file(answer: str) -> str | None:
+    if not answer:
+        return None
+    lower = answer.lower()
+    if lower.endswith(_RASTER_SUFFIXES) and "://" in answer:
+        return None  # a remote label raster is read later
+    path = Path(answer).expanduser()
+    if not lower.endswith(_RASTER_SUFFIXES) and path.suffix.lower() not in VECTOR_LABEL_SUFFIXES:
+        return (
+            f"{answer} is not a label file: use .geojson, .kml, .gpkg, .shp or .parquet, "
+            "a .tif label raster, or leave it blank."
+        )
+    if not path.is_file():
+        return f"File not found: {answer}"
+    return None
+
+
+def _check_product(answer: str) -> str | None:
+    from mapcv.config import _validate_eopf_path
+
+    if not answer:
+        return "A Sentinel-2 product is needed: a local .zarr folder, or an https:// or s3:// URL."
+    try:
+        _validate_eopf_path(answer)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def _ask_bbox_or_file(
     default_bbox: tuple[float, float, float, float] | None = None,
 ) -> tuple[tuple[float, float, float, float], Path | None, str | None]:
@@ -1558,7 +1648,18 @@ def _ask_bbox_or_file(
             continue
         if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
             _console.print("[red]Expected west < east and south < north, in lon/lat degrees.[/red]")
+            if -90 <= west < east <= 90 and -180 <= south < north <= 180:
+                _console.print(
+                    "[dim]These look like latitude,longitude. The order is longitude first: "
+                    f"{_coordinate(south)},{_coordinate(west)},{_coordinate(north)},"
+                    f"{_coordinate(east)}[/dim]"
+                )
             continue
+        _console.print(
+            f"[dim]Centre: longitude {_coordinate((west + east) / 2)}, latitude "
+            f"{_coordinate((south + north) / 2)}. The order is west,south,east,north: "
+            "longitude first.[/dim]"
+        )
         return (west, south, east, north), None, None
 
 
@@ -1945,12 +2046,9 @@ def _ask_earth_engine(latitude: float) -> list[str]:
         )
         lines.append(f"    {kind}: {_yaml_str(asset.strip())}")
         if kind == "collection":
-            lines.append(
-                f'    start: "{Prompt.ask("Start date", default=f"{last_year}-06-01", console=_console)}"'
-            )
-            lines.append(
-                f'    end: "{Prompt.ask("End date", default=f"{last_year}-09-01", console=_console)}"'
-            )
+            start = _ask_checked("Start date", _check_date, default=f"{last_year}-06-01")
+            end = _ask_checked("End date", _check_date, default=f"{last_year}-09-01")
+            lines += [f'    start: "{start}"', f'    end: "{end}"']
             reducer = Prompt.ask(
                 "Combine the scenes with",
                 choices=["median", "mosaic", "mean", "min", "max"],
@@ -1969,11 +2067,11 @@ def _ask_earth_engine(latitude: float) -> list[str]:
         metres = preset["metres"]
         lines.append(f"    collection: {preset['collection']}")
         if dataset == "naip":
-            start = Prompt.ask("From", default=f"{last_year - 2}-01-01", console=_console)
-            end = Prompt.ask("To", default=f"{last_year + 1}-01-01", console=_console)
+            start = _ask_checked("From", _check_date, default=f"{last_year - 2}-01-01")
+            end = _ask_checked("To", _check_date, default=f"{last_year + 1}-01-01")
         else:
-            start = Prompt.ask("Start date", default=f"{last_year}-06-01", console=_console)
-            end = Prompt.ask("End date", default=f"{last_year}-09-01", console=_console)
+            start = _ask_checked("Start date", _check_date, default=f"{last_year}-06-01")
+            end = _ask_checked("End date", _check_date, default=f"{last_year}-09-01")
         lines += [f'    start: "{start}"', f'    end: "{end}"']
         if preset["max_cloud"] is not None:
             cloud = IntPrompt.ask(
@@ -1999,9 +2097,7 @@ def _ask_earth_engine(latitude: float) -> list[str]:
     for zoom in range(max(1, suggested - 2), min(22, suggested + 2) + 1):
         table.add_row(str(zoom), f"{ground_resolution_m(zoom, latitude):.2f} m")
     _console.print(table)
-    zoom = IntPrompt.ask(
-        f"Zoom [dim](the data is {metres:g} m)[/dim]", default=suggested, console=_console
-    )
+    zoom = _ask_zoom(f"Zoom [dim](the data is {metres:g} m)[/dim]", suggested)
     return [f"  zoom: {zoom}" if line == "ZOOM" else line for line in lines]
 
 
@@ -2009,7 +2105,10 @@ def _wizard() -> str:
     _console.print(
         Panel(
             "Answer a few questions to get a working config. Press Enter to accept a "
-            "[bold]default[/bold].",
+            "[bold]default[/bold].\n"
+            "[dim]Change detection and regression need before/after pairs or a raster of "
+            "values: start from [bold]mapcv init --template change[/bold] or "
+            "[bold]--template regression[/bold].[/dim]",
             title="[bold]mapcv init[/bold]",
             title_align="left",
             border_style="cyan",
@@ -2047,8 +2146,12 @@ def _wizard() -> str:
         imagery_lines = _ask_earth_engine(latitude)
         patch_default, image_format, edge = 256, "png", "pad"
     elif kind == "sentinel2":
-        product = Prompt.ask(
-            "Product path or URL [dim](local .zarr, https:// or s3://)[/dim]", console=_console
+        _console.print(
+            '  [dim]Needs pip install "mapcv\\[zarr]" (Python 3.10 to 3.13). Sentinel-2 pixels '
+            "are 10 m: pick a region of a few hundred pixels or more.[/dim]"
+        )
+        product = _ask_checked(
+            "Product path or URL [dim](local .zarr, https:// or s3://)[/dim]", _check_product
         )
         resolution = Prompt.ask(
             "Resolution in metres", choices=["10", "20", "60"], default="10", console=_console
@@ -2069,11 +2172,11 @@ def _wizard() -> str:
         for zoom in range(15, 20):
             table.add_row(str(zoom), f"{ground_resolution_m(zoom, latitude):.2f} m")
         _console.print(table)
-        zoom = IntPrompt.ask("Zoom", default=17, console=_console)
+        zoom = _ask_zoom("Zoom", 17)
         if kind == "custom":
-            template = Prompt.ask(
+            template = _ask_checked(
                 "Tile URL with {z}, {x}, {y} [dim](keep API keys out of shared files)[/dim]",
-                console=_console,
+                _check_tile_url,
             )
             source_line = f"  url_template: {_yaml_str(template)}"
         else:
@@ -2096,13 +2199,13 @@ def _wizard() -> str:
         labels_path = area_file
         labels_layer = area_layer
     else:  # no area file, or labels from another file
-        answer = Prompt.ask(
+        answer = _ask_checked(
             "Label file [dim](.geojson, .kml, .gpkg, .shp, .parquet, or a .tif label raster; "
             "blank for an image-only dataset)[/dim]",
+            _check_label_file,
             default="",
             show_default=False,
-            console=_console,
-        ).strip()
+        )
         if answer.lower().endswith(_RASTER_SUFFIXES):
             path_text = answer if "://" in answer else str(Path(answer).expanduser())
             raster_lines = _ask_label_raster(path_text, (west, south, east, north))
@@ -2292,6 +2395,13 @@ def init(
         _fail(
             f"[red]Cannot write[/red] {escape(str(target))}: {escape(exc.strerror or str(exc))}.",
             "Check that its folder exists and that you can write to it.",
+        )
+    if not guided and template is None:
+        why = "No terminal was found" if interactive is None else "--no-interactive is set"
+        _console.print(
+            f"[dim]{why}, so no questions were asked: this is the xyz template, with an example "
+            "region (Lahore). Edit region and labels, or pick another with --template NAME "
+            "(mapcv init --help lists them).[/dim]"
         )
     try:
         MapcvConfig.from_yaml(target)
@@ -2535,7 +2645,11 @@ def split(
     block_size: int | None = typer.Option(
         None, help="Spatial block size in pixels (default: 4 × patch size)."
     ),
-    sample_limit: int | None = typer.Option(None, help="Use at most this many patches."),
+    sample_limit: int | None = typer.Option(
+        None,
+        help="Split only a sample of this many patches (a small benchmark from a large "
+        "dataset); the other patches are in no split.",
+    ),
 ) -> None:
     """Re-split an existing dataset from its manifest; no images are read."""
     ratios = labeled_ratios if labeled_ratios is not None else [0.10, 0.20, 0.30]
@@ -2567,6 +2681,24 @@ def split(
         f"{_split_line(counts)}",
         soft_wrap=True,
     )
+    if sample_limit is not None:
+        _note_patches_outside_sample(staging_dir, counts, sample_limit)
+
+
+def _note_patches_outside_sample(staging_dir: Path, counts: dict[str, int], limit: int) -> None:
+    """After ``split --sample-limit``: say how many patches no split list holds."""
+    try:
+        patches = len(Manifest.load(staging_dir / "manifest.json").patches)
+    except (OSError, ValueError):
+        return
+    left_out = patches - counts["train"] - counts["val"] - counts["test"] - counts.get("dropped", 0)
+    if left_out > 0:
+        _console.print(
+            f"[dim]{_plural(left_out, 'patch', 'patches')} of {patches:,} "
+            f"{'is' if left_out == 1 else 'are'} in no split: --sample-limit {limit} "
+            "splits only a sample. Run it without the option to split them all.[/dim]",
+            soft_wrap=True,
+        )
 
 
 @app.command(

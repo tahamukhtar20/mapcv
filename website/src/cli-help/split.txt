@@ -19,7 +19,9 @@
 │                                    [default: spatial]                                │
 │ --block-size              <int>    Spatial block size in pixels (default: 4 × patch  │
 │                                    size).                                            │
-│ --sample-limit            <int>    Use at most this many patches.                    │
+│ --sample-limit            <int>    Split only a sample of this many patches (a small │
+│                                    benchmark from a large dataset); the other        │
+│                                    patches are in no split.                          │
 │ --help            -h               Show this message and exit.                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 

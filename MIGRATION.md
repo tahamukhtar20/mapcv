@@ -96,6 +96,10 @@ A patch without a single pixel of imagery (all its tiles failed, or it lies whol
 
 `writer.staging_dir` must be new, empty or a mapcv dataset: `generate` refuses a folder that holds other files and no `manifest.json` (for example the folder of the config, with `staging_dir: .`), so none of them is overwritten or removed. `generate` and `split` lock the folder while they write, and a second run into it stops at once. An interrupted `generate` records `"complete": false` in the manifest until a run finishes it, and `mapcv verify` fails on such a dataset. Resuming also refuses a custom `url_template` other than the dataset's (also on the same host), another region on the same grid, and a local GeoTIFF whose modification time changed: copy imagery with `cp -p` or `rsync -a` to resume with the copy.
 
+## Repeated config keys
+
+A key written twice in the same mapping of a config (for example `stride` twice under `sampler`) is now an error that names the key and both lines; YAML used to keep the last one silently. Delete the one you do not mean. An empty `imagery.path` for a Sentinel-2 product is rejected as well.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

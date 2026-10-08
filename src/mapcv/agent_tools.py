@@ -60,6 +60,7 @@ from mapcv.config import (
     XYZImageryConfig,
     _resolve_relative_paths,
     eopf_local_path,
+    load_yaml,
 )
 from mapcv.downloader import URL_TEMPLATES
 from mapcv.labels import (
@@ -537,7 +538,7 @@ def parse_config_text(state: ToolState, text: str, base: Path) -> MapcvConfig:
     if len(text.encode("utf-8")) > MAX_CONFIG_BYTES:
         raise ToolFailure(f"The config is larger than {MAX_CONFIG_BYTES // 1024} KiB.")
     try:
-        data = yaml.safe_load(text)
+        data = load_yaml(text)
     except yaml.YAMLError as exc:
         problem = _yaml_problem(exc)
         raise ConfigInvalid(problem, [{"field": "config", "message": problem}]) from None

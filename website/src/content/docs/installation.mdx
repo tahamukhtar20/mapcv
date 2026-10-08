@@ -27,6 +27,10 @@ import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
   </TabItem>
 </Tabs>
 
+<Aside title="Installed into a virtual environment?">
+`mapcv` is then on the `PATH` only while that environment is active. Activate it in each new shell (`source .venv/bin/activate` on Linux and macOS, `.venv\Scripts\activate` on Windows), or call the program by its path (`.venv/bin/mapcv`). `pipx install mapcv` and `uv tool install mapcv` put the command on the `PATH` without an environment to activate.
+</Aside>
+
 mapcv needs **Python 3.10 or newer** (3.10 – 3.14 are tested). One pre-built wheel per platform covers every supported Python version:
 
 | Platform | Wheel |
@@ -60,7 +64,7 @@ $ mapcv --version
 mapcv 0.2.0
 ```
 
-`mapcv --help` (or `mapcv -h`) lists the commands, grouped in the order you use them: **1. Build a dataset** (`init`, `plan`, `generate`), **2. Use a dataset** (`info`, `split`, `stats`, `card`, `verify`, `export`) and **3. Utilities** (`validate`, `cache`, `mcp`, `doctor`). If the shell says `command not found`, activate the environment you installed into, or run `python -m pip show mapcv` to see where it went.
+`mapcv --help` (or `mapcv -h`) lists the commands, grouped in the order you use them: **1. Build a dataset** (`init`, `plan`, `generate`), **2. Use a dataset** (`info`, `split`, `stats`, `card`, `verify`, `export`) and **3. Utilities** (`validate`, `cache`, `mcp`, `doctor`). If the shell says `command not found`, activate the environment you installed into (see [Installed into a virtual environment?](#install) above), or run `python -m pip show mapcv` to see where it went.
 
 ## Shell completion
 

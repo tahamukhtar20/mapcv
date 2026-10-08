@@ -50,6 +50,41 @@ DEFAULT_SENTINEL2_L2A_BANDS: list[str] = [
 ]
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
+    """``yaml.SafeLoader`` that rejects a mapping key written twice (YAML itself lets the
+    last one win, so a pasted snippet could silently override a setting)."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            first: dict[Any, int] = {}
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge" or not isinstance(
+                    key_node, yaml.ScalarNode
+                ):
+                    continue
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    seen = first.get(key)
+                except TypeError:  # an unhashable key: the base class reports it
+                    continue
+                if seen is not None:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found the key {key!r} twice (first on line {seen}); keep one",
+                        key_node.start_mark,
+                    )
+                first[key] = key_node.start_mark.line + 1
+        mapping: dict[Any, Any] = super().construct_mapping(node, deep=deep)
+        return mapping
+
+
+def load_yaml(text: str) -> Any:
+    """Parse YAML config text like ``yaml.safe_load``, but a repeated key in one mapping
+    is an error naming the key and its lines."""
+    return yaml.load(text, Loader=_UniqueKeyLoader)
+
+
 _RASTER_LABEL_SUFFIXES = frozenset({".tif", ".tiff"})
 
 
@@ -68,6 +103,8 @@ def eopf_local_path(path: str) -> Path | None:
 
 
 def _validate_eopf_path(path: str) -> str:
+    if not path.strip():
+        raise ValueError("imagery.path must not be empty: name the .zarr product or its URL")
     if eopf_local_path(path) is not None:
         return path
     parsed = urlsplit(path)
@@ -2061,7 +2098,7 @@ class MapcvConfig(BaseModel):
         file's folder, so a config works from any working directory.
         """
         path = Path(path)
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = load_yaml(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             _resolve_relative_paths(data, path.parent)
         return cls.model_validate(data)

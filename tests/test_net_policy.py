@@ -123,85 +123,73 @@ def test_public_addresses(text: str) -> None:
     assert not _net.is_internal_ip(ipaddress.ip_address(text))
 
 
-def test_a_stac_catalog_name_resolving_to_this_machine_is_not_connected(
+def test_the_host_a_config_names_is_trusted_wherever_it_resolves(
     service: Recorder, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Plain http, as a public catalog cannot be: the config check is skipped, the rules not.
-    _fake_dns(monkeypatch, {"catalog.example": "127.0.0.1"})
-    with pytest.raises(AddressRefused, match="catalog.example resolves to an address on this"):
-        stac._post(f"http://catalog.example:{service.port}/search", {})
-    assert service.requests == []
-
-
-def test_an_overpass_name_resolving_to_this_machine_is_not_connected(
-    service: Recorder, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    """A docker-compose service, an on-prem server or an /etc/hosts alias: the user wrote it."""
     from mapcv.config import OsmLabelsSource
 
-    _fake_dns(monkeypatch, {"overpass.example": "127.0.0.1"})
+    _fake_dns(monkeypatch, {"catalog.lab": "127.0.0.1", "overpass.lab": "127.0.0.1"})
+    stac._post(f"http://catalog.lab:{service.port}/search", {})
     source = OsmLabelsSource.model_validate(
         {"classes": [{"name": "b", "tags": {"building": "*"}}], "overpass_url": "https://x"}
-    ).model_copy(update={"overpass_url": f"http://overpass.example:{service.port}/api"})
-    with pytest.raises(RuntimeError, match="refused: overpass.example resolves to"):
-        osm._fetch(source, "[out:json];")
-    assert service.requests == []
+    ).model_copy(update={"overpass_url": f"http://overpass.lab:{service.port}/api"})
+    osm._fetch(source, "[out:json];")
+    assert service.requests == ["POST /search", "POST /api"]
 
 
-def test_a_url_naming_this_machine_still_reaches_it(service: Recorder) -> None:
-    """A local test server, named by its address, keeps working (outside the MCP server)."""
-    with _net.urlopen(f"http://127.0.0.1:{service.port}/search", timeout=10) as response:
-        assert response.status == 200
-    with _net.urlopen(f"http://localhost:{service.port}/search", timeout=10) as response:
-        assert response.status == 200
-    assert len(service.requests) == 2
+class _FakeSocket:
+    """Records where a connection goes, and fails it (nothing is sent anywhere)."""
+
+    attempts: list[Any] = []
+
+    def __init__(self, *args: Any) -> None:
+        pass
+
+    def settimeout(self, value: Any) -> None:
+        pass
+
+    def bind(self, address: Any) -> None:
+        pass
+
+    def connect(self, address: Any) -> None:
+        type(self).attempts.append(address[0])
+        raise ConnectionRefusedError("refused (test)")
+
+    def close(self) -> None:
+        pass
 
 
-def test_the_allow_local_variable_lets_names_resolve_internally(
-    service: Recorder, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _fake_dns(monkeypatch, {"tiles.corp.example": "127.0.0.1"})
-    monkeypatch.setenv("MAPCV_ALLOW_LOCAL_URLS", "1")
-    with _net.urlopen(f"http://tiles.corp.example:{service.port}/x", timeout=10) as response:
-        assert response.status == 200
-    assert service.requests == ["GET /x"]
-
-
-@pytest.fixture()
-def second_loopback() -> Iterator[Recorder]:
-    """A server on 127.0.0.2, standing in for a public host (Linux has the whole /8)."""
-    try:
-        server = Recorder("127.0.0.2")
-    except OSError:
-        pytest.skip("127.0.0.2 is not configured on this machine")
-    yield server
-    server.close()
-
-
-def _only_127_0_0_1_is_internal(monkeypatch: pytest.MonkeyPatch) -> None:
-    real = _net.is_internal_ip
-
-    def internal(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-        return ip == ipaddress.ip_address("127.0.0.1") or (
-            real(ip) and not str(ip).startswith("127.")
-        )
-
-    monkeypatch.setattr(_net, "is_internal_ip", internal)
-
-
-@pytest.mark.parametrize("target", ["127.0.0.1", "internal.example"])
-def test_a_public_server_cannot_redirect_into_this_machine(
-    target: str,
-    service: Recorder,
-    second_loopback: Recorder,
+def test_a_start_host_on_a_private_network_is_connected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """By a literal address (the redirect check) or by a name (the connect-time check)."""
-    _only_127_0_0_1_is_internal(monkeypatch)
-    _fake_dns(monkeypatch, {"public.example": "127.0.0.2", "internal.example": "127.0.0.1"})
-    second_loopback.answer = _redirect_to(f"http://{target}:{service.port}/latest/meta-data")
-    with pytest.raises(AddressRefused, match="private network"):
-        stac._get(f"http://public.example:{second_loopback.port}/search")
-    assert second_loopback.requests == ["GET /search"]
+    _fake_dns(monkeypatch, {"tiles.corp.example": "10.0.0.7"})
+    _FakeSocket.attempts = []
+    monkeypatch.setattr(socket, "socket", _FakeSocket)
+    with pytest.raises(OSError) as excinfo:
+        _net.urlopen("http://tiles.corp.example:8080/1/2/3.png", timeout=1)
+    assert not isinstance(excinfo.value, AddressRefused)
+    assert _FakeSocket.attempts == ["10.0.0.7"]
+
+
+@pytest.mark.parametrize(
+    "target", ["127.0.0.1:{port}", "internal.lab:8080", "public.example:{port}"]
+)
+def test_a_redirect_cannot_lead_to_another_host_on_a_private_network(
+    target: str, service: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """By a literal address (the redirect check), by a name resolving to 10.x, or to another
+    port of the configured host (the connect-time check)."""
+    _fake_dns(monkeypatch, {"public.example": "127.0.0.1", "internal.lab": "10.0.0.7"})
+    first = Recorder()
+    try:
+        location = "http://" + target.format(port=service.port) + "/latest/meta-data"
+        first.answer = _redirect_to(location)
+        with pytest.raises(AddressRefused, match="private network"):
+            stac._get(f"http://public.example:{first.port}/search")
+        assert first.requests == ["GET /search"]
+    finally:
+        first.close()
     assert service.requests == []
 
 
@@ -237,6 +225,15 @@ def test_public_only_refuses_this_machine_before_connecting(service: Recorder) -
     # Outside the block, the same local server is reachable again.
     with _net.urlopen(f"{url}/search", timeout=10) as response:
         assert response.status == 200
+
+
+def test_public_only_refuses_a_name_resolving_to_this_machine(
+    service: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_dns(monkeypatch, {"catalog.lab": "127.0.0.1"})
+    with public_addresses_only(), pytest.raises(AddressRefused, match="--allow-local-urls"):
+        stac._post(f"http://catalog.lab:{service.port}/search", {})
+    assert service.requests == []
 
 
 def _plan_message(state: Any, url: str) -> str:
@@ -293,20 +290,25 @@ def test_the_fsspec_session_does_not_connect_to_names_resolving_internally(
 ) -> None:
     pytest.importorskip("aiohttp")
     _fake_dns(monkeypatch, {"products.example": "127.0.0.1"})
-    options = _net.fsspec_options("https://products.example/S2.zarr")
-    assert set(options) == {"get_client"}
+    product = f"http://products.example:{service.port}/S2.zarr"
 
-    async def fetch(url: str) -> int:
+    async def fetch(options: dict[str, Any], url: str) -> int:
         session = await options["get_client"]()
         async with session, session.get(url) as response:
             return int(response.status)
 
+    # The product the config names is the user's host: connected wherever it resolves.
+    trusted = _net.fsspec_options(product)
+    assert set(trusted) == {"get_client"}
+    assert asyncio.run(fetch(trusted, f"{product}/.zmetadata")) == 200
+    # One a catalog named is judged by its addresses.
+    linked = _net.fsspec_options(product, trust_host=False)
     with pytest.raises(OSError, match="products.example resolves to an address"):
-        asyncio.run(fetch(f"http://products.example:{service.port}/S2.zarr/.zmetadata"))
+        asyncio.run(fetch(linked, f"{product}/.zmetadata"))
     service.answer = _redirect_to("http://169.254.169.254/latest/meta-data")
     with pytest.raises(AddressRefused, match="169.254.169.254"):
-        asyncio.run(fetch(f"http://127.0.0.1:{service.port}/S2.zarr/.zmetadata"))
-    assert service.requests == ["GET /S2.zarr/.zmetadata"]
+        asyncio.run(fetch(trusted, f"{product}/.zmetadata"))
+    assert service.requests == ["GET /S2.zarr/.zmetadata"] * 2
     # A product named by a local address keeps fsspec's own client.
     assert _net.fsspec_options(f"https://127.0.0.1:{service.port}/S2.zarr") == {}
 
@@ -321,7 +323,7 @@ def test_an_eopf_product_is_opened_with_the_rules(monkeypatch: pytest.MonkeyPatc
 
     before = fsspec.config.conf.get("https")
     with _eopf_guards("https://products.example/S2.zarr"):
-        assert fsspec.config.conf["https"]["get_client"] is _net._public_client
+        assert fsspec.config.conf["https"]["get_client"].func is _net._public_client
         with pytest.raises(ValueError, match="pickle"):
             get_codec({"id": "pickle"})
     assert fsspec.config.conf.get("https") == before

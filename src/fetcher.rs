@@ -406,15 +406,19 @@ async fn fetch_single_tile(
 struct Shared {
     pid: u32,
     runtime: &'static tokio::runtime::Runtime,
-    /// For templates on public hosts: connects to public addresses only.
-    public: Client,
     /// For templates that may reach this machine or a private network.
     local: Client,
+    /// For templates on a host name: connects to that host wherever it resolves, and
+    /// to public addresses only elsewhere. Keyed by the host name ("" trusts none).
+    trusting: BTreeMap<String, Client>,
 }
+
+/// The most clients kept for different template hosts (a process uses a few).
+const MAX_TRUSTING_CLIENTS: usize = 32;
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 
-fn build_client(public: bool) -> Result<Client, String> {
+fn build_client(public: bool, trusted: Option<String>) -> Result<Client, String> {
     let builder = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
@@ -428,7 +432,7 @@ fn build_client(public: bool) -> Result<Client, String> {
             " (+https://github.com/tahamukhtar20/mapcv)"
         ));
     let builder = if public {
-        builder.dns_resolver(crate::http_policy::PublicResolver::new())
+        builder.dns_resolver(crate::http_policy::PublicResolver::new().trusting(trusted))
     } else {
         builder
     };
@@ -444,37 +448,46 @@ fn shared(start: Option<&Url>) -> Result<(&'static tokio::runtime::Runtime, Clie
         .lock()
         .map_err(|_| "the shared fetch runtime lock is poisoned".to_owned())?;
     let pid = std::process::id();
-    let local = start.is_some_and(crate::http_policy::may_reach_internal);
-    let pick = |found: &Shared| {
-        if local {
-            found.local.clone()
-        } else {
-            found.public.clone()
-        }
-    };
-    if let Some(found) = guard.as_ref().filter(|found| found.pid == pid) {
-        return Ok((found.runtime, pick(found)));
+    if guard.as_ref().is_none_or(|found| found.pid != pid) {
+        let runtime: &'static tokio::runtime::Runtime = Box::leak(Box::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("mapcv-fetch")
+                .build()
+                .map_err(|e| format!("Failed to create tokio runtime: {e}"))?,
+        ));
+        let local = {
+            let _context = runtime.enter();
+            build_client(false, None)?
+        };
+        *guard = Some(Shared {
+            pid,
+            runtime,
+            local,
+            trusting: BTreeMap::new(),
+        });
     }
-    let runtime: &'static tokio::runtime::Runtime = Box::leak(Box::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("mapcv-fetch")
-            .build()
-            .map_err(|e| format!("Failed to create tokio runtime: {e}"))?,
-    ));
-    let (public, local_client) = {
-        let _context = runtime.enter();
-        (build_client(true)?, build_client(false)?)
+    let found = guard
+        .as_mut()
+        .ok_or_else(|| "the shared fetch runtime is missing".to_owned())?;
+    if start.is_some_and(crate::http_policy::may_reach_internal) {
+        return Ok((found.runtime, found.local.clone()));
+    }
+    // The host the template names is the user's: it is connected wherever it resolves.
+    let trusted = start.and_then(crate::http_policy::trusted_name);
+    let key = trusted.clone().unwrap_or_default();
+    if let Some(client) = found.trusting.get(&key) {
+        return Ok((found.runtime, client.clone()));
+    }
+    if found.trusting.len() >= MAX_TRUSTING_CLIENTS {
+        found.trusting.clear();
+    }
+    let client = {
+        let _context = found.runtime.enter();
+        build_client(true, trusted)?
     };
-    let found = Shared {
-        pid,
-        runtime,
-        public,
-        local: local_client,
-    };
-    let client = pick(&found);
-    *guard = Some(found);
-    Ok((runtime, client))
+    found.trusting.insert(key, client.clone());
+    Ok((found.runtime, client))
 }
 
 /// The URL of one tile of a template, to check where the fetch starts.

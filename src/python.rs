@@ -759,9 +759,9 @@ struct PyGeoTiff {
 #[pymethods]
 impl PyGeoTiff {
     #[new]
-    #[pyo3(signature = (path, cache_bytes = geotiff::DEFAULT_CACHE_BYTES))]
-    fn new(py: Python<'_>, path: String, cache_bytes: usize) -> PyResult<Self> {
-        py.detach(|| geotiff::GeoTiff::open(&path, cache_bytes))
+    #[pyo3(signature = (path, cache_bytes = geotiff::DEFAULT_CACHE_BYTES, trust_host = true))]
+    fn new(py: Python<'_>, path: String, cache_bytes: usize, trust_host: bool) -> PyResult<Self> {
+        py.detach(|| geotiff::GeoTiff::open_with(&path, cache_bytes, trust_host))
             .map(|inner| PyGeoTiff { inner, path })
             .map_err(geotiff_error)
     }

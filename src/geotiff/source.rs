@@ -320,6 +320,16 @@ impl HttpSource {
     /// [`GeoTiffError::Io`] when the server cannot be reached, answers with an
     /// error, or does not support range requests.
     pub fn open(url: &str, cache_bytes: usize) -> Result<Self> {
+        Self::open_with(url, cache_bytes, true)
+    }
+
+    /// [`HttpSource::open`], trusting the URL's host (`trust_host`, a URL the user
+    /// wrote) or judging it by its addresses like any other (a URL a catalog links to);
+    /// see [`crate::http_policy::with_resolver`].
+    ///
+    /// # Errors
+    /// As [`HttpSource::open`].
+    pub fn open_with(url: &str, cache_bytes: usize, trust_host: bool) -> Result<Self> {
         let resolved = resolve_url(url)?;
         let display = sanitize_url(resolved.as_str());
         if let Some(reason) = crate::http_policy::start_refusal(&resolved) {
@@ -343,7 +353,7 @@ impl HttpSource {
                 " (+https://github.com/tahamukhtar20/mapcv)"
             ));
         // Names are judged by the addresses they resolve to, when connecting.
-        let client = crate::http_policy::with_resolver(builder, &resolved)
+        let client = crate::http_policy::with_resolver(builder, &resolved, trust_host)
             .build()
             .map_err(|e| GeoTiffError::Io(format!("cannot build the HTTP client: {e}")))?;
         let mut source = HttpSource {

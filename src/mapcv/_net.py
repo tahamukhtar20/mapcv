@@ -1,15 +1,17 @@
 """Where mapcv's Python HTTP requests may connect: the rules of ``src/http_policy.rs``.
 
-A URL that names a public host must not lead mapcv to this machine or a private
-network, neither through a redirect nor through a name that resolves there. Names are
-judged by the addresses they resolve to *when connecting* (every address, IPv4 and
-IPv6), so a DNS answer that changes between a check and the connection does not help.
+The host a URL in the config names is the user's choice: mapcv connects to it (that
+host name and port) wherever it resolves, a docker-compose service or an on-prem server
+included. Any *other* host, reached through a redirect or named by a STAC catalog, must
+not be on this machine or a private network: a name is judged by the addresses it
+resolves to *when connecting* (every address, IPv4 and IPv6), so a DNS answer that
+changes between a check and the connection does not help. A request that starts at a
+URL naming such an address literally (an IP address or ``localhost``: a local test
+server) may go on to others.
 
-A request that starts at a URL naming such an address literally (an IP address or
-``localhost``: a local test server) may stay there, as may every request when
-``MAPCV_ALLOW_LOCAL_URLS=1`` is set. Inside :func:`public_addresses_only` (the MCP
-server, unless started with ``--allow-local-urls``) neither applies: every request,
-the Rust tile fetcher's and GeoTIFF reader's included, reaches public addresses only.
+Inside :func:`public_addresses_only` (the MCP server, unless started with
+``--allow-local-urls``) nothing is trusted: every request, the Rust tile fetcher's and
+GeoTIFF reader's included, reaches public addresses only.
 
 :func:`urlopen` is ``urllib.request.urlopen`` with these rules; :func:`fsspec_options`
 gives the same rules to fsspec's HTTP file system (aiohttp).
@@ -19,7 +21,6 @@ from __future__ import annotations
 
 import errno
 import ipaddress
-import os
 import socket
 import threading
 import urllib.error
@@ -32,7 +33,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 __all__ = [
-    "ALLOW_LOCAL_ENV",
     "AddressRefused",
     "fsspec_options",
     "is_internal_host",
@@ -43,10 +43,12 @@ __all__ = [
     "public_only",
     "redirect_refusal",
     "start_refusal",
+    "trusted_endpoints",
     "urlopen",
 ]
 
-ALLOW_LOCAL_ENV = "MAPCV_ALLOW_LOCAL_URLS"
+#: ``(host, port)`` pairs a request connects to wherever they resolve.
+Trusted = frozenset[tuple[str, int]]
 _MAX_REDIRECTS = 10
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 _UNIQUE_LOCAL = ipaddress.ip_network("fc00::/7")
@@ -143,15 +145,35 @@ def public_addresses_only() -> Iterator[None]:
                 set_public_only(False)
 
 
-def _allowed_by_env() -> bool:
-    return os.environ.get(ALLOW_LOCAL_ENV, "").strip() == "1"
-
-
 def may_reach_internal(start: str) -> bool:
     """Whether a request that started at ``start`` may reach this machine or a private
-    network: when ``start`` names one literally or ``MAPCV_ALLOW_LOCAL_URLS=1`` is set,
-    and requests are not limited to public addresses."""
-    return not public_only() and (is_internal_host(urlsplit(start).hostname) or _allowed_by_env())
+    network anywhere: when ``start`` names one literally and requests are not limited to
+    public addresses."""
+    return not public_only() and is_internal_host(urlsplit(start).hostname)
+
+
+def trusted_endpoints(start: str) -> Trusted:
+    """The host name and port of ``start``, which a request connects to wherever they
+    resolve: the user wrote them. Also port 443 of a plain-http URL on port 80, for the
+    usual upgrade to https. Nothing while requests are limited to public addresses."""
+    if public_only():
+        return frozenset()
+    parts = urlsplit(start)
+    host = (parts.hostname or "").rstrip(".").lower()
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return frozenset()
+    if not host:
+        return frozenset()
+    found = {(host, port)}
+    if parts.scheme == "http" and port == 80:
+        found.add((host, 443))
+    return frozenset(found)
+
+
+def _is_trusted(trusted: Trusted, host: str, port: int) -> bool:
+    return (host.rstrip(".").lower(), int(port)) in trusted
 
 
 def _origin(url: str) -> str:
@@ -168,9 +190,9 @@ def _internal_refusal(host: str) -> str:
             "local server)"
         )
     return (
-        f"{host} resolves to an address on this machine or a private network, which mapcv "
-        "does not connect to for a URL that names a public host; to use a server on your "
-        f"own network, put its IP address in the URL or set {ALLOW_LOCAL_ENV}=1"
+        f"{host} resolves to an address on this machine or a private network; mapcv "
+        "connects there only to the host a URL in the config names, not to another host "
+        "reached by a redirect or named by a catalog"
     )
 
 
@@ -232,11 +254,13 @@ def _connect(
     source_address: tuple[str, int] | None = None,
     *,
     filtered: bool,
+    trusted: Trusted = frozenset(),
 ) -> socket.socket:
-    """``socket.create_connection``, connecting only to public addresses when ``filtered``."""
-    if not filtered:
-        return socket.create_connection(address, timeout, source_address)
+    """``socket.create_connection``, connecting only to public addresses when ``filtered``,
+    except to a ``trusted`` host and port."""
     host, port = address
+    if not filtered or _is_trusted(trusted, host, port):
+        return socket.create_connection(address, timeout, source_address)
     kept = [
         info
         for info in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
@@ -263,15 +287,15 @@ def _connect(
 
 
 class _Connection(HTTPConnection):
-    def __init__(self, *args: Any, filtered: bool, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, filtered: bool, trusted: Trusted, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._create_connection = partial(_connect, filtered=filtered)
+        self._create_connection = partial(_connect, filtered=filtered, trusted=trusted)
 
 
 class _SecureConnection(HTTPSConnection):
-    def __init__(self, *args: Any, filtered: bool, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, filtered: bool, trusted: Trusted, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._create_connection = partial(_connect, filtered=filtered)
+        self._create_connection = partial(_connect, filtered=filtered, trusted=trusted)
 
 
 def _through_proxy(request: urllib.request.Request) -> bool:
@@ -279,25 +303,28 @@ def _through_proxy(request: urllib.request.Request) -> bool:
 
 
 class _HTTPHandler(urllib.request.HTTPHandler):
-    def __init__(self, filtered: bool) -> None:
+    def __init__(self, filtered: bool, trusted: Trusted) -> None:
         super().__init__()
         self._filtered = filtered
+        self._trusted = trusted
 
     def http_open(self, req: urllib.request.Request) -> HTTPResponse:
         # Through a proxy, the proxy resolves the target; the proxy itself is the operator's.
         filtered = self._filtered and not _through_proxy(req)
-        return self.do_open(partial(_Connection, filtered=filtered), req)
+        return self.do_open(partial(_Connection, filtered=filtered, trusted=self._trusted), req)
 
 
 class _HTTPSHandler(urllib.request.HTTPSHandler):
-    def __init__(self, filtered: bool) -> None:
+    def __init__(self, filtered: bool, trusted: Trusted) -> None:
         super().__init__()
         self._filtered = filtered
+        self._trusted = trusted
 
     def https_open(self, req: urllib.request.Request) -> HTTPResponse:
         filtered = self._filtered and not _through_proxy(req)
         context = getattr(self, "_context", None)
-        return self.do_open(partial(_SecureConnection, filtered=filtered), req, context=context)
+        connection = partial(_SecureConnection, filtered=filtered, trusted=self._trusted)
+        return self.do_open(connection, req, context=context)
 
 
 class _RedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -322,8 +349,13 @@ class _RedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def urlopen(request: str | urllib.request.Request, timeout: float) -> Any:
+def urlopen(
+    request: str | urllib.request.Request, timeout: float, *, trust_host: bool = True
+) -> Any:
     """``urllib.request.urlopen`` for http(s) with the connection rules of this module.
+
+    ``trust_host=False`` for a URL the user did not write (one a catalog links to): its
+    host is then filtered like any other.
 
     Raises:
         AddressRefused: The URL, a redirect or the addresses of a name break the rules.
@@ -334,12 +366,13 @@ def urlopen(request: str | urllib.request.Request, timeout: float) -> Any:
     if reason is not None:
         raise AddressRefused(reason)
     filtered = not may_reach_internal(url)
+    trusted = trusted_endpoints(url) if trust_host else frozenset()
     opener = urllib.request.OpenerDirector()
     for handler in (
         urllib.request.ProxyHandler(),
         urllib.request.UnknownHandler(),
-        _HTTPHandler(filtered),
-        _HTTPSHandler(filtered),
+        _HTTPHandler(filtered, trusted),
+        _HTTPSHandler(filtered, trusted),
         urllib.request.HTTPDefaultErrorHandler(),
         _RedirectHandler(url),
         urllib.request.HTTPErrorProcessor(),
@@ -356,9 +389,10 @@ def urlopen(request: str | urllib.request.Request, timeout: float) -> Any:
 # ── fsspec (aiohttp) ─────────────────────────────────────────────────────────
 
 
-def fsspec_options(url: str) -> dict[str, Any]:
+def fsspec_options(url: str, *, trust_host: bool = True) -> dict[str, Any]:
     """Options for fsspec's HTTP file system that apply these rules to ``url`` and
     every request it leads to, or ``{}`` when the request may reach internal addresses.
+    ``trust_host`` as for :func:`urlopen`.
 
     Raises:
         AddressRefused: ``url`` itself is refused.
@@ -368,15 +402,17 @@ def fsspec_options(url: str) -> dict[str, Any]:
         raise AddressRefused(reason)
     if may_reach_internal(url):
         return {}
-    return {"get_client": _public_client}
+    trusted = trusted_endpoints(url) if trust_host else frozenset()
+    return {"get_client": partial(_public_client, trusted=trusted)}
 
 
 #: Stands for the public URL a session of :func:`_public_client` started at.
 _PUBLIC_START = "https://public.invalid/"
 
 
-async def _public_client(**kwargs: Any) -> Any:
-    """An aiohttp session that connects to public addresses only (for ``get_client``).
+async def _public_client(*, trusted: Trusted = frozenset(), **kwargs: Any) -> Any:
+    """An aiohttp session that connects to public addresses only, and to the ``trusted``
+    host and port (for ``get_client``).
 
     Names go through a resolver that keeps public addresses; redirects (literal IP
     addresses included, which aiohttp does not resolve) through :func:`redirect_refusal`.
@@ -397,12 +433,12 @@ async def _public_client(**kwargs: Any) -> Any:
     trace.on_request_redirect.append(on_redirect)
     kwargs.pop("connector", None)
     kwargs.pop("trust_env", None)  # a proxy would resolve names itself
-    connector = aiohttp.TCPConnector(resolver=_public_resolver())
+    connector = aiohttp.TCPConnector(resolver=_public_resolver(trusted))
     return aiohttp.ClientSession(connector=connector, trace_configs=[trace], **kwargs)
 
 
-def _public_resolver() -> Any:
-    """An aiohttp resolver that keeps public addresses only."""
+def _public_resolver(trusted: Trusted) -> Any:
+    """An aiohttp resolver that keeps public addresses only, except for ``trusted``."""
     import aiohttp
 
     class PublicResolver(aiohttp.ThreadedResolver):
@@ -410,6 +446,8 @@ def _public_resolver() -> Any:
             self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
         ) -> list[Any]:
             found = await super().resolve(host, port, family)
+            if _is_trusted(trusted, host, port):
+                return list(found)
             kept = [entry for entry in found if _public(entry["host"])]
             if not kept:
                 raise AddressRefused(_internal_refusal(host))

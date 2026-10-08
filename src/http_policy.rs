@@ -7,13 +7,15 @@
 //! The clients that use them also never send a `Referer` header, which would
 //! carry the previous URL, query string included, to the next host.
 //!
-//! A host *name* is judged by the addresses it resolves to, at connect time:
-//! [`PublicResolver`] drops every address on this machine or a private network,
-//! so neither a name pointing there nor a DNS answer that changes between a
-//! check and the connection reaches one. A request that starts at such an
-//! address named literally (a local test server) may stay there, unless the
-//! process only allows public addresses ([`set_public_only`], used by the MCP
-//! server) or `MAPCV_ALLOW_LOCAL_URLS=1` lets every request reach them.
+//! The host the configured URL names is the user's choice: mapcv connects to it
+//! wherever it resolves (a docker-compose service, an on-prem server). Any other
+//! host, reached through a redirect or named by a STAC catalog, is judged by the
+//! addresses it resolves to, at connect time: [`PublicResolver`] drops every
+//! address on this machine or a private network, so neither a name pointing
+//! there nor a DNS answer that changes between a check and the connection
+//! reaches one. A request that starts at such an address named literally (a
+//! local test server) may go on to others. When the process only allows public
+//! addresses ([`set_public_only`], used by the MCP server), nothing is trusted.
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::redirect::{Attempt, Policy};
@@ -83,9 +85,6 @@ pub fn is_internal_ip(ip: IpAddr) -> bool {
 /// Set when every request of this process must stay on public addresses.
 static PUBLIC_ONLY: AtomicBool = AtomicBool::new(false);
 
-/// The environment variable that lets requests reach this machine and private networks.
-pub const ALLOW_LOCAL_ENV: &str = "MAPCV_ALLOW_LOCAL_URLS";
-
 /// Make every request of this process stay on public addresses (`true`), even one whose
 /// URL names this machine, or go back to the default (`false`). The MCP server sets it.
 pub fn set_public_only(on: bool) {
@@ -98,16 +97,44 @@ pub fn public_only() -> bool {
     PUBLIC_ONLY.load(Ordering::SeqCst)
 }
 
-fn local_allowed_by_env() -> bool {
-    std::env::var(ALLOW_LOCAL_ENV).is_ok_and(|value| value.trim() == "1")
-}
-
 /// Whether a request that started at `start` may reach this machine or a private
-/// network: when `start` names one literally (an IP address or `localhost`) or
-/// `MAPCV_ALLOW_LOCAL_URLS=1` is set, and the process is not limited to public addresses.
+/// network anywhere: when `start` names one literally (an IP address or `localhost`)
+/// and the process is not limited to public addresses.
 #[must_use]
 pub fn may_reach_internal(start: &Url) -> bool {
-    !public_only() && (is_internal(start) || local_allowed_by_env())
+    !public_only() && is_internal(start)
+}
+
+/// The host name of `start`, which a request connects to wherever it resolves (the
+/// user wrote it), or `None`: for an IP address (not resolved), or when the process
+/// is limited to public addresses.
+#[must_use]
+pub fn trusted_name(start: &Url) -> Option<String> {
+    if public_only() || host_ip(start).is_some() {
+        return None;
+    }
+    start.host_str().map(normal_name)
+}
+
+fn normal_name(name: &str) -> String {
+    name.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Whether `to` is on the port of `from`, or the https port of a plain-http URL on
+/// port 80 (the usual upgrade).
+fn trusted_port(from: &Url, to: &Url) -> bool {
+    let (was, is) = (from.port_or_known_default(), to.port_or_known_default());
+    was == is || (from.scheme() == "http" && was == Some(80) && is == Some(443))
+}
+
+/// Whether the name of `url` resolves to an address on this machine or a private network.
+fn resolves_internal(url: &Url) -> bool {
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return false;
+    };
+    (host, port)
+        .to_socket_addrs()
+        .is_ok_and(|mut found| found.any(|address| is_internal_ip(address.ip())))
 }
 
 /// Why `host` may not be reached; the same text whatever is (or is not) listening there.
@@ -120,9 +147,9 @@ fn internal_refusal(host: &str) -> String {
         )
     } else {
         format!(
-            "{host} resolves to an address on this machine or a private network, which \
-             mapcv does not connect to for a URL that names a public host; to use a server \
-             on your own network, put its IP address in the URL or set {ALLOW_LOCAL_ENV}=1"
+            "{host} resolves to an address on this machine or a private network; mapcv \
+             connects there only to the host a URL in the config names, not to another host \
+             reached by a redirect or named by a catalog"
         )
     }
 }
@@ -182,17 +209,17 @@ fn proxy_hosts() -> Vec<String> {
     .collect()
 }
 
-/// A DNS resolver that keeps only public addresses.
+/// A DNS resolver that keeps only public addresses, except for one trusted name.
 ///
 /// The addresses are checked when the connection is made, after every lookup, so a
 /// name (or a redirect to a name) cannot lead a request to this machine or a private
 /// network, and an answer that changes between a check and the connection does not
-/// either. A name with no public address fails with [`AddressRefused`].
+/// either. A name with no public address fails with [`AddressRefused`]. The trusted
+/// name (the host the configured URL names, see [`PublicResolver::trusting`]) and
+/// the proxies from the environment resolve as they are.
 pub struct PublicResolver {
     lookup: Arc<Lookup>,
     exempt: Vec<String>,
-    /// Which addresses are dropped ([`is_internal_ip`]; tests pick their own).
-    internal: fn(IpAddr) -> bool,
 }
 
 impl PublicResolver {
@@ -207,9 +234,15 @@ impl PublicResolver {
     pub fn with_lookup(lookup: Arc<Lookup>) -> Self {
         Self {
             lookup,
-            exempt: proxy_hosts(),
-            internal: is_internal_ip,
+            exempt: proxy_hosts().iter().map(|host| normal_name(host)).collect(),
         }
+    }
+
+    /// This resolver, also resolving `name` as it is (the host the user wrote).
+    #[must_use]
+    pub fn trusting(mut self, name: Option<String>) -> Self {
+        self.exempt.extend(name.map(|name| normal_name(&name)));
+        self
     }
 }
 
@@ -223,11 +256,7 @@ impl Resolve for PublicResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         let lookup = Arc::clone(&self.lookup);
-        let internal = self.internal;
-        let exempt = self
-            .exempt
-            .iter()
-            .any(|proxy| proxy.eq_ignore_ascii_case(&host));
+        let exempt = self.exempt.contains(&normal_name(&host));
         Box::pin(async move {
             let asked = host.clone();
             let found = tokio::task::spawn_blocking(move || lookup(&asked)).await??;
@@ -236,7 +265,7 @@ impl Resolve for PublicResolver {
             }
             let kept: Vec<SocketAddr> = found
                 .into_iter()
-                .filter(|ip| exempt || !internal(*ip))
+                .filter(|ip| exempt || !is_internal_ip(*ip))
                 .map(|ip| SocketAddr::new(ip, 0))
                 .collect();
             if kept.is_empty() {
@@ -249,14 +278,19 @@ impl Resolve for PublicResolver {
 }
 
 /// `builder` with the resolver a request starting at `start` needs: one that keeps
-/// only public addresses, unless the request may reach this machine or a private
-/// network ([`may_reach_internal`]).
-pub fn with_resolver(builder: reqwest::ClientBuilder, start: &Url) -> reqwest::ClientBuilder {
+/// only public addresses, except for the host of `start` when `trust_start` (a URL the
+/// user wrote, not one a catalog links to), or none when the request may reach this
+/// machine or a private network anyway ([`may_reach_internal`]).
+pub fn with_resolver(
+    builder: reqwest::ClientBuilder,
+    start: &Url,
+    trust_start: bool,
+) -> reqwest::ClientBuilder {
     if may_reach_internal(start) {
-        builder
-    } else {
-        builder.dns_resolver(PublicResolver::new())
+        return builder;
     }
+    let trusted = trust_start.then(|| trusted_name(start)).flatten();
+    builder.dns_resolver(PublicResolver::new().trusting(trusted))
 }
 
 /// The host of a URL as an IP address, if it is one (`[::1]` without brackets).
@@ -334,6 +368,21 @@ fn common_refusal(from: &Url, to: &Url) -> Option<String> {
         return Some(format!(
             "the server redirected to {}, an address on this machine or a private network, \
              which mapcv does not follow from a public server",
+            origin(to)
+        ));
+    }
+    // The resolver trusts the configured host by name, whatever the port; another port
+    // of that host is another server, judged by its addresses here (a lookup, rarely).
+    if !public_only()
+        && !may_reach_internal(from)
+        && host_ip(to).is_none()
+        && same_host(from, to)
+        && !trusted_port(from, to)
+        && resolves_internal(to)
+    {
+        return Some(format!(
+            "the server redirected to {}, another port of a host on this machine or a \
+             private network, which mapcv does not follow",
             origin(to)
         ));
     }
@@ -660,33 +709,55 @@ mod tests {
         assert!(listener.accept().is_err());
     }
 
-    #[test]
-    fn a_redirect_to_a_name_resolving_internally_is_never_connected() {
-        // Stand-ins on this machine: 127.0.0.1 plays a public tile server, 127.0.0.2
-        // the internal service; "internal" means 127.0.0.2 only.
-        let Ok(internal_service) = std::net::TcpListener::bind("127.0.0.2:0") else {
-            return; // 127.0.0.2 is not configured (macOS): nothing to check here
-        };
-        internal_service.set_nonblocking(true).unwrap();
-        let internal_port = internal_service.local_addr().unwrap().port();
-        let public = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let public_port = public.local_addr().unwrap().port();
+    /// A one-shot HTTP server on 127.0.0.1 answering `answer`; returns its port.
+    fn serve_once(answer: String) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
             use std::io::{Read, Write};
-            let (mut stream, _) = public.accept().unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0_u8; 1024];
             let _ = stream.read(&mut buffer).unwrap();
-            let answer = format!(
-                "HTTP/1.1 302 Found\r\nLocation: http://internal.test:{internal_port}/latest/\
-                 meta-data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
             stream.write_all(answer.as_bytes()).unwrap();
         });
-        let mut resolver = resolver(&[
+        (port, server)
+    }
+
+    #[test]
+    fn the_configured_host_is_connected_wherever_it_resolves() {
+        let ok = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        let (port, server) = serve_once(ok.to_owned());
+        let client = reqwest::Client::builder()
+            .dns_resolver(
+                resolver(&[("tileserver", &["127.0.0.1"])]).trusting(Some("TileServer.".into())),
+            )
+            .build()
+            .unwrap();
+        let response = runtime()
+            .block_on(
+                client
+                    .get(format!("http://tileserver:{port}/1/2/3.png"))
+                    .send(),
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[test]
+    fn a_redirect_to_a_name_resolving_internally_is_never_connected() {
+        // The configured host (trusted) is on this machine; the redirect goes to a name
+        // that resolves to 10.0.0.7, which is refused before any connection.
+        let (port, server) = serve_once(
+            "HTTP/1.1 302 Found\r\nLocation: http://internal.test:8080/latest/meta-data\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_owned(),
+        );
+        let resolver = resolver(&[
             ("public.test", &["127.0.0.1"]),
-            ("internal.test", &["127.0.0.2"]),
-        ]);
-        resolver.internal = |ip| ip == IpAddr::from([127, 0, 0, 2]);
+            ("internal.test", &["10.0.0.7"]),
+        ])
+        .trusting(Some("public.test".into()));
         let client = reqwest::Client::builder()
             .dns_resolver(resolver)
             .redirect(tile_redirect_policy())
@@ -695,19 +766,41 @@ mod tests {
         let error = runtime()
             .block_on(
                 client
-                    .get(format!("http://public.test:{public_port}/1/2/3.png"))
+                    .get(format!("http://public.test:{port}/1/2/3.png"))
                     .send(),
             )
             .unwrap_err();
         server.join().unwrap();
         let reason = address_refusal(&error).unwrap();
         assert!(reason.starts_with("internal.test resolves to"), "{reason}");
-        assert!(internal_service.accept().is_err());
+    }
+
+    #[test]
+    fn another_port_of_the_configured_host_is_judged_by_its_addresses() {
+        let from = url("http://localhost.example:8080/1/2/3.png");
+        assert!(trusted_port(&from, &url("http://localhost.example:8080/x")));
+        assert!(trusted_port(
+            &from,
+            &url("https://localhost.example:8080/x")
+        ));
+        assert!(!trusted_port(
+            &from,
+            &url("http://localhost.example:9090/x")
+        ));
+        let plain = url("http://tiles.example/1/2/3.png");
+        assert!(trusted_port(
+            &plain,
+            &url("https://tiles.example/1/2/3.png")
+        ));
+        // The trusted name is the configured host's, normalised; an IP address is not resolved.
+        let start = url("http://TileServer.:8080/x");
+        assert_eq!(trusted_name(&start).as_deref(), Some("tileserver"));
+        assert!(trusted_name(&url("http://10.0.0.7/x")).is_none());
     }
 
     #[test]
     fn a_literal_local_start_may_stay_local() {
-        // `MAPCV_ALLOW_LOCAL_URLS` and the MCP switch are off in tests.
+        // The MCP switch is off in tests.
         assert!(may_reach_internal(&url("http://127.0.0.1:8000/x.tif")));
         assert!(may_reach_internal(&url("http://localhost:8000/x.tif")));
         assert!(!may_reach_internal(&url("https://tiles.example.com/x.png")));

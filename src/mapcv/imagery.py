@@ -747,18 +747,20 @@ _fsspec_config_lock = threading.Lock()
 
 
 @contextmanager
-def _eopf_guards(path: str) -> Iterator[None]:
+def _eopf_guards(path: str, *, trust_host: bool = True) -> Iterator[None]:
     """The rules for opening an EOPF product: no ``pickle`` codec (a product names its
     own codecs, and that one runs code), and, over https, connections to public
     addresses only (:mod:`mapcv._net`), redirects included.
 
     xarray-eopf passes no options to fsspec for an https product, so the connection
     rules go in through fsspec's configuration while the product is opened; the file
-    system created then keeps them for the reads that follow.
+    system created then keeps them for the reads that follow. ``trust_host=False`` for
+    a product a STAC catalog named: its host is judged by its addresses too.
     """
     from mapcv._zarr_safety import pickle_codec_refused
 
-    options = fsspec_options(path) if urlsplit(path).scheme == "https" else {}
+    https = urlsplit(path).scheme == "https"
+    options = fsspec_options(path, trust_host=trust_host) if https else {}
     with pickle_codec_refused():
         if not options:
             yield
@@ -836,7 +838,7 @@ class EOPFZarrRasterSource:
         variables = list(config.bands) + (["scl"] if config.scl_mask is not None else [])
 
         def open_dataset(**spatial_options: Any) -> Any:
-            with _eopf_guards(path):
+            with _eopf_guards(path, trust_host=config.search is None):
                 return xr.open_dataset(
                     path,
                     engine="eopf-zarr",
@@ -1005,7 +1007,7 @@ def _remote_http_url(url: str) -> str:
     return host + quote(key, safe="/%")
 
 
-def geotiff_fingerprint(location: str) -> dict[str, Any]:
+def geotiff_fingerprint(location: str, *, trust_host: bool = True) -> dict[str, Any]:
     """A cheap identity of a GeoTIFF, so a resumed run notices a different file.
 
     Local files: size, modification time (in nanoseconds) and the SHA-256 of the first and
@@ -1039,7 +1041,7 @@ def geotiff_fingerprint(location: str) -> dict[str, Any]:
         headers={"Range": f"bytes=0-{_FINGERPRINT_BYTES - 1}", "User-Agent": "mapcv"},
     )
     try:
-        with _urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S) as response:
+        with _urlopen(request, timeout=_FINGERPRINT_TIMEOUT_S, trust_host=trust_host) as response:
             head = response.read(_FINGERPRINT_BYTES)
             etag = response.headers.get("ETag")
             content_range = response.headers.get("Content-Range", "")
@@ -1215,10 +1217,12 @@ class GeoTiffRasterSource:
         config: GeoTiffImageryConfig,
         *,
         image_format: str | None = None,
+        linked: bool = False,
     ) -> None:
-        # URL safety rules are enforced by GeoTiffImageryConfig validation.
+        # URL safety rules are enforced by GeoTiffImageryConfig validation. A file a STAC
+        # catalog named (``linked``) is not the user's host: it is judged by its addresses.
         location = geotiff_location(config.path)
-        self._tif = GeoTiff(location)
+        self._tif = GeoTiff(location, trust_host=not linked)
         info = self._tif.info
         name = _safe_product_id(config.path)
 
@@ -1303,7 +1307,7 @@ class GeoTiffRasterSource:
             transform=offset_transform(file_transform, row0, col0),
             chunk_rows=config.chunk_rows,
             fingerprint={
-                **geotiff_fingerprint(location),
+                **geotiff_fingerprint(location, trust_host=not linked),
                 "overview": config.overview,
                 "bands": selected,
                 "nodata": effective_nodata,
@@ -1646,6 +1650,7 @@ class StacCogRasterSource:
                         type="geotiff", path=location, bands=[1], chunk_rows=config.chunk_rows
                     ),
                     image_format="npy",
+                    linked=True,
                 )
             # The finest band's grid is the source's grid.
             reference_key = min(

@@ -454,8 +454,16 @@ impl GeoTiff {
     /// Returns [`GeoTiffError::Io`] when the file cannot be read and
     /// [`GeoTiffError::Invalid`] when it is not a TIFF the reader supports.
     pub fn open(path_or_url: &str, cache_bytes: usize) -> Result<GeoTiff> {
+        GeoTiff::open_with(path_or_url, cache_bytes, true)
+    }
+
+    /// [`GeoTiff::open`]; for a URL, `trust_host` as in [`HttpSource::open_with`].
+    ///
+    /// # Errors
+    /// As [`GeoTiff::open`].
+    pub fn open_with(path_or_url: &str, cache_bytes: usize, trust_host: bool) -> Result<GeoTiff> {
         let source: Box<dyn ByteSource> = if is_url(path_or_url) {
-            Box::new(HttpSource::open(path_or_url, cache_bytes)?)
+            Box::new(HttpSource::open_with(path_or_url, cache_bytes, trust_host)?)
         } else {
             Box::new(LocalFile::open(path_or_url)?)
         };

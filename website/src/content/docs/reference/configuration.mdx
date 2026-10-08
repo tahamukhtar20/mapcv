@@ -574,7 +574,7 @@ Target pixels are `NaN` where there is no value: outside the raster, on its NoDa
 | `mode` | `grid` \| `random` | `grid` | Regular grid, or `random_count` random positions |
 | `edge_strategy` | `pad` \| `drop` \| `shift` | `pad` | What to do where a patch would cross the raster edge (see below) |
 | `pad_mode` | `zero` \| `reflect` | `zero` | How `pad` fills the missing part of an edge patch |
-| `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction is **above** this. `1.0` keeps everything |
+| `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction (pixels without imagery: failed tiles, NoData, outside the raster) is **above** this. A patch without a single pixel of imagery is always skipped, and `generate` says how many were |
 | `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled fraction (mask pixels that are neither background `0` nor `ignore_index`) is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts; for classification, the valid pixels of any class over the whole patch |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
 | `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |

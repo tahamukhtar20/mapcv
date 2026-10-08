@@ -335,6 +335,21 @@ def _xyz_product_id(url_template: str) -> str:
     return f"custom-xyz:{urlsplit(url_template).hostname or 'unknown'}"
 
 
+# A slow, salted hash of a custom URL template: a resumed run notices another layer, year
+# or style on the same host, while a key in the template cannot be read back from the
+# manifest (and guessing a weak one costs this many SHA-256 rounds per guess).
+_TEMPLATE_HASH_SALT = b"mapcv url_template"
+_TEMPLATE_HASH_ROUNDS = 100_000
+
+
+def url_template_digest(url_template: str) -> str:
+    """The hex PBKDF2-SHA256 digest of a URL template, recorded instead of the template."""
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", url_template.encode("utf-8"), _TEMPLATE_HASH_SALT, _TEMPLATE_HASH_ROUNDS
+    )
+    return digest.hex()
+
+
 class XYZRasterSource:
     """Windowed view over cached XYZ tiles without a full-region allocation."""
 
@@ -386,6 +401,8 @@ class XYZRasterSource:
             self._template = resolve_url_template(config.url_template, config.source)
             cache_key = self._template
             product_id = config.source or _xyz_product_id(self._template)
+            if config.url_template:
+                fingerprint = {"url_template_pbkdf2": url_template_digest(self._template)}
         self._zoom = config.zoom
         # Tiles are fetched lazily per window and evicted once windows move
         # past them, so memory stays bounded to about one chunk of tiles and
@@ -893,10 +910,12 @@ def _remote_http_url(url: str) -> str:
 def geotiff_fingerprint(location: str) -> dict[str, Any]:
     """A cheap identity of a GeoTIFF, so a resumed run notices a different file.
 
-    Local files: size and the SHA-256 of the first and last 64 KiB (where the TIFF headers
-    and, for non-COG files, the directory live). The modification time is left out on
-    purpose: it changes when a file is copied, touched or rsynced, which would refuse a
-    resume of an unchanged file.
+    Local files: size, modification time (in nanoseconds) and the SHA-256 of the first and
+    last 64 KiB (where the TIFF headers and, for non-COG files, the directory live). The
+    modification time catches pixels edited in place, which leave the size and both ends
+    unchanged; hashing the whole file would cost a full read of every file on every run.
+    A copy that does not keep modification times (``cp`` without ``-p``) therefore counts
+    as another file, which refuses a resume rather than mixing two versions.
     URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
     ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
     Nothing reads the whole file, whatever its size.
@@ -913,6 +932,7 @@ def geotiff_fingerprint(location: str) -> dict[str, Any]:
         return {
             "kind": "file",
             "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
             "sha256_head_tail": digest.hexdigest(),
         }
     fingerprint: dict[str, Any] = {"kind": "url", "url": location}

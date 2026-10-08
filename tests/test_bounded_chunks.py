@@ -196,7 +196,8 @@ def test_a_chunk_stopped_part_way_is_dropped_from_the_saved_manifest(
     assert saved and len({e["chunk"] for e in saved}) == 1
 
     monkeypatch.setattr(pipeline, "create_writer", original)
-    reference = run_generate(_wide_config(tmp_path, staging="reference")).manifest
+    (tmp_path / "reference").mkdir()
+    reference = run_generate(_wide_config(tmp_path / "reference")).manifest
     assert run_generate(config).manifest.patches == reference.patches
 
 

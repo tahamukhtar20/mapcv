@@ -119,16 +119,21 @@ class SourceRecord(BaseModel):
     crs: str | None = None
     transform: Transform | None = None
     patch_shape: list[int] = Field(default_factory=list)
+    # The size in pixels of the raster the patches are cut from (the source's window over
+    # the region), so a resumed run notices another region. Absent before mapcv 0.3.
+    width: int | None = None
+    height: int | None = None
     # Identity of the input (a GeoTIFF's size and header hash, a URL's ETag, the files of a
     # mosaic, a STAC item or Earth Engine settings), so a resumed run refuses a different
     # one. Absent for sources that have none.
     fingerprint: dict[str, Any] | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_missing_fingerprint(self, handler: Any) -> dict[str, Any]:
+    def _omit_missing_fields(self, handler: Any) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
-        if data.get("fingerprint") is None:
-            data.pop("fingerprint", None)
+        for key in ("width", "height", "fingerprint"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
 
@@ -165,6 +170,10 @@ class Manifest(BaseModel):
 
     version: int = MANIFEST_VERSION
     mapcv_version: str | None = None
+    # ``False`` while ``generate`` is writing the dataset or after it stopped early (an
+    # interrupted run, a failed chunk), ``True`` once it finished. Absent (``None``) in
+    # manifests of mapcv 0.2 and earlier, which did not record it.
+    complete: bool | None = None
     task: str = "segmentation"
     sources: list[SourceRecord] = Field(default_factory=list)
     target: TargetRecord | None = None
@@ -295,6 +304,8 @@ class Manifest(BaseModel):
         """The manifest as JSON: indented header, one line per patch."""
         header = self.model_dump(mode="json", exclude={"patches"})
         header["version"] = MANIFEST_VERSION
+        if header.get("complete") is None:
+            header.pop("complete", None)
         text = json.dumps(header, indent=2, ensure_ascii=False)
         head = text[: text.rfind("}")].rstrip()
         rows = ",\n    ".join(to_json(entry).decode("utf-8") for entry in self.patches)
@@ -417,8 +428,47 @@ _SOURCE_FIELDS = (
     "patch_shape",
     "fingerprint",
 )
+# Recorded from mapcv 0.3 on: compared only when the existing manifest has them.
+_NEWER_SOURCE_FIELDS = ("width", "height")
 # Fields whose difference is easier to act on under another name.
-_SOURCE_FIELD_LABELS = {"fingerprint": "imagery file or read settings"}
+_SOURCE_FIELD_LABELS = {
+    "fingerprint": "imagery file, URL template or read settings",
+    "mtime": (
+        "imagery file modification time: the file was edited, or copied without its times "
+        "(cp -p and rsync -a keep them)"
+    ),
+    "width": "region",
+    "height": "region",
+}
+
+
+def _without_times(value: Any) -> Any:
+    """A fingerprint without its files' modification times."""
+    if isinstance(value, dict):
+        return {key: _without_times(item) for key, item in value.items() if key != "mtime_ns"}
+    if isinstance(value, list):
+        return [_without_times(item) for item in value]
+    return value
+
+
+def _source_mismatches(have: SourceRecord, want: SourceRecord) -> list[str]:
+    """The names of the fields that differ between a recorded source and the current one."""
+    names = [name for name in _SOURCE_FIELDS if getattr(have, name) != getattr(want, name)]
+    if "fingerprint" in names and have.fingerprint is None and have.source_type == "xyz":
+        # Before mapcv 0.3 a URL template was recorded by its host only (product_id).
+        names.remove("fingerprint")
+    elif "fingerprint" in names and _without_times(have.fingerprint) == _without_times(
+        want.fingerprint
+    ):
+        names[names.index("fingerprint")] = "mtime"
+    names += [
+        name
+        for name in _NEWER_SOURCE_FIELDS
+        if getattr(have, name) is not None and getattr(have, name) != getattr(want, name)
+    ]
+    return names
+
+
 _TARGET_FIELDS = {
     "type": "target type",
     "class_map": "class_map",
@@ -440,8 +490,7 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
             prefix = f"{have.name}: " if len(expected.sources) > 1 else ""
             mismatches.extend(
                 prefix + _SOURCE_FIELD_LABELS.get(name, name)
-                for name in _SOURCE_FIELDS
-                if getattr(have, name) != getattr(want, name)
+                for name in _source_mismatches(have, want)
             )
             if _transforms_differ(have.transform, want.transform):
                 mismatches.append(prefix + "transform")
@@ -459,7 +508,7 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
         mismatches.append("region")
     if manifest.writer != expected.writer:
         mismatches.append("writer")
-    return mismatches
+    return list(dict.fromkeys(mismatches))
 
 
 def load_or_create_manifest(path: Path, expected: Manifest) -> Manifest:

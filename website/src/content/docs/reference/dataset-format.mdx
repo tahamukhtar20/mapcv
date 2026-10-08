@@ -108,6 +108,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 {
   "version": 3,
   "mapcv_version": "0.3.0",
+  "complete": true,
   "task": "segmentation",
   "sources": [
     {
@@ -119,7 +120,9 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
       "crs": "EPSG:3857",
       "transform": [0.5971642834779232, 0.0, 549582.2333704159,
                     0.0, -0.5971642834774684, 6868784.235762509],
-      "patch_shape": [256, 256, 3]
+      "patch_shape": [256, 256, 3],
+      "width": 2048,
+      "height": 1536
     }
   ],
   "target": {
@@ -152,6 +155,7 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | --- | --- | --- |
 | `version` | int | `3`. A reader refuses a higher version with a message to upgrade mapcv |
 | `mapcv_version` | string \| null | The mapcv that created the dataset (a resumed run keeps it). `null` for a manifest upgraded from version 1 or 2 |
+| `complete` | bool | `false` while `mapcv generate` writes the dataset and after it stopped early (Ctrl-C, a failed chunk, a full disk); `true` once every patch, the splits and the annotation files are written. `mapcv info` and `mapcv verify` report an incomplete dataset; running `mapcv generate` again with the same config finishes it. Absent in manifests written before mapcv 0.3, which did not record it |
 | `task` | string | The config's [`task`](/mapcv/reference/configuration/#task): `"segmentation"`, `"detection"`, `"instance"`, `"classification"`, `"change"` or `"regression"` |
 | `sources` | list | The imagery, one object per source: one named `"image"`, or the [configured sources](/mapcv/reference/configuration/#several-imagery-sources) in order. See [Sources](#sources) |
 | `target` | object \| null | What each patch is annotated with. `null` for an image-only dataset (no `labels`). See [Target](#target) |
@@ -172,8 +176,9 @@ The dataset-wide blocks are indented; each patch is one line, so a manifest with
 | `crs` | string | Raster CRS: `EPSG:3857` for XYZ, the product's UTM zone (for example `EPSG:32631`) for Sentinel-2, the file's CRS for a GeoTIFF |
 | `transform` | 6 floats | Affine `(a, b, c, d, e, f)` of the whole raster: `x = a·col + b·row + c`, `y = d·col + e·row + f`, in `crs` units (metres) at the pixel's top-left corner |
 | `patch_shape` | list of int | Shape of one stored image patch: `[H, W, 3]` for PNG/JPG, `[bands, H, W]` for NPY and TIF |
+| `width`, `height` | int | Size in pixels of the raster the patches are cut from: the source's window over the region. A resume refuses another region on the same grid. Absent in manifests written before mapcv 0.3 |
 | `factor`, `offset` | int, `[row, col]` | Only for a further source whose own grid differs from the first source's: each of its pixels is `factor` × `factor` first-source pixels (repeated onto the grid), and its pixel `(0, 0)` starts at first-source pixel `offset`. `transform` stays the source's own. Every patch, whichever source, is georeferenced by the **first** source's `transform` |
-| `fingerprint` | object | Identifies the input so a resumed run refuses a different one; absent for built-in and custom XYZ sources and for an EOPF product named by `path` without `scl_mask`. **GeoTIFF:** `kind: "file"` with `size` and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path and modification time are not recorded, so a copied or moved file still resumes), or `kind: "url"` with the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB; both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file. **Mosaic:** `kind: "mosaic"` and `files`, each file's `name` and fingerprint, plus `overview`, `bands` and `nodata`. **STAC** (`stac_cog`, or `eopf_zarr` with `search`): `stac` with the `catalog`, `collection` and `item`. **Sentinel-2 with `scl_mask`:** `scl_mask`, the masked classes. **Earth Engine:** `earth_engine`, the image and rendering settings without `project` |
+| `fingerprint` | object | Identifies the input so a resumed run refuses a different one; absent for built-in XYZ sources and for an EOPF product named by `path` without `scl_mask`. **Custom XYZ** (`url_template`): `url_template_pbkdf2`, a salted PBKDF2-SHA256 hash (100,000 rounds) of the template, so another layer, year or style on the same host is refused while a key in the template cannot be read back. **GeoTIFF:** `kind: "file"` with `size`, `mtime_ns` (the modification time in nanoseconds: pixels edited in place keep the size and both ends of the file) and `sha256_head_tail`, the SHA-256 of its first and last 64 KiB (the path is not recorded, so a moved file still resumes, as does a copy that keeps its times, such as `cp -p` or `rsync -a`), or `kind: "url"` with the `url`, the `etag` and total `size` the server reports, and `sha256_head` of the first 64 KiB; both add `overview`, `bands` (1-based) and the effective `nodata`. Nothing reads the whole file. **Mosaic:** `kind: "mosaic"` and `files`, each file's `name` and fingerprint, plus `overview`, `bands` and `nodata`. **STAC** (`stac_cog`, or `eopf_zarr` with `search`): `stac` with the `catalog`, `collection` and `item`. **Sentinel-2 with `scl_mask`:** `scl_mask`, the masked classes. **Earth Engine:** `earth_engine`, the image and rendering settings without `project` |
 
 ### Target
 

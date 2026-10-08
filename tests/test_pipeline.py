@@ -382,6 +382,7 @@ class RecordingWriter:
         self.calls: list[tuple[int, list[Center], list[tuple[int, int]], tuple[int, ...]]] = []
         self.finalized: list[tuple[int, SplitLists | None]] = []
         self.supported: tuple[str | None, ...] = ("centers",)
+        self.staging = Path()  # the dataset folder of the run, set by _plug
 
     @property
     def layout(self) -> str:
@@ -412,14 +413,18 @@ class RecordingWriter:
                 tuple(images.shape),
             )
         )
-        for index, patch in enumerate(metadata):
+        records = self.staging / "Records"
+        records.mkdir(parents=True, exist_ok=True)
+        for patch in metadata:
+            name = f"{len(manifest.patches)}.bin"
+            (records / name).write_bytes(b"patch")
             manifest.patches.append(
                 ManifestEntry(
                     row=patch["row"],
                     col=patch["col"],
                     padded=patch["padded"],
                     chunk=chunk_index,
-                    files={"image": f"Records/{len(manifest.patches)}.bin"},
+                    files={"image": f"Records/{name}"},
                     summary=PatchSummary(empty_ratio=patch.get("empty_ratio", 0.0)),
                 )
             )
@@ -439,7 +444,12 @@ def _plug(
 
     monkeypatch.setattr("mapcv.pipeline.open_raster_source", open_source)
     monkeypatch.setattr("mapcv.pipeline.create_target", lambda config: target)
-    monkeypatch.setattr("mapcv.pipeline.create_writer", lambda config, target=None: writer)
+
+    def create_writer(config: Any, target: Any = None) -> RecordingWriter:
+        writer.staging = config.staging_dir
+        return writer
+
+    monkeypatch.setattr("mapcv.pipeline.create_writer", create_writer)
     return sources
 
 

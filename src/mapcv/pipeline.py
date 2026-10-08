@@ -12,7 +12,7 @@ import logging
 import os
 import time
 import warnings
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,6 +34,7 @@ from mapcv.imagery import (
     offset_transform,
     open_raster_source,
 )
+from mapcv.locking import LOCK_FILENAME, StagingDirError, dataset_lock
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
     PatchMeta,
@@ -77,6 +78,8 @@ class GenerateResult:
     seconds: float
     # XYZ tiles read from the on-disk cache instead of downloaded.
     tiles_cached: int = 0
+    # Patches left out of this run because they had no pixel of imagery at all.
+    patches_without_imagery: int = 0
 
 
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
@@ -110,6 +113,7 @@ def _process_anchor_chunk(
     sampler: SamplerConfig,
     target: Target,
     others: dict[str, AlignedSource] | None = None,
+    counts: Counter[str] | None = None,
 ) -> tuple[
     npt.NDArray[Any], list[Annotation], list[PatchMeta], dict[str, npt.NDArray[Any]], WindowTarget
 ]:
@@ -147,6 +151,7 @@ def _process_anchor_chunk(
         row_offset=row_start,
         col_offset=col_start,
         valid_mask=valid_mask,
+        counts=counts,
     )
     other_patches: dict[str, npt.NDArray[Any]] = {}
     for name, other_image in other_images.items():
@@ -380,6 +385,67 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
                 )
 
 
+# Folders and files a run writes before its first manifest.json, or that are not the
+# dataset's (a lock, a file browser's leftovers): a folder holding only these is a
+# dataset folder whose first run stopped early.
+_OWN_BEFORE_MANIFEST = frozenset(
+    {
+        "Images",
+        "Masks",
+        "images",
+        "labels",
+        "masks",
+        "annotations",
+        "A",
+        "B",
+        "label",
+        "manifest.json.tmp",
+        LOCK_FILENAME,
+        ".DS_Store",
+        "Thumbs.db",
+        "desktop.ini",
+    }
+)
+
+
+def _check_staging_dir(staging: Path) -> None:
+    """Refuse a folder with files of its own and no manifest: mapcv would overwrite (and,
+    for some layouts, remove) files such as ``train.txt`` or ``dataset.yaml`` there."""
+    if not staging.is_dir() or (staging / _MANIFEST_FILENAME).exists():
+        return
+    foreign = sorted(
+        entry.name for entry in staging.iterdir() if entry.name not in _OWN_BEFORE_MANIFEST
+    )
+    if foreign:
+        raise StagingDirError(
+            f"writer.staging_dir {staging} already holds files that mapcv did not write "
+            f"(first: {foreign[0]}) and no manifest.json; generate into a new or empty "
+            "folder, so none of them is overwritten or removed"
+        )
+
+
+def _first_broken_patch(staging: Path, manifest: Manifest) -> tuple[int, str] | None:
+    """``(index, path)`` of the first patch with a missing or empty file, or ``None``.
+
+    The index is the first patch of that patch's chunk: a resumed run writes the chunk
+    again from there, numbering its files as an uninterrupted run would.
+    """
+    base = os.path.join(staging, "")  # plain strings: a Path per file is several times slower
+    for index, entry in enumerate(manifest.patches):
+        for rel in entry["files"].values():
+            try:
+                broken = os.stat(base + rel).st_size == 0
+            except OSError:
+                broken = True
+            if broken:
+                chunk = entry["chunk"]
+                first = index
+                while first > 0 and manifest.patches[first - 1]["chunk"] == chunk:
+                    first -= 1
+                return first, rel
+    return None
+
+
 def run_generate(
     config: MapcvConfig, on_chunk: Callable[[int, int], None] | None = None
 ) -> GenerateResult:
@@ -395,11 +461,26 @@ def run_generate(
 
     The manifest is saved every :data:`_SAVE_EVERY_S` seconds and whenever the run
     stops, normally or with an exception (Ctrl-C included); a process killed outright
-    loses at most those seconds of chunks, which a resumed run writes again.
+    loses at most those seconds of chunks, which a resumed run writes again. It records
+    ``complete: false`` until the run has finished, splits and annotations included. A
+    resumed run also writes again the patches whose files went missing or empty.
+
+    Raises:
+        DatasetBusyError: Another mapcv run is writing to ``writer.staging_dir``.
+        StagingDirError: ``writer.staging_dir`` holds other files and no manifest.
     """
     started = time.monotonic()
     staging = config.writer.staging_dir
+    _check_staging_dir(staging)
     staging.mkdir(parents=True, exist_ok=True)
+    with dataset_lock(staging):
+        return _generate_locked(config, on_chunk, started)
+
+
+def _generate_locked(
+    config: MapcvConfig, on_chunk: Callable[[int, int], None] | None, started: float
+) -> GenerateResult:
+    staging = config.writer.staging_dir
     manifest_path = staging / _MANIFEST_FILENAME
 
     target = create_target(config)
@@ -409,6 +490,7 @@ def run_generate(
     else:
         writer = create_writer(config.writer, target)
     check_compatible(target, writer)
+    counts: Counter[str] = Counter()
     with _sources(config) as (opened, others):
         source = opened[0]
         target.prepare(source.metadata)
@@ -434,6 +516,8 @@ def run_generate(
                     crs=meta.crs,
                     transform=meta.transform,
                     patch_shape=writer.patch_shape(meta, config.sampler.patch_size),
+                    width=meta.width,
+                    height=meta.height,
                     fingerprint=meta.fingerprint,
                     **grid,
                 )
@@ -445,6 +529,7 @@ def run_generate(
         region_record: dict[str, Any] = {"region": aoi.record()} if aoi is not None else {}
         expected = Manifest(
             mapcv_version=mapcv_version(),
+            complete=False,
             task=config.task,
             sources=records,
             target=target.record(),
@@ -453,6 +538,20 @@ def run_generate(
             **region_record,
         )
         manifest = load_or_create_manifest(manifest_path, expected)
+        # Whether the dataset on disk was finished (None: a manifest from before mapcv 0.3).
+        was_complete = manifest.complete if manifest_path.exists() else False
+        broken = _first_broken_patch(staging, manifest)
+        if broken is not None:
+            index, rel = broken
+            warnings.warn(
+                f"{rel} is missing or empty, so {_patches(len(manifest.patches) - index)} "
+                "from its chunk on are written again",
+                UserWarning,
+                stacklevel=3,
+            )
+            del manifest.patches[index:]
+            was_complete = False
+        manifest.complete = False
 
         resumed_patches = len(manifest.patches)
         patch_size = config.sampler.patch_size
@@ -500,7 +599,7 @@ def run_generate(
             for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
                 chunk_started = time.perf_counter()
                 images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
-                    source, chunk_anchors, config.sampler, target, others
+                    source, chunk_anchors, config.sampler, target, others, counts
                 )
                 read_s = time.perf_counter() - chunk_started
                 annotations = window.collate(per_patch, patch_size)
@@ -547,9 +646,6 @@ def run_generate(
             del manifest.patches[complete:]
             manifest.save(manifest_path)
             raise
-        # A finished dataset is left untouched (a 0.2 manifest stays version 2).
-        if chunks or not manifest_path.exists():
-            manifest.save(manifest_path)
         requested = sum(int(getattr(each, "tiles_requested", 0)) for each in opened)
         failed = sum(int(getattr(each, "tiles_failed", 0)) for each in opened)
         cached = sum(int(getattr(each, "tiles_cached", 0)) for each in opened)
@@ -562,34 +658,56 @@ def run_generate(
                 f"{failed:,} of {requested:,} tiles failed; check the tile URL, your network and "
                 f"imagery.policy (failed tiles are left empty or black).{why}",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         elif failed and config.sampler.max_empty_ratio >= 1.0:
             warnings.warn(
                 f"{_tiles(failed)} failed and {'was' if failed == 1 else 'were'} filled with "
-                "black; patches that include them were kept, with labels over black pixels. "
-                f"Set sampler.max_empty_ratio below 1 (for example 0.5) to drop such patches.{why}",
+                f"black; patches that include them were kept{_failed_tile_masks(manifest)}. "
+                "Set sampler.max_empty_ratio below 1 (for example 0.5) to drop such patches."
+                f"{why}",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
+    if counts["no_imagery"]:
+        _log.info(
+            "Left out %s without any imagery (failed tiles, NoData or outside the imagery).",
+            _patches(counts["no_imagery"]),
+        )
 
     split_counts: dict[str, int] | None = None
     split_lists: SplitLists | None = None
-    # A run with nothing new keeps the dataset's splits, which `mapcv split` may have
-    # changed since: re-splitting here would undo that (and break SHA256SUMS).
-    kept = _existing_splits(staging / _SPLITS_SUBDIR) if resumed_patches and not chunks else None
-    if kept is not None:
-        split_counts, split_lists, settings = kept
-        if config.split is not None and settings != config.split.model_dump(mode="json"):
-            warnings.warn(
-                f"{_SPLITS_SUBDIR}/ was made with other split settings (by mapcv split) and is "
-                f"kept as it is; run `mapcv split {staging}` to apply other settings",
-                UserWarning,
-                stacklevel=2,
+    try:
+        # A run with nothing new keeps the dataset's splits, which `mapcv split` may have
+        # changed since: re-splitting here would undo that (and break SHA256SUMS).
+        kept = (
+            _existing_splits(staging / _SPLITS_SUBDIR) if resumed_patches and not chunks else None
+        )
+        if kept is not None:
+            split_counts, split_lists, settings = kept
+            if config.split is not None and settings != config.split.model_dump(mode="json"):
+                warnings.warn(
+                    f"{_SPLITS_SUBDIR}/ was made with other split settings (by mapcv split) and "
+                    f"is kept as it is; run `mapcv split {staging}` to apply other settings",
+                    UserWarning,
+                    stacklevel=3,
+                )
+        elif config.split is not None:
+            split_counts, split_lists = split_manifest(
+                manifest, config.split, staging / _SPLITS_SUBDIR
             )
-    elif config.split is not None:
-        split_counts, split_lists = split_manifest(manifest, config.split, staging / _SPLITS_SUBDIR)
-    writer.finalize(manifest, split_lists)
+        writer.finalize(manifest, split_lists)
+    except BaseException:
+        # Every patch is written, but splits or annotations may not be: the manifest says
+        # the dataset is incomplete, and the same config writes them again.
+        manifest.save(manifest_path)
+        raise
+    # A finished dataset is left untouched (a 0.2 manifest stays version 2).
+    if chunks or was_complete is False:
+        manifest.complete = True
+        manifest.save(manifest_path)
+    else:
+        manifest.complete = was_complete
 
     return GenerateResult(
         staging_dir=staging,
@@ -600,7 +718,17 @@ def run_generate(
         tiles_failed=failed,
         seconds=time.monotonic() - started,
         tiles_cached=cached,
+        patches_without_imagery=counts["no_imagery"],
     )
+
+
+def _failed_tile_masks(manifest: Manifest) -> str:
+    """What the masks of patches with failed tiles hold there, for the warning."""
+    if manifest.target is None or manifest.task == "classification":
+        return ""
+    if manifest.ignore_index is not None:
+        return f"; their masks mark those pixels with labels.ignore_index ({manifest.ignore_index})"
+    return ", with labels over black pixels (labels.ignore_index is null)"
 
 
 def _existing_splits(
@@ -640,15 +768,16 @@ def run_split(
     manifest = Manifest.load(manifest_path)
     cfg = split_config or SplitterConfig()
     splits_dir = staging_dir / _SPLITS_SUBDIR
-    counts, lists = split_manifest(manifest, cfg, splits_dir)
-    footprints = staging_dir / FOOTPRINTS_FILENAME
-    if footprints.exists():
-        # Keep the footprint index's ``split`` property in step with the new lists.
-        try:
-            write_footprints(manifest, lists, footprints)
-        except (RuntimeError, ValueError) as exc:
-            warnings.warn(
-                f"{FOOTPRINTS_FILENAME} was not updated: {exc}", UserWarning, stacklevel=2
-            )
-    refresh_split_outputs(manifest, staging_dir, lists)
+    with dataset_lock(staging_dir):
+        counts, lists = split_manifest(manifest, cfg, splits_dir)
+        footprints = staging_dir / FOOTPRINTS_FILENAME
+        if footprints.exists():
+            # Keep the footprint index's ``split`` property in step with the new lists.
+            try:
+                write_footprints(manifest, lists, footprints)
+            except (RuntimeError, ValueError) as exc:
+                warnings.warn(
+                    f"{FOOTPRINTS_FILENAME} was not updated: {exc}", UserWarning, stacklevel=2
+                )
+        refresh_split_outputs(manifest, staging_dir, lists)
     return counts

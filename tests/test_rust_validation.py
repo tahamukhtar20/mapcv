@@ -305,12 +305,12 @@ def test_anchors_reject_unknown_edge_strategy(strategy: str) -> None:
 
 
 def test_anchors_reject_unallocatable_requests() -> None:
-    with pytest.raises(ValueError, match="cannot allocate"):
+    with pytest.raises(ValueError, match="more than the limit of 3000000"):
         grid_sample_anchors(2**63, 2**63, 1, 1, "pad")
     # A count beyond the raster's capacity is capped to it (not an allocation request),
     # so only a raster with too many positions to hold can fail.
     assert len(random_sample_anchors(10, 10, 4, U64_MAX, 42, "pad")) == 49
-    with pytest.raises(ValueError, match="cannot allocate"):
+    with pytest.raises(ValueError, match="more than the limit of 3000000"):
         random_sample_anchors(2**30, 2**30, 1, U64_MAX, 42, "pad")
     with pytest.raises(ValueError, match="too large"):
         random_sample_anchors(U64_MAX, U64_MAX, 1, 1, 42, "pad")

@@ -1463,6 +1463,8 @@ def _plan_summary(data: dict[str, Any]) -> str:
         f"Plan: {tiles}about {data['patches']:,} patch(es) of {data['patch_size']} px, "
         f"{human_bytes(data['output_bytes'])} output."
     )
+    if data["blocking"]:
+        text += f" generate will refuse this config: {data['blocking'][0]}."
     if data["large"]:
         text += f" LARGE job: {data['large_reason']}. generate needs confirm_large=true."
     return text

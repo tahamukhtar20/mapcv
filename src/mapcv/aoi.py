@@ -36,6 +36,10 @@ def _to_pixels(
     return cast(npt.NDArray[np.object_], shapely.transform(geometries, inverse))
 
 
+# Anchors tested against the polygons at a time.
+_KEEP_BATCH = 100_000
+
+
 class AreaOfInterest:
     """The polygons of ``region.path`` on an imagery grid (``crs``, ``transform``)."""
 
@@ -63,14 +67,22 @@ class AreaOfInterest:
         return cast(npt.NDArray[np.object_], shapely.box(cols, rows, cols + size, rows + size))
 
     def keep(self, anchors: list[tuple[int, int]], size: int) -> list[tuple[int, int]]:
-        """The anchors whose ``size`` x ``size`` patch overlaps a polygon, in order."""
-        if not anchors:
-            return []
-        boxes = self._boxes(anchors, size)
-        box_index, polygon_index = self._tree.query(boxes, predicate="intersects")
-        overlap = shapely.area(shapely.intersection(boxes[box_index], self._pixels[polygon_index]))
-        kept = set(box_index[overlap > 0].tolist())
-        return [anchor for index, anchor in enumerate(anchors) if index in kept]
+        """The anchors whose ``size`` x ``size`` patch overlaps a polygon, in order.
+
+        Anchors are tested in batches, so the boxes (a Python object each) of a large
+        grid never exist all at once.
+        """
+        kept: list[tuple[int, int]] = []
+        for start in range(0, len(anchors), _KEEP_BATCH):
+            batch = anchors[start : start + _KEEP_BATCH]
+            boxes = self._boxes(batch, size)
+            box_index, polygon_index = self._tree.query(boxes, predicate="intersects")
+            overlap = shapely.area(
+                shapely.intersection(boxes[box_index], self._pixels[polygon_index])
+            )
+            hit = set(box_index[overlap > 0].tolist())
+            kept.extend(anchor for index, anchor in enumerate(batch) if index in hit)
+        return kept
 
     def region_of(self, row: int, col: int, size: int) -> str:
         """The name of the region covering most of the patch at ``(row, col)``."""

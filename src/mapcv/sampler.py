@@ -12,7 +12,13 @@ import numpy.typing as npt
 from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import NotRequired, TypedDict
 
-from mapcv._mapcv_rs import grid_sample_anchors, random_anchor_capacity, random_sample_anchors
+from mapcv._mapcv_rs import (
+    MAX_ANCHORS,
+    grid_anchor_count,
+    grid_sample_anchors,
+    random_anchor_capacity,
+    random_sample_anchors,
+)
 from mapcv._numbers import NoBooleanNumbers
 from mapcv._patching import MaskWindow, NullWindow, extract_array_patch
 
@@ -53,6 +59,67 @@ class PatchMeta(TypedDict):
     empty_ratio: NotRequired[float]
 
 
+#: The most patches one run enumerates (grid or random): the anchors of a run are held in
+#: memory, about 150 bytes each, so a larger request is refused before any is built.
+MAX_PATCHES = int(MAX_ANCHORS)
+
+
+class TooManyPatchesError(ValueError):
+    """The sampler settings describe more patches than one run can hold."""
+
+
+def grid_patch_count(height: int, width: int, config: SamplerConfig) -> int:
+    """Number of patches the grid of ``config`` has on a ``height`` x ``width`` raster.
+
+    Counted per axis and multiplied: no anchor is built, so this is cheap (and uses no
+    memory) for any raster size.
+    """
+    return int(
+        grid_anchor_count(height, width, config.patch_size, config.stride, config.edge_strategy)[2]
+    )
+
+
+def too_many_patches_message(height: int, width: int, config: SamplerConfig) -> str | None:
+    """Why ``config`` is refused on a ``height`` x ``width`` raster, or ``None`` within the limit.
+
+    The message says how many patches the settings give, the limit, and how to get below it.
+    """
+    if config.mode == "random":
+        wanted = random_patch_capacity(height, width, config)
+        if wanted <= MAX_PATCHES:
+            return None
+        return (
+            f"sampler.random_count asks for {wanted:,} patches, more than the limit of "
+            f"{MAX_PATCHES:,} for one run. Lower sampler.random_count, shrink the region or "
+            "split it into several smaller ones"
+        )
+    rows, cols, total = grid_anchor_count(
+        height, width, config.patch_size, config.stride, config.edge_strategy
+    )
+    if total <= MAX_PATCHES:
+        return None
+    return (
+        f"the grid has {rows:,} x {cols:,} = {total:,} patches, more than the limit of "
+        f"{MAX_PATCHES:,} for one run. Raise sampler.stride (or patch_size), shrink the "
+        "region or split it into several smaller ones"
+    )
+
+
+def check_patch_limit(height: int, width: int, config: SamplerConfig) -> None:
+    """Raise :class:`TooManyPatchesError` when ``config`` gives more patches than the limit."""
+    message = too_many_patches_message(height, width, config)
+    if message is not None:
+        raise TooManyPatchesError(f"{message}.")
+
+
+def grid_anchors_for(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
+    """Every grid anchor of ``config``, or :class:`TooManyPatchesError` above the limit."""
+    check_patch_limit(height, width, config)
+    return list(
+        grid_sample_anchors(height, width, config.patch_size, config.stride, config.edge_strategy)
+    )
+
+
 def random_anchors_for(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
     """Distinct random anchors for ``config``, warning when fewer than requested exist.
 
@@ -60,6 +127,7 @@ def random_anchors_for(height: int, width: int, config: SamplerConfig) -> list[t
     the number of distinct positions on the raster; asking for more returns
     all of them and emits a ``UserWarning`` saying so.
     """
+    check_patch_limit(height, width, config)
     anchors: list[tuple[int, int]] = list(
         random_sample_anchors(
             height,
@@ -102,11 +170,10 @@ def sample_patches(
     ``(N, ps, ps, C)`` and mask patches ``(N, ps, ps)`` or ``None``.
     """
     height, width = image.shape[:2]
-    ps = config.patch_size
     if config.mode == "random":
         anchors: list[tuple[int, int]] = random_anchors_for(height, width, config)
     else:
-        anchors = list(grid_sample_anchors(height, width, ps, config.stride, config.edge_strategy))
+        anchors = grid_anchors_for(height, width, config)
     return sample_patches_at_anchors(image, mask, anchors, config)
 
 

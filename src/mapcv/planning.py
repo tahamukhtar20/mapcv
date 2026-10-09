@@ -11,7 +11,7 @@ import numpy as np
 import shapely
 from shapely.geometry import box
 
-from mapcv._mapcv_rs import grid_sample_anchors, snap_bbox, tile
+from mapcv._mapcv_rs import snap_bbox, tile
 from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
@@ -27,7 +27,7 @@ from mapcv.config import (
 )
 from mapcv.imagery import open_geotiff_source
 from mapcv.pipeline import _max_window_width
-from mapcv.sampler import random_patch_capacity
+from mapcv.sampler import grid_patch_count, random_patch_capacity, too_many_patches_message
 from mapcv.targets.segmentation import check_ignore_index, load_labels
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
@@ -217,14 +217,11 @@ def _geotiff_raster(
 
 
 def _patch_count(height: int, width: int, config: MapcvConfig) -> int:
+    """How many patches the sampler gives on the raster, counted without building them."""
     sampler = config.sampler
     if sampler.mode == "random":
         return random_patch_capacity(height, width, sampler)
-    return len(
-        grid_sample_anchors(
-            height, width, sampler.patch_size, sampler.stride, sampler.edge_strategy
-        )
-    )
+    return grid_patch_count(height, width, sampler)
 
 
 def _summarize_label_raster(
@@ -497,6 +494,11 @@ def _plan(config: MapcvConfig) -> Plan:
         description = primary.description
 
     patches = _patch_count(height, width, config)
+    too_many = too_many_patches_message(height, width, config.sampler)
+    if too_many is not None:
+        # generate stops on this before it writes anything; the plan says so up front.
+        blocking.append(too_many)
+        plan_warnings.append(too_many)
     if region.path is not None:
         # Only patches over the area of interest are made: scale by the share of the box
         # its polygons cover (an estimate; generate counts them exactly).

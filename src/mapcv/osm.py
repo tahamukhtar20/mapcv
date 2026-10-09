@@ -24,6 +24,7 @@ ODbL too. See https://www.openstreetmap.org/copyright.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -276,13 +277,22 @@ def _fetch(source: OsmLabelsSource, query: str) -> dict[str, Any]:
         raise RuntimeError(
             f"Overpass request to {_server(source.overpass_url)} refused: {exc}"
         ) from None
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise RuntimeError(
-            f"Overpass request to {_server(source.overpass_url)} failed: {exc}. The public "
-            "server limits load; try again later or set labels.osm.overpass_url to another "
-            "instance"
+            f"Overpass request to {_server(source.overpass_url)} failed: {_describe(exc)}. The "
+            "public server limits load; try again later or set labels.osm.overpass_url to "
+            "another instance"
         ) from exc
     return _decode_answer(body, what)
+
+
+def _describe(exc: Exception) -> str:
+    """Why a request failed, in words (``IncompleteRead(0 bytes read)`` is not)."""
+    if isinstance(exc, http.client.IncompleteRead):
+        return "the server closed the connection before the whole answer arrived"
+    if isinstance(exc, http.client.HTTPException):
+        return f"the server did not answer in valid HTTP ({str(exc) or type(exc).__name__})"
+    return str(exc)
 
 
 def _server(url: str) -> str:
@@ -308,6 +318,7 @@ def _read_answer(response: Any, deadline: float, what: str) -> bytes:
     Raises:
         TimeoutError: The deadline passed.
         RuntimeError: The answer is too large.
+        http.client.HTTPException: The answer is cut off or is not valid HTTP.
     """
     chunks: list[bytes] = []
     size = 0
@@ -316,7 +327,10 @@ def _read_answer(response: Any, deadline: float, what: str) -> bytes:
         if remaining <= 0:
             raise TimeoutError
         _set_read_timeout(response, remaining)
-        chunk: bytes = response.read1(1 << 16)
+        try:
+            chunk: bytes = response.read1(1 << 16)
+        except ValueError as exc:  # a chunked answer whose chunk size is not a number
+            raise http.client.HTTPException(f"garbled chunk in the answer: {exc}") from None
         if not chunk:
             return b"".join(chunks)
         size += len(chunk)

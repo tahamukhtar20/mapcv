@@ -22,7 +22,6 @@ from typing import Any, Union
 import numpy as np
 import numpy.typing as npt
 
-from mapcv._mapcv_rs import grid_sample_anchors
 from mapcv._patching import extract_array_patch
 from mapcv.aoi import AreaOfInterest, column_clusters
 from mapcv.config import GeoTiffImageryConfig, MapcvConfig
@@ -39,6 +38,8 @@ from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapc
 from mapcv.sampler import (
     PatchMeta,
     SamplerConfig,
+    check_patch_limit,
+    grid_anchors_for,
     random_anchors_for,
     sample_annotated_patches,
 )
@@ -85,15 +86,7 @@ class GenerateResult:
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
     if config.mode == "random":
         return random_anchors_for(height, width, config)
-    return list(
-        grid_sample_anchors(
-            height,
-            width,
-            config.patch_size,
-            config.stride,
-            config.edge_strategy,
-        )
-    )
+    return grid_anchors_for(height, width, config)
 
 
 def _group_anchors(anchors: list[tuple[int, int]], chunk_rows: int) -> list[list[tuple[int, int]]]:
@@ -500,6 +493,8 @@ def _generate_locked(
     counts: Counter[str] = Counter()
     with _sources(config) as (opened, others):
         source = opened[0]
+        # Refuse a grid too big to hold before anything is prepared or written.
+        check_patch_limit(source.metadata.height, source.metadata.width, config.sampler)
         target.prepare(source.metadata)
         records: list[SourceRecord] = []
         for name, opened_source in zip(names, opened):

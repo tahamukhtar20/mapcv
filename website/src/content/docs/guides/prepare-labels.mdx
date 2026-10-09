@@ -266,6 +266,7 @@ Land-cover products have their own terms: ESA WorldCover is CC BY 4.0 (credit "�
 - **All masks are background** and `generate` warns *"no label polygon intersects the imagery extent"*: the polygons are outside the region, or longitude and latitude are swapped (coordinates like `[52.37, 4.94]` instead of `[4.94, 52.37]`). Check in QGIS or [geojson.io](https://geojson.io/).
 - **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326, or save it as a GeoPackage, Shapefile or GeoParquet, which carry their CRS.
 - **`labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file`**: unzip a KMZ to its KML (or a `.zip` to the file inside), or convert other formats as shown above.
+- **`… is a named pipe (FIFO), not a regular file`** (or a character device, such as a link to `/dev/zero`): a path that names something other than an ordinary file would be read for ever. This holds for every file mapcv is given: the config, `region.path`, labels, an annotated area and GeoTIFF imagery. Point it at a file.
 - **`… has no .prj file, so its CRS is unknown`**: the Shapefile lacks its projection file; see [Labels in another CRS](#labels-in-another-crs).
 - **`… has 3 layers: …`**: set `labels.layer`.
 - **`GeoParquet labels need the pyarrow package`**: `pip install "mapcv[parquet]"`.

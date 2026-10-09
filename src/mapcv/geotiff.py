@@ -34,6 +34,7 @@ from typing import Any, Literal
 import numpy as np
 import numpy.typing as npt
 
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import GeoTiff as _RustGeoTiff
 
 Transform = tuple[float, float, float, float, float, float]
@@ -111,8 +112,10 @@ class GeoTiff:
         trust_host: bool = True,
     ) -> None:
         path = os.fspath(source)
-        if "://" not in path and not os.path.exists(path):
-            raise FileNotFoundError(f"No such file: {path}")
+        if "://" not in path:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"No such file: {path}")
+            check_regular_file(path, "the GeoTIFF")
         self._inner = _RustGeoTiff(path, cache_bytes, trust_host)
         meta = self._inner.metadata()
         self.info = GeoTiffInfo(

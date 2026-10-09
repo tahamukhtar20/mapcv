@@ -26,6 +26,7 @@ from pydantic import (
     model_validator,
 )
 
+from mapcv._inputs import check_regular_file
 from mapcv._numbers import NoBooleanNumbers
 from mapcv.downloader import URL_TEMPLATES
 from mapcv.filepattern import is_pattern, matching_files
@@ -245,6 +246,7 @@ def area_polygons(
     the ``name_field`` value, or the polygon's number (1, 2, ...) in file order."""
     from mapcv.labels import load_vector_labels
 
+    check_regular_file(path, "region.path")
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -2092,6 +2094,7 @@ class MapcvConfig(NoBooleanNumbers):
         file's folder, so a config works from any working directory.
         """
         path = Path(path)
+        check_regular_file(path, "the config file")
         data = load_yaml(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             _resolve_relative_paths(data, path.parent)

@@ -50,6 +50,7 @@ from typer.core import TyperGroup
 import mapcv
 from mapcv import doctor
 from mapcv._confine import LinkEscapeError, check_folder_links
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv._redact import REDACTOR, RedactingFormatter
 from mapcv._redact import redact_url as _redact_url
@@ -537,6 +538,11 @@ def _load_config(config_path: Path) -> MapcvConfig:
             f"[red]Not a config file:[/red] {escape(str(config_path))} is a folder.",
             "Pass the YAML file, for example [bold]mapcv.yaml[/bold].",
         )
+    try:
+        check_regular_file(config_path, "the config file")
+    except ValueError as exc:
+        message = str(exc)
+        _fail(f"[red]{escape(message[0].upper() + message[1:])}[/red]")
     _learn_secrets(config_path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

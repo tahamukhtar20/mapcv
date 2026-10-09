@@ -23,6 +23,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 
 from mapcv import vector_files
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 
 _RE: float = 6_378_137.0
@@ -642,6 +643,7 @@ def load_vector_labels(
     """
     kind = _format_name(path)
     _check_layer(path, kind, layer)
+    check_regular_file(path, "the label file")
     if kind in ("GeoJSON", "KML"):
         data = path.read_bytes()
         try:
@@ -707,6 +709,7 @@ def label_file_sha256(path: Path) -> str:
     (each prefixed by its suffix), since editing any of them changes the labels. For the
     other formats it is the hash of the file's bytes.
     """
+    check_regular_file(path, "the label file")
     digest = hashlib.sha256()
     files = vector_files.shapefile_files(path) if path.suffix.lower() == ".shp" else [path]
     for index, file in enumerate(files):

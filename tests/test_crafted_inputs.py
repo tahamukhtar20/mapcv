@@ -13,6 +13,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,53 @@ def test_geotiff_ifds_sharing_one_large_value_are_refused(tmp_path: Path) -> Non
         """,
         "hold more data than the file itself",
     )
+
+
+# --- KML -----------------------------------------------------------------------------
+
+
+def _kml(names: list[str]) -> bytes:
+    placemark = (
+        '<Placemark><ExtendedData><Data name="{name}"><value>v{index}</value></Data>'
+        "</ExtendedData><Polygon><outerBoundaryIs><LinearRing><coordinates>0,0 1,0 1,1 0,0"
+        "</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n"
+    )
+    body = "".join(placemark.format(name=n, index=i % 3) for i, n in enumerate(names))
+    return f'<?xml version="1.0"?><kml><Document>{body}</Document></kml>'.encode()
+
+
+def test_inspecting_a_kml_with_many_field_names_is_linear(tmp_path: Path) -> None:
+    # 3000 distinct field names: one parse of the whole file per name took minutes.
+    (tmp_path / "labels.kml").write_bytes(_kml([f"f{i}" for i in range(3000)]))
+    result = _bounded(
+        f"""
+        from pathlib import Path
+        from mapcv.agent_tools import Sandbox, ToolState, inspect_labels
+        from mapcv.cli import label_fields
+        print(inspect_labels(ToolState(Sandbox(Path({str(tmp_path)!r}))), "labels.kml").summary)
+        print(len(label_fields(Path({str(tmp_path)!r}) / "labels.kml")), "wizard fields")
+        """
+    )
+    assert result.returncode == 0, f"exit {result.returncode}: {result.stderr[-2000:]}"
+    assert "3,000 feature(s), 3000 field(s)" in result.stdout, result.stdout
+    assert "3000 wizard fields" in result.stdout, result.stdout
+
+
+def test_kml_field_scan_counts_each_field(tmp_path: Path) -> None:
+    from mapcv.agent_tools import _scan_kml
+    from mapcv.cli import label_fields
+
+    data = _kml(["kind", "kind", "kind", "other"]).replace(
+        b"</Document>",
+        b'<Placemark><ExtendedData><SchemaData><SimpleData name="kind">v0</SimpleData>'
+        b"</SchemaData></ExtendedData><Point><coordinates>0,0</coordinates></Point>"
+        b"</Placemark></Document>",
+    )
+    scan = _scan_kml(data)
+    assert scan.fields == {
+        "kind": Counter({"v0": 1, "v1": 1, "v2": 1}),
+        "other": Counter({"v0": 1}),
+    }
+    assert scan.with_field == Counter({"kind": 3, "other": 1})
+    (tmp_path / "l.kml").write_bytes(data)
+    assert label_fields(tmp_path / "l.kml") == {"kind": ["v0", "v1", "v2"], "other": ["v0"]}

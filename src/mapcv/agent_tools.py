@@ -20,7 +20,6 @@ import difflib
 import ipaddress
 import json
 import os
-import re
 import tempfile
 import threading
 import warnings
@@ -43,6 +42,7 @@ from shapely.geometry import shape
 
 from mapcv import planning
 from mapcv._confine import first_outside_path
+from mapcv._mapcv_rs import kml_fields as _kml_fields
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv._net import is_internal_host, public_addresses_only
 from mapcv._redact import Redactor
@@ -1205,8 +1205,6 @@ def _scan_geojson(data: bytes) -> _Scan:
 
 def _scan_kml(data: bytes) -> _Scan:
     data = kml_to_utf8(data)
-    text = data.decode("utf-8", errors="replace")
-    names = sorted(set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text)))
     scan = _Scan()
     polygons, other = _parse_kml_bytes(data, None)
     scan.features = len(polygons) + other
@@ -1219,16 +1217,16 @@ def _scan_kml(data: bytes) -> _Scan:
         geometries, _ = parse_kml(data)
     for geometry, _ in geometries:
         scan.extend(cast(tuple[float, float, float, float], geometry.bounds))
-    for name in names:
-        labeled, _ = _parse_kml_bytes(data, name)
-        counter: Counter[str] = Counter()
-        for _, label in labeled:
+    # Every field of every polygon in one pass (one parse per field name is quadratic).
+    counters: dict[str, Counter[str]] = {}
+    for fields in _kml_fields(data):
+        for name, label in fields.items():
             normalized = _normalize_label(label)
             if normalized is not None:
-                counter[normalized] += 1
-        if counter:
-            scan.fields[name] = counter
-            scan.with_field[name] = sum(counter.values())
+                counters.setdefault(name, Counter())[normalized] += 1
+    for name in sorted(counters):
+        scan.fields[name] = counters[name]
+        scan.with_field[name] = sum(counters[name].values())
     return scan
 
 

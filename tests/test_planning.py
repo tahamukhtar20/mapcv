@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -169,3 +170,69 @@ def test_a_run_of_millions_of_files_is_flagged() -> None:
     assert estimate.patches > 500_000
     assert any("files of 4 x 4 px" in warning for warning in estimate.warnings)
     assert not any("files of" in warning for warning in plan(_config()).warnings)
+
+
+def _many_classes(tmp_path: Path, names: list[str]) -> Path:
+    """A label file with one small polygon per name, inside the test region."""
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"k": name},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [74.21 + i * 1e-4, 31.41],
+                        [74.2101 + i * 1e-4, 31.41],
+                        [74.2101 + i * 1e-4, 31.4101],
+                        [74.21 + i * 1e-4, 31.41],
+                    ]
+                ],
+            },
+        }
+        for i, name in enumerate(names)
+    ]
+    path = tmp_path / "many.geojson"
+    path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return path
+
+
+def test_plan_refuses_a_class_that_would_get_the_ignore_value(tmp_path: Path) -> None:
+    # 255 distinct names are numbered 1..255, and 255 is labels.ignore_index by default:
+    # generate fails on that, so plan must say so too, with advice that applies.
+    names = [f"c{i:03d}" for i in range(255)]
+    labels = _many_classes(tmp_path, names)
+    config = _config(labels={"path": str(labels), "label_field": "k"})
+    with pytest.raises(
+        ValueError, match=r"255 classes.*'c254'.*numbered 255.*at most 254"
+    ) as raised:
+        plan(config)
+    assert "labels.ignore_index" in str(raised.value)
+    # Opting out of the ignore value, or keeping 254 classes, plans fine.
+    assert plan(_config(labels={"path": str(labels), "label_field": "k", "ignore_index": None}))
+    kept = {name: index for index, name in enumerate(names[:254], start=1)}
+    estimate = plan(_config(labels={"path": str(labels), "label_field": "k", "classes": kept}))
+    assert estimate.labels is not None and len(estimate.labels.classes) == 254
+    # The detection task has no mask, so no ignore value to clash with.
+    assert plan(_config(task="detection", labels={"path": str(labels), "label_field": "k"}))
+
+
+def test_plan_refuses_an_integer_label_equal_to_the_ignore_value(tmp_path: Path) -> None:
+    labels = _many_classes(tmp_path, ["3", "255"])
+    config = _config(labels={"path": str(labels), "label_field": "k"})
+    with pytest.raises(ValueError, match=r"label value 255 is also labels.ignore_index"):
+        plan(config)
+
+
+def test_plan_and_generate_report_the_same_ignore_clash(tmp_path: Path) -> None:
+    from mapcv.targets.segmentation import check_ignore_index
+
+    class_map = {f"c{i}": i for i in range(1, 256)}
+    with pytest.raises(ValueError, match="numbered 255"):
+        check_ignore_index(255, class_map)
+    check_ignore_index(None, class_map)
+    check_ignore_index(255, {"a": 1, "b": 254})
+    # IDs the user wrote in labels.classes: the advice is to map the class elsewhere, not
+    # to keep fewer classes.
+    with pytest.raises(ValueError, match=r"class 'b' gets mask value 255.*map it to another ID"):
+        check_ignore_index(255, {"a": 1, "b": 255}, classes_given=True)

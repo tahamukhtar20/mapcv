@@ -251,3 +251,35 @@ def test_a_single_path_is_unchanged(tmp_path: Path) -> None:
     assert config.labels is not None
     dumped = config.labels.model_dump(mode="json")
     assert "files" not in dumped and dumped["path"] == "a.geojson"
+
+
+# ── More distinct values than a mask holds ───────────────────────────────────
+
+
+def test_a_file_with_many_values_needs_no_numbering_when_classes_is_set(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    region = scene["region"]
+    west, south = region["west"], region["south"]
+    step = (region["east"] - west) / 400
+    many = _write(
+        tmp_path / "many.geojson",
+        [
+            (box(west + i * step, south, west + (i + 0.5) * step, south + step), {"kind": f"v{i}"})
+            for i in range(300)
+        ],
+    )
+    files = [
+        {"path": str(many), "label_field": "kind"},
+        {"path": str(scene["files"]["roads"]), "class": "road", "buffer": {"line": 8}},
+    ]
+    classes = {"v1": 1, "v7": 3, "road": 2}
+    config = _config(tmp_path, scene, {"files": files, "classes": classes})
+    estimate = plan(config)
+    assert any("labels.files: skipped 298 feature(s)" in text for text in estimate.warnings)
+    assert estimate.labels is not None and estimate.labels.classes == classes
+    assert estimate.labels.polygons == 3  # v1, v7 and the road
+
+    # Without labels.classes the limit applies, and the advice (set labels.classes) fits.
+    with pytest.raises(ValueError, match=r"300 distinct values.*Map them with labels.classes"):
+        plan(_config(tmp_path, scene, {"files": files}))

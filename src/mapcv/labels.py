@@ -202,6 +202,7 @@ def assign_class_ids(
     labels: list[str | None],
     label_field: str | None,
     classes: ClassMap | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[int], ClassMap]:
     """Map raw label values to mask class IDs.
 
@@ -212,7 +213,9 @@ def assign_class_ids(
     sorted order: numbers by value, then text. IDs do not depend on the order
     of features in the file.
 
-    Returns one class ID per label (0 = skip) and the class map.
+    Returns one class ID per label (0 = skip) and the class map. ``max_classes`` caps the
+    number of distinct labels that are numbered (``None``: no cap, for a caller that maps
+    the numbers to class names again before the mask exists).
 
     Raises:
         ValueError: More distinct labels than fit in a ``uint8`` mask.
@@ -228,10 +231,10 @@ def assign_class_ids(
     ):
         class_map = {label: int(label) for label in present}
     else:
-        if len(present) > MAX_CLASS_ID:
+        if max_classes is not None and len(present) > max_classes:
             raise ValueError(
                 f"labels.label_field '{label_field}' has {len(present)} distinct values; "
-                f"masks support at most {MAX_CLASS_ID} classes. Map them with labels.classes."
+                f"masks support at most {max_classes} classes. Map them with labels.classes."
             )
         class_map = {label: index for index, label in enumerate(present, start=1)}
         if "0" in class_map:
@@ -280,8 +283,9 @@ def _with_class_ids(
     non_polygon: int,
     points: bool = False,
     invalid: int = 0,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
-    ids, class_map = assign_class_ids(labels, label_field, classes)
+    ids, class_map = assign_class_ids(labels, label_field, classes, max_classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
@@ -428,6 +432,7 @@ def parse_kml(
     data: bytes,
     label_field: str | None = None,
     classes: ClassMap | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse KML bytes into (geometry, class_id) pairs.
 
@@ -455,7 +460,14 @@ def parse_kml(
             )
     geometries, labels, invalid = _drop_invalid(geometries, labels)
     return _with_class_ids(
-        "KML", geometries, labels, label_field, classes, non_polygon, invalid=invalid
+        "KML",
+        geometries,
+        labels,
+        label_field,
+        classes,
+        non_polygon,
+        invalid=invalid,
+        max_classes=max_classes,
     )
 
 
@@ -581,6 +593,7 @@ def parse_geojson(
     classes: ClassMap | None = None,
     points: bool = False,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
@@ -628,7 +641,14 @@ def parse_geojson(
     if label_field and features and label_field not in fields:
         raise ValueError(_missing_field_message(label_field, list(fields), "in the file"))
     return _polygon_features(
-        "GeoJSON", geometries, raw_labels, label_field, classes, points, buffer=buffer
+        "GeoJSON",
+        geometries,
+        raw_labels,
+        label_field,
+        classes,
+        points,
+        buffer=buffer,
+        max_classes=max_classes,
     )
 
 
@@ -641,6 +661,7 @@ def _polygon_features(
     points: bool,
     unreadable: set[int] | None = None,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Keep the polygon (and, with ``points``, point) features and give them class IDs.
 
@@ -676,7 +697,7 @@ def _polygon_features(
         kept.append(geom)
         labels.append(_normalize_label(raw_labels[index]) if label_field else None)
     return _with_class_ids(
-        source, kept, labels, label_field, classes, non_polygon, points, len(invalid)
+        source, kept, labels, label_field, classes, non_polygon, points, len(invalid), max_classes
     )
 
 
@@ -735,6 +756,7 @@ def load_vector_labels(
     points: bool = False,
     layer: str | None = None,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Read a vector label file of any supported format into ``(geometry, class_id)`` pairs.
 
@@ -762,6 +784,8 @@ def load_vector_labels(
         classes: Optional label-to-ID map.
         points: Keep point features (KML points are never read).
         layer: GeoPackage table name.
+        buffer: ``(line, point)`` widths in metres, or ``None``.
+        max_classes: The most distinct labels that are numbered (``None``: no limit).
 
     Returns:
         ``(geometries, class_map)``.
@@ -783,8 +807,10 @@ def load_vector_labels(
                         f"{path.name}: buffering needs line and point features, which mapcv "
                         "does not read from KML; convert the file to GeoJSON or GeoPackage"
                     )
-                return parse_kml(data, label_field, classes)
-            return parse_geojson(data, label_field, classes, points=points, buffer=buffer)
+                return parse_kml(data, label_field, classes, max_classes)
+            return parse_geojson(
+                data, label_field, classes, points=points, buffer=buffer, max_classes=max_classes
+            )
         except UnicodeDecodeError as exc:
             raise ValueError(f"{path.name} is not valid UTF-8 text ({exc}).") from exc
         except json.JSONDecodeError as exc:
@@ -801,7 +827,15 @@ def load_vector_labels(
     if not label_field:
         raw_labels = [None] * len(table.geometries)
     return _polygon_features(
-        kind, table.geometries, raw_labels, label_field, classes, points, table.unreadable, buffer
+        kind,
+        table.geometries,
+        raw_labels,
+        label_field,
+        classes,
+        points,
+        table.unreadable,
+        buffer,
+        max_classes,
     )
 
 

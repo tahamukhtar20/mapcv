@@ -53,7 +53,7 @@ labels:
 3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`: numbers by value (`2` before `10`), then names in alphabetical order. The result does not depend on feature order, so two files with the same classes get the same IDs.
 4. **`classes` given:** exactly those IDs (1–255); features whose label is not listed are skipped. Use it to merge classes (`{house: 1, apartments: 1}`), to keep IDs stable across datasets, or to match an existing model.
 
-The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
+The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`. Class 255 is also `labels.ignore_index` by default, so without `classes` at most 254 labels fit (and a label `255` is its own ID, which clashes too): `mapcv plan` stops with the same message as `generate`; list the labels to keep in `classes`, or set `ignore_index: null`. With `labels.files`, `classes` also settles the limit: a file's values are looked up there, and the ones it does not list are skipped, whatever number each file has.
 
 <Aside type="caution" title="A label of 0 changes the numbering">
 Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`, and `0, 2, 10` too. Remove such features or set `classes` explicitly. `plan` and `generate` say so with `label '0' is class 1, not background; set labels.classes to map it differently`.

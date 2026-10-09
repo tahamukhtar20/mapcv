@@ -17,6 +17,7 @@ from mapcv._redact import redact_query
 from mapcv.config import LabelsConfig
 from mapcv.imagery import RasterMetadata, transform_geometry_to_crs
 from mapcv.labels import (
+    MAX_CLASS_ID,
     ClassMap,
     GeomWithClass,
     assign_class_ids,
@@ -85,6 +86,10 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> tuple[list[GeomWi
         )
     geometries: list[Any] = []
     names: list[str | None] = []
+    # Each file's values are numbered only to tell them apart; the real IDs come from
+    # labels.classes below, which skips the values it does not list, so with it the cap on
+    # distinct values does not apply to a file.
+    cap = None if labels.classes is not None else MAX_CLASS_ID
     for file in labels.files:
         raw, file_map = load_vector_labels(
             file.path,
@@ -93,6 +98,7 @@ def load_labels(labels: LabelsConfig, points: bool = False) -> tuple[list[GeomWi
             points=points,
             layer=file.layer,
             buffer=label_buffer(file),
+            max_classes=cap,
         )
         if file.class_name is not None:
             names.extend(file.class_name for _ in raw)
@@ -170,15 +176,39 @@ def _parse_labels(
     return transformed, class_map
 
 
-def _check_ignore_index(ignore: int | None, class_map: ClassMap) -> None:
-    """Fail when a class would get the mask value reserved for ignored pixels."""
+def check_ignore_index(
+    ignore: int | None, class_map: ClassMap, classes_given: bool = False
+) -> None:
+    """Fail when a class would get the mask value reserved for ignored pixels.
+
+    ``plan`` runs this too, so a config that cannot be generated is refused up front.
+    ``classes_given`` says the IDs come from ``labels.classes``; otherwise mapcv numbered
+    them, and the advice is about how many classes fit.
+    """
+    if ignore is None:
+        return
     clashing = sorted(name for name, cid in class_map.items() if cid == ignore)
-    if clashing:
+    if not clashing:
+        return
+    name = clashing[0]
+    if name == str(ignore):  # an integer label is its own mask ID
         raise ValueError(
-            f"class {clashing[0]!r} gets mask value {ignore}, which labels.ignore_index "
+            f"the label value {ignore} is also labels.ignore_index, which is reserved for "
+            "pixels without imagery; map it to another ID with labels.classes or set "
+            "labels.ignore_index to a free value (or null)"
+        )
+    if classes_given:
+        raise ValueError(
+            f"class {name!r} gets mask value {ignore}, which labels.ignore_index "
             "reserves for pixels without imagery; map it to another ID with labels.classes "
             "or set labels.ignore_index to a free value (or null)"
         )
+    raise ValueError(
+        f"there are {len(class_map)} classes, so class {name!r} is numbered {ignore}, "
+        "which labels.ignore_index reserves for pixels without imagery; keep at most "
+        f"{ignore - 1} classes (list the ones to keep in labels.classes) or set "
+        "labels.ignore_index to a free value (or null)"
+    )
 
 
 def _raster_bounds(source: RasterMetadata) -> tuple[float, float, float, float]:
@@ -269,7 +299,9 @@ class SegmentationTarget:
     def prepare(self, source: RasterMetadata) -> None:
         self._sha256 = labels_sha256(self._labels)
         self._geometries, self._class_map = _parse_labels(self._labels, source.crs)
-        _check_ignore_index(self._labels.ignore_index, self._class_map)
+        check_ignore_index(
+            self._labels.ignore_index, self._class_map, self._labels.classes is not None
+        )
         _warn_if_labels_miss_raster(self._geometries, source)
         self._bounds = _label_bounds(self._geometries)
         area = self._labels.annotated_area

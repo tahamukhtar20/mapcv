@@ -28,6 +28,7 @@ import shapely
 from PIL import Image
 from shapely.geometry.base import BaseGeometry
 
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import (
     TileIndex,
     decode_tile_window,
@@ -1022,6 +1023,7 @@ def geotiff_fingerprint(location: str, *, trust_host: bool = True) -> dict[str, 
     """
     if "://" not in location:
         path = Path(location)
+        check_regular_file(path, "the imagery file")
         stat = path.stat()
         digest = hashlib.sha256()
         with path.open("rb") as handle:

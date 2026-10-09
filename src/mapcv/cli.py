@@ -50,6 +50,7 @@ from typer.core import TyperGroup
 import mapcv
 from mapcv import doctor
 from mapcv._confine import LinkEscapeError, check_folder_links
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv._redact import REDACTOR, RedactingFormatter
 from mapcv._redact import redact_url as _redact_url
@@ -68,6 +69,7 @@ from mapcv.labels import (
     MAX_CLASS_ID,
     VECTOR_LABEL_SUFFIXES,
     _normalize_label,
+    kml_to_utf8,
     load_vector_labels,
     vector_attributes,
     vector_layers,
@@ -537,6 +539,11 @@ def _load_config(config_path: Path) -> MapcvConfig:
             f"[red]Not a config file:[/red] {escape(str(config_path))} is a folder.",
             "Pass the YAML file, for example [bold]mapcv.yaml[/bold].",
         )
+    try:
+        check_regular_file(config_path, "the config file")
+    except ValueError as exc:
+        message = str(exc)
+        _fail(f"[red]{escape(message[0].upper() + message[1:])}[/red]")
     _learn_secrets(config_path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -1704,7 +1711,7 @@ def label_fields(path: Path, max_values: int = 5, layer: str | None = None) -> d
     values: dict[str, Counter[str]] = {}
     suffix = path.suffix.lower()
     if suffix == ".kml":
-        data = path.read_bytes()
+        data = kml_to_utf8(path.read_bytes())
         text = data.decode("utf-8", errors="replace")
         names = set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text))
         for name in sorted(names):
@@ -2788,10 +2795,13 @@ def stats(
         raise typer.BadParameter("must be train, val, test or all.", param_hint="'--split'")
     _require_dataset(staging_dir)
     try:
-        path, values = write_stats(staging_dir, split_name)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            path, values = write_stats(staging_dir, split_name)
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _fail(f"[red]Cannot compute the statistics:[/red] {escape(str(exc))}")
+    _show_warnings(caught, set())
     table = Table(box=None, padding=(0, 2), show_edge=False)
     for column in ("source", "band", "mean", "std", "min", "max"):
         table.add_column(column, justify="left" if column in ("source", "band") else "right")
@@ -2831,13 +2841,16 @@ def card(
 
     _require_dataset(staging_dir)
     try:
-        path = write_card(staging_dir, overwrite=force)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            path = write_card(staging_dir, overwrite=force)
     except FileExistsError as exc:
         _debug_traceback(exc)
         _fail(f"[red]{escape(str(exc))}[/red]")
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _fail(f"[red]Cannot write the dataset card:[/red] {escape(str(exc))}")
+    _show_warnings(caught, set())
     _console.print(
         f"[green]✓[/green] Dataset card written to [bold]{escape(str(path))}[/bold]. Its licence "
         "is 'other' until you set it.",

@@ -7,7 +7,9 @@ Items are compared with the files as rasterio, Pillow and numpy read them, label
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -441,3 +443,128 @@ def test_export_cli(tmp_path: Path, scene: dict[str, Any]) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "3 Parquet files" in result.output and (tmp_path / "hf" / "README.md").exists()
+
+
+# ── Export folders and unfinished datasets ───────────────────────────────────
+
+
+def _png_dataset(tmp_path: Path, scene: dict[str, Any], name: str = "d") -> Path:
+    return _generate(
+        tmp_path,
+        scene,
+        name,
+        writer={"image_format": "png", "mask_format": "png"},
+        imagery={"type": "geotiff", "path": str(tmp_path / "rgb.tif")},
+    )
+
+
+def test_hf_parquet_replaces_its_own_earlier_export_whole(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    pytest.importorskip("pyarrow.parquet")
+    root = _png_dataset(tmp_path, scene)
+    out = tmp_path / "hf"
+    first = export_hf_parquet(root, out)
+    assert len(first) == 3
+    # The dataset loses its split lists: the new export has one split, and no file of the
+    # old one (a stale test-... file that load_dataset would still pick up) is left.
+    shutil.rmtree(root / "splits")
+    second = export_hf_parquet(root, out)
+    assert [path.name for path in second] == ["all-00000-of-00001.parquet"]
+    assert sorted(path.name for path in (out / "data").iterdir()) == ["all-00000-of-00001.parquet"]
+    assert sorted(path.name for path in out.iterdir()) == ["README.md", "data"]
+
+
+def test_hf_parquet_refuses_a_folder_that_is_not_its_own(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    pytest.importorskip("pyarrow.parquet")
+    root = _png_dataset(tmp_path, scene)
+    mine = tmp_path / "notes"
+    mine.mkdir()
+    (mine / "notes.txt").write_text("keep me")
+    with pytest.raises(ValueError, match=r"is not empty \(first: notes.txt\)"):
+        export_hf_parquet(root, mine)
+    only_readme = tmp_path / "readme"
+    only_readme.mkdir()
+    (only_readme / "README.md").write_text("mine")
+    with pytest.raises(ValueError, match="holds no earlier Hugging Face Parquet export"):
+        export_hf_parquet(root, only_readme)
+    foreign_data = tmp_path / "data-folder"
+    (foreign_data / "data").mkdir(parents=True)
+    (foreign_data / "data" / "table.csv").write_text("a,b")
+    with pytest.raises(ValueError, match="holds no earlier Hugging Face Parquet export"):
+        export_hf_parquet(root, foreign_data)
+    assert (mine / "notes.txt").read_text() == "keep me"
+    assert (only_readme / "README.md").read_text() == "mine"
+    assert (foreign_data / "data" / "table.csv").exists()
+    afile = tmp_path / "afile"
+    afile.write_text("x")
+    with pytest.raises(ValueError, match="is a file"):
+        export_hf_parquet(root, afile)
+
+
+def _unfinish(root: Path) -> None:
+    """Make the manifest say that generate stopped before it finished."""
+    manifest = Manifest.load(root / "manifest.json")
+    manifest.complete = False
+    manifest.save(root / "manifest.json")
+
+
+def test_every_export_refuses_a_dataset_that_generate_did_not_finish(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    from mapcv.shards import export_webdataset, export_zarr
+
+    root = _png_dataset(tmp_path, scene)
+    _unfinish(root)
+    gone = r"dataset is incomplete.*Run mapcv generate again"
+    with pytest.raises(ValueError, match=gone):
+        terratorch_config(root)
+    with pytest.raises(ValueError, match=gone):
+        export_webdataset(root, tmp_path / "w")
+    assert not (tmp_path / "w").exists()
+    if importlib.util.find_spec("zarr") is not None:  # the extra needs Python < 3.14
+        with pytest.raises(ValueError, match=gone):
+            export_zarr(root, tmp_path / "z.zarr")
+        assert not (tmp_path / "z.zarr").exists()
+    pytest.importorskip("pyarrow.parquet")
+    with pytest.raises(ValueError, match=gone):
+        export_hf_parquet(root, tmp_path / "hf")
+    assert not (tmp_path / "hf").exists()
+    result = runner.invoke(
+        app, ["export", str(root), "-f", "hf-parquet", "-o", str(tmp_path / "hf")], env=ENV
+    )
+    assert result.exit_code == 1 and "dataset is incomplete" in " ".join(result.output.split())
+
+
+def test_export_accepts_a_manifest_without_the_flag_and_a_finished_one(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    root = _png_dataset(tmp_path, scene)
+    assert Manifest.load(root / "manifest.json").complete is True
+    assert terratorch_config(root)
+    manifest = Manifest.load(root / "manifest.json")
+    manifest.complete = None  # a dataset of mapcv 0.2 and earlier
+    manifest.save(root / "manifest.json")
+    assert terratorch_config(root)
+
+
+def test_stats_and_card_warn_about_a_dataset_that_generate_did_not_finish(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    root = _png_dataset(tmp_path, scene)
+    fine = runner.invoke(app, ["stats", str(root)], env=ENV)
+    assert fine.exit_code == 0 and "incomplete" not in fine.output
+    _unfinish(root)
+    for command in ("stats", "card"):
+        result = runner.invoke(
+            app, [command, str(root), *(["--force"] if command == "card" else [])], env=ENV
+        )
+        text = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "⚠" in text and "the dataset is incomplete" in text, text
+        assert "Run mapcv generate again" in text
+    assert (root / "stats.json").exists() and (root / "README.md").exists()
+    with pytest.warns(UserWarning, match="the dataset is incomplete"):
+        write_stats(root)

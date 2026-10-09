@@ -955,6 +955,22 @@ def test_stats_and_verify_over_a_read_only_server(project: Path) -> None:
     assert tree(project / "dataset") == before  # nothing written: no stats.json, no SHA256SUMS
 
 
+def test_stats_tells_an_agent_that_the_dataset_is_unfinished(project: Path) -> None:
+    _generated(project)
+    manifest_path = project / "dataset" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["complete"] = False
+    manifest_path.write_text(json.dumps(manifest))
+
+    async def scenario(client: Client) -> None:
+        result = await call(client, "stats", dataset="dataset", split="all")
+        assert not result.is_error, text_of(result)
+        assert any("the dataset is incomplete" in note for note in data(result)["warnings"])
+        assert "Run mapcv generate again" in text_of(result)
+
+    run_client(project, scenario, write=False)
+
+
 def test_stats_and_verify_write_only_when_asked_and_allowed(project: Path) -> None:
     _generated(project)
 

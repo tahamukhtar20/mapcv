@@ -196,17 +196,30 @@ impl From<BBox> for PyBBox {
 }
 
 /// Convert (lng, lat) in EPSG:4326 to Web Mercator (x, y) in EPSG:3857.
-#[must_use]
+///
+/// A latitude of exactly ±90 gives an infinite `y`.
+///
+/// # Errors
+/// Raises `ValueError` for a longitude or latitude that is not a finite number.
 #[pyfunction]
-fn xy(lng: f64, lat: f64) -> (f64, f64) {
-    tile_math::xy(lng, lat)
+fn xy(lng: f64, lat: f64) -> PyResult<(f64, f64)> {
+    tile_math::check_finite(lng, lat).map_err(PyValueError::new_err)?;
+    Ok(tile_math::xy(lng, lat))
 }
 
 /// Return the XYZ tile index for a (lng, lat) point at the given zoom level.
-#[must_use]
+///
+/// A position beyond the world (a longitude past ±180, a latitude past ±90 or the Web
+/// Mercator limit of about ±85.05) is in the edge column or row.
+///
+/// # Errors
+/// Raises `ValueError` for a longitude or latitude that is not a finite number, and for
+/// a zoom above 32.
 #[pyfunction]
-fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
-    tile_math::tile(lng, lat, zoom).into()
+fn tile(lng: f64, lat: f64, zoom: u8) -> PyResult<PyTileIndex> {
+    tile_math::check_finite(lng, lat).map_err(PyValueError::new_err)?;
+    tile_math::check_zoom(zoom).map_err(PyValueError::new_err)?;
+    Ok(tile_math::tile(lng, lat, zoom).into())
 }
 
 /// Return all XYZ tiles covering the given bounding box at the specified zoom levels.
@@ -215,8 +228,8 @@ fn tile(lng: f64, lat: f64, zoom: u8) -> PyTileIndex {
 /// A point or line covers the tiles containing it.
 ///
 /// # Errors
-/// Raises `ValueError` for a NaN coordinate, for `south > north`, and when the
-/// box would cover more than 2^24 tiles.
+/// Raises `ValueError` for a NaN coordinate, for `south > north`, for a zoom above
+/// 32, and when the box would cover more than 2^24 tiles.
 #[pyfunction]
 #[allow(clippy::needless_pass_by_value)]
 fn tiles(
@@ -234,19 +247,27 @@ fn tiles(
 }
 
 /// Return the Web Mercator bounding box (EPSG:3857, meters) for an XYZ tile.
-#[must_use]
+///
+/// # Errors
+/// Raises `ValueError` for a zoom above 32, or a column or row that does not exist
+/// at that zoom (2^zoom or more).
 #[pyfunction]
-fn xy_bounds(x: u32, y: u32, z: u8) -> PyBBox {
+fn xy_bounds(x: u32, y: u32, z: u8) -> PyResult<PyBBox> {
     let t = TileIndex { x, y, z };
-    tile_math::xy_bounds(t).into()
+    tile_math::check_tile(t).map_err(PyValueError::new_err)?;
+    Ok(tile_math::xy_bounds(t).into())
 }
 
 /// Return the geographic bounding box (EPSG:4326, degrees) for an XYZ tile.
-#[must_use]
+///
+/// # Errors
+/// Raises `ValueError` for a zoom above 32, or a column or row that does not exist
+/// at that zoom (2^zoom or more).
 #[pyfunction]
-fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
+fn bounds(x: u32, y: u32, z: u8) -> PyResult<PyBBox> {
     let t = TileIndex { x, y, z };
-    tile_math::bounds(t).into()
+    tile_math::check_tile(t).map_err(PyValueError::new_err)?;
+    Ok(tile_math::bounds(t).into())
 }
 
 /// Expand a bbox outward to the nearest tile boundaries at the given zoom level.
@@ -254,8 +275,8 @@ fn bounds(x: u32, y: u32, z: u8) -> PyBBox {
 /// A point or line snaps to the tiles containing it.
 ///
 /// # Errors
-/// Raises `ValueError` for a NaN coordinate, for `south > north`, and for
-/// `west > east` (a box crossing the antimeridian, which must be split).
+/// Raises `ValueError` for a NaN coordinate, for `south > north`, for a zoom above 32,
+/// and for `west > east` (a box crossing the antimeridian, which must be split).
 #[pyfunction]
 fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> PyResult<PyBBox> {
     tile_math::snap_bbox(west, south, east, north, zoom)
@@ -689,10 +710,19 @@ fn stitch_tiles<'py>(
 /// Compute the affine transform for a stitched tile grid.
 ///
 /// Returns `(a, b, c, d, e, f)` mapping pixel `(col, row)` to Mercator `(x, y)` in metres.
-#[must_use]
+///
+/// # Errors
+/// Raises `ValueError` for a zoom above 32, or a column or row that does not exist
+/// at that zoom (2^zoom or more).
 #[pyfunction]
-fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> (f64, f64, f64, f64, f64, f64) {
-    stitcher::tile_transform(min_x, min_y, zoom)
+fn tile_transform(min_x: u32, min_y: u32, zoom: u8) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
+    tile_math::check_tile(TileIndex {
+        x: min_x,
+        y: min_y,
+        z: zoom,
+    })
+    .map_err(PyValueError::new_err)?;
+    Ok(stitcher::tile_transform(min_x, min_y, zoom))
 }
 
 /// Parse KML bytes into polygon groups with their raw label values.

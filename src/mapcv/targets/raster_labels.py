@@ -141,7 +141,11 @@ class _Classifier:
             self._lut = lut
             self._unsigned = unsigned
         keys = sorted(fits)
-        self._keys = np.asarray(keys, dtype=np.int64)
+        # Every integer type fits int64 but uint64, whose values from 2**63 up need uint64.
+        self._wide: type[np.signedinteger[Any] | np.unsignedinteger[Any]] = (
+            np.uint64 if dtype == np.uint64 else np.int64
+        )
+        self._keys = np.asarray(keys, dtype=self._wide)
         self._codes = np.asarray([fits[key] for key in keys], dtype=np.uint8)
 
     def __call__(self, values: npt.NDArray[Any]) -> npt.NDArray[np.uint8]:
@@ -151,7 +155,7 @@ class _Classifier:
         out = np.full(values.shape, self._unmapped, dtype=np.uint8)
         if not len(self._keys):
             return out
-        wide = values.astype(np.int64)
+        wide = values.astype(self._wide)
         position = np.clip(np.searchsorted(self._keys, wide), 0, len(self._keys) - 1)
         hit = self._keys[position] == wide
         out[hit] = self._codes[position[hit]]

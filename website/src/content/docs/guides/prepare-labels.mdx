@@ -15,8 +15,8 @@ mapcv burns **polygons** from a label file (or [several](/mapcv/reference/config
 | Coordinates | GeoJSON and KML are WGS-84 **longitude, latitude** (EPSG:4326), in that order, as RFC 7946 requires. GeoPackage, Shapefile and GeoParquet may be in **any CRS** they state; mapcv reprojects them to lon/lat |
 | Geometry | `Polygon` and `MultiPolygon`, including those inside a `GeometryCollection` (nested ones too). Points and lines are skipped with a warning (points are kept for [detection](/mapcv/tutorials/object-detection/) with `point_box_size`) |
 | GeoJSON shape | A `FeatureCollection` or a single `Feature`. A `crs` member is allowed only if it names WGS-84 (`CRS84`, `EPSG:4326`); projected CRSs are rejected |
-| KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write), not from the placemark's `<name>` |
-| GeoPackage | One feature table (a *layer*). With several, set `labels.layer`. The layer's CRS comes from `gpkg_spatial_ref_sys`; a layer without one (`srs_id` 0 or -1) is an error |
+| KML | `<Polygon>` and `<MultiGeometry>` placemarks; attributes from `<ExtendedData>` `<Data name="…">` or `<SimpleData name="…">` (what QGIS and ogr2ogr write), not from the placemark's `<name>`. The file may be UTF-8, UTF-16 or UTF-32 (with a byte order mark), or ISO-8859-1 or windows-1252 as its XML declaration says; another encoding is an error that asks for UTF-8 |
+| GeoPackage | One feature table (a *layer*). With several, set `labels.layer`. The layer's CRS comes from `gpkg_spatial_ref_sys`; a layer without one (`srs_id` 0 or -1) is an error. A GeoPackage in WAL mode (QGIS and GDAL leave them so) in a read-only folder, such as a read-only mount, is read as it is; if it has changes in a `-wal` file next to it that are not merged into it yet, mapcv says so instead of reading stale data |
 | Shapefile | The `.shp` with its `.dbf` (attributes) next to it. The CRS comes from the `.prj`: **without one mapcv stops** rather than guess. Text attributes are read as UTF-8 unless a `.cpg` file names another encoding. The reader is pure Python: a Shapefile with hundreds of thousands of features loads in tens of seconds, so for very large layers a GeoPackage or GeoParquet is faster |
 | GeoParquet | WKB geometry (the default of geopandas and GDAL), with the standard `geo` metadata. Needs `pip install "mapcv[parquet]"`. A missing `crs` means WGS-84 (`OGC:CRS84`, as the specification says); `crs: null` is an error. Native (GeoArrow) encodings are not read |
 
@@ -53,7 +53,7 @@ labels:
 3. **`label_field` with any other labels:** distinct values are sorted and numbered `1, 2, 3, …`: numbers by value (`2` before `10`), then names in alphabetical order. The result does not depend on feature order, so two files with the same classes get the same IDs.
 4. **`classes` given:** exactly those IDs (1–255); features whose label is not listed are skipped. Use it to merge classes (`{house: 1, apartments: 1}`), to keep IDs stable across datasets, or to match an existing model.
 
-The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`.
+The rules are the same for every file format. Mask value `0` is always background. More than 255 distinct labels is an error; map them down with `classes`. Class 255 is also `labels.ignore_index` by default, so without `classes` at most 254 labels fit (and a label `255` is its own ID, which clashes too): `mapcv plan` stops with the same message as `generate`; list the labels to keep in `classes`, or set `ignore_index: null`. With `labels.files`, `classes` also settles the limit: a file's values are looked up there, and the ones it does not list are skipped, whatever number each file has.
 
 <Aside type="caution" title="A label of 0 changes the numbering">
 Rule 2 applies only if *every* label is between 1 and 255. If one feature has the label `0` (or `-1`, or a name), all labels are numbered in sorted order instead: `0, 1, 2` become IDs `1, 2, 3`, and `0, 2, 10` too. Remove such features or set `classes` explicitly. `plan` and `generate` say so with `label '0' is class 1, not background; set labels.classes to map it differently`.
@@ -78,7 +78,7 @@ The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`,
 
 ### Roads, rivers and trees: buffer lines and points
 
-Lines and points have no area, so they are skipped unless you give them one. `labels.buffer` turns a line into a band of the given width and a point into a disc of the given diameter, both in metres on the ground (drawn in the UTM zone of each feature), before they are rasterized like polygons:
+Lines and points have no area, so they are skipped unless you give them one. `labels.buffer` turns a line into a band of the given width and a point into a disc of the given diameter, both in metres on the ground (drawn in the UTM zone of each feature; the parts of a multi-part feature that lie in different zones each in their own), before they are rasterized like polygons:
 
 ```yaml
 labels:
@@ -266,6 +266,8 @@ Land-cover products have their own terms: ESA WorldCover is CC BY 4.0 (credit "�
 - **All masks are background** and `generate` warns *"no label polygon intersects the imagery extent"*: the polygons are outside the region, or longitude and latitude are swapped (coordinates like `[52.37, 4.94]` instead of `[4.94, 52.37]`). Check in QGIS or [geojson.io](https://geojson.io/).
 - **`GeoJSON 'crs' … is not supported`**: the file is in a projected CRS. Re-export to EPSG:4326, or save it as a GeoPackage, Shapefile or GeoParquet, which carry their CRS.
 - **`labels.path must be a .geojson, .json, .kml, .gpkg, .shp, .parquet or .geoparquet file`**: unzip a KMZ to its KML (or a `.zip` to the file inside), or convert other formats as shown above.
+- **`… is a named pipe (FIFO), not a regular file`** (or a character device, such as a link to `/dev/zero`): a path that names something other than an ordinary file would be read for ever. This holds for every file mapcv is given: the config, `region.path`, labels, an annotated area and GeoTIFF imagery. Point it at a file.
+- **`the KML file's encoding … is not supported; save it as UTF-8`**: re-export the KML as UTF-8 (UTF-16, ISO-8859-1 and windows-1252 are read as they are declared).
 - **`… has no .prj file, so its CRS is unknown`**: the Shapefile lacks its projection file; see [Labels in another CRS](#labels-in-another-crs).
 - **`… has 3 layers: …`**: set `labels.layer`.
 - **`GeoParquet labels need the pyarrow package`**: `pip install "mapcv[parquet]"`.

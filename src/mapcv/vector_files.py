@@ -17,6 +17,7 @@ import codecs
 import difflib
 import importlib
 import json
+import os
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import closing
@@ -212,14 +213,28 @@ def _open_gpkg(path: Path) -> tuple[sqlite3.Connection, _GpkgBudget]:
     _check_file(path)
     size = path.stat().st_size
     wal = path.with_name(path.name + "-wal")
-    if wal.is_file():
-        size += wal.stat().st_size
+    wal_size = wal.stat().st_size if wal.is_file() else 0
+    size += wal_size
+    # A GeoPackage in WAL mode (QGIS and GDAL leave them so) needs a shared-memory file
+    # next to it, which SQLite cannot create in a folder that is read-only (a mounted
+    # data volume, a file owned by someone else). With no unmerged changes in the -wal
+    # file, the file is then read as an unchanging snapshot.
+    options = "mode=ro"
+    if not os.access(path.parent, os.W_OK):
+        if wal_size:
+            raise ValueError(
+                f"{path.name} is in a read-only folder and has changes that are not merged "
+                f"into it yet ({wal.name}), which cannot be read from there. Copy the "
+                f"GeoPackage and {wal.name} to a folder you can write to, or open and close "
+                "it once in QGIS so the changes are merged."
+            )
+        options = "mode=ro&immutable=1"
     budget = _GpkgBudget(
         instructions=_INSTRUCTIONS_FLOOR + _INSTRUCTIONS_PER_BYTE * size,
         rows=_ROWS_FLOOR + int(_ROWS_PER_BYTE * size),
     )
     try:
-        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?{options}", uri=True)
     except sqlite3.Error as exc:  # pragma: no cover - connect() is lazy and rarely fails
         raise ValueError(f"{path.name}: cannot open the GeoPackage ({exc}).") from exc
     connection.set_progress_handler(budget.tick, _PROGRESS_STEP)

@@ -19,21 +19,26 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from mapcv.data import splits_of
-from mapcv.manifest import Manifest, ManifestEntry
+from mapcv.manifest import Manifest, ManifestEntry, require_complete
+from mapcv.shards import export_folder
 
 FORMATS = ("hf-parquet", "terratorch", "webdataset", "zarr")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+_HF_PARQUET = re.compile(r"(train|val|test|all)-\d{5}-of-\d{5}\.parquet")
 
 
 def _manifest(root: Path) -> Manifest:
     path = root / "manifest.json"
     if not path.exists():
         raise FileNotFoundError(f"No manifest found at {path}")
-    return Manifest.load(path)
+    manifest = Manifest.load(path)
+    require_complete(manifest, "it would be exported with patches (and splits) missing")
+    return manifest
 
 
 def _entries_by_split(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry]]:
@@ -64,7 +69,9 @@ def _stats(root: Path) -> dict[str, Any]:
 
 def export_hf_parquet(root: Path, out: Path) -> list[Path]:
     """Write ``out/data/<split>-00000-of-00001.parquet`` and ``out/README.md``; returns the
-    Parquet files. ``out`` must not be the dataset folder."""
+    Parquet files. ``out`` must not be the dataset folder. It must be a new or empty
+    folder, or hold an earlier export of this format, which is replaced whole (no split
+    file of it is left behind); an export that fails part way removes what it wrote."""
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -117,28 +124,45 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
         fields, metadata={"huggingface": json.dumps({"info": {"features": features}})}
     )
 
+    def owned(name: str) -> bool:
+        """``README.md`` and a ``data`` folder holding only files this export writes."""
+        if name == "README.md":
+            return True
+        folder = out / name
+        return (
+            name == "data"
+            and folder.is_dir()
+            and not folder.is_symlink()
+            and all(_HF_PARQUET.fullmatch(entry.name) for entry in folder.iterdir())
+        )
+
     written: list[Path] = []
-    (out / "data").mkdir(parents=True, exist_ok=True)
-    for split, entries in by_split.items():
-        columns: dict[str, list[Any]] = {field.name: [] for field in fields}
-        for entry in entries:
-            columns["name"].append(manifest.patch_name(entry))
-            for key in keys:
-                rel = entry["files"][key]
-                columns[key].append({"bytes": (root / rel).read_bytes(), "path": Path(rel).name})
-            columns["row"].append(entry["row"])
-            columns["col"].append(entry["col"])
-            columns["crs"].append(manifest.source.crs)
-            columns["transform"].append(list(manifest.patch_transform(entry)))
-            if classification:
-                columns["labels"].append(
-                    [int(label) for label in entry["summary"].get("labels") or []]
-                )
-        table = pa.table(columns, schema=schema)
-        path = out / "data" / f"{split}-00000-of-00001.parquet"
-        pq.write_table(table, path)
-        written.append(path)
-    (out / "README.md").write_text(_hf_card(root, list(by_split)), encoding="utf-8", newline="\n")
+    with export_folder(out, "Hugging Face Parquet", owned, "data"):
+        (out / "data").mkdir(parents=True, exist_ok=True)
+        for split, entries in by_split.items():
+            columns: dict[str, list[Any]] = {field.name: [] for field in fields}
+            for entry in entries:
+                columns["name"].append(manifest.patch_name(entry))
+                for key in keys:
+                    rel = entry["files"][key]
+                    columns[key].append(
+                        {"bytes": (root / rel).read_bytes(), "path": Path(rel).name}
+                    )
+                columns["row"].append(entry["row"])
+                columns["col"].append(entry["col"])
+                columns["crs"].append(manifest.source.crs)
+                columns["transform"].append(list(manifest.patch_transform(entry)))
+                if classification:
+                    columns["labels"].append(
+                        [int(label) for label in entry["summary"].get("labels") or []]
+                    )
+            table = pa.table(columns, schema=schema)
+            path = out / "data" / f"{split}-00000-of-00001.parquet"
+            pq.write_table(table, path)
+            written.append(path)
+        (out / "README.md").write_text(
+            _hf_card(root, list(by_split)), encoding="utf-8", newline="\n"
+        )
     return written
 
 

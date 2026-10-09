@@ -484,7 +484,7 @@ The built-in XYZ sources and their URL templates. `resolve_url_template(url_temp
 
 ### Tile math
 
-`snap_bbox(west, south, east, north, zoom)` returns the box expanded to whole tiles (an object with `west`, `south`, `east`, `north`); `bounds(x, y, z)` returns a tile's lon/lat box. A point or a zero-width box snaps to the tile that contains it. `snap_bbox` raises `ValueError` when `south > north`, or when `west > east` (a box that crosses the antimeridian; split it into two boxes at 180°).
+`snap_bbox(west, south, east, north, zoom)` returns the box expanded to whole tiles (an object with `west`, `south`, `east`, `north`); `bounds(x, y, z)` returns a tile's lon/lat box (`ValueError` for a zoom above 32 or a column or row that does not exist at that zoom). The other tile helpers check their input the same way: `tile(lng, lat, zoom)` raises `ValueError` for a longitude or latitude that is not a number or a zoom above 32 (a position beyond the world is moved onto the edge), and `snap_bbox` for a zoom above 32. A point or a zero-width box snaps to the tile that contains it. `snap_bbox` raises `ValueError` when `south > north`, or when `west > east` (a box that crosses the antimeridian; split it into two boxes at 180°).
 
 ### Writer internals
 

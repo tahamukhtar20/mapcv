@@ -23,6 +23,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 
 from mapcv import vector_files
+from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 
 _RE: float = 6_378_137.0
@@ -54,12 +55,8 @@ def _utm_transformers(epsg: int) -> tuple[Any, Any]:
     )
 
 
-def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
-    """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
-
-    The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
-    metre to within 0.1%, and the polygon is brought back to lon/lat.
-    """
+def _buffer_in_zone(geometry: BaseGeometry, distance: float) -> BaseGeometry:
+    """``geometry`` buffered by ``distance`` metres in the UTM zone of its centroid."""
     centroid = geometry.centroid
     to_utm, to_lonlat = _utm_transformers(_utm_epsg(centroid.x, centroid.y))
 
@@ -72,6 +69,29 @@ def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
 
     projected = shapely.transform(geometry, project(to_utm))
     return shapely.transform(projected.buffer(distance, quad_segs=8), project(to_lonlat))
+
+
+def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
+    """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
+
+    The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
+    metre to within 0.1%, and the polygon is brought back to lon/lat. The parts of a
+    multi-part geometry that lie in different zones are each buffered in their own zone
+    (one zone for a feature with parts far apart would stretch the distance by a lot),
+    and the buffers are merged.
+    """
+    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else []
+    if len(parts) > 1:
+        zones: dict[int, list[BaseGeometry]] = {}
+        for part in parts:
+            if not part.is_empty:
+                centroid = part.centroid
+                zones.setdefault(_utm_epsg(centroid.x, centroid.y), []).append(part)
+        if len(zones) > 1:
+            kind = type(geometry)
+            buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+            return shapely.union_all(buffers)
+    return _buffer_in_zone(geometry, distance)
 
 
 def _to_mercator(
@@ -182,6 +202,7 @@ def assign_class_ids(
     labels: list[str | None],
     label_field: str | None,
     classes: ClassMap | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[int], ClassMap]:
     """Map raw label values to mask class IDs.
 
@@ -192,7 +213,9 @@ def assign_class_ids(
     sorted order: numbers by value, then text. IDs do not depend on the order
     of features in the file.
 
-    Returns one class ID per label (0 = skip) and the class map.
+    Returns one class ID per label (0 = skip) and the class map. ``max_classes`` caps the
+    number of distinct labels that are numbered (``None``: no cap, for a caller that maps
+    the numbers to class names again before the mask exists).
 
     Raises:
         ValueError: More distinct labels than fit in a ``uint8`` mask.
@@ -208,10 +231,10 @@ def assign_class_ids(
     ):
         class_map = {label: int(label) for label in present}
     else:
-        if len(present) > MAX_CLASS_ID:
+        if max_classes is not None and len(present) > max_classes:
             raise ValueError(
                 f"labels.label_field '{label_field}' has {len(present)} distinct values; "
-                f"masks support at most {MAX_CLASS_ID} classes. Map them with labels.classes."
+                f"masks support at most {max_classes} classes. Map them with labels.classes."
             )
         class_map = {label: index for index, label in enumerate(present, start=1)}
         if "0" in class_map:
@@ -260,8 +283,9 @@ def _with_class_ids(
     non_polygon: int,
     points: bool = False,
     invalid: int = 0,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
-    ids, class_map = assign_class_ids(labels, label_field, classes)
+    ids, class_map = assign_class_ids(labels, label_field, classes, max_classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
@@ -295,18 +319,130 @@ def _drop_invalid(
     return [geometries[i] for i in kept], [labels[i] for i in kept], len(bad)
 
 
+_KML_DECLARATION = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*<\?xml\b[^>]*\?>")
+_KML_ENCODING = re.compile(rb"""(\bencoding\s*=\s*)(?:"([^"]*)"|'([^']*)')""")
+_UTF8_NAMES = frozenset({"utf-8", "utf8", "us-ascii", "ascii"})
+_WIDE_NAMES = frozenset(
+    {"utf-16", "utf-16le", "utf-16be", "utf16", "ucs-2", "utf-32", "utf-32le", "utf-32be"}
+)
+_SINGLE_BYTE_CODECS = {
+    "iso-8859-1": "latin-1",
+    "iso_8859-1": "latin-1",
+    "latin1": "latin-1",
+    "latin-1": "latin-1",
+    "l1": "latin-1",
+    "windows-1252": "cp1252",
+    "cp1252": "cp1252",
+}
+# (byte order mark, codec) of the Unicode forms a KML file can have; UTF-32 first, since the
+# UTF-32 little-endian mark starts with the UTF-16 one.
+_KML_BOMS = (
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+# The first bytes of "<?" in a UTF-16/32 file that has no byte order mark (XML 1.0, appendix F).
+_KML_BARE_WIDE = (
+    (b"<\x00?\x00", "utf-16-le"),
+    (b"\x00<\x00?", "utf-16-be"),
+    (b"<\x00\x00\x00", "utf-32-le"),
+    (b"\x00\x00\x00<", "utf-32-be"),
+)
+
+
+def _set_declared_utf8(text: bytes) -> bytes:
+    """``text`` (UTF-8 bytes of an XML document) with its declaration saying UTF-8."""
+    declaration = _KML_DECLARATION.match(text)
+    if declaration is None:
+        return text
+    fixed = _KML_ENCODING.sub(rb'\1"UTF-8"', declaration.group(0))
+    return fixed + text[declaration.end() :]
+
+
+def kml_to_utf8(data: bytes) -> bytes:
+    """The bytes of a KML file as UTF-8, whatever encoding it is saved in.
+
+    mapcv's KML parser reads UTF-8. The file's own encoding is taken from its byte order
+    mark (UTF-16 and UTF-32) or its XML declaration (``encoding="ISO-8859-1"`` and
+    ``"windows-1252"`` are converted), and the declaration is rewritten to say UTF-8 so
+    the result is stable if it goes through here again. UTF-8 (with or without a byte
+    order mark) is returned as it is.
+
+    Raises:
+        ValueError: The declared encoding is not one of those, or the bytes are not valid
+            in the encoding the file declares.
+    """
+    for mark, codec in _KML_BOMS:
+        if data.startswith(mark):
+            try:
+                return _set_declared_utf8(data.decode(codec).encode("utf-8"))
+            except UnicodeDecodeError:
+                raise ValueError(
+                    f"the KML file starts like {codec.upper()} text but is not valid "
+                    f"{codec.upper()}; save it as UTF-8"
+                ) from None
+    for prefix, codec in _KML_BARE_WIDE:
+        if data.startswith(prefix):
+            try:
+                return _set_declared_utf8(data.decode(codec).encode("utf-8"))
+            except UnicodeDecodeError:
+                raise ValueError(
+                    f"the KML file looks like {codec.upper()} text but is not valid "
+                    f"{codec.upper()}; save it as UTF-8"
+                ) from None
+    declaration = _KML_DECLARATION.match(data)
+    if declaration is None:
+        return data
+    found = _KML_ENCODING.search(declaration.group(0))
+    if found is None:
+        return data
+    name = (found.group(2) if found.group(2) is not None else found.group(3)).decode(
+        "ascii", errors="replace"
+    )
+    key = name.strip().lower()
+    if key in _UTF8_NAMES:
+        return data
+    single_byte = _SINGLE_BYTE_CODECS.get(key)
+    if single_byte is not None:
+        try:
+            return _set_declared_utf8(data.decode(single_byte).encode("utf-8"))
+        except UnicodeDecodeError:
+            raise ValueError(
+                f"the KML file declares the encoding {name!r} but has bytes that are not "
+                "valid in it; save it as UTF-8"
+            ) from None
+    # Another declared encoding (or UTF-16 without a byte order mark): mapcv only reads
+    # such a file when its bytes are valid UTF-8 anyway, as it always has.
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    else:
+        return _set_declared_utf8(data)
+    if key in _WIDE_NAMES:
+        raise ValueError(
+            f"the KML file declares the encoding {name!r} but is not saved as {name} text "
+            "(it has no byte order mark); save it as UTF-8"
+        )
+    raise ValueError(f"the KML file's encoding {name!r} is not supported; save it as UTF-8")
+
+
 def parse_kml(
     data: bytes,
     label_field: str | None = None,
     classes: ClassMap | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse KML bytes into (geometry, class_id) pairs.
 
     Labels are read from ``<Data>`` or ``<SimpleData>`` fields named
     ``label_field``; see :func:`assign_class_ids` for how IDs are chosen.
-    Points, lines, and unlabeled placemarks are skipped with a warning.
-    Returns (geometries, class_map).
+    Points, lines, and unlabeled placemarks are skipped with a warning. The file may be
+    UTF-8, UTF-16/32 (with a byte order mark), ISO-8859-1 or windows-1252 (as its XML
+    declaration says); see :func:`kml_to_utf8`. Returns (geometries, class_map).
     """
+    data = kml_to_utf8(data)
     raw_polys, non_polygon = _parse_kml_bytes(data, label_field)
     geometries: list[BaseGeometry] = []
     labels: list[str | None] = []
@@ -324,7 +460,14 @@ def parse_kml(
             )
     geometries, labels, invalid = _drop_invalid(geometries, labels)
     return _with_class_ids(
-        "KML", geometries, labels, label_field, classes, non_polygon, invalid=invalid
+        "KML",
+        geometries,
+        labels,
+        label_field,
+        classes,
+        non_polygon,
+        invalid=invalid,
+        max_classes=max_classes,
     )
 
 
@@ -450,6 +593,7 @@ def parse_geojson(
     classes: ClassMap | None = None,
     points: bool = False,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Parse GeoJSON bytes into (geometry, class_id) pairs.
 
@@ -497,7 +641,14 @@ def parse_geojson(
     if label_field and features and label_field not in fields:
         raise ValueError(_missing_field_message(label_field, list(fields), "in the file"))
     return _polygon_features(
-        "GeoJSON", geometries, raw_labels, label_field, classes, points, buffer=buffer
+        "GeoJSON",
+        geometries,
+        raw_labels,
+        label_field,
+        classes,
+        points,
+        buffer=buffer,
+        max_classes=max_classes,
     )
 
 
@@ -510,6 +661,7 @@ def _polygon_features(
     points: bool,
     unreadable: set[int] | None = None,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Keep the polygon (and, with ``points``, point) features and give them class IDs.
 
@@ -545,7 +697,7 @@ def _polygon_features(
         kept.append(geom)
         labels.append(_normalize_label(raw_labels[index]) if label_field else None)
     return _with_class_ids(
-        source, kept, labels, label_field, classes, non_polygon, points, len(invalid)
+        source, kept, labels, label_field, classes, non_polygon, points, len(invalid), max_classes
     )
 
 
@@ -604,6 +756,7 @@ def load_vector_labels(
     points: bool = False,
     layer: str | None = None,
     buffer: BufferDistances | None = None,
+    max_classes: int | None = MAX_CLASS_ID,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     """Read a vector label file of any supported format into ``(geometry, class_id)`` pairs.
 
@@ -631,6 +784,8 @@ def load_vector_labels(
         classes: Optional label-to-ID map.
         points: Keep point features (KML points are never read).
         layer: GeoPackage table name.
+        buffer: ``(line, point)`` widths in metres, or ``None``.
+        max_classes: The most distinct labels that are numbered (``None``: no limit).
 
     Returns:
         ``(geometries, class_map)``.
@@ -642,6 +797,7 @@ def load_vector_labels(
     """
     kind = _format_name(path)
     _check_layer(path, kind, layer)
+    check_regular_file(path, "the label file")
     if kind in ("GeoJSON", "KML"):
         data = path.read_bytes()
         try:
@@ -651,8 +807,10 @@ def load_vector_labels(
                         f"{path.name}: buffering needs line and point features, which mapcv "
                         "does not read from KML; convert the file to GeoJSON or GeoPackage"
                     )
-                return parse_kml(data, label_field, classes)
-            return parse_geojson(data, label_field, classes, points=points, buffer=buffer)
+                return parse_kml(data, label_field, classes, max_classes)
+            return parse_geojson(
+                data, label_field, classes, points=points, buffer=buffer, max_classes=max_classes
+            )
         except UnicodeDecodeError as exc:
             raise ValueError(f"{path.name} is not valid UTF-8 text ({exc}).") from exc
         except json.JSONDecodeError as exc:
@@ -669,7 +827,15 @@ def load_vector_labels(
     if not label_field:
         raw_labels = [None] * len(table.geometries)
     return _polygon_features(
-        kind, table.geometries, raw_labels, label_field, classes, points, table.unreadable, buffer
+        kind,
+        table.geometries,
+        raw_labels,
+        label_field,
+        classes,
+        points,
+        table.unreadable,
+        buffer,
+        max_classes,
     )
 
 
@@ -707,6 +873,7 @@ def label_file_sha256(path: Path) -> str:
     (each prefixed by its suffix), since editing any of them changes the labels. For the
     other formats it is the hash of the file's bytes.
     """
+    check_regular_file(path, "the label file")
     digest = hashlib.sha256()
     files = vector_files.shapefile_files(path) if path.suffix.lower() == ".shp" else [path]
     for index, file in enumerate(files):

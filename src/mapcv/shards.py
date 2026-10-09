@@ -41,7 +41,7 @@ from typing import Any
 import numpy as np
 
 from mapcv.data import read_image, read_mask, splits_of
-from mapcv.manifest import Manifest, ManifestEntry
+from mapcv.manifest import Manifest, ManifestEntry, require_complete
 
 SHARD_BYTES = 1_000_000_000
 SPLIT_CODES = {"train": 0, "val": 1, "test": 2}
@@ -52,7 +52,9 @@ def _load(root: Path) -> Manifest:
     path = root / "manifest.json"
     if not path.exists():
         raise FileNotFoundError(f"No manifest found at {path}")
-    return Manifest.load(path)
+    manifest = Manifest.load(path)
+    require_complete(manifest, "it would be exported with patches (and splits) missing")
+    return manifest
 
 
 def _split_lists(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry]]:
@@ -102,7 +104,7 @@ def _clear(out: Path, names: list[str]) -> None:
 
 
 @contextmanager
-def _export_folder(
+def export_folder(
     out: Path, what: str, owned: Callable[[str], bool], marker: str
 ) -> Iterator[None]:
     """Prepare ``out`` for an export and remove what it wrote when the export fails.
@@ -205,7 +207,7 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> 
     _check_out(root, out)
     manifest = _load(root)
     objects = _coco_by_image(root) if manifest.task in ("detection", "instance") else None
-    with _export_folder(out, "WebDataset", _is_webdataset_file, "shards.json"):
+    with export_folder(out, "WebDataset", _is_webdataset_file, "shards.json"):
         return _write_shards(root, out, manifest, objects, shard_bytes)
 
 
@@ -278,7 +280,7 @@ def export_zarr(root: Path, out: Path) -> Path:
     entries = list(manifest.patches)
     if not entries:
         raise ValueError("the dataset has no patches")
-    with _export_folder(out, "Zarr", _is_zarr_file, ".zgroup"):
+    with export_folder(out, "Zarr", _is_zarr_file, ".zgroup"):
         _write_zarr(zarr, root, out, manifest, entries, split_of)
     return out
 

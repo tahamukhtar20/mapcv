@@ -28,7 +28,7 @@ from mapcv.config import (
 from mapcv.imagery import open_geotiff_source
 from mapcv.pipeline import _max_window_width
 from mapcv.sampler import random_patch_capacity
-from mapcv.targets.segmentation import load_labels
+from mapcv.targets.segmentation import check_ignore_index, load_labels
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
 # 2 * pi * R * cos(lat) / (256 * 2**z) metres per pixel.
@@ -305,6 +305,9 @@ def summarize_labels(config: MapcvConfig) -> LabelSummary | None:
     return _summarize_vector(config, labels)
 
 
+_MASK_TASKS = frozenset({"segmentation", "classification", "change"})
+
+
 def _summarize_vector(
     config: MapcvConfig, labels: LabelsConfig, key: str = "labels"
 ) -> LabelSummary:
@@ -319,6 +322,8 @@ def _summarize_vector(
     points = config.task == "detection" and config.detection_options.point_box_size is not None
     with capture_warnings() as caught:
         geometries, class_map = load_labels(labels, points)
+    if config.task in _MASK_TASKS:  # the tasks whose masks reserve labels.ignore_index
+        check_ignore_index(labels.ignore_index, class_map, labels.classes is not None)
     messages = [str(warning.message) for warning in caught if _is_user_warning(warning)]
     if labels.annotated_area is not None and not labels.annotated_area.exists():
         messages.append(f"{key}.annotated_area not found: {labels.annotated_area}")

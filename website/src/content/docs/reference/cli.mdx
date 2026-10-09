@@ -215,6 +215,8 @@ Class weights (median frequency): background 0.769, a 1.43
 ✓ 36 patches of the train split → dataset/stats.json
 ```
 
+Counting an unfinished dataset (`generate` stopped before it finished: its manifest's `complete` is `false`) prints a `⚠` line saying so, since the numbers cover only the patches written so far; run `mapcv generate` again with the dataset's config to finish it first.
+
 `stats.json` is written on request, not by `generate`: reading every patch back costs about as long as writing it, and `generate`'s output stays the same as before. Run it again after `mapcv split`.
 
 ## `mapcv card`
@@ -223,7 +225,7 @@ Class weights (median frequency): background 0.769, a 1.43
 
 Writes `STAGING_DIR/README.md`, a dataset card with [Hugging Face dataset-card](https://huggingface.co/docs/hub/datasets-cards) YAML metadata (`license`, `task_categories`, `tags`, `size_categories`), so the folder can be pushed to the Hub or archived as is. The card describes the imagery (type, product, CRS, ground sampling distance, bands and data type), the classes, the split sizes, the normalisation values (when `stats.json` exists, so run `mapcv stats` first), the files, the provenance (mapcv and manifest version, label file SHA-256, imagery fingerprints) and the provider's credit line for built-in sources.
 
-The licence is `other` until you change it: mapcv can't know what the imagery provider's terms allow (see [Providers & licensing](/mapcv/project/providers/)). An existing `README.md` is kept unless you pass `--force`.
+The licence is `other` until you change it: mapcv can't know what the imagery provider's terms allow (see [Providers & licensing](/mapcv/project/providers/)). An existing `README.md` is kept unless you pass `--force`. A dataset that `generate` did not finish gets a `⚠` line, because the card describes only the patches written so far.
 
 ## `mapcv verify`
 
@@ -252,12 +254,12 @@ Exit code `1` when anything is missing, empty, cut short, unreadable (`--deep`) 
 
 <Code code={exportHelp} lang="text" title="mapcv export --help" />
 
-Writes a dataset in the form another tool reads; the dataset itself is not changed.
+Writes a dataset in the form another tool reads; the dataset itself is not changed. A dataset that `generate` did not finish (its manifest's `complete` is `false`) is refused with the advice to run `mapcv generate` again with its config: an export would leave out patches and split members. (Manifests from mapcv 0.2 and earlier have no such flag and are exported.)
+
+`OUT` of `hf-parquet`, `webdataset` and `zarr` must be new or empty, or hold an earlier export of the same format, which is replaced whole (no split file or shard of it is left next to the new ones); a folder with other files is refused, and an export that fails part way removes what it wrote.
 
 - **`hf-parquet`** (needs `pip install "mapcv[export]"`): `OUT/data/<split>-00000-of-00001.parquet` for each split (`all` without split lists) and `OUT/README.md`, a [dataset card](#mapcv-card) whose metadata names the split files, so `datasets.load_dataset("OUT")` and the Hugging Face Hub read it as is. Each patch file is a `{bytes, path}` column holding the file exactly as written (PNG and JPEG columns are typed as images; NPY and GeoTIFF columns hold the bytes, for `np.load(io.BytesIO(...))` or rasterio's `MemoryFile`), next to `name`, `row`, `col`, `crs`, `transform` and, for classification, `labels`.
 - **`webdataset`**: `OUT/<split>-000000.tar`, ... of at most `--shard-mb` MB (default 1000), and `OUT/shards.json` listing each split's shards and sample counts. A sample is one patch: `<name>.png` (or `.jpg`, `.npy`, `.tif`: the image file as written), `<name>.mask.<ext>`, `<name>.<source>.<ext>` for further sources, and `<name>.json` (`row`, `col`, `transform`, `crs`, `split`, the manifest `summary`, and for detection and instance segmentation the COCO `annotations`). Samples follow the split lists' order; the tars are byte-for-byte reproducible. Stream them with the [webdataset](https://github.com/webdataset/webdataset) library without unpacking.
-
-  `OUT` must be new or empty, or hold an earlier export of the same format, which is replaced whole (no shard of it is left next to the new ones); a folder with other files is refused. An export that fails part way removes what it wrote.
 - **`zarr`** (the `zarr` extra): `OUT` is a Zarr group with `images/<source>` `(N, C, H, W)`, `masks` `(N, H, W)`, `split` (`0` train, `1` val, `2` test, `255` none), `row` and `col`, one patch per chunk, plus copies of `manifest.json`, `splits/` and the COCO files. [`MapcvDataset`](/mapcv/guides/use-your-dataset/#a-pytorch-dataset) reads it like the dataset folder: `MapcvDataset("dataset.zarr", split="train")`. The store is in the zarr 2 format and needs zarr 2.x (what the extra installs); with zarr 3 the export stops with a message before writing anything.
 
 All three pack the dataset into a few files for copying, object storage and fast reading; the dataset folder is unchanged and every other command keeps working on it. To change splits, run `mapcv split` on the folder and export again.

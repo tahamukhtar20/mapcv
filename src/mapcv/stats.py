@@ -25,7 +25,7 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image
 
-from mapcv.manifest import Manifest, ManifestEntry
+from mapcv.manifest import Manifest, ManifestEntry, warn_if_incomplete
 
 STATS_FILENAME = "stats.json"
 _READ_THREADS = 8
@@ -221,6 +221,7 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")
     manifest = Manifest.load(manifest_path)
+    warn_if_incomplete(manifest, "these statistics cover only the patches written so far")
     entries, used = _split_entries(manifest, staging_dir, split)
     sources = manifest.sources
     stacked = bool((manifest.writer or {}).get("stack_sources"))

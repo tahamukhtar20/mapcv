@@ -55,12 +55,8 @@ def _utm_transformers(epsg: int) -> tuple[Any, Any]:
     )
 
 
-def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
-    """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
-
-    The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
-    metre to within 0.1%, and the polygon is brought back to lon/lat.
-    """
+def _buffer_in_zone(geometry: BaseGeometry, distance: float) -> BaseGeometry:
+    """``geometry`` buffered by ``distance`` metres in the UTM zone of its centroid."""
     centroid = geometry.centroid
     to_utm, to_lonlat = _utm_transformers(_utm_epsg(centroid.x, centroid.y))
 
@@ -73,6 +69,29 @@ def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
 
     projected = shapely.transform(geometry, project(to_utm))
     return shapely.transform(projected.buffer(distance, quad_segs=8), project(to_lonlat))
+
+
+def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
+    """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
+
+    The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
+    metre to within 0.1%, and the polygon is brought back to lon/lat. The parts of a
+    multi-part geometry that lie in different zones are each buffered in their own zone
+    (one zone for a feature with parts far apart would stretch the distance by a lot),
+    and the buffers are merged.
+    """
+    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else []
+    if len(parts) > 1:
+        zones: dict[int, list[BaseGeometry]] = {}
+        for part in parts:
+            if not part.is_empty:
+                centroid = part.centroid
+                zones.setdefault(_utm_epsg(centroid.x, centroid.y), []).append(part)
+        if len(zones) > 1:
+            kind = type(geometry)
+            buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+            return shapely.union_all(buffers)
+    return _buffer_in_zone(geometry, distance)
 
 
 def _to_mercator(

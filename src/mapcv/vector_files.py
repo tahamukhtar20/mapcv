@@ -175,12 +175,22 @@ def _quote(identifier: str) -> str:
 # layer is read, and that may never end (a recursive view yields rows forever). Reading
 # is bounded by the size of the file: at most this many SQLite instructions (checked
 # every _PROGRESS_STEP) and rows per byte, plus a floor, which is far more than reading
-# any real table takes.
+# any real table takes. A view can also compute values far larger than the file in a
+# single instruction, so the bytes read are bounded too: each value by the file size plus
+# a floor (Python 3.11+, where SQLite enforces it), and all values together by
+# _BYTES_PER_BYTE times the file size plus a floor. Each value counts _SCALAR_BYTES (its
+# slot in a list), and a text or blob value its length besides. A table stores every
+# value in at least one byte of the file (its type in the record header) and a text or
+# blob value in its length besides, so no table can reach that budget.
 _PROGRESS_STEP = 10_000
 _INSTRUCTIONS_PER_BYTE = 500
 _INSTRUCTIONS_FLOOR = 20_000_000
 _ROWS_PER_BYTE = 0.25
 _ROWS_FLOOR = 10_000
+_VALUE_BYTES_FLOOR = 16 << 20
+_SCALAR_BYTES = 8
+_BYTES_PER_BYTE = _SCALAR_BYTES
+_BYTES_FLOOR = 64 << 20
 
 
 @dataclass
@@ -189,6 +199,7 @@ class _GpkgBudget:
 
     instructions: int
     rows: int
+    bytes: int = 0
     exceeded: bool = False
 
     def tick(self) -> int:
@@ -199,13 +210,26 @@ class _GpkgBudget:
             return 1
         return 0
 
+    def take(self, row: Sequence[Any]) -> bool:
+        """Count the bytes of one row read; ``False`` once they exceed the budget."""
+        self.bytes -= _SCALAR_BYTES * len(row)
+        for value in row:
+            if isinstance(value, (str, bytes)):
+                self.bytes -= len(value)
+        return self.bytes >= 0
 
-def _budget_message(what: str) -> str:
+
+def _budget_message(what: str, memory: bool = False) -> str:
+    problem = (
+        "its layer returns far more data than a file of this size holds, so it is probably "
+        "a view that builds large values while it is read"
+        if memory
+        else "reading it did not finish within the work a file of this size can need, so its "
+        "layer is probably a view whose query does not end"
+    )
     return (
-        f"{what}: reading it did not finish within the work a file of this size can need, "
-        "so its layer is probably a view whose query does not end. Export the layer to a "
-        "new GeoPackage as a table (QGIS: Export, Save Features As; or ogr2ogr) and read "
-        "that."
+        f"{what}: {problem}. Export the layer to a new GeoPackage as a table (QGIS: Export, "
+        "Save Features As; or ogr2ogr) and read that."
     )
 
 
@@ -232,12 +256,16 @@ def _open_gpkg(path: Path) -> tuple[sqlite3.Connection, _GpkgBudget]:
     budget = _GpkgBudget(
         instructions=_INSTRUCTIONS_FLOOR + _INSTRUCTIONS_PER_BYTE * size,
         rows=_ROWS_FLOOR + int(_ROWS_PER_BYTE * size),
+        bytes=_BYTES_FLOOR + _BYTES_PER_BYTE * size,
     )
     try:
         connection = sqlite3.connect(f"{path.resolve().as_uri()}?{options}", uri=True)
     except sqlite3.Error as exc:  # pragma: no cover - connect() is lazy and rarely fails
         raise ValueError(f"{path.name}: cannot open the GeoPackage ({exc}).") from exc
     connection.set_progress_handler(budget.tick, _PROGRESS_STEP)
+    if hasattr(connection, "setlimit"):  # Python 3.11+
+        limit = min(_VALUE_BYTES_FLOOR + size, connection.getlimit(sqlite3.SQLITE_LIMIT_LENGTH))
+        connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, limit)
     return connection, budget
 
 
@@ -336,8 +364,15 @@ def _gpkg_order(connection: sqlite3.Connection, table: str, info: list[Any]) -> 
     Feature order decides which polygon wins where polygons overlap and the order and IDs
     of instances, and SQLite returns rows in any order without ``ORDER BY``. A feature
     table has an integer primary key (``fid``): rows are ordered by it, as GDAL does. A
-    table without one is ordered by ``rowid``.
+    table without one is ordered by ``rowid``. A view has no file order and is read as
+    SQLite returns it: ordering it would make SQLite hold every row of the view before
+    returning the first, which the budget of :class:`_GpkgBudget` cannot see.
     """
+    kind = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name = ? COLLATE NOCASE", (table,)
+    ).fetchone()
+    if kind is not None and kind[0] == "view":
+        return ""
     keys = [row for row in info if row[5]]
     if len(keys) == 1 and str(keys[0][2]).upper() == "INTEGER":
         return f" ORDER BY {_quote(str(keys[0][1]))}"
@@ -428,19 +463,20 @@ def read_gpkg(
         values: dict[str, list[Any]] = {name: [] for name in columns}
         try:
             cursor = connection.execute(f"SELECT {select} FROM {_quote(table)}{order}")
-            while True:
-                rows = cursor.fetchmany(_READ_CHUNK)
-                if not rows:
-                    break
-                if len(blobs) + len(rows) > budget.rows:
+            # Row by row, so that the budgets stop a view before it returns much.
+            for row in cursor:
+                if len(blobs) >= budget.rows:
                     raise ValueError(_budget_message(what))
-                for row in rows:
-                    blobs.append(_gpkg_wkb(row[0], what))
-                    for name, value in zip(columns, row[1:]):
-                        values[name].append(value)
+                if not budget.take(row):
+                    raise ValueError(_budget_message(what, memory=True))
+                blobs.append(_gpkg_wkb(row[0], what))
+                for name, value in zip(columns, row[1:]):
+                    values[name].append(value)
         except sqlite3.Error as exc:
             if budget.exceeded:
                 raise ValueError(_budget_message(what)) from None
+            if isinstance(exc, sqlite3.DataError):  # a value past SQLITE_LIMIT_LENGTH
+                raise ValueError(_budget_message(what, memory=True)) from None
             raise ValueError(
                 f"{what}: cannot read the features ({exc}). The file may be corrupt."
             ) from exc
@@ -745,6 +781,112 @@ def _geo_metadata(schema: Any, name: str) -> tuple[str, dict[str, Any]]:
     return str(primary), column
 
 
+# Parquet compresses and dictionary-encodes its columns, so a small file can decode to
+# gigabytes. What a read may decode is bounded by the size of the file, before anything
+# large is decoded: the sizes the file states for the columns read, plus at most each
+# dictionary-encoded value's longest dictionary entry, must fit the budget. A file within
+# it is read as it is; one past it is read with its text columns as dictionaries, so that
+# what each batch expands to is counted before it is expanded. Each value counts its
+# bytes, and _SCALAR_BYTES for its slot in a list.
+_PARQUET_BYTES_PER_BYTE = 64
+_PARQUET_BYTES_FLOOR = 64 << 20
+
+
+def _parquet_budget_message(name: str, budget: int) -> str:
+    return (
+        f"{name}: its columns decode to more than {budget >> 20} MiB, far more than labels "
+        "in a file of this size need, so mapcv does not read it. If the file is genuine, "
+        "write it without the large columns (or name the one column needed in "
+        "labels.label_field) and try again."
+    )
+
+
+def _parquet_leaves(metadata: Any, columns: Sequence[str]) -> list[int]:
+    """The indices of the Parquet leaf columns that make up ``columns``."""
+    # A leaf of a nested column has the path "column.field"; a name may hold dots itself.
+    return [
+        index
+        for index in range(metadata.num_columns)
+        if any(
+            path == name or path.startswith(f"{name}.")
+            for path in [metadata.schema.column(index).path]
+            for name in columns
+        )
+    ]
+
+
+def _parquet_stated_bytes(parquet: Any, columns: Sequence[str]) -> int:
+    """Bytes the file's metadata states for ``columns`` once decompressed, plus a slot
+    for every value."""
+    metadata = parquet.metadata
+    leaves = _parquet_leaves(metadata, columns)
+    total = 0
+    for group in range(metadata.num_row_groups):
+        row_group = metadata.row_group(group)
+        for index in leaves:
+            chunk = row_group.column(index)
+            total += chunk.total_uncompressed_size + _SCALAR_BYTES * chunk.num_values
+    return int(total)
+
+
+def _parquet_dictionary_bytes(
+    pq: Any, path: Path, parquet: Any, columns: Sequence[str], text: Sequence[str], most: int
+) -> int:
+    """At most how many bytes the dictionary-encoded byte-array values of ``columns``
+    expand to: in each column chunk with a dictionary, its values times its longest
+    dictionary entry. Stops counting once past ``most``."""
+    metadata = parquet.metadata
+    compute = importlib.import_module("pyarrow.compute")
+    probe = None
+    total = 0
+    for group in range(metadata.num_row_groups):
+        row_group = metadata.row_group(group)
+        for index in _parquet_leaves(metadata, columns):
+            chunk = row_group.column(index)
+            if not chunk.has_dictionary_page or chunk.physical_type != "BYTE_ARRAY":
+                continue
+            # No entry is longer than the chunk; a text column's dictionary is read to
+            # find its longest entry (the first value read loads the whole dictionary).
+            longest = chunk.total_uncompressed_size
+            name = chunk.path_in_schema
+            if name in text:
+                if probe is None:
+                    probe = pq.ParquetFile(str(path), read_dictionary=list(text))
+                first = next(
+                    probe.iter_batches(batch_size=1, row_groups=[group], columns=[name]), None
+                )
+                column = None if first is None else first.column(0)
+                if column is not None and hasattr(column, "dictionary"):
+                    lengths = compute.binary_length(column.dictionary)
+                    longest = compute.max(lengths).as_py() or 0
+            total += chunk.num_values * longest
+            if total > most:
+                return int(total)
+    return int(total)
+
+
+def _decoded_bytes(pa: Any, array: Any) -> int:
+    """Bytes of an Arrow column once its values are expanded, plus a slot per value."""
+    if pa.types.is_dictionary(array.type):
+        dictionary = array.dictionary
+        if any(
+            check(dictionary.type)
+            for check in (
+                pa.types.is_binary,
+                pa.types.is_large_binary,
+                pa.types.is_string,
+                pa.types.is_large_string,
+            )
+        ):
+            compute = importlib.import_module("pyarrow.compute")
+            lengths = compute.binary_length(dictionary).take(array.indices)
+            expanded = compute.sum(lengths).as_py() or 0
+        else:
+            expanded = _SCALAR_BYTES * len(array)
+        return int(expanded) + _SCALAR_BYTES * len(array)
+    return int(array.nbytes) + _SCALAR_BYTES * len(array)
+
+
 def read_geoparquet(path: Path, fields: Sequence[str] | None = None) -> VectorTable:
     """Read a GeoParquet file (WKB geometry) with pyarrow, an optional dependency.
 
@@ -812,17 +954,52 @@ def read_geoparquet(path: Path, fields: Sequence[str] | None = None) -> VectorTa
     # A named field is read whatever its type; the wizard's all-columns read takes scalars.
     available = scalar if fields is None else [name for name in schema.names if name != primary]
     columns = _require_columns(fields, available, path.name, "file")
+    read = [primary, *columns]
+    is_text = (
+        pa.types.is_binary,
+        pa.types.is_large_binary,
+        pa.types.is_string,
+        pa.types.is_large_string,
+    )
+    limit = _PARQUET_BYTES_FLOOR + _PARQUET_BYTES_PER_BYTE * path.stat().st_size
+    used = 0
     blobs: list[bytes | None] = []
     values: dict[str, list[Any]] = {name: [] for name in columns}
     try:
-        for batch in parquet.iter_batches(batch_size=_READ_CHUNK, columns=[primary, *columns]):
-            blobs.extend(batch.column(0).to_pylist())
-            for index, name in enumerate(columns, start=1):
-                values[name].extend(batch.column(index).to_pylist())
+        stated = _parquet_stated_bytes(parquet, read)
+        too_large = stated > limit
+        if not too_large:
+            text = [
+                name for name in read if any(check(schema.field(name).type) for check in is_text)
+            ]
+            most = limit - stated
+            if _parquet_dictionary_bytes(pq, path, parquet, read, text, most) > most:
+                # Its dictionaries may expand past the budget: read the text columns as
+                # dictionaries, to count what they expand to before expanding them.
+                parquet = pq.ParquetFile(str(path), read_dictionary=text)
+            for batch in parquet.iter_batches(batch_size=_READ_CHUNK, columns=read):
+                used += sum(_decoded_bytes(pa, column) for column in batch.columns)
+                if used > limit:
+                    too_large = True
+                    break
+                # Expanded in Arrow, which is much faster than a dictionary's to_pylist.
+                lists = [
+                    (
+                        column.dictionary_decode()
+                        if pa.types.is_dictionary(column.type)
+                        else column
+                    ).to_pylist()
+                    for column in batch.columns
+                ]
+                blobs.extend(lists[0])
+                for name, column_values in zip(columns, lists[1:]):
+                    values[name].extend(column_values)
     except Exception as exc:
         raise ValueError(
             f"{path.name}: cannot read its features ({exc}). The file may be corrupt."
         ) from exc
+    if too_large:
+        raise ValueError(_parquet_budget_message(path.name, limit))
     geometries = _parse_wkb(blobs, path.name)
     _to_wgs84(geometries, crs, path.name)
     return VectorTable(geometries, values)

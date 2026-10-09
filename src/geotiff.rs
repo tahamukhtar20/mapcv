@@ -22,7 +22,7 @@ pub mod source;
 
 use codec::MAX_CHUNK_BYTES;
 use georef::{Georef, RasterType};
-use ifd::{tag, ByteOrder, Ifd};
+use ifd::{tag, ByteOrder, Ifd, UintArray};
 use rayon::prelude::*;
 use source::{ByteSource, HttpSource, LocalFile, MemorySource};
 use std::fmt;
@@ -156,8 +156,8 @@ struct Level {
     compression: u16,
     predictor: u16,
     photometric: u16,
-    offsets: Vec<u64>,
-    byte_counts: Vec<u64>,
+    offsets: UintArray,
+    byte_counts: UintArray,
     jpeg_tables: Option<Vec<u8>>,
     samples: usize,
     dtype: DType,
@@ -186,12 +186,18 @@ impl Level {
             .filter(|&s| (1..=65535).contains(&s))
             .ok_or_else(|| GeoTiffError::Invalid("invalid SamplesPerPixel".to_owned()))?;
         let uniform = |t: u16, default: u64, name: &str| -> Result<u64> {
-            let values = ifd.uints(t)?.unwrap_or_else(|| vec![default]);
-            match values.first() {
-                Some(&first) if values.iter().all(|&v| v == first) => Ok(first),
-                Some(_) => Err(GeoTiffError::Invalid(format!(
-                    "bands with different {name} values ({values:?}) are not supported"
-                ))),
+            let Some(values) = ifd.uint_array(t)? else {
+                return Ok(default);
+            };
+            match values.get(0) {
+                Some(first) if values.iter().all(|v| v == first) => Ok(first),
+                Some(_) => {
+                    let shown: Vec<u64> = values.iter().take(8).collect();
+                    Err(GeoTiffError::Invalid(format!(
+                        "bands with different {name} values ({shown:?}{}) are not supported",
+                        if values.len() > 8 { ", ..." } else { "" }
+                    )))
+                }
                 None => Err(GeoTiffError::Invalid(format!("TIFF tag {name} is empty"))),
             }
         };
@@ -243,10 +249,10 @@ impl Level {
             let rows = usize::try_from(rows).unwrap_or(usize::MAX).clamp(1, height);
             (width, rows, tag::STRIP_OFFSETS, tag::STRIP_BYTE_COUNTS)
         };
-        let offsets = ifd.uints(offsets_tag)?.ok_or_else(|| {
+        let offsets = ifd.uint_array(offsets_tag)?.ok_or_else(|| {
             GeoTiffError::Invalid("the TIFF has no StripOffsets or TileOffsets tag".to_owned())
         })?;
-        let byte_counts = ifd.uints(counts_tag)?.ok_or_else(|| {
+        let byte_counts = ifd.uint_array(counts_tag)?.ok_or_else(|| {
             GeoTiffError::Invalid(
                 "the TIFF has no StripByteCounts or TileByteCounts tag".to_owned(),
             )
@@ -883,7 +889,14 @@ impl Plan {
             for cy in cy0..=cy1 {
                 for cx in cx0..=cx1 {
                     let index = plane * per_plane + cy * level.chunks_across() + cx;
-                    let (offset, count) = (level.offsets[index], level.byte_counts[index]);
+                    // `from_ifd` checked that both arrays hold one value per chunk.
+                    let (Some(offset), Some(count)) =
+                        (level.offsets.get(index), level.byte_counts.get(index))
+                    else {
+                        return Err(GeoTiffError::Invalid(format!(
+                            "chunk {index} has no offset or byte count"
+                        )));
+                    };
                     let mut request = ChunkRequest {
                         range: None,
                         first_row: cy * ch,

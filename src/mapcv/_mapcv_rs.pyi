@@ -30,6 +30,7 @@ __all__ = [
     "decode_tile_window",
     "fetch_tiles",
     "grid_sample_anchors",
+    "kml_fields",
     "parse_kml",
     "random_anchor_capacity",
     "random_sample_anchors",
@@ -219,6 +220,7 @@ def write_geotiffs(
     band_names: Sequence[str] | None = None,
     level: int | None = None,
 ) -> None: ...
+def kml_fields(data: bytes) -> list[dict[str, str]]: ...
 def parse_kml(
     data: bytes, label_field: str | None = None
 ) -> tuple[list[tuple[list[_Ring], str | None]], int]: ...

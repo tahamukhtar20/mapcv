@@ -8,6 +8,7 @@
 use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
+use std::collections::BTreeMap;
 
 /// A single ring: list of `(lng, lat)` pairs.
 pub type Ring = Vec<(f64, f64)>;
@@ -22,6 +23,28 @@ pub struct KmlResult {
     pub polygons: Vec<(Vec<Polygon>, Option<String>)>,
     /// Placemarks skipped because they contain no polygon (points, lines).
     pub skipped_non_polygon: usize,
+    /// With [`kml_fields`]: every `<Data>`/`<SimpleData>` field of each entry of
+    /// `polygons`, by name; empty otherwise.
+    pub fields: Vec<BTreeMap<String, String>>,
+}
+
+/// Which `<Data>`/`<SimpleData>` values a parse keeps.
+#[derive(Clone, Copy)]
+enum Labels<'a> {
+    /// The value of this field, as each placemark's label (none when `None`).
+    One(Option<&'a str>),
+    /// Every field, by name.
+    All,
+}
+
+impl Labels<'_> {
+    /// The field to capture in an element whose field name is `name`, if any.
+    fn capture(self, name: Option<&str>) -> Option<String> {
+        match self {
+            Labels::One(field) => field.filter(|&f| name == Some(f)).map(str::to_owned),
+            Labels::All => name.map(str::to_owned),
+        }
+    }
 }
 
 /// Minimum ring length: a closed triangle has 4 coordinates, an open one 3.
@@ -72,6 +95,9 @@ struct PlacemarkState {
     capture_value: bool,
     value: String,
     data_name: Option<String>,
+    /// The field whose value is being captured.
+    field: Option<String>,
+    fields: BTreeMap<String, String>,
 }
 
 impl PlacemarkState {
@@ -120,15 +146,30 @@ impl PlacemarkState {
 /// # Errors
 /// Returns an error string if the XML is malformed or truncated, or a
 /// coordinate cannot be parsed as a finite number.
+pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, String> {
+    parse(data, Labels::One(label_field))
+}
+
+/// Parse KML bytes once and keep every `<Data>`/`<SimpleData>` field of each
+/// polygon placemark in [`KmlResult::fields`]: the labels [`parse_kml`] gives
+/// for each field name, from a single pass over the file.
+///
+/// # Errors
+/// As [`parse_kml`].
+pub fn kml_fields(data: &[u8]) -> Result<KmlResult, String> {
+    parse(data, Labels::All)
+}
+
 // The event loop is one state machine; splitting it would only move the match arms.
 #[allow(clippy::too_many_lines)]
-pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, String> {
+fn parse(data: &[u8], labels: Labels<'_>) -> Result<KmlResult, String> {
     let mut reader = Reader::from_reader(data);
     // Untrimmed: entity references arrive as separate events, and trimming each
     // text piece would drop the spaces in a label such as `A &amp; B`.
 
     let mut polygons: Vec<(Vec<Polygon>, Option<String>)> = Vec::new();
     let mut skipped_non_polygon = 0usize;
+    let mut fields: Vec<BTreeMap<String, String>> = Vec::new();
     let mut state = PlacemarkState::default();
     let mut depth = 0usize;
     let mut buf = Vec::new();
@@ -163,13 +204,13 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
                     }
                     "Data" => state.data_name = name_attribute(e)?,
                     "value" => {
-                        state.capture_value =
-                            label_field.is_some() && state.data_name.as_deref() == label_field;
+                        state.field = labels.capture(state.data_name.as_deref());
+                        state.capture_value = state.field.is_some();
                         state.value.clear();
                     }
                     "SimpleData" => {
-                        state.capture_value =
-                            label_field.is_some() && name_attribute(e)?.as_deref() == label_field;
+                        state.field = labels.capture(name_attribute(e)?.as_deref());
+                        state.capture_value = state.field.is_some();
                         state.value.clear();
                     }
                     _ => {}
@@ -190,6 +231,9 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
                             }
                         } else {
                             polygons.push((std::mem::take(&mut state.polys), state.label.take()));
+                            if let Labels::All = labels {
+                                fields.push(std::mem::take(&mut state.fields));
+                            }
                         }
                         state.in_placemark = false;
                     }
@@ -198,7 +242,13 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
                     "coordinates" => state.capture_coords = false,
                     "value" | "SimpleData" => {
                         if state.capture_value {
-                            state.label = Some(state.value.trim().to_owned());
+                            let value = state.value.trim().to_owned();
+                            match (labels, state.field.take()) {
+                                (Labels::All, Some(name)) => {
+                                    state.fields.insert(name, value);
+                                }
+                                _ => state.label = Some(value),
+                            }
                         }
                         state.capture_value = false;
                     }
@@ -227,6 +277,7 @@ pub fn parse_kml(data: &[u8], label_field: Option<&str>) -> Result<KmlResult, St
     Ok(KmlResult {
         polygons,
         skipped_non_polygon,
+        fields,
     })
 }
 
@@ -359,5 +410,38 @@ mod tests {
             parse_kml(kml.as_bytes(), None).unwrap().polygons,
             Vec::new()
         );
+    }
+
+    #[test]
+    fn kml_fields_matches_one_parse_per_field() {
+        let placemarks = [
+            format!(r#"<ExtendedData><Data name="kind"><value> roof </value></Data><Data name="a&amp;b"><value>x</value></Data></ExtendedData>{SQUARE}"#),
+            format!(r##"<ExtendedData><SchemaData schemaUrl="#s"><SimpleData name="kind">wall</SimpleData><SimpleData name='q'>1</SimpleData></SchemaData></ExtendedData>{SQUARE}"##),
+            r#"<ExtendedData><Data name="kind"><value>point</value></Data></ExtendedData><Point><coordinates>0,0</coordinates></Point>"#.to_owned(),
+            format!(r#"<ExtendedData><Data name="kind"><value>a</value></Data><Data name="kind"><value>b</value></Data><Data><value>nameless</value></Data></ExtendedData>{SQUARE}"#),
+            SQUARE.to_owned(),
+        ];
+        let body = placemarks
+            .map(|p| ["<Placemark>", &p, "</Placemark>"].concat())
+            .concat();
+        let kml = format!(
+            r#"<kml><Document><Data name="outside"><value>z</value></Data>{body}</Document></kml>"#
+        );
+        let all = kml_fields(kml.as_bytes()).unwrap();
+        assert_eq!(all.polygons.len(), 4);
+        assert_eq!(all.fields.len(), 4);
+        assert_eq!(all.skipped_non_polygon, 1);
+        for name in ["kind", "a&b", "q", "outside", "missing"] {
+            let one = parse_kml(kml.as_bytes(), Some(name)).unwrap();
+            let expected: Vec<Option<String>> = one.polygons.into_iter().map(|(_, l)| l).collect();
+            let got: Vec<Option<String>> =
+                all.fields.iter().map(|f| f.get(name).cloned()).collect();
+            assert_eq!(got, expected, "field {name}");
+        }
+        assert_eq!(all.fields[0]["kind"], "roof");
+        assert_eq!(all.fields[2]["kind"], "b", "the last value of a field wins");
+        assert_eq!(all.fields[3].len(), 0);
+        let one = parse_kml(kml.as_bytes(), Some("kind")).unwrap();
+        assert_eq!(one.fields.len(), 0, "only kml_fields keeps every field");
     }
 }

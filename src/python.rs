@@ -19,6 +19,7 @@ use numpy::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 use tile_math::{BBox, TileIndex};
 
 /// A fetched tile and its encoded image bytes, as returned to Python; with
@@ -751,6 +752,22 @@ fn parse_kml(
     Ok((result.polygons, result.skipped_non_polygon))
 }
 
+/// Every `<Data>`/`<SimpleData>` field of each polygon placemark of a KML file.
+///
+/// Returns one `{name: value}` dict per entry of `parse_kml(data)[0]`, in the
+/// same order, from a single pass over the file: `fields[i].get(name)` is the
+/// label `parse_kml(data, name)` gives polygon `i`.
+///
+/// # Errors
+/// As `parse_kml`.
+#[pyfunction]
+fn kml_fields(py: Python<'_>, data: &[u8]) -> PyResult<Vec<BTreeMap<String, String>>> {
+    let result = py
+        .detach(|| kml_parser::kml_fields(data))
+        .map_err(|err| PyValueError::new_err(format!("invalid KML: {err}")))?;
+    Ok(result.fields)
+}
+
 /// Map a GeoTIFF reader error to `ValueError` (bad input, corrupt or
 /// unsupported file) or `RuntimeError` (file system or network failure).
 fn geotiff_error(error: geotiff::GeoTiffError) -> PyErr {
@@ -947,6 +964,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_patches, m)?)?;
     m.add_function(wrap_pyfunction!(write_geotiffs, m)?)?;
     m.add_function(wrap_pyfunction!(parse_kml, m)?)?;
+    m.add_function(wrap_pyfunction!(kml_fields, m)?)?;
     m.add_class::<PyTileIndex>()?;
     m.add_class::<PyBBox>()?;
     // The names before mapcv 0.3, for code that imported them.

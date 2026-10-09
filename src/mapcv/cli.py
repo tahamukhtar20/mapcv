@@ -51,7 +51,7 @@ import mapcv
 from mapcv import doctor
 from mapcv._confine import LinkEscapeError, check_folder_links
 from mapcv._inputs import check_regular_file
-from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
+from mapcv._mapcv_rs import kml_fields as _kml_fields
 from mapcv._redact import REDACTOR, RedactingFormatter
 from mapcv._redact import redact_url as _redact_url
 from mapcv.config import (
@@ -1711,12 +1711,12 @@ def label_fields(path: Path, max_values: int = 5, layer: str | None = None) -> d
     values: dict[str, Counter[str]] = {}
     suffix = path.suffix.lower()
     if suffix == ".kml":
-        data = kml_to_utf8(path.read_bytes())
-        text = data.decode("utf-8", errors="replace")
-        names = set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text))
-        for name in sorted(names):
-            polygons, _ = _parse_kml_bytes(data, name)
-            values[name] = Counter(label for _, label in polygons if label)
+        # Every field of every polygon in one pass, not one parse per field name.
+        for fields in _kml_fields(kml_to_utf8(path.read_bytes())):
+            for name, label in fields.items():
+                if label:
+                    values.setdefault(name, Counter())[label] += 1
+        values = dict(sorted(values.items()))
     elif suffix in (".geojson", ".json"):
         obj: Any = json.loads(path.read_bytes().decode("utf-8"))
         features = obj.get("features", [obj]) if isinstance(obj, dict) else []

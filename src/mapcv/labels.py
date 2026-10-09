@@ -296,6 +296,115 @@ def _drop_invalid(
     return [geometries[i] for i in kept], [labels[i] for i in kept], len(bad)
 
 
+_KML_DECLARATION = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*<\?xml\b[^>]*\?>")
+_KML_ENCODING = re.compile(rb"""(\bencoding\s*=\s*)(?:"([^"]*)"|'([^']*)')""")
+_UTF8_NAMES = frozenset({"utf-8", "utf8", "us-ascii", "ascii"})
+_WIDE_NAMES = frozenset(
+    {"utf-16", "utf-16le", "utf-16be", "utf16", "ucs-2", "utf-32", "utf-32le", "utf-32be"}
+)
+_SINGLE_BYTE_CODECS = {
+    "iso-8859-1": "latin-1",
+    "iso_8859-1": "latin-1",
+    "latin1": "latin-1",
+    "latin-1": "latin-1",
+    "l1": "latin-1",
+    "windows-1252": "cp1252",
+    "cp1252": "cp1252",
+}
+# (byte order mark, codec) of the Unicode forms a KML file can have; UTF-32 first, since the
+# UTF-32 little-endian mark starts with the UTF-16 one.
+_KML_BOMS = (
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+# The first bytes of "<?" in a UTF-16/32 file that has no byte order mark (XML 1.0, appendix F).
+_KML_BARE_WIDE = (
+    (b"<\x00?\x00", "utf-16-le"),
+    (b"\x00<\x00?", "utf-16-be"),
+    (b"<\x00\x00\x00", "utf-32-le"),
+    (b"\x00\x00\x00<", "utf-32-be"),
+)
+
+
+def _set_declared_utf8(text: bytes) -> bytes:
+    """``text`` (UTF-8 bytes of an XML document) with its declaration saying UTF-8."""
+    declaration = _KML_DECLARATION.match(text)
+    if declaration is None:
+        return text
+    fixed = _KML_ENCODING.sub(rb'\1"UTF-8"', declaration.group(0))
+    return fixed + text[declaration.end() :]
+
+
+def kml_to_utf8(data: bytes) -> bytes:
+    """The bytes of a KML file as UTF-8, whatever encoding it is saved in.
+
+    mapcv's KML parser reads UTF-8. The file's own encoding is taken from its byte order
+    mark (UTF-16 and UTF-32) or its XML declaration (``encoding="ISO-8859-1"`` and
+    ``"windows-1252"`` are converted), and the declaration is rewritten to say UTF-8 so
+    the result is stable if it goes through here again. UTF-8 (with or without a byte
+    order mark) is returned as it is.
+
+    Raises:
+        ValueError: The declared encoding is not one of those, or the bytes are not valid
+            in the encoding the file declares.
+    """
+    for mark, codec in _KML_BOMS:
+        if data.startswith(mark):
+            try:
+                return _set_declared_utf8(data.decode(codec).encode("utf-8"))
+            except UnicodeDecodeError:
+                raise ValueError(
+                    f"the KML file starts like {codec.upper()} text but is not valid "
+                    f"{codec.upper()}; save it as UTF-8"
+                ) from None
+    for prefix, codec in _KML_BARE_WIDE:
+        if data.startswith(prefix):
+            try:
+                return _set_declared_utf8(data.decode(codec).encode("utf-8"))
+            except UnicodeDecodeError:
+                raise ValueError(
+                    f"the KML file looks like {codec.upper()} text but is not valid "
+                    f"{codec.upper()}; save it as UTF-8"
+                ) from None
+    declaration = _KML_DECLARATION.match(data)
+    if declaration is None:
+        return data
+    found = _KML_ENCODING.search(declaration.group(0))
+    if found is None:
+        return data
+    name = (found.group(2) if found.group(2) is not None else found.group(3)).decode(
+        "ascii", errors="replace"
+    )
+    key = name.strip().lower()
+    if key in _UTF8_NAMES:
+        return data
+    single_byte = _SINGLE_BYTE_CODECS.get(key)
+    if single_byte is not None:
+        try:
+            return _set_declared_utf8(data.decode(single_byte).encode("utf-8"))
+        except UnicodeDecodeError:
+            raise ValueError(
+                f"the KML file declares the encoding {name!r} but has bytes that are not "
+                "valid in it; save it as UTF-8"
+            ) from None
+    # Another declared encoding (or UTF-16 without a byte order mark): mapcv only reads
+    # such a file when its bytes are valid UTF-8 anyway, as it always has.
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    else:
+        return _set_declared_utf8(data)
+    if key in _WIDE_NAMES:
+        raise ValueError(
+            f"the KML file declares the encoding {name!r} but is not saved as {name} text "
+            "(it has no byte order mark); save it as UTF-8"
+        )
+    raise ValueError(f"the KML file's encoding {name!r} is not supported; save it as UTF-8")
+
+
 def parse_kml(
     data: bytes,
     label_field: str | None = None,
@@ -305,9 +414,11 @@ def parse_kml(
 
     Labels are read from ``<Data>`` or ``<SimpleData>`` fields named
     ``label_field``; see :func:`assign_class_ids` for how IDs are chosen.
-    Points, lines, and unlabeled placemarks are skipped with a warning.
-    Returns (geometries, class_map).
+    Points, lines, and unlabeled placemarks are skipped with a warning. The file may be
+    UTF-8, UTF-16/32 (with a byte order mark), ISO-8859-1 or windows-1252 (as its XML
+    declaration says); see :func:`kml_to_utf8`. Returns (geometries, class_map).
     """
+    data = kml_to_utf8(data)
     raw_polys, non_polygon = _parse_kml_bytes(data, label_field)
     geometries: list[BaseGeometry] = []
     labels: list[str | None] = []

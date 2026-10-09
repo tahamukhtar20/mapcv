@@ -73,6 +73,7 @@ from mapcv.labels import (
     VECTOR_LABEL_SUFFIXES,
     _check_geojson_crs,
     _normalize_label,
+    kml_to_utf8,
     parse_kml,
 )
 from mapcv.locking import DatasetBusyError, StagingDirError
@@ -1203,6 +1204,7 @@ def _scan_geojson(data: bytes) -> _Scan:
 
 
 def _scan_kml(data: bytes) -> _Scan:
+    data = kml_to_utf8(data)
     text = data.decode("utf-8", errors="replace")
     names = sorted(set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text)))
     scan = _Scan()

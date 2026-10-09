@@ -69,6 +69,7 @@ from mapcv.labels import (
     MAX_CLASS_ID,
     VECTOR_LABEL_SUFFIXES,
     _normalize_label,
+    kml_to_utf8,
     load_vector_labels,
     vector_attributes,
     vector_layers,
@@ -1710,7 +1711,7 @@ def label_fields(path: Path, max_values: int = 5, layer: str | None = None) -> d
     values: dict[str, Counter[str]] = {}
     suffix = path.suffix.lower()
     if suffix == ".kml":
-        data = path.read_bytes()
+        data = kml_to_utf8(path.read_bytes())
         text = data.decode("utf-8", errors="replace")
         names = set(re.findall(r'<(?:\w+:)?(?:Simple)?Data\s+name="([^"]+)"', text))
         for name in sorted(names):

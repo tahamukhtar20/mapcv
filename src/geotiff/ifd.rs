@@ -108,6 +108,21 @@ const MAX_IFDS: usize = 1024;
 const MAX_ENTRIES: usize = 4096;
 /// Largest tag value loaded (64 MiB holds 8 million 64-bit offsets).
 const MAX_TAG_BYTES: usize = 64 * 1024 * 1024;
+/// Out-of-line tag values of a file may hold this much more than the file itself:
+/// values of distinct tags occupy distinct bytes of the file, and only small values
+/// (`BitsPerSample` arrays, `JPEGTables`) are sometimes shared between IFDs.
+const SHARED_TAG_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The most values a tag may hold when its size is set by the format rather than by
+/// the image: one per band (at most 65535), or a GeoKey directory (a 4-value header and
+/// at most 65535 4-value keys). `None` for the tags whose size grows with the image.
+fn max_values(tag_id: u16) -> Option<u64> {
+    match tag_id {
+        tag::BITS_PER_SAMPLE | tag::SAMPLE_FORMAT => Some(65_535),
+        tag::GEO_KEY_DIRECTORY => Some(4 + 4 * 65_535),
+        _ => None,
+    }
+}
 
 /// The raw value of one tag, in file byte order.
 #[derive(Clone, Debug)]
@@ -122,6 +137,66 @@ struct Entry {
 pub struct Ifd {
     order: ByteOrder,
     entries: BTreeMap<u16, Entry>,
+}
+
+/// The unsigned integer values of one tag (BYTE, SHORT, LONG, LONG8 or IFD types),
+/// kept as stored in the file and decoded one at a time: a chunk offset array decodes
+/// to up to eight times its size in the file.
+#[derive(Clone, Debug)]
+pub struct UintArray {
+    order: ByteOrder,
+    width: usize,
+    data: Vec<u8>,
+}
+
+impl UintArray {
+    /// Number of values.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.data.len() / self.width
+    }
+
+    /// Whether there are no values.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data.len() < self.width
+    }
+
+    /// The value at `index`, `None` past the end.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<u64> {
+        let start = index.checked_mul(self.width)?;
+        let b = self.data.get(start..start.checked_add(self.width)?)?;
+        Some(decode_uint(self.order, self.width, b))
+    }
+
+    /// Every value, in order.
+    pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+}
+
+/// Bytes per value of an unsigned integer tag, or an error for another field type.
+fn uint_width(tag: u16, field_type: u16) -> Result<usize> {
+    match field_type {
+        1 | 7 => Ok(1),
+        3 => Ok(2),
+        4 | 13 => Ok(4),
+        16 | 18 => Ok(8),
+        t => Err(GeoTiffError::Invalid(format!(
+            "TIFF tag {tag} has field type {t}, expected an unsigned integer type"
+        ))),
+    }
+}
+
+/// One unsigned value of `width` bytes (1, 2, 4 or 8) at the start of `b`.
+fn decode_uint(order: ByteOrder, width: usize, b: &[u8]) -> u64 {
+    match width {
+        1 => u64::from(b[0]),
+        2 => u64::from(u16_at(order, b)),
+        4 => u64::from(u32_at(order, b)),
+        _ => u64_at(order, b),
+    }
 }
 
 /// Size in bytes of one value of a TIFF field type, `None` for unknown types.
@@ -170,56 +245,40 @@ impl Ifd {
     ///
     /// # Errors
     /// Returns [`GeoTiffError::Invalid`] when the tag has a non-integer type.
-    pub fn uints(&self, tag: u16) -> Result<Option<Vec<u64>>> {
+    pub fn uint_array(&self, tag: u16) -> Result<Option<UintArray>> {
         let Some(entry) = self.entries.get(&tag) else {
             return Ok(None);
         };
-        let o = self.order;
-        let values = match entry.field_type {
-            1 | 7 => entry.data.iter().map(|&v| u64::from(v)).collect(),
-            3 => entry
-                .data
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|b| u64::from(u16_at(o, b)))
-                .collect(),
-            4 | 13 => entry
-                .data
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| u64::from(u32_at(o, b)))
-                .collect(),
-            16 | 18 => entry
-                .data
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|b| u64_at(o, b))
-                .collect(),
-            t => {
-                return Err(GeoTiffError::Invalid(format!(
-                    "TIFF tag {tag} has field type {t}, expected an unsigned integer type"
-                )))
-            }
-        };
-        Ok(Some(values))
+        Ok(Some(UintArray {
+            order: self.order,
+            width: uint_width(tag, entry.field_type)?,
+            data: entry.data.clone(),
+        }))
     }
 
-    /// The tag's single unsigned value, or `default` when absent.
+    /// The tag's values as unsigned integers, decoded into a vector.
+    ///
+    /// # Errors
+    /// As [`Ifd::uint_array`].
+    pub fn uints(&self, tag: u16) -> Result<Option<Vec<u64>>> {
+        Ok(self.uint_array(tag)?.map(|values| values.iter().collect()))
+    }
+
+    /// The tag's first unsigned value, or `default` when absent.
     ///
     /// # Errors
     /// Returns [`GeoTiffError::Invalid`] for a non-integer type or an empty value.
     pub fn uint(&self, tag: u16, default: Option<u64>) -> Result<Option<u64>> {
-        match self.uints(tag)? {
-            None => Ok(default),
-            Some(values) => values
-                .first()
-                .copied()
-                .map(Some)
-                .ok_or_else(|| GeoTiffError::Invalid(format!("TIFF tag {tag} has no value"))),
-        }
+        let Some(entry) = self.entries.get(&tag) else {
+            return Ok(default);
+        };
+        // Decode only the first value, not the whole tag.
+        let width = uint_width(tag, entry.field_type)?;
+        entry
+            .data
+            .get(..width)
+            .map(|b| Some(decode_uint(self.order, width, b)))
+            .ok_or_else(|| GeoTiffError::Invalid(format!("TIFF tag {tag} has no value")))
     }
 
     /// The tag's values as doubles (DOUBLE or FLOAT types).
@@ -327,6 +386,8 @@ pub fn read_tiff(source: &dyn ByteSource) -> Result<TiffFile> {
     };
     let mut ifds = Vec::new();
     let mut seen = HashSet::new();
+    // Bytes of out-of-line tag values still allowed for the rest of the file.
+    let mut tag_budget = source.size().saturating_add(SHARED_TAG_BYTES);
     while next != 0 {
         if !seen.insert(next) {
             return Err(GeoTiffError::Invalid(format!(
@@ -338,7 +399,7 @@ pub fn read_tiff(source: &dyn ByteSource) -> Result<TiffFile> {
                 "{name} has more than {MAX_IFDS} IFDs"
             )));
         }
-        let (ifd, following) = read_ifd(source, order, bigtiff, next)?;
+        let (ifd, following) = read_ifd(source, order, bigtiff, next, &mut tag_budget)?;
         ifds.push(ifd);
         next = following;
     }
@@ -353,11 +414,15 @@ pub fn read_tiff(source: &dyn ByteSource) -> Result<TiffFile> {
 }
 
 /// Read the IFD at `offset`; returns it and the offset of the next IFD (0 at the end).
+///
+/// Its out-of-line values are taken from `tag_budget` before any is read, so that a
+/// file cannot make the reader hold more tag data than the file is long.
 fn read_ifd(
     source: &dyn ByteSource,
     order: ByteOrder,
     bigtiff: bool,
     offset: u64,
+    tag_budget: &mut u64,
 ) -> Result<(Ifd, u64)> {
     let name = source.describe();
     // Sizes of the entry count, one entry, and an inline value or offset.
@@ -391,6 +456,7 @@ fn read_ifd(
 
     let mut entries = BTreeMap::new();
     let mut deferred: Vec<(u16, u16, u64, u64, usize)> = Vec::new();
+    let mut listed: Vec<u16> = Vec::new();
     for raw in table[..n * entry_size].chunks_exact(entry_size) {
         let tag_id = u16_at(order, raw);
         if !tag::LOADED.contains(&tag_id) {
@@ -400,6 +466,12 @@ fn read_ifd(
         let Some(size) = type_size(field_type) else {
             continue;
         };
+        // A tag appears once per IFD (TIFF 6.0, section 2). Like libtiff, keep the first
+        // and ignore repeats, which would otherwise each be read.
+        if listed.contains(&tag_id) {
+            continue;
+        }
+        listed.push(tag_id);
         let (count, value) = if bigtiff {
             (u64_at(order, &raw[4..]), &raw[12..20])
         } else {
@@ -407,6 +479,7 @@ fn read_ifd(
         };
         let len = usize::try_from(count)
             .ok()
+            .filter(|_| max_values(tag_id).is_none_or(|most| count <= most))
             .and_then(|c| c.checked_mul(size))
             .filter(|&l| l <= MAX_TAG_BYTES)
             .ok_or_else(|| {
@@ -428,7 +501,14 @@ fn read_ifd(
             deferred.push((tag_id, field_type, count, read_offset(value), len));
         }
     }
-    // Fetch all out-of-line values of this IFD in one batch.
+    // Fetch all out-of-line values of this IFD in one batch, once they fit the budget.
+    let wanted: u64 = deferred.iter().map(|&(.., len)| len as u64).sum();
+    *tag_budget = tag_budget.checked_sub(wanted).ok_or_else(|| {
+        GeoTiffError::Invalid(format!(
+            "{name}: its TIFF tags hold more data than the file itself, so the file is \
+             corrupt; rewrite it (e.g. gdal_translate or rio convert) and try again"
+        ))
+    })?;
     let ranges: Vec<(u64, usize)> = deferred.iter().map(|&(.., at, len)| (at, len)).collect();
     let values = source.read_ranges(&ranges)?;
     for ((tag_id, field_type, count, ..), data) in deferred.into_iter().zip(values) {
@@ -496,5 +576,93 @@ mod tests {
         assert!(err.to_string().contains("loop"), "{err}");
         let err = read_tiff(&MemorySource::new(b"\x89PNG\r\n\x1a\n0000".to_vec())).unwrap_err();
         assert!(err.to_string().contains("not a TIFF"), "{err}");
+    }
+
+    /// A TIFF with a 1 MiB block of zeros at offset 8, then `ifds` IFDs that each list
+    /// `(tag, type, count, value)` entries.
+    fn tiff_with_block(ifds: &[Vec<(u16, u16, u32, u32)>]) -> Vec<u8> {
+        let block = 1 << 20;
+        let mut f = b"II".to_vec();
+        f.extend(42u16.to_le_bytes());
+        f.extend((8 + block as u32).to_le_bytes());
+        f.resize(8 + block, 0);
+        for (i, entries) in ifds.iter().enumerate() {
+            f.extend((entries.len() as u16).to_le_bytes());
+            for &(tag, ty, count, value) in entries {
+                f.extend(tag.to_le_bytes());
+                f.extend(ty.to_le_bytes());
+                f.extend(count.to_le_bytes());
+                f.extend(value.to_le_bytes());
+            }
+            let next = if i + 1 == ifds.len() {
+                0
+            } else {
+                f.len() as u32 + 4
+            };
+            f.extend(next.to_le_bytes());
+        }
+        f
+    }
+
+    #[test]
+    fn reads_a_tag_repeated_in_one_ifd_once() {
+        // Each of the 4096 entries read the 1 MiB block before: 4 GiB. Now the first
+        // is kept, as libtiff does, and only it is read.
+        let mut entries = vec![(tag::IMAGE_WIDTH, 3, 1, 7), (tag::IMAGE_WIDTH, 3, 1, 9)];
+        entries.extend(vec![(tag::STRIP_OFFSETS, 1, 1 << 20, 8); MAX_ENTRIES - 2]);
+        let tiff = read_tiff(&MemorySource::new(tiff_with_block(&[entries]))).unwrap();
+        let ifd = &tiff.ifds[0];
+        assert_eq!(ifd.uint(tag::IMAGE_WIDTH, None).unwrap(), Some(7));
+        assert_eq!(
+            ifd.uint_array(tag::STRIP_OFFSETS).unwrap().unwrap().len(),
+            1 << 20
+        );
+    }
+
+    #[test]
+    fn tag_values_are_bounded_by_the_file_size() {
+        // Each IFD lists its own tags once, but all point at the same 1 MiB block.
+        let ifd = vec![
+            (tag::IMAGE_WIDTH, 3, 1, 1),
+            (tag::STRIP_OFFSETS, 1, 1 << 20, 8),
+        ];
+        let tiff = read_tiff(&MemorySource::new(tiff_with_block(&vec![ifd.clone(); 8])));
+        assert_eq!(
+            tiff.unwrap().ifds.len(),
+            8,
+            "shared values within the slack"
+        );
+        let err = read_tiff(&MemorySource::new(tiff_with_block(&vec![ifd; 64]))).unwrap_err();
+        assert!(err.to_string().contains("more data than the file"), "{err}");
+    }
+
+    #[test]
+    fn rejects_more_band_values_than_bands_can_exist() {
+        let ifd = vec![(tag::BITS_PER_SAMPLE, 3, 65_536, 8)];
+        let err = read_tiff(&MemorySource::new(tiff_with_block(&[ifd]))).unwrap_err();
+        assert!(err.to_string().contains("65536 values"), "{err}");
+    }
+
+    #[test]
+    fn decodes_integer_arrays_on_access() {
+        let ifd = vec![
+            (tag::IMAGE_WIDTH, 4, 1, 7),
+            (tag::STRIP_OFFSETS, 3, 3, 8),
+            (tag::STRIP_BYTE_COUNTS, 16, 2, 16),
+        ];
+        let mut f = tiff_with_block(&[ifd]);
+        f[8..14].copy_from_slice(&[1, 0, 2, 0, 3, 0]);
+        f[16..24].copy_from_slice(&2u64.to_le_bytes());
+        f[24..32].copy_from_slice(&3u64.to_le_bytes());
+        let tiff = read_tiff(&MemorySource::new(f)).unwrap();
+        let ifd = &tiff.ifds[0];
+        assert_eq!(ifd.uint(tag::IMAGE_WIDTH, None).unwrap(), Some(7));
+        let offsets = ifd.uint_array(tag::STRIP_OFFSETS).unwrap().unwrap();
+        assert_eq!(offsets.len(), 3);
+        assert_eq!(offsets.iter().collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(offsets.get(3), None);
+        assert_eq!(ifd.uints(tag::STRIP_BYTE_COUNTS).unwrap(), Some(vec![2, 3]));
+        assert_eq!(ifd.uint(tag::STRIP_OFFSETS, None).unwrap(), Some(1));
+        assert_eq!(ifd.uint(tag::ROWS_PER_STRIP, Some(5)).unwrap(), Some(5));
     }
 }

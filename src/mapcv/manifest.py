@@ -14,6 +14,7 @@ import os
 import posixpath
 import re
 import shlex
+import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
@@ -666,3 +667,32 @@ def patch_folders(manifest: Manifest) -> list[str]:
         for path in entry["files"].values():
             folders.setdefault(path.split("/", 1)[0], None)
     return list(folders)
+
+
+_FINISH_HINT = "Run mapcv generate again with the dataset's config to finish it."
+
+
+def warn_if_incomplete(manifest: Manifest, consequence: str) -> None:
+    """Warn when ``generate`` stopped before it finished the dataset (``complete`` is
+    ``false``). ``consequence`` says what that means for the caller's result, such as
+    "the statistics cover only the patches written so far"."""
+    if manifest.complete is False:
+        warnings.warn(
+            f"the dataset is incomplete: mapcv generate stopped before it finished, so "
+            f"{consequence}. {_FINISH_HINT}",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def require_complete(manifest: Manifest, consequence: str) -> None:
+    """Raise ``ValueError`` when ``generate`` stopped before it finished the dataset.
+
+    Manifests without the flag (mapcv 0.2 and earlier) pass: nothing says they are not
+    finished.
+    """
+    if manifest.complete is False:
+        raise ValueError(
+            f"the dataset is incomplete: mapcv generate stopped before it finished, so "
+            f"{consequence}. {_FINISH_HINT}"
+        )

@@ -2795,10 +2795,13 @@ def stats(
         raise typer.BadParameter("must be train, val, test or all.", param_hint="'--split'")
     _require_dataset(staging_dir)
     try:
-        path, values = write_stats(staging_dir, split_name)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            path, values = write_stats(staging_dir, split_name)
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _fail(f"[red]Cannot compute the statistics:[/red] {escape(str(exc))}")
+    _show_warnings(caught, set())
     table = Table(box=None, padding=(0, 2), show_edge=False)
     for column in ("source", "band", "mean", "std", "min", "max"):
         table.add_column(column, justify="left" if column in ("source", "band") else "right")
@@ -2838,13 +2841,16 @@ def card(
 
     _require_dataset(staging_dir)
     try:
-        path = write_card(staging_dir, overwrite=force)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            path = write_card(staging_dir, overwrite=force)
     except FileExistsError as exc:
         _debug_traceback(exc)
         _fail(f"[red]{escape(str(exc))}[/red]")
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _fail(f"[red]Cannot write the dataset card:[/red] {escape(str(exc))}")
+    _show_warnings(caught, set())
     _console.print(
         f"[green]✓[/green] Dataset card written to [bold]{escape(str(path))}[/bold]. Its licence "
         "is 'other' until you set it.",

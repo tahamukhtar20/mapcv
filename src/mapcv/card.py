@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mapcv.manifest import Manifest, SourceRecord
+from mapcv.manifest import Manifest, SourceRecord, warn_if_incomplete
 from mapcv.stats import STATS_FILENAME
 
 CARD_FILENAME = "README.md"
@@ -111,6 +111,7 @@ def _split_counts(staging_dir: Path) -> dict[str, int]:
 def card_text(staging_dir: Path) -> str:
     """The card of the dataset in ``staging_dir`` (see the module docs)."""
     manifest = Manifest.load(staging_dir / "manifest.json")
+    warn_if_incomplete(manifest, "the card describes only the patches written so far")
     stats: dict[str, Any] = {}
     stats_path = staging_dir / STATS_FILENAME
     if stats_path.exists():

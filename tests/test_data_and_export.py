@@ -441,3 +441,43 @@ def test_export_cli(tmp_path: Path, scene: dict[str, Any]) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "3 Parquet files" in result.output and (tmp_path / "hf" / "README.md").exists()
+
+
+# ── Unfinished datasets ──────────────────────────────────────────────────────
+
+
+def _png_dataset(tmp_path: Path, scene: dict[str, Any], name: str = "d") -> Path:
+    return _generate(
+        tmp_path,
+        scene,
+        name,
+        writer={"image_format": "png", "mask_format": "png"},
+        imagery={"type": "geotiff", "path": str(tmp_path / "rgb.tif")},
+    )
+
+
+def _unfinish(root: Path) -> None:
+    """Make the manifest say that generate stopped before it finished."""
+    manifest = Manifest.load(root / "manifest.json")
+    manifest.complete = False
+    manifest.save(root / "manifest.json")
+
+
+def test_stats_and_card_warn_about_a_dataset_that_generate_did_not_finish(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    root = _png_dataset(tmp_path, scene)
+    fine = runner.invoke(app, ["stats", str(root)], env=ENV)
+    assert fine.exit_code == 0 and "incomplete" not in fine.output
+    _unfinish(root)
+    for command in ("stats", "card"):
+        result = runner.invoke(
+            app, [command, str(root), *(["--force"] if command == "card" else [])], env=ENV
+        )
+        text = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "⚠" in text and "the dataset is incomplete" in text, text
+        assert "Run mapcv generate again" in text
+    assert (root / "stats.json").exists() and (root / "README.md").exists()
+    with pytest.warns(UserWarning, match="the dataset is incomplete"):
+        write_stats(root)

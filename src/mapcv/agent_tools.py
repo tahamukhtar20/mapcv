@@ -1958,12 +1958,14 @@ def stats(state: ToolState, dataset: str, split: str = "train", save: bool = Fal
         sandbox.require_write("stats with save=true")
     folder, _ = _checked_dataset(state, dataset)
     try:
-        if save:
-            path, values = write_stats(folder, split)
-        else:
-            path, values = None, dataset_stats(folder, split)
+        with capture_warnings() as caught:
+            if save:
+                path, values = write_stats(folder, split)
+            else:
+                path, values = None, dataset_stats(folder, split)
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         raise ToolFailure(f"Cannot compute the statistics: {exc}") from None
+    notes = _warning_texts(caught)
     weights = (values.get("classes") or {}).get("median_frequency_weights")
     text = (
         f"{sandbox.rel(folder)}: statistics of {values['patches']:,} patch(es), "
@@ -1971,8 +1973,13 @@ def stats(state: ToolState, dataset: str, split: str = "train", save: bool = Fal
     )
     if weights:
         text += "; class weights " + ", ".join(f"{k} {v:.3g}" for k, v in weights.items())
-    out = {"dataset": sandbox.rel(folder), **values, "saved": sandbox.rel(path) if path else None}
-    return ToolResult(text + ".", out)
+    out = {
+        "dataset": sandbox.rel(folder),
+        **values,
+        "saved": sandbox.rel(path) if path else None,
+        "warnings": notes,
+    }
+    return ToolResult(" ".join([text + ".", *notes]), out)
 
 
 def verify(

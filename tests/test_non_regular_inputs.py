@@ -188,3 +188,36 @@ def test_the_mcp_tools_refuse_a_pipe(tmp_path: Path) -> None:
     )
     with pytest.raises(ToolFailure, match="not a regular file"):
         _bounded(lambda: plan_tool(state, None, labels))
+
+
+def test_the_validate_command_refuses_a_pipe_or_device_as_an_input(
+    special: Callable[[str], Path], tmp_path: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from mapcv.cli import app
+
+    runner = CliRunner()
+    path = special("labels.geojson")
+    text = (
+        "region: {west: 4.0, south: 52.0, east: 4.02, north: 52.02}\n"
+        "imagery: {type: xyz, zoom: 16, source: esri_satellite}\n"
+        f"labels: {{path: {path}}}\n"
+        "sampler: {patch_size: 256}\nwriter: {staging_dir: out}\n"
+    )
+    (tmp_path / "mapcv.yaml").write_text(text)
+    result = _bounded(lambda: runner.invoke(app, ["validate", str(tmp_path / "mapcv.yaml")]))
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "labels.path" in output and "not a regular file" in output
+    assert "is a valid config" not in output
+
+    # An ordinary file, and one that is missing, are as before.
+    ordinary = tmp_path / "ordinary.geojson"
+    ordinary.write_text('{"type": "FeatureCollection", "features": []}')
+    (tmp_path / "ok.yaml").write_text(text.replace(str(path), str(ordinary)))
+    result = runner.invoke(app, ["validate", str(tmp_path / "ok.yaml")])
+    assert result.exit_code == 0 and "is a valid config" in result.output
+    (tmp_path / "gone.yaml").write_text(text.replace(str(path), str(tmp_path / "gone.geojson")))
+    result = runner.invoke(app, ["validate", str(tmp_path / "gone.yaml")])
+    assert result.exit_code == 0 and "labels.path not found" in " ".join(result.output.split())

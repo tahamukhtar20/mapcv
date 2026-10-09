@@ -582,7 +582,9 @@ Target pixels are `NaN` where there is no value: outside the raster, on its NoDa
 | `max_empty_ratio` | float, 0–1 | `1.0` | Skip patches whose empty fraction (pixels without imagery: failed tiles, NoData, outside the raster) is **above** this. A patch without a single pixel of imagery is always skipped, and `generate` says how many were |
 | `min_label_ratio` | float, 0–1 | `0.0` | Skip patches whose labeled fraction (mask pixels that are neither background `0` nor `ignore_index`) is **below** this. Only applies with labels. For detection, the labeled fraction is the area of the kept objects' visible parts; for classification, the valid pixels of any class over the whole patch |
 | `random_seed` | int ≥ 0 | `42` | Seed for `mode: random` |
-| `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so) |
+| `random_count` | int ≥ 0 | `100` | Number of random patches **in total** (not per chunk). Capped at the number of distinct positions on the raster (a warning says so), and at most 3,000,000 (see below) |
+
+**Patch limit.** One run enumerates at most **3,000,000** patches (grid positions over the whole raster, or `random_count`), because every position is held in memory while the run lasts. `plan` still counts any grid, from the raster's size alone, and lists the limit as a problem; `generate` refuses a larger one before it writes anything, with the number of patches, the limit and what to change: raise `sampler.stride` (or `patch_size`), shrink the region or split it into several smaller ones. With `region.path` the limit applies to the grid over the region's bounding box, before the polygons are applied. Jobs over 1,000,000 patches ask for confirmation first.
 
 **Edge strategies:**
 

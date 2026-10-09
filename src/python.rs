@@ -376,6 +376,22 @@ fn grid_sample_anchors(
         .map_err(PyValueError::new_err)
 }
 
+/// Number of patches `grid_sample_anchors` returns, as `(rows, columns, total)`.
+///
+/// Computed from the sizes alone: nothing is allocated, whatever the sizes.
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, stride, edge_strategy = "pad"))]
+fn grid_anchor_count(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    stride: usize,
+    edge_strategy: &str,
+) -> PyResult<(u128, u128, u128)> {
+    sampler::grid_anchor_count(height, width, patch_size, stride, edge_strategy)
+        .map_err(PyValueError::new_err)
+}
+
 /// Generate random patch anchor positions using a seeded PRNG.
 ///
 /// Returns up to `count` distinct `(row, col)` top-left corners, drawn
@@ -956,6 +972,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(rasterize, m)?)?;
     m.add_function(wrap_pyfunction!(grid_sample_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(grid_anchor_count, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
@@ -973,5 +990,6 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGeoTiff>()?;
     // The version this binary was built from; `mapcv doctor` compares it with the package's.
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("MAX_ANCHORS", sampler::MAX_ANCHORS)?;
     Ok(())
 }

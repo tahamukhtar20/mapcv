@@ -794,7 +794,11 @@ def _plan_table(config: MapcvConfig, estimate: Plan) -> Table:
         )
         if labels.raster is not None:
             where = _redact_url(labels.path) if "://" in labels.path else labels.path
-            detail = f"{escape(labels.raster)} · classes: {classes or 'none (all background)'}"
+            if isinstance(config.labels, ContinuousLabelsConfig):
+                # A raster of values (regression targets): there are no classes.
+                detail = f"{escape(labels.raster)} · continuous values"
+            else:
+                detail = f"{escape(labels.raster)} · classes: {classes or 'none (all background)'}"
             table.add_row("Labels", f"{escape(where)} · {detail}")
         else:
             detail = _plural(labels.polygons, "polygon")
@@ -841,6 +845,15 @@ def _fail_without_patches(estimate: Plan) -> None:
         _fail(
             "[red]This config would write no patches.[/red]",
             "Enlarge the region, lower sampler.patch_size or set sampler.edge_strategy: pad.",
+        )
+
+
+def _fail_when_blocked(estimate: Plan) -> None:
+    """Exit when the plan lists a problem that stops ``generate`` (it is shown above)."""
+    if estimate.blocking:
+        _fail(
+            f"[red]This config cannot be built:[/red] {escape(estimate.blocking[0])}.",
+            "Change the config, then check it again with mapcv plan.",
         )
 
 
@@ -2521,6 +2534,7 @@ def plan(
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
     _fail_without_patches(estimate)
+    _fail_when_blocked(estimate)
     _console.print(
         "\nLooks right? Build it with "
         f"[cyan]mapcv generate {escape(_shell_path(config_path))}[/cyan]",
@@ -2552,6 +2566,7 @@ def generate(
     estimate = _make_plan(config)
     _print_plan(config_path, config, estimate)
     _fail_without_patches(estimate)
+    _fail_when_blocked(estimate)
     if dry_run:
         return
     if estimate.is_large and not yes:
@@ -2941,21 +2956,36 @@ def validate(
 ) -> None:
     """Check a config without reading labels or imagery (use [bold]plan[/bold] for estimates)."""
     config = _load_config(config_path)
+    not_ordinary: list[str] = []
+    missing = _missing_inputs(config, not_ordinary)
+    if not_ordinary:  # plan and generate refuse these, so the config is not usable
+        _fail("[red]" + escape("\n".join(not_ordinary)) + "[/red]")
     _console.print(
         f"[green]✓[/green] {escape(str(config_path))} is a valid config.", soft_wrap=True
     )
     _console.print(_settings_table(config))
-    for problem in _missing_inputs(config):
+    for problem in missing:
         _console.print(f"[yellow]⚠[/yellow]  {escape(problem)}")
 
 
-def _missing_inputs(config: MapcvConfig) -> list[str]:
-    """Local files the config reads that do not exist, as ``"<key> not found: <path>"``."""
+def _missing_inputs(config: MapcvConfig, not_ordinary: list[str] | None = None) -> list[str]:
+    """Local files the config reads that do not exist, as ``"<key> not found: <path>"``.
+
+    With a ``not_ordinary`` list, a file that exists but is a folder, a pipe or a device is
+    added to it, worded as ``plan`` and ``generate`` do when they open it.
+    """
     missing: list[str] = []
 
     def check(key: str, path: Path | None) -> None:
-        if path is not None and not path.exists():
+        if path is None:
+            return
+        if not path.exists():
             missing.append(f"{key} not found: {path}")
+        elif not_ordinary is not None and path.suffix.lower() != ".zarr":  # Zarr: a folder
+            try:
+                check_regular_file(path, key)
+            except ValueError as exc:
+                not_ordinary.append(str(exc))
 
     labels = config.labels
     if isinstance(labels, RASTER_LABEL_TYPES):

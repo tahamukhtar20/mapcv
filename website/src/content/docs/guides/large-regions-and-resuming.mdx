@@ -46,6 +46,14 @@ In a script or CI (no terminal), it refuses with exit code 2 instead:
 This is a large job. Re-run with --yes to confirm.
 ```
 
+A job with more than **3,000,000** patches is not a large job but a refused one: every patch position is held in memory during a run, so `generate` stops before it starts, and `plan` lists the same problem under its warnings (and ends with exit code 1, without the `Looks right?` line):
+
+```text
+This config cannot be built: the grid has 8,960 x 5,888 = 52,756,480 patches, more than the limit of 3,000,000 for one run. Raise sampler.stride (or patch_size), shrink the region or split it into several smaller ones.
+```
+
+A stride of 1 on a region of a few square kilometres gives tens of millions of positions; there is one position per stride in each direction, so doubling the stride divides the count by four. `plan` itself counts patches per axis and never builds them, so it answers at once for any region.
+
 Pass `--yes` (`-y`) once you have read the plan. In a log, progress is a plain line per tenth of the chunks (`Reading imagery and writing patches: 40/400 chunks (10%), 3m 12s`) instead of a bar; add `-q` to drop it too: `mapcv -q generate big.yaml --yes`.
 
 ## 2. Keep memory bounded

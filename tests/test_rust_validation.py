@@ -351,14 +351,69 @@ def test_fetch_tiles_rejects_zero_connections() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scalar_tile_helpers_clamp_extreme_values() -> None:
+def test_scalar_tile_helpers_accept_the_whole_valid_range() -> None:
     max_u32 = 2**32 - 1
-    assert tile(math.nan, math.nan, 255).z == 32
-    assert tile(1e308, -1e308, 0).z == 0
+    assert tile(180.0, -90.0, 3) == TileIndex(7, 7, 3)  # the edges of the world, and beyond
+    assert tile(-180.0, 90.0, 0) == TileIndex(0, 0, 0)  # Web Mercator's own limit (~85.05)
+    assert tile(0.0, 0.0, 32).z == 32
     assert math.isinf(xy(0.0, 90.0)[1])
-    assert bounds(max_u32, max_u32, 255).east == pytest.approx(180.0)
-    assert xy_bounds(max_u32, max_u32, 0).west == pytest.approx(-20037508.342789244)
-    assert len(tile_transform(max_u32, max_u32, 255)) == 6
+    assert bounds(max_u32, max_u32, 32).east == pytest.approx(180.0)
+    assert xy_bounds(max_u32, max_u32, 32).east == pytest.approx(20037508.342789244)
+    assert xy_bounds(0, 0, 0).west == pytest.approx(-20037508.342789244)
+    assert len(tile_transform(max_u32, max_u32, 32)) == 6
+
+
+def test_a_finite_position_beyond_the_world_is_moved_onto_its_edge() -> None:
+    # As mercantile's truncate=True does: only a coordinate that is not a number is refused.
+    assert tile(500.0, 0.0, 3) == tile(180.0, 0.0, 3) == TileIndex(7, 4, 3)
+    assert tile(-180.5, 0.0, 3) == tile(-180.0, 0.0, 3) == TileIndex(0, 4, 3)
+    assert tile(0.0, 91.0, 3) == tile(0.0, 90.0, 3) == TileIndex(4, 0, 3)
+
+
+@pytest.mark.parametrize(
+    ("lng", "lat", "zoom"),
+    [
+        (math.nan, 0.0, 3),
+        (0.0, math.nan, 3),
+        (math.nan, math.nan, 3),
+        (math.inf, 0.0, 3),
+        (0.0, -math.inf, 3),
+        (0.0, 0.0, 33),
+        (0.0, 0.0, 64),
+    ],
+)
+def test_tile_rejects_a_position_or_zoom_that_is_not_valid(
+    lng: float, lat: float, zoom: int
+) -> None:
+    with pytest.raises(ValueError, match="must be"):
+        tile(lng, lat, zoom)
+
+
+def test_xy_rejects_coordinates_that_are_not_numbers() -> None:
+    for lng, lat in [(math.nan, 0.0), (0.0, math.nan), (math.inf, 0.0), (0.0, -math.inf)]:
+        with pytest.raises(ValueError, match="finite"):
+            xy(lng, lat)
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "z"),
+    [(8, 0, 3), (0, 8, 3), (1, 0, 0), (0, 1, 0), (10**9, 0, 3), (0, 0, 33), (0, 0, 64)],
+)
+def test_tile_bounds_reject_a_tile_that_does_not_exist(x: int, y: int, z: int) -> None:
+    for function in (bounds, xy_bounds, tile_transform):
+        with pytest.raises(ValueError, match="does not exist|zoom must be"):
+            function(x, y, z)
+
+
+def test_zooms_above_32_are_errors_not_32() -> None:
+    from mapcv._mapcv_rs import snap_bbox, tiles
+
+    with pytest.raises(ValueError, match="zoom must be between 0 and 32, got 40"):
+        snap_bbox(0.0, 0.0, 1.0, 1.0, 40)
+    with pytest.raises(ValueError, match="zoom must be between 0 and 32, got 33"):
+        tiles(0.0, 0.0, 1.0, 1.0, [3, 33])
+    assert snap_bbox(0.0, 0.0, 1.0, 1.0, 32).west <= 0.0
+    assert tiles(0.0, 0.0, 0.001, 0.001, [3, 20])
 
 
 @pytest.mark.parametrize(

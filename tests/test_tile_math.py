@@ -44,13 +44,13 @@ def test_tile() -> None:
         assert m_tile.y == r_tile.y
         assert m_tile.z == r_tile.z
 
-    zoom = 40
+    # The deepest zoom is 32 (the index fits 32 bits); a deeper one is an error, not zoom 32.
     lng, lat = 12.34, 56.78
     m_tile = mercantile.tile(lng, lat, 32, truncate=False)
-    r_tile = tile(lng, lat, zoom)
-    assert m_tile.x == r_tile.x
-    assert m_tile.y == r_tile.y
-    assert r_tile.z == 32
+    r_tile = tile(lng, lat, 32)
+    assert (m_tile.x, m_tile.y, r_tile.z) == (r_tile.x, r_tile.y, 32)
+    with pytest.raises(ValueError, match="zoom must be between 0 and 32, got 40"):
+        tile(lng, lat, 40)
 
 
 def test_xy_bounds() -> None:
@@ -82,20 +82,24 @@ def test_tiles() -> None:
             assert m_set == r_set
 
     tiny = 1e-9
-    r_tiles = tiles(0.0, 0.0, tiny, tiny, [40])
+    r_tiles = tiles(0.0, 0.0, tiny, tiny, [32])
     m_tiles = list(mercantile.tiles(0.0, 0.0, tiny, tiny, [32]))
     assert {(t.x, t.y, t.z) for t in r_tiles} == {(t.x, t.y, t.z) for t in m_tiles}
+    with pytest.raises(ValueError, match="zoom must be between 0 and 32, got 40"):
+        tiles(0.0, 0.0, tiny, tiny, [40])
 
 
-def test_xy_bounds_zoom_clamp() -> None:
-    z = 40
+def test_xy_bounds_at_the_deepest_zoom() -> None:
+    z = 32
     max_index = (1 << 32) - 1
     r_bounds = xy_bounds(max_index, max_index, z)
-    m_bounds = mercantile.xy_bounds(max_index, max_index, 32)
+    m_bounds = mercantile.xy_bounds(max_index, max_index, z)
     assert pytest.approx(m_bounds.left, abs=1e-5) == r_bounds.west
     assert pytest.approx(m_bounds.right, abs=1e-5) == r_bounds.east
     assert pytest.approx(m_bounds.bottom, abs=1e-5) == r_bounds.south
     assert pytest.approx(m_bounds.top, abs=1e-5) == r_bounds.north
+    with pytest.raises(ValueError, match="zoom must be between 0 and 32, got 40"):
+        xy_bounds(max_index, max_index, 40)
 
 
 def test_bounds() -> None:

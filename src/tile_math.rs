@@ -50,6 +50,53 @@ pub struct Bounds {
 /// Backward-compatible alias for [`Bounds`].
 pub type BBox = Bounds;
 
+/// Reject a zoom level above [`MAX_ZOOM`] (the tile index then no longer fits `u32`).
+///
+/// # Errors
+/// Returns an error naming the zoom and the limit.
+pub fn check_zoom(zoom: u8) -> Result<(), String> {
+    if zoom > MAX_ZOOM {
+        return Err(format!("zoom must be between 0 and {MAX_ZOOM}, got {zoom}"));
+    }
+    Ok(())
+}
+
+/// Reject a longitude or latitude that is not a finite number. A finite position beyond the
+/// world (a longitude past ±180, a latitude past ±90) is still moved onto the edge, as
+/// `mercantile.tile(..., truncate=True)` does.
+///
+/// # Errors
+/// Returns an error naming the coordinates.
+pub fn check_finite(lng: f64, lat: f64) -> Result<(), String> {
+    if !lng.is_finite() || !lat.is_finite() {
+        return Err(format!(
+            "longitude and latitude must be finite numbers, got ({lng}, {lat})"
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a tile whose zoom is above [`MAX_ZOOM`] or whose column or row does not exist at
+/// its zoom (an index of 2^zoom or more).
+///
+/// # Errors
+/// Returns an error naming the tile.
+pub fn check_tile(tile: TileIndex) -> Result<(), String> {
+    check_zoom(tile.z)?;
+    let count = 1u64 << tile.z;
+    if u64::from(tile.x) >= count || u64::from(tile.y) >= count {
+        return Err(format!(
+            "tile {}/{}/{} does not exist: at zoom {} columns and rows run from 0 to {}",
+            tile.z,
+            tile.x,
+            tile.y,
+            tile.z,
+            count - 1
+        ));
+    }
+    Ok(())
+}
+
 /// Convert (lng, lat) to Web Mercator (x, y) in metres.
 #[must_use]
 pub fn xy(lng: f64, lat: f64) -> (f64, f64) {
@@ -231,12 +278,13 @@ fn tile_range(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> (u32, u
 /// A point or line snaps to the tiles that contain it (see [`check_bbox`]).
 ///
 /// # Errors
-/// Returns an error for a NaN coordinate, for `south > north`, and for
-/// `west > east`: a box crossing the antimeridian cannot be represented by a
-/// single snapped box, so it must be split into two at ±180°. (This function
+/// Returns an error for a NaN coordinate, for `south > north`, for a zoom above
+/// 32, and for `west > east`: a box crossing the antimeridian cannot be represented
+/// by a single snapped box, so it must be split into two at ±180°. (This function
 /// used to return the whole world for these.)
 pub fn snap_bbox(west: f64, south: f64, east: f64, north: f64, zoom: u8) -> Result<BBox, String> {
     check_bbox(west, south, east, north)?;
+    check_zoom(zoom)?;
     if west > east {
         return Err(format!(
             "bbox west ({west}) is greater than east ({east}): boxes crossing the \
@@ -280,9 +328,9 @@ fn split_bbox(west: f64, south: f64, east: f64, north: f64) -> Vec<(f64, f64, f6
 /// containing it where mercantile can yield none (see [`check_bbox`]).
 ///
 /// # Errors
-/// Returns an error for a NaN coordinate, for `south > north`, and when the
-/// cover would exceed [`MAX_TILES`] tiles; the count is checked before any
-/// tile is allocated.
+/// Returns an error for a NaN coordinate, for `south > north`, for a zoom above 32,
+/// and when the cover would exceed [`MAX_TILES`] tiles; the count is checked before
+/// any tile is allocated.
 pub fn tiles(
     west: f64,
     south: f64,
@@ -291,6 +339,9 @@ pub fn tiles(
     zooms: &[u8],
 ) -> Result<Vec<TileIndex>, String> {
     check_bbox(west, south, east, north)?;
+    for &z in zooms {
+        check_zoom(z)?;
+    }
     let mut ranges = Vec::new();
     for (w, s, e, n) in split_bbox(west, south, east, north) {
         for &z in zooms {
@@ -443,6 +494,33 @@ mod tests {
             assert_ne!(snap(0.0, 0.0, 0.0, 0.0, zoom), world);
             assert_ne!(snap(0.0, 0.0, 1e-13, 1e-13, zoom), world);
         }
+    }
+
+    #[test]
+    fn positions_zooms_and_tiles_are_checked() {
+        assert!(check_finite(0.0, 0.0).is_ok());
+        assert!(check_finite(-180.0, 90.0).is_ok());
+        assert!(check_finite(500.0, -91.0).is_ok()); // moved onto the edge, not refused
+        for (lng, lat) in [
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            assert!(check_finite(lng, lat).is_err(), "({lng}, {lat})");
+        }
+        assert!(check_zoom(32).is_ok());
+        assert!(check_zoom(33).is_err());
+        let at = |x, y, z| TileIndex { x, y, z };
+        assert!(check_tile(at(0, 0, 0)).is_ok());
+        assert!(check_tile(at(7, 7, 3)).is_ok());
+        assert!(check_tile(at(u32::MAX, u32::MAX, 32)).is_ok());
+        assert!(check_tile(at(8, 0, 3)).is_err());
+        assert!(check_tile(at(0, 8, 3)).is_err());
+        assert!(check_tile(at(1, 0, 0)).is_err());
+        assert!(check_tile(at(0, 0, 64)).is_err());
+        assert!(snap_bbox(0.0, 0.0, 1.0, 1.0, 33).is_err());
+        assert!(tiles(0.0, 0.0, 1.0, 1.0, &[3, 33]).is_err());
     }
 
     #[test]

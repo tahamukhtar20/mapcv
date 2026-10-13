@@ -2677,7 +2677,7 @@ SOFTWARE.
 
 ### MIT License
 
-Used by: tokio 1.53.1
+Used by: tokio 1.53.2
 
 ``````text
 MIT License

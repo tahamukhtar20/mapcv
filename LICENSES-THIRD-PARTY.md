@@ -123,7 +123,7 @@ Code that mapcv derived from other projects is acknowledged in
 - sync_wrapper 1.0.2: Apache-2.0
 - synstructure 0.13.2: MIT
 - tinystr 0.8.3: Unicode-3.0
-- tokio 1.53.1: MIT
+- tokio 1.53.2: MIT
 - tokio-rustls 0.26.4: MIT OR Apache-2.0
 - tower 0.5.3: MIT
 - tower-http 0.6.8: MIT

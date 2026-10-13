@@ -286,6 +286,24 @@ def test_resume_plan_info_and_several_sources(tmp_path: Path, scene: dict[str, A
     assert set(entry["files"]) == {"a", "b", "mask"}
 
 
+def test_the_plan_panel_calls_a_value_raster_continuous_values(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    import json
+
+    import yaml
+
+    write_values(tmp_path / "height.tif", scene["ref"], WIDTH, HEIGHT, nodata=-9999.0)
+    config = regression_config(tmp_path, scene["region"], {"path": str(tmp_path / "height.tif")})
+    path = tmp_path / "mapcv.yaml"
+    path.write_text(yaml.safe_dump(json.loads(config.model_dump_json(exclude_none=True))))
+    result = runner.invoke(app, ["plan", str(path)], env={"COLUMNS": "250"})
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "height.tif" in text and "continuous values" in text
+    assert "classes" not in text and "background" not in text
+
+
 # ── Config ───────────────────────────────────────────────────────────────────
 
 

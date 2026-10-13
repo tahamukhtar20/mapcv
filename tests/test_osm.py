@@ -100,6 +100,8 @@ class Overpass:
         # one byte a second.
         self.raw: bytes | None = None
         self.drip = False
+        # A chunked answer sent as it is (chunk headers included), then the connection closes.
+        self.chunked: bytes | None = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -109,6 +111,14 @@ class Overpass:
                 if owner.status != 200:
                     self.send_response(owner.status)
                     self.end_headers()
+                    return
+                if owner.chunked is not None:
+                    self.send_response(200)
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    self.wfile.write(owner.chunked)
+                    self.wfile.flush()
+                    self.close_connection = True
                     return
                 if owner.drip:
                     self.send_response(200)
@@ -329,6 +339,49 @@ def test_an_answer_that_is_not_overpass_json_is_a_message(
         osm_labels_file(labels.osm, tmp_path / "osm")
     with pytest.raises(RuntimeError, match=message):
         osm_labels_file(labels.osm, tmp_path / "osm")
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        # The connection closes right after a chunk header announcing 255 bytes.
+        (b"ff\r\n", "closed the connection before the whole answer arrived"),
+        # A chunk that stops half way.
+        (b"20\r\n" + b'{"elements"', "closed the connection before the whole answer arrived"),
+        # A chunk size that is not a number (http.client reports the lost framing as a
+        # short read, after the ValueError this used to raise).
+        (b"zz\r\n{}\r\n0\r\n\r\n", "closed the connection before the whole answer arrived"),
+    ],
+    ids=["after-header", "mid-chunk", "garbled-size"],
+)
+def test_an_answer_cut_or_garbled_in_transit_is_a_message(
+    tmp_path: Path, region: dict[str, float], overpass: Overpass, raw: bytes, reason: str
+) -> None:
+    labels = _config(tmp_path, region, overpass).labels
+    assert isinstance(labels, LabelsConfig) and labels.osm is not None
+    overpass.chunked = raw
+    with pytest.raises(RuntimeError) as raised:
+        osm_labels_file(labels.osm, tmp_path / "osm")
+    message = str(raised.value)
+    assert message.startswith("Overpass request to http://127.0.0.1:")
+    assert "failed" in message and reason in message
+    assert "try again later" in message
+    assert not (tmp_path / "osm").exists() or not list((tmp_path / "osm").glob("*.geojson"))
+
+
+def test_a_read_that_raises_a_value_error_is_reported_as_a_bad_answer() -> None:
+    import http.client
+
+    from mapcv import osm
+
+    class Garbled:
+        def read1(self, size: int) -> bytes:
+            raise ValueError("invalid literal for int() with base 16: b'zz\\r\\n'")
+
+    with pytest.raises(http.client.HTTPException, match="garbled chunk in the answer"):
+        osm._read_answer(Garbled(), time.monotonic() + 5, "Overpass")
+    assert "did not answer in valid HTTP" in osm._describe(http.client.HTTPException("bad"))
+    assert osm._describe(http.client.BadStatusLine("x")).startswith("the server did not answer")
 
 
 def test_a_slow_overpass_answer_stops_at_the_deadline(

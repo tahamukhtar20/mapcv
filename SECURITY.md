@@ -6,8 +6,8 @@ Security fixes go into the latest minor release. Upgrade to it before reporting.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.3.x   | Yes       |
+| < 0.3   | No        |
 
 ## Reporting a vulnerability
 

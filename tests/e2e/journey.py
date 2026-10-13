@@ -5,7 +5,7 @@ init (answering the wizard on stdin), validate, plan, generate, resume, info and
 split (segmentation, detection, instance segmentation and classification datasets), in a folder whose name has a space and a non-ASCII character, against a
 local tile server. Exits non-zero with the failing step's output on any problem.
 
-    python tests/e2e/journey.py --version 0.2.0
+    python tests/e2e/journey.py --version 0.3.0
 """
 
 from __future__ import annotations

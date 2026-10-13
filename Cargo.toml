@@ -1,6 +1,6 @@
 [package]
 name = "mapcv_rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 # The oldest Rust that builds the crate and its dependencies (image and weezl need 1.88);
 # CI and releases use the pinned toolchain in rust-toolchain.toml.

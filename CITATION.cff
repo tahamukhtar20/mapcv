@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Mukhtar
     given-names: Muhammad Taha
-version: 0.2.0
-date-released: "2026-10-05"
+version: 0.3.0
+date-released: "2026-10-14"
 doi: 10.5281/zenodo.23149438
 identifiers:
   - type: doi
@@ -19,8 +19,9 @@ license: MIT
 repository-code: "https://github.com/tahamukhtar20/mapcv"
 url: "https://tahamukhtar20.github.io/mapcv/"
 abstract: >-
-  mapcv turns map imagery (XYZ tiles, GeoTIFF/COG and Sentinel-2 EOPF Zarr) and
-  geospatial labels into training datasets for semantic and instance segmentation,
+  mapcv turns imagery (XYZ tiles, GeoTIFF/COG, Sentinel-2 from STAC or EOPF Zarr,
+  and Google Earth Engine) and geospatial labels (vector files, OpenStreetMap or
+  label rasters) into training datasets for semantic and instance segmentation,
   object detection, classification, change detection and regression, with
   georeferenced patches, a manifest and leakage-safe spatial splits.
 keywords:

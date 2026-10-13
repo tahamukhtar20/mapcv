@@ -42,9 +42,9 @@ def _resident_bytes(pid: int) -> int:
     return resident_pages * os.sysconf("SC_PAGE_SIZE")
 
 
-def _bounded(code: str) -> subprocess.CompletedProcess[str]:
+def _bounded(code: str, memory: int = _MEMORY_BYTES) -> subprocess.CompletedProcess[str]:
     """Run ``code`` in a fresh interpreter with capped CPU time, killing it if its resident
-    memory passes ``_MEMORY_BYTES``."""
+    memory passes ``memory`` bytes."""
     limits = (
         "import resource\n"
         f"resource.setrlimit(resource.RLIMIT_CPU, ({_CPU_SECONDS}, {_CPU_SECONDS}))\n"
@@ -61,7 +61,7 @@ def _bounded(code: str) -> subprocess.CompletedProcess[str]:
                 break
             except subprocess.TimeoutExpired:
                 peak = max(peak, _resident_bytes(process.pid))
-                if peak > _MEMORY_BYTES or time.monotonic() > deadline:
+                if peak > memory or time.monotonic() > deadline:
                     process.kill()
                     stdout, stderr = process.communicate()
                     stderr += f"\nkilled at {peak >> 20} MiB resident"
@@ -69,8 +69,8 @@ def _bounded(code: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def _refused(code: str, message: str) -> None:
-    """``code`` raises ValueError containing ``message``, within the limits."""
+def _refused(code: str, message: str) -> str:
+    """``code`` raises ValueError containing ``message``, within the limits; its output."""
     wrapped = f"""
         try:
 {textwrap.indent(textwrap.dedent(code), " " * 12)}
@@ -83,6 +83,7 @@ def _refused(code: str, message: str) -> None:
     assert result.returncode == 0, f"exit {result.returncode}: {result.stderr[-2000:]}"
     assert "refused:" in result.stdout, result.stdout
     assert message in result.stdout, result.stdout
+    return result.stdout
 
 
 # --- GeoTIFF -------------------------------------------------------------------------
@@ -172,6 +173,28 @@ def test_geoparquet_decompressing_to_gigabytes_is_refused(tmp_path: Path) -> Non
         """,
         "its columns decode to more than",
     )
+
+
+def test_the_geoparquet_refusal_gives_its_limit_in_one_unit_and_a_fitting_next_step(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plain.parquet"
+    _parquet(path, 12, "x" * (64 << 20), dictionary=False)
+    size = path.stat().st_size
+    code = """
+        from mapcv.vector_files import read_geoparquet
+        read_geoparquet(__import__("pathlib").Path({path!r}), {fields})
+        """
+    # A column is named: the hint to name one is not repeated back.
+    named = _refused(code.format(path=str(path), fields='["class"]'), "its columns decode to more")
+    limit = (64 << 20) + 64 * size
+    assert f"more than {limit / (1 << 20):.1f} MiB, the limit for a file of " in named
+    assert "(64 MiB plus 64 times its size)" in named
+    assert "MB" not in named and "labels.label_field" not in named
+    assert "write it without the large columns and try again" in named
+    # No column named (the wizard's read of every column): naming one is the way out.
+    unnamed = _refused(code.format(path=str(path), fields="None"), "its columns decode to more")
+    assert "(or name the one column needed in labels.label_field)" in unnamed
 
 
 def test_geoparquet_dictionary_expanding_to_gigabytes_is_refused(tmp_path: Path) -> None:

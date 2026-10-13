@@ -84,6 +84,8 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Expected FeatureCollection or Feature, got: …`** The file is not GeoJSON features (for example a bare geometry). Wrap it in a Feature.
 
+**`Overpass request to … failed: …. The public server limits load; try again later or set labels.osm.overpass_url to another instance`** (`labels.osm`) The Overpass server refused the request, closed the connection before the whole answer arrived, or sent something that is not valid HTTP. The public servers are shared and drop requests when busy: run the command again later, ask for a smaller region or fewer classes, or point `labels.osm.overpass_url` at another instance. Nothing is cached from a failed request.
+
 **Unexpected class IDs.** Labels like `0, 1, 2` are numbered in sorted order (`1, 2, 3`) because `0` is not a valid class ID. Pin IDs with `labels.classes`. See [How class IDs are chosen](/mapcv/guides/prepare-labels/#how-class-ids-are-chosen).
 
 ## Tile downloads (XYZ)
@@ -119,6 +121,8 @@ Fix the fields above, or start from a working config with mapcv init.
 **`… manifest.json cannot be read (…). It may be incomplete or edited by hand: restore it, or generate the dataset again into a new folder`** The manifest is truncated or was edited. Restore it from a copy, or generate again into a new folder.
 
 **`This config would write no patches.`** (`plan` and `generate`, exit code 1) The plan holds no patch: the region is smaller than one `sampler.patch_size`, or `edge_strategy: drop` leaves none. Enlarge the region, lower `patch_size` or set `edge_strategy: pad`. If a run that did start ends with `No patches were written.`, every patch was dropped by `sampler.max_empty_ratio` or `min_label_ratio`; no dataset is left in the folder.
+
+**`This config cannot be built: the grid has 8,960 x 5,888 = 52,756,480 patches, more than the limit of 3,000,000 for one run`** (`plan` and `generate`, exit code 1; `sampler.random_count asks for … patches` for random mode) The sampler settings give more patches than one run can hold. Raise `sampler.stride` (a stride of 1 gives a patch at every pixel), use a larger `patch_size`, shrink the region or split it into several smaller ones, one config each.
 
 **`patch_size: true is a YAML boolean, not a number`** YAML reads `yes`, `on` and `true` as booleans. Write the number itself.
 

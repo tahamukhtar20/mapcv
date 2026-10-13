@@ -18,8 +18,10 @@ import numpy as np
 import numpy.typing as npt
 
 __version__: str
+MAX_ANCHORS: int
 
 __all__ = [
+    "MAX_ANCHORS",
     "BBox",
     "GeoTiff",
     "PyBBox",
@@ -29,6 +31,7 @@ __all__ = [
     "bounds",
     "decode_tile_window",
     "fetch_tiles",
+    "grid_anchor_count",
     "grid_sample_anchors",
     "kml_fields",
     "parse_kml",
@@ -164,6 +167,9 @@ def fetch_tiles(
 def grid_sample_anchors(
     height: int, width: int, patch_size: int, stride: int, edge_strategy: str = "pad"
 ) -> list[tuple[int, int]]: ...
+def grid_anchor_count(
+    height: int, width: int, patch_size: int, stride: int, edge_strategy: str = "pad"
+) -> tuple[int, int, int]: ...
 def random_sample_anchors(
     height: int,
     width: int,

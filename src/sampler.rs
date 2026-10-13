@@ -51,6 +51,14 @@ fn check_strategy(strategy: &str) -> Result<(), String> {
     }
 }
 
+/// The most anchors one call builds (grid or random).
+///
+/// Python holds each anchor as a tuple of two ints, about 150 bytes, so this keeps the
+/// anchor lists of one run near 450 MB. A larger request is refused before anything is
+/// allocated: how many anchors there would be is computed from the dimensions alone, so
+/// a crafted size cannot ask for memory the system only runs out of while filling it.
+pub const MAX_ANCHORS: u64 = 3_000_000;
+
 /// An empty vector with room for `n` items, or an error when that much memory
 /// cannot be allocated (instead of aborting the process).
 fn with_room<T>(n: usize, what: &str) -> Result<Vec<T>, String> {
@@ -64,29 +72,91 @@ fn allocation_error(n: usize, what: &str) -> String {
     format!("cannot allocate {n} {what}; the request is too large")
 }
 
+/// Number of grid anchors along one dimension, without building them.
+///
+/// `dim`, `patch_size` and `stride` must be non-zero. This is the length of
+/// [`dim_anchors`]; a `u128` because `shift` can add one to a count of `usize::MAX`.
+fn dim_count(dim: usize, patch_size: usize, stride: usize, strategy: &str) -> u128 {
+    // Anchors `p` with `p + patch_size <= dim`, i.e. patches fully inside the image.
+    let inside = if dim >= patch_size {
+        (dim - patch_size) / stride + 1
+    } else {
+        0
+    } as u128;
+    match strategy {
+        "drop" => inside,
+        "shift" => {
+            if dim >= patch_size {
+                // One more, shifted inward, unless the stride steps already end flush.
+                let last = (dim - patch_size) as u128;
+                inside + u128::from((inside - 1) * (stride as u128) < last)
+            } else {
+                // Image smaller than patch_size: a single anchor at 0.
+                1
+            }
+        }
+        // "pad": every stride step that starts inside the image (`p < dim`).
+        _ => ((dim - 1) / stride + 1) as u128,
+    }
+}
+
+/// Number of patches [`grid_anchors`] returns, computed from the dimensions alone (no
+/// anchor is built): the per-axis counts multiplied.
+///
+/// Returns `(rows, cols, rows * cols)`; the product saturates at `u128::MAX`.
+///
+/// # Errors
+/// Returns an error if `patch_size`, `stride`, `height` or `width` is zero, or if
+/// `strategy` is unknown.
+pub fn grid_anchor_count(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    stride: usize,
+    strategy: &str,
+) -> Result<(u128, u128, u128), String> {
+    check_strategy(strategy)?;
+    if patch_size == 0 {
+        return Err("patch_size must be > 0".to_string());
+    }
+    if stride == 0 {
+        return Err("stride must be > 0".to_string());
+    }
+    if height == 0 || width == 0 {
+        return Err("height and width must be > 0".to_string());
+    }
+    let rows = dim_count(height, patch_size, stride, strategy);
+    let cols = dim_count(width, patch_size, stride, strategy);
+    Ok((rows, cols, rows.saturating_mul(cols)))
+}
+
 /// Compute anchor positions along one dimension for grid sampling.
 ///
-/// `dim`, `patch_size` and `stride` must be non-zero. Anchors are `i * stride`
-/// for a count computed up front, so huge strides or dimensions can neither
-/// overflow nor loop for long.
+/// `dim`, `patch_size` and `stride` must be non-zero, and the caller has checked the
+/// count against [`MAX_ANCHORS`]. Anchors are `i * stride` for a count computed up
+/// front, so huge strides or dimensions can neither overflow nor loop for long.
 fn dim_anchors(
     dim: usize,
     patch_size: usize,
     stride: usize,
     strategy: &str,
 ) -> Result<Vec<usize>, String> {
-    // Anchors `p` with `p + patch_size <= dim`, i.e. patches fully inside the image.
-    let inside = if dim >= patch_size {
-        (dim - patch_size) / stride + 1
-    } else {
-        0
-    };
+    let total = dim_count(dim, patch_size, stride, strategy);
     let count = match strategy {
-        "drop" | "shift" => inside,
+        "drop" | "shift" => {
+            if dim >= patch_size {
+                (dim - patch_size) / stride + 1
+            } else {
+                0
+            }
+        }
         // "pad": every stride step that starts inside the image (`p < dim`).
         _ => (dim - 1) / stride + 1,
     };
-    let mut v = with_room(count.saturating_add(1), "patch anchors")?;
+    let mut v = with_room(
+        usize::try_from(total).map_err(|_| allocation_error(usize::MAX, "patch anchors"))?,
+        "patch anchors",
+    )?;
     // Each anchor is below `dim`, so `i * stride` cannot overflow.
     v.extend((0..count).map(|i| i * stride));
     if strategy == "shift" {
@@ -102,6 +172,7 @@ fn dim_anchors(
             v.push(0);
         }
     }
+    debug_assert_eq!(v.len() as u128, total);
     Ok(v)
 }
 
@@ -112,7 +183,8 @@ fn dim_anchors(
 ///
 /// # Errors
 /// Returns an error if `patch_size`, `stride`, `height`, or `width` is zero,
-/// if `strategy` is unknown, or if the anchors would not fit in memory.
+/// if `strategy` is unknown, or if there would be more than [`MAX_ANCHORS`]
+/// anchors (checked before anything is allocated).
 pub fn grid_anchors(
     height: usize,
     width: usize,
@@ -120,26 +192,16 @@ pub fn grid_anchors(
     stride: usize,
     strategy: &str,
 ) -> Result<Vec<(usize, usize)>, String> {
-    check_strategy(strategy)?;
-    if patch_size == 0 {
-        return Err("patch_size must be > 0".to_string());
-    }
-    if stride == 0 {
-        return Err("stride must be > 0".to_string());
-    }
-    if height == 0 || width == 0 {
-        return Err("height and width must be > 0".to_string());
+    let (rows_n, cols_n, total) = grid_anchor_count(height, width, patch_size, stride, strategy)?;
+    if total > u128::from(MAX_ANCHORS) {
+        return Err(format!(
+            "the grid has {rows_n} x {cols_n} = {total} patches, more than the limit of \
+             {MAX_ANCHORS}; raise the stride, use a smaller area or split it into parts"
+        ));
     }
     let rows = dim_anchors(height, patch_size, stride, strategy)?;
     let cols = dim_anchors(width, patch_size, stride, strategy)?;
-    let total = rows.len().checked_mul(cols.len()).ok_or_else(|| {
-        format!(
-            "cannot allocate {} x {} patch anchors; the request is too large",
-            rows.len(),
-            cols.len()
-        )
-    })?;
-    let mut anchors = with_room(total, "patch anchors")?;
+    let mut anchors = with_room(rows.len() * cols.len(), "patch anchors")?;
     for &row in &rows {
         for &col in &cols {
             anchors.push((row, col));
@@ -198,7 +260,8 @@ pub fn random_anchor_capacity(
 ///
 /// # Errors
 /// Returns an error if `patch_size`, `height`, or `width` is zero, if
-/// `strategy` is unknown, or if `count` anchors would not fit in memory.
+/// `strategy` is unknown, or if more than [`MAX_ANCHORS`] anchors are asked for
+/// (and available).
 pub fn random_anchors(
     height: usize,
     width: usize,
@@ -213,6 +276,12 @@ pub fn random_anchors(
     let wanted = (count as u64).min(capacity);
     if wanted == 0 {
         return Ok(Vec::new());
+    }
+    if wanted > MAX_ANCHORS {
+        return Err(format!(
+            "{wanted} random patches were asked for (the raster has room for {capacity}), \
+             more than the limit of {MAX_ANCHORS}; ask for fewer"
+        ));
     }
     let mut state = seed;
     // Sized with `try_reserve` so a request too large to hold is an error, not
@@ -510,6 +579,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn grid_count_matches_the_enumeration() {
+        for strategy in ["pad", "drop", "shift"] {
+            for (height, width) in [(1, 1), (5, 40), (37, 11), (64, 64), (100, 73)] {
+                for patch_size in [1, 3, 8, 32, 64, 120] {
+                    for stride in [1, 2, 7, 16, 33, 64, 500] {
+                        let (rows, cols, total) =
+                            grid_anchor_count(height, width, patch_size, stride, strategy).unwrap();
+                        let anchors =
+                            grid_anchors(height, width, patch_size, stride, strategy).unwrap();
+                        assert_eq!(
+                            total,
+                            anchors.len() as u128,
+                            "{strategy} {height}x{width} ps={patch_size} stride={stride}"
+                        );
+                        assert_eq!(rows * cols, total);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_count_handles_sizes_beyond_memory() {
+        // 2^30 x 2^30 positions: counted without building anything.
+        let (_, _, total) = grid_anchor_count(1 << 30, 1 << 30, 64, 1, "pad").unwrap();
+        assert_eq!(total, 1u128 << 60);
+        let (_, _, total) = grid_anchor_count(usize::MAX, usize::MAX, 1, 1, "shift").unwrap();
+        assert!(total > u128::from(u64::MAX));
+        assert!(grid_anchor_count(10, 10, 4, 0, "pad").is_err());
+        assert!(grid_anchor_count(10, 10, 0, 4, "pad").is_err());
+        assert!(grid_anchor_count(0, 10, 4, 4, "pad").is_err());
+        assert!(grid_anchor_count(10, 10, 4, 4, "wrap").is_err());
+    }
+
+    #[test]
+    fn grid_over_the_limit_is_refused_before_allocating() {
+        // 4,063 x 4,063 = 16 million anchors would be 256 MB here and ~2.4 GB in Python.
+        let err = grid_anchors(4_063, 4_063, 64, 1, "pad").unwrap_err();
+        assert!(err.contains("more than the limit of 3000000"), "{err}");
+        assert!(err.contains("4063 x 4063 = 16507969"), "{err}");
+        // Exactly at the limit is fine: 1,500 x 2,000 = 3,000,000.
+        let anchors = grid_anchors(1_500, 2_000, 1, 1, "pad").unwrap();
+        assert_eq!(anchors.len() as u64, MAX_ANCHORS);
+        assert!(grid_anchors(1_500, 2_001, 1, 1, "pad").is_err());
+    }
+
+    #[test]
+    fn random_over_the_limit_is_refused() {
+        let err = random_anchors(100_000, 100_000, 64, 3_000_001, 1, "drop").unwrap_err();
+        assert!(err.contains("more than the limit of 3000000"), "{err}");
+        // A count above the raster's capacity is capped first, so this stays valid.
+        assert_eq!(
+            random_anchors(10, 10, 4, 3_000_001, 1, "drop")
+                .unwrap()
+                .len(),
+            49
+        );
     }
 
     #[test]

@@ -13,6 +13,9 @@ identifiers:
     value: 10.5281/zenodo.23149438
     description: Every version of mapcv (resolves to the latest release)
   - type: doi
+    value: 10.5281/zenodo.23352201
+    description: mapcv 0.3.0
+  - type: doi
     value: 10.5281/zenodo.23149439
     description: mapcv 0.2.0
 license: MIT

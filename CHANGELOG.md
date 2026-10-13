@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-10-14
+
+mapcv 0.3 turns it from a segmentation tool for XYZ tiles into a dataset compiler for remote sensing: six tasks, your own GeoTIFFs and COGs, Sentinel-2 from STAC, Google Earth Engine, many label formats and OpenStreetMap, and tools to train on, check and share the result. See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) before upgrading: the manifest is now version 3, and masks mark pixels without imagery.
+
+### Highlights
+
+- **Six tasks** (`task:`): segmentation, object detection (COCO and YOLO), instance segmentation (COCO RLE masks, optional instance-ID masks), patch classification (single and multi-label), change detection (before/after pairs in the LEVIR-CD layout) and regression (float targets from a raster of values).
+- **Your own imagery** (`type: geotiff`): GeoTIFF and Cloud Optimized GeoTIFF from local files, `https://` and anonymous `s3://`, read fast in the file's own CRS and pixel grid, any data type and band count; a glob pattern (`tiles/*.tif`) reads a folder of tiles as one mosaic.
+- **More imagery sources:** Sentinel-2 band COGs found in a STAC catalog (`type: stac_cog`), EOPF products found by search, SCL cloud masking, Google Earth Engine images and cloud-filtered composites (`imagery.earth_engine`, `pip install "mapcv[gee]"`), and several sources sampled on one grid (dates, sensors, a DEM), optionally stacked into one file per patch.
+- **More labels:** GeoPackage, Shapefile and GeoParquet besides GeoJSON and KML, label rasters (same grid or reprojected), labels straight from OpenStreetMap through Overpass, several label files with a class each, buffered lines and points, and annotated areas (outside them, pixels are ignored rather than background).
+- **Areas of interest:** `region.path` with polygons samples only where they are, and `split.strategy: region` holds out whole areas.
+- **Outputs:** georeferenced GeoTIFF and NPY images and masks, world files, `patches.geojson` footprints for QGIS, and exports to Hugging Face Parquet, TerraTorch, WebDataset shards and Zarr.
+- **Train, check and share:** `mapcv.data.MapcvDataset` loads any task for PyTorch; `mapcv stats` (band means and class weights), `mapcv card` (a Hugging Face dataset card), `mapcv verify` (with `SHA256SUMS` over every file), tiled prediction over a region into one GeoTIFF (`mapcv.infer.predict_raster`), and `mapcv doctor` for the installation.
+- **AI agents:** `mapcv mcp` (`pip install "mapcv[mcp]"`) lets Claude, Cursor and other MCP clients inspect labels, validate, plan and generate, read-only by default and confined to one folder; plus an agent skill and `llms.txt`.
+- **Datasets that stay consistent:** `generate` and `split` lock the dataset folder, an interrupted run is marked incomplete in the manifest (`complete`) and resumes where it stopped, `info`, `verify`, `stats` and `card` say when a dataset is unfinished and the exports refuse one, and a GeoTIFF changed since the last run (size or modification time) stops a resume.
+- **Exact and fast:** the rasterizer matches GDAL's rules (checked against rasterio), XYZ tiles are decoded in Rust in parallel, downloaded tiles are cached on disk as the server's caching headers allow, and each chunk's memory is bounded. A benchmark suite checks correctness at scale; see the Performance page.
+
+### Breaking changes
+
+- **Manifest version 3** (`task`, `sources`, `target`, per-patch `files` and `summary`). mapcv 0.3 reads versions 1–3; 0.2 cannot read version 3. Code that reads `manifest.json` directly needs the new keys (MIGRATION.md has a table and a snippet).
+- **Pixels without imagery** (padding, failed tiles, NoData, outside a GeoTIFF) are `labels.ignore_index` (255 by default) in masks instead of background `0`. Pass it to your loss, or set `labels.ignore_index: null` for 0.2's behaviour (needed to resume a 0.2 dataset).
+- **`tiles:` and `region.zoom`**, deprecated in 0.2, are removed and fail validation with a pointer to MIGRATION.md.
+- **JPEG patches** use 4:2:0 chroma subsampling by default, as Pillow does (up to half the size); `writer.jpg_subsampling: "4:4:4"` resumes a 0.2 JPEG dataset.
+- **`sampler.mode: random`** draws positions without repeats and covers the edges; 0.2 random datasets cannot be resumed.
+- **Patches without any imagery** (all tiles failed, wholly in NoData or outside a GeoTIFF) are no longer written, whatever `sampler.max_empty_ratio` is; `generate` says how many were left out.
+- **Stricter configs:** a key written twice in the same mapping is an error, a number field refuses a YAML boolean (`patch_size: true`), and `writer.staging_dir` must be new, empty or a mapcv dataset.
+- **One run holds at most 3,000,000 patches** (grid positions or `random_count`); `plan` counts any grid and `generate` refuses a larger one with what to change. Jobs over 1,000,000 patches still ask for confirmation.
+- **Runs that write nothing** leave no dataset: a plan with no patch stops before it starts, and a run whose every patch is dropped writes no manifest, split lists or footprints.
+- **Tile helpers** (`mapcv.bounds`, `mapcv.snap_bbox` and the tile functions of the extension) raise `ValueError` for a coordinate that is not a number, a zoom above 32 or a tile that does not exist, instead of clamping.
+- **Library output:** `run_generate` and the download functions no longer print or draw progress bars; messages go to the `mapcv` logger and progress to callbacks. The manifest classes, `load_or_create_manifest` and `write_patches` signatures changed (see MIGRATION.md).
+
+### Security
+
+- Redirects are checked like the configured URL, and requests send no `Referer` header. A host the config does not name, reached through a redirect or a STAC catalog, may not be on this machine or a private network, judged by the addresses its name resolves to when connecting.
+- `mapcv mcp` connects to public addresses only unless started with `--allow-local-urls`, and its URL errors read the same whatever listens at the address.
+- `MapcvDataset` reads Zarr stores of numbers with plain compressors only and refuses others (such as `pickle`) before opening any array; EOPF products are opened with the `pickle` codec disabled.
+- Dataset folders with symbolic links that point outside are refused, manifests with absolute or `..` patch paths do not load, and credentials and query values in URLs are redacted from messages and manifests in one place.
+- Crafted inputs are bounded: GeoParquet, GeoPackage and GeoTIFF readers cap the memory a small file can claim, KML field inspection is linear, and a pipe or device given as an input file is refused instead of hanging.
+
+### Fixes
+
+- Rasterization follows GDAL's scanline and `all_touched` rules exactly, so mask edges match rasterio.
+- Rust entry points validate array shapes instead of panicking; the GeoTIFF, KML and tile decoders are fuzzed.
+- Degenerate and antimeridian-crossing boxes are handled; the region is range-checked.
+- Class counts in the manifest are deterministic.
+- User errors print one message with the next step instead of a traceback: corrupt manifests, unreadable patches, region splits without areas, and configs that could never work are refused at `validate`. `--debug` shows the traceback when you need it.
+- `plan` counts grid patches without building them, so a fine stride or a huge region no longer exhausts memory (also through the MCP `plan` tool).
+- KML files in UTF-16, ISO-8859-1 and windows-1252 are read; GeoPackages in read-only folders open; multi-part features spanning UTM zones are buffered per zone; `plan` runs the same class-ID checks as `generate`; uint64 label rasters keep their values.
+- Label files: numbers sort by value, a `label_field` no feature has is an error, OSM ways and relations are assembled robustly, and Overpass failures (including answers cut off mid-transfer) give a clean message.
+- XYZ fetching retries and reports failed tiles without URL paths; the `mapcv init` wizard checks each answer; progress lines fit narrow terminals.
+- Change detection with annotated areas no longer counts unlabeled pixels as change; Earth Engine composites are filtered on the exact tile area and cached per area.
+
+### Install
+
+- `pip install mapcv`; extras: `zarr` (EOPF Sentinel-2, Python 3.10–3.13), `gee` (Earth Engine), `parquet` (GeoParquet labels), `export` (Hugging Face Parquet), `mcp` (MCP server). `mapcv doctor` checks what is installed. GeoTIFF/COG, STAC COGs and the other label formats need no extra.
+
 ## [0.2.0] - 2026-10-04
 
 mapcv 0.2 adds Sentinel-2 imagery, leakage-safe dataset splits and Python 3.14 support, and fixes several ways 0.1 could silently produce wrong datasets. See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) before upgrading: configs and datasets need small changes.

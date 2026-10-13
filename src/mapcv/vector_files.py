@@ -792,12 +792,29 @@ _PARQUET_BYTES_PER_BYTE = 64
 _PARQUET_BYTES_FLOOR = 64 << 20
 
 
-def _parquet_budget_message(name: str, budget: int) -> str:
+def _binary_size(size: int) -> str:
+    """``size`` bytes in KiB, MiB or GiB (powers of 1024, like the limit itself)."""
+    for unit, scale in (("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)):
+        if size >= scale:
+            return f"{size / scale:.1f} {unit}"
+    return f"{size} B"
+
+
+def _parquet_budget_message(name: str, budget: int, file_size: int, name_a_column: bool) -> str:
+    """Why a GeoParquet file is refused: what it decodes to against the limit it has, in
+    one unit, and a next step that fits the config (naming a column helps only when none
+    is named)."""
+    floor = _PARQUET_BYTES_FLOOR >> 20
+    fix = (
+        "write it without the large columns (or name the one column needed in labels.label_field)"
+        if name_a_column
+        else "write it without the large columns"
+    )
     return (
-        f"{name}: its columns decode to more than {budget >> 20} MiB, far more than labels "
-        "in a file of this size need, so mapcv does not read it. If the file is genuine, "
-        "write it without the large columns (or name the one column needed in "
-        "labels.label_field) and try again."
+        f"{name}: its columns decode to more than {_binary_size(budget)}, the limit for a file "
+        f"of {_binary_size(file_size)} ({floor} MiB plus {_PARQUET_BYTES_PER_BYTE} times its "
+        f"size), far more than labels need, so mapcv does not read it. If the file is genuine, "
+        f"{fix} and try again."
     )
 
 
@@ -999,7 +1016,9 @@ def read_geoparquet(path: Path, fields: Sequence[str] | None = None) -> VectorTa
             f"{path.name}: cannot read its features ({exc}). The file may be corrupt."
         ) from exc
     if too_large:
-        raise ValueError(_parquet_budget_message(path.name, limit))
+        raise ValueError(
+            _parquet_budget_message(path.name, limit, path.stat().st_size, fields is None)
+        )
     geometries = _parse_wkb(blobs, path.name)
     _to_wgs84(geometries, crs, path.name)
     return VectorTable(geometries, values)

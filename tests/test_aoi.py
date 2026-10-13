@@ -321,3 +321,20 @@ def test_a_polygon_without_a_region_name_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"region\.name_field 'zon' is not a property.*'zone'"):
         area_polygons(path, "zon")
     assert [name for _, name in area_polygons(path)] == ["1", "2"]
+
+
+def test_anchors_are_tested_in_batches_with_the_same_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mapcv import aoi as aoi_module
+
+    area = _exact_aoi(
+        tmp_path,
+        [(_lonlat(64, 32, 128, 96), {"name": "a"}), (_lonlat(160, 0, 200, 70), {"name": "b"})],
+    )
+    anchors = [(row, col) for row in range(0, 160, 8) for col in range(0, 256, 8)]
+    whole = area.keep(anchors, 32)
+    assert 0 < len(whole) < len(anchors)
+    for batch in (1, 7, len(anchors) - 1, len(anchors), len(anchors) + 1):
+        monkeypatch.setattr(aoi_module, "_KEEP_BATCH", batch)
+        assert area.keep(anchors, 32) == whole

@@ -36,6 +36,7 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image
 
+from mapcv._confine import check_inside
 from mapcv.manifest import Manifest, ManifestEntry
 
 _SPLITS = ("train", "val", "test")
@@ -88,6 +89,9 @@ class MapcvDataset:
 
     Raises:
         FileNotFoundError: No manifest, or no list for ``split``.
+        LinkEscapeError: A file it reads (the manifest, a split list, ``stats.json``, a
+            COCO file or, when an item is read, a patch file) is a symbolic link, or lies
+            below one, that resolves outside ``root``. A ``ValueError``.
         ValueError: A Zarr store with an array that is not numeric or names a codec other
             than the plain compressors (reading it could run code).
     """
@@ -105,7 +109,7 @@ class MapcvDataset:
         manifest_path = self.root / "manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(f"No manifest found at {manifest_path}")
-        self.manifest = Manifest.load(manifest_path)
+        self.manifest = Manifest.load(self._inside(manifest_path))
         self.split = split
         # A Zarr export (mapcv export --format zarr) holds the patches as arrays.
         self._zarr: Any = None
@@ -130,6 +134,11 @@ class MapcvDataset:
             self._load_objects() if self.manifest.task in ("detection", "instance") else {}
         )
 
+    def _inside(self, path: Path) -> Path:
+        """``path``, after checking that no link takes it out of the dataset folder."""
+        check_inside(self.root, path, "the dataset folder")
+        return path
+
     # ── which patches ────────────────────────────────────────────────────────
 
     def _entries(self, split: str) -> list[ManifestEntry]:
@@ -148,7 +157,7 @@ class MapcvDataset:
             raise FileNotFoundError(
                 f"No split list {listed}; available: {', '.join(available + ['all'])}"
             )
-        names = listed.read_text(encoding="utf-8").split()
+        names = self._inside(listed).read_text(encoding="utf-8").split()
         by_name = {self.manifest.patch_name(entry): entry for entry in self.manifest.patches}
         return [by_name[name] for name in names if name in by_name]
 
@@ -167,7 +176,7 @@ class MapcvDataset:
     def _load_stats(self) -> dict[str, Any]:
         path = self.root / "stats.json"
         if path.exists():
-            stats: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+            stats: dict[str, Any] = json.loads(self._inside(path).read_text(encoding="utf-8"))
             return stats
         from mapcv.stats import dataset_stats
 
@@ -184,7 +193,7 @@ class MapcvDataset:
             )
         objects: dict[str, list[dict[str, Any]]] = {}
         for document in documents:
-            coco = json.loads(document.read_text(encoding="utf-8"))
+            coco = json.loads(self._inside(document).read_text(encoding="utf-8"))
             names = {image["id"]: image["file_name"] for image in coco["images"]}
             for name in names.values():
                 objects.setdefault(name, [])
@@ -211,12 +220,12 @@ class MapcvDataset:
     def _image(self, key: str, entry: ManifestEntry) -> npt.NDArray[Any]:
         if self._zarr is not None:
             return np.asarray(self._zarr["images"][key][self._positions[id(entry)]])
-        return read_image(self.root / entry["files"][key])
+        return read_image(self._inside(self.root / entry["files"][key]))
 
     def _mask(self, entry: ManifestEntry) -> npt.NDArray[Any]:
         if self._zarr is not None:
             return np.asarray(self._zarr["masks"][self._positions[id(entry)]])
-        return read_mask(self.root / entry["files"]["mask"])
+        return read_mask(self._inside(self.root / entry["files"]["mask"]))
 
     def __getitem__(self, index: int) -> Any:
         entry = self.entries[index]

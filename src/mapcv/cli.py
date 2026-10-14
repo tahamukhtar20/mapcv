@@ -49,7 +49,7 @@ from typer.core import TyperGroup
 
 import mapcv
 from mapcv import doctor
-from mapcv._confine import LinkEscapeError, check_folder_links
+from mapcv._confine import LinkEscapeError, check_folder_links, check_inside
 from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import kml_fields as _kml_fields
 from mapcv._redact import REDACTOR, RedactingFormatter
@@ -2577,13 +2577,15 @@ def generate(
             )
         if not Confirm.ask("This is a large job. Start it?", default=False, console=_console):
             _fail("Not started.", "Re-run with [bold]--yes[/bold] to start without asking.")
-    _check_links(config.writer.staging_dir, "writer.staging_dir")
     shown = set(estimate.warnings)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             with _GenerateFeedback() as feedback:
                 result = run_generate(config, feedback)
+        except LinkEscapeError as exc:
+            _debug_traceback(exc)
+            _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
         except ManifestMismatchError as exc:
             _debug_traceback(exc)
             _show_warnings(caught, shown)
@@ -2631,6 +2633,14 @@ def info(
 ) -> None:
     """Summarize a generated dataset: source, shapes, class balance and splits."""
     _require_dataset(staging_dir, files=False)
+    split_lists = [staging_dir / "splits" / f"{name}.txt" for name in ("train", "val", "test")]
+    try:
+        # Only the files info reads, so it stays quick on a dataset of millions of patches.
+        for path in (staging_dir / "manifest.json", *split_lists):
+            check_inside(staging_dir, path, "the dataset folder")
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
     try:
         manifest = Manifest.load(staging_dir / "manifest.json")
     except (ValueError, OSError) as exc:  # ManifestMismatchError and bad JSON are ValueErrors
@@ -2675,8 +2685,7 @@ def info(
     splits_dir = staging_dir / "splits"
     if splits_dir.is_dir():
         counts = {}
-        for name in ("train", "val", "test"):
-            path = splits_dir / f"{name}.txt"
+        for name, path in zip(("train", "val", "test"), split_lists):
             text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
             counts[name] = len(text.splitlines()) if text else 0
         table.add_row("Splits", _split_line(counts))
@@ -2753,11 +2762,15 @@ def split(
         _debug_traceback(exc)
         option, message = _validation_items(exc, options=True)[0]
         raise typer.BadParameter(message, param_hint=f"'{option}'") from None
-    _require_dataset(staging_dir)
+    # run_split refuses a link out of the dataset itself.
+    _require_dataset(staging_dir, files=False)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             counts = run_split(staging_dir, cfg)
+        except LinkEscapeError as exc:
+            _debug_traceback(exc)
+            _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
         except (OSError, ValueError, DatasetBusyError) as exc:  # incl. ManifestMismatchError
             _debug_traceback(exc)
             _fail(f"[red]Cannot split the dataset:[/red] {escape(str(exc))}")

@@ -56,6 +56,26 @@ def test_split_does_not_write_through_a_hard_link(tmp_path: Path) -> None:
     assert victim.read_text() == "VICTIM ORIGINAL CONTENT\n"
 
 
+def test_split_refuses_a_link_out_of_the_dataset_inside_the_root(tmp_path: Path) -> None:
+    """A link to another file under the root passes the root's check, not the dataset's."""
+    root = tmp_path / "root"
+    staging = _dataset(root)
+    other = root / "other.txt"
+    other.write_text("OTHER ORIGINAL CONTENT\n")
+    train = staging / "splits" / "train.txt"
+    train.unlink()
+    train.symlink_to(other)
+
+    async def scenario(client: Client) -> str:
+        result = await call(client, "split", dataset="dataset", test_ratio=0.3)
+        assert result.is_error
+        return text_of(result)
+
+    shown = run_client(root, scenario)
+    assert "Unsafe link" in shown and "splits/train.txt" in shown
+    assert other.read_text() == "OTHER ORIGINAL CONTENT\n"
+
+
 def test_config_text_written_as_json_is_a_config(tmp_path: Path) -> None:
     """JSON is YAML: the SDK must not turn it into an object and reject it, quoting the key."""
     config = {

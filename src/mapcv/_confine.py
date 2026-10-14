@@ -7,15 +7,23 @@ Two things in it could make mapcv touch files outside it:
   ``..`` (:func:`is_dataset_path`);
 * a symbolic link that resolves outside the folder, or a hard link (a file with
   another name somewhere else), which a write would go through
-  (:func:`check_folder_links`).
+  (:func:`check_folder_links`, or :func:`check_inside` for the few files a read
+  touches).
 """
 
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
-__all__ = ["LinkEscapeError", "check_folder_links", "first_outside_path", "is_dataset_path"]
+__all__ = [
+    "LinkEscapeError",
+    "check_folder_links",
+    "check_inside",
+    "first_outside_path",
+    "is_dataset_path",
+]
 
 # With every path between newlines, one of these is in the text exactly when a path is
 # not an :func:`is_dataset_path` (a newline inside a path changes the line count).
@@ -119,3 +127,46 @@ def check_folder_links(folder: Path, what: str, hard_links: bool = False) -> Non
                         "so writing it would change those too. Replace it with a copy, or use "
                         "another folder."
                     )
+
+
+def check_inside(folder: Path, path: Path, what: str) -> None:
+    """Fail if ``path``, a file below ``folder``, resolves outside it through a link.
+
+    Only ``path`` itself is looked at, so a read can call it per file: the parts of
+    ``path`` below ``folder`` are checked with ``lstat`` and, only when one of them is a
+    symbolic link, resolved. A link to a place inside ``folder`` is fine, and so is a
+    missing file (reading it fails on its own).
+
+    Raises:
+        LinkEscapeError: Naming ``path`` and where it leads.
+    """
+    try:
+        parts = path.relative_to(folder).parts
+    except ValueError:
+        parts = ("..",)
+    if ".." not in parts:
+        current = str(folder)
+        for part in parts:
+            current = os.path.join(current, part)
+            try:
+                linked = stat.S_ISLNK(os.lstat(current).st_mode)
+            except OSError:
+                return
+            if linked:
+                break
+        else:
+            return
+    root = os.path.normcase(os.path.realpath(folder))
+    target = os.path.realpath(path)
+    found = os.path.normcase(target)
+    if found == root or found.startswith(root.rstrip(os.sep) + os.sep):
+        return
+    try:
+        rel = os.path.relpath(path, folder).replace(os.sep, "/")
+    except ValueError:  # another drive on Windows
+        rel = str(path)
+    raise LinkEscapeError(
+        f"{what}: {rel} leads through a link to {target}, outside {folder}. mapcv does not "
+        "read or write through links that leave the folder: replace the link with the file "
+        "itself, or use another folder."
+    )

@@ -19,7 +19,8 @@ target/
 *.so
 *.pyd
 *.dylib
-.claude/
+.claude/*
+!.claude/settings.json
 site/
 website/.astro/
 website/dist/

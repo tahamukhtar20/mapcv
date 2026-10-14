@@ -149,6 +149,8 @@ def test_check_inside(tmp_path: Path) -> None:
         check_inside(folder, folder / "outdir" / "other.txt", "ds")
     with pytest.raises(LinkEscapeError):
         check_inside(folder, folder / "sub" / ".." / ".." / "other.txt", "ds")
+    with pytest.raises(LinkEscapeError, match="other.txt leads through a link"):
+        check_inside(folder, tmp_path / "other.txt", "ds")  # not below the folder at all
 
 
 def _link_out(staging: Path, rel: str, tmp_path: Path) -> Path:

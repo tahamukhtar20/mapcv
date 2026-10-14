@@ -76,6 +76,25 @@ def test_split_refuses_a_link_out_of_the_dataset_inside_the_root(tmp_path: Path)
     assert other.read_text() == "OTHER ORIGINAL CONTENT\n"
 
 
+def test_generate_refuses_a_link_out_of_the_staging_dir_inside_the_root(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    staging = _dataset(root)
+    other = root / "other.txt"
+    other.write_text("OTHER ORIGINAL CONTENT\n")
+    image = min((staging / "Images").iterdir())
+    image.unlink()
+    image.symlink_to(other)
+
+    async def scenario(client: Client) -> str:
+        result = await call(client, "generate", config="mapcv.yaml")
+        assert result.is_error
+        return text_of(result)
+
+    shown = run_client(root, scenario)
+    assert "Unsafe link" in shown and image.name in shown
+    assert other.read_text() == "OTHER ORIGINAL CONTENT\n"
+
+
 def test_config_text_written_as_json_is_a_config(tmp_path: Path) -> None:
     """JSON is YAML: the SDK must not turn it into an object and reject it, quoting the key."""
     config = {

@@ -21,17 +21,18 @@ from typer.testing import CliRunner
 pytest.importorskip("rasterio", reason="the GeoTIFF is written with rasterio")
 from test_geotiff_imagery import config_for, make_raster, write_labels
 
-from mapcv import stac
+from mapcv import MapcvDataset, generate, split, stac
 from mapcv._confine import (
     LinkEscapeError,
     check_folder_links,
+    check_inside,
     first_outside_path,
     is_dataset_path,
 )
 from mapcv.cli import app
 from mapcv.config import LabelsConfig, MapcvConfig, OsmLabelsSource
 from mapcv.manifest import Manifest, ManifestMismatchError
-from mapcv.pipeline import run_generate
+from mapcv.pipeline import run_generate, run_split
 from mapcv.verify import verify_dataset
 
 runner = CliRunner()
@@ -129,6 +130,126 @@ def test_check_folder_links(tmp_path: Path) -> None:
     (folder / "sub" / "out").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(LinkEscapeError, match="sub/out is a link to"):
         check_folder_links(folder, "ds")
+
+
+def test_check_inside(tmp_path: Path) -> None:
+    folder = tmp_path / "ds"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "a.txt").write_text("a")
+    (folder / "alias.txt").symlink_to(folder / "sub" / "a.txt")
+    (tmp_path / "other.txt").write_text("b")
+    (folder / "out.txt").symlink_to(tmp_path / "other.txt")
+    (folder / "outdir").symlink_to(tmp_path, target_is_directory=True)
+    check_inside(folder, folder / "sub" / "a.txt", "ds")
+    check_inside(folder, folder / "alias.txt", "ds")
+    check_inside(folder, folder / "missing.txt", "ds")  # reading it fails on its own
+    with pytest.raises(LinkEscapeError, match="out.txt leads through a link to"):
+        check_inside(folder, folder / "out.txt", "ds")
+    with pytest.raises(LinkEscapeError, match="outdir/other.txt leads through a link to"):
+        check_inside(folder, folder / "outdir" / "other.txt", "ds")
+    with pytest.raises(LinkEscapeError):
+        check_inside(folder, folder / "sub" / ".." / ".." / "other.txt", "ds")
+    with pytest.raises(LinkEscapeError, match="other.txt leads through a link"):
+        check_inside(folder, tmp_path / "other.txt", "ds")  # not below the folder at all
+
+
+def _link_out(staging: Path, rel: str, tmp_path: Path) -> Path:
+    """Replace ``rel`` in the dataset with a link to a copy of it outside; the copy."""
+    outside = tmp_path / ("outside_" + rel.replace("/", "_"))
+    path = staging / rel
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(outside)
+    return outside
+
+
+@pytest.mark.parametrize("rel", ["manifest.json", "splits/train.txt"])
+def test_info_does_not_read_through_a_link_out_of_the_dataset(tmp_path: Path, rel: str) -> None:
+    staging = _dataset(tmp_path)
+    _link_out(staging, rel, tmp_path)
+
+    result = runner.invoke(app, ["info", str(staging)])
+
+    assert result.exit_code == 1, result.output
+    assert "Unsafe link" in result.output and "outside" in result.output
+
+
+def test_info_refuses_a_splits_folder_linked_out_of_the_dataset(tmp_path: Path) -> None:
+    staging = _dataset(tmp_path)
+    (staging / "splits").rename(tmp_path / "splits")
+    (staging / "splits").symlink_to(tmp_path / "splits", target_is_directory=True)
+
+    result = runner.invoke(app, ["info", str(staging)])
+
+    assert result.exit_code == 1, result.output
+    assert "Unsafe link" in result.output
+
+
+def test_info_reads_a_dataset_with_links_inside_it(tmp_path: Path) -> None:
+    staging = _dataset(tmp_path)
+    (staging / "splits" / "train.txt").rename(staging / "train_list.txt")
+    (staging / "splits" / "train.txt").symlink_to(staging / "train_list.txt")
+    result = runner.invoke(app, ["info", str(staging)])
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("rel", ["manifest.json", "splits/train.txt"])
+def test_mapcv_dataset_refuses_a_linked_manifest_or_split_list(tmp_path: Path, rel: str) -> None:
+    staging = _dataset(tmp_path)
+    _link_out(staging, rel, tmp_path)
+    with pytest.raises(LinkEscapeError, match="outside"):
+        MapcvDataset(staging, "train", as_tensors=False)
+
+
+def test_mapcv_dataset_refuses_a_linked_patch_file(tmp_path: Path) -> None:
+    staging = _dataset(tmp_path)
+    dataset = MapcvDataset(staging, "all", as_tensors=False)
+    image = dataset.entries[0]["files"]["image"]
+    _link_out(staging, image, tmp_path)
+    with pytest.raises(LinkEscapeError, match=f"{image} leads through a link"):
+        dataset[0]
+    mask = dataset.entries[1]["files"]["mask"]
+    _link_out(staging, mask, tmp_path)
+    with pytest.raises(LinkEscapeError, match=f"{mask} leads through a link"):
+        dataset[1]
+
+
+def test_mapcv_dataset_reads_links_inside_the_dataset(tmp_path: Path) -> None:
+    staging = _dataset(tmp_path)
+    dataset = MapcvDataset(staging, "all", as_tensors=False)
+    before = dataset[0]
+    path = staging / dataset.entries[0]["files"]["image"]
+    path.rename(staging / "moved.png")
+    path.symlink_to(staging / "moved.png")
+    after = MapcvDataset(staging, "all", as_tensors=False)[0]
+    assert (after["image"] == before["image"]).all()
+
+
+@pytest.mark.parametrize("entry_point", ["run_generate", "generate"])
+def test_library_generate_refuses_a_link_out_of_the_staging_dir(
+    tmp_path: Path, entry_point: str
+) -> None:
+    config = MapcvConfig.from_yaml(_config(tmp_path))
+    outside = tmp_path / "outside.txt"
+    outside.write_text("precious\n")
+    staging = Path(config.writer.staging_dir)
+    (staging / "Images").mkdir(parents=True)
+    (staging / "Images" / "patch_0000000.png").symlink_to(outside)
+
+    with pytest.raises(LinkEscapeError, match="writer.staging_dir"):
+        run_generate(config) if entry_point == "run_generate" else generate(config)
+    assert outside.read_text() == "precious\n"
+
+
+@pytest.mark.parametrize("entry_point", ["run_split", "split"])
+def test_library_split_refuses_a_link_out_of_the_dataset(tmp_path: Path, entry_point: str) -> None:
+    staging = _dataset(tmp_path)
+    outside = _link_out(staging, "splits/train.txt", tmp_path)
+    before = outside.read_bytes()
+
+    with pytest.raises(LinkEscapeError, match="splits/train.txt is a link"):
+        run_split(staging) if entry_point == "run_split" else split(staging)
+    assert outside.read_bytes() == before
 
 
 # ── Paths in a manifest and in SHA256SUMS (D-3) ──────────────────────────────

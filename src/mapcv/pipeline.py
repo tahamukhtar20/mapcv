@@ -22,6 +22,7 @@ from typing import Any, Union
 import numpy as np
 import numpy.typing as npt
 
+from mapcv._confine import check_folder_links
 from mapcv._patching import extract_array_patch
 from mapcv.aoi import AreaOfInterest, column_clusters
 from mapcv.config import GeoTiffImageryConfig, MapcvConfig
@@ -466,11 +467,14 @@ def run_generate(
     resumed run also writes again the patches whose files went missing or empty.
 
     Raises:
+        LinkEscapeError: ``writer.staging_dir`` holds a symbolic link that resolves
+            outside it, which a write would go through.
         DatasetBusyError: Another mapcv run is writing to ``writer.staging_dir``.
         StagingDirError: ``writer.staging_dir`` holds other files and no manifest.
     """
     started = time.monotonic()
     staging = config.writer.staging_dir
+    check_folder_links(staging, "writer.staging_dir")
     _check_staging_dir(staging)
     staging.mkdir(parents=True, exist_ok=True)
     with dataset_lock(staging):
@@ -798,10 +802,15 @@ def run_split(
     The manifest is read, never rewritten. Outputs that depend on the split
     (``patches.geojson``, a detection dataset's COCO files, YOLO image lists
     and ``dataset.yaml``, and a classification dataset's label tables) are rebuilt.
+
+    Raises:
+        FileNotFoundError: ``staging_dir`` has no manifest.
+        LinkEscapeError: ``staging_dir`` holds a symbolic link that resolves outside it.
     """
     manifest_path = staging_dir / _MANIFEST_FILENAME
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")
+    check_folder_links(staging_dir, "the dataset folder")
 
     manifest = Manifest.load(manifest_path)
     cfg = split_config or SplitterConfig()

@@ -41,7 +41,7 @@ from pydantic import ValidationError
 from shapely.geometry import shape
 
 from mapcv import planning
-from mapcv._confine import first_outside_path
+from mapcv._confine import LinkEscapeError, first_outside_path
 from mapcv._mapcv_rs import kml_fields as _kml_fields
 from mapcv._mapcv_rs import parse_kml as _parse_kml_bytes
 from mapcv._net import is_internal_host, public_addresses_only
@@ -1651,6 +1651,8 @@ def execute_generate(
                     "Generation cancelled. Finished chunks are saved: call generate again with "
                     "the same config to resume."
                 ) from None
+            except LinkEscapeError as exc:
+                raise ToolFailure(f"Unsafe link: {exc}") from None
             except ManifestMismatchError as exc:
                 raise ToolFailure(f"Cannot resume: {exc}") from None
             except (DatasetBusyError, StagingDirError) as exc:
@@ -1893,6 +1895,8 @@ def split(
     with capture_warnings() as caught:
         try:
             counts = run_split(folder, config)
+        except LinkEscapeError as exc:
+            raise ToolFailure(f"Unsafe link: {exc}") from None
         except (FileNotFoundError, ManifestMismatchError, DatasetBusyError) as exc:
             raise ToolFailure(str(exc)) from None
     parts = ", ".join(f"{name} {counts[name]:,}" for name in ("train", "val", "test"))

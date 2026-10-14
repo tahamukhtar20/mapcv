@@ -153,7 +153,7 @@ print(result.new_patches, "new patches in", result.staging_dir)
 
 `run_generate(config, on_chunk)` is the same function with a `MapcvConfig` only.
 
-**Output.** The library prints nothing. Messages such as "Resuming: 120 patches already written, 80 to go." go to the `mapcv` logger at `INFO`; show them with `logging.basicConfig(level=logging.INFO)`, or `logging.getLogger("mapcv").setLevel(logging.INFO)` with a handler of your own. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `mapcv.locking.DatasetBusyError` (a `RuntimeError`) while another `generate` or `split` writes to the folder, `mapcv.locking.StagingDirError` (a `ValueError`) for a folder with other files and no manifest (hidden entries and a top-level `README.md` do not count), `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
+**Output.** The library prints nothing. Messages such as "Resuming: 120 patches already written, 80 to go." go to the `mapcv` logger at `INFO`; show them with `logging.basicConfig(level=logging.INFO)`, or `logging.getLogger("mapcv").setLevel(logging.INFO)` with a handler of your own. Unlike `mapcv generate`, it never asks for confirmation, so check `plan(config).is_large` yourself if needed. Problems that don't stop the run (skipped label features, labels outside the imagery, more than half of the tiles failing, split leakage) are emitted as `UserWarning`s. Raises `ManifestMismatchError` if the folder holds an incompatible dataset, `mapcv.locking.DatasetBusyError` (a `RuntimeError`) while another `generate` or `split` writes to the folder, `mapcv.locking.StagingDirError` (a `ValueError`) for a folder with other files and no manifest (hidden entries and a top-level `README.md` do not count), a `ValueError` naming the link for a folder that holds a symbolic link pointing outside it (a write would go through it), `RuntimeError` for download failures beyond the tile policy, and `ValueError` / `OSError` for bad inputs.
 
 ### `GenerateResult`
 
@@ -210,7 +210,7 @@ The library form of `mapcv split`. Pass a `SplitterConfig`, or its fields as key
 def run_split(staging_dir: Path, split_config: SplitterConfig | None = None) -> dict[str, int]
 ```
 
-Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files; for a classification dataset, the `split` column of `labels.csv` and the `labels_<split>.csv` files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest.
+Reads `staging_dir/manifest.json`, writes `staging_dir/splits/` and returns the counts (`train`, `val`, `test`, `dropped`). For a detection dataset it also rewrites the per-split COCO files, the YOLO image lists and `dataset.yaml`; for an instance dataset, the per-split COCO files; for a classification dataset, the `split` column of `labels.csv` and the `labels_<split>.csv` files. Without `split_config`, uses `SplitterConfig()` defaults. Raises `FileNotFoundError` when there is no manifest, and a `ValueError` naming the link when the folder holds a symbolic link pointing outside it.
 
 ### `split_dataset`
 
@@ -285,7 +285,7 @@ One split (`train`, `val`, `test`, `10/labeled`, ..., or `all`) of a dataset, as
 | `boxes`, `categories`, `annotations` | detection, instance | `(N, 4)` `[x, y, width, height]` boxes in pixels, their class IDs, and the COCO records (from the split's COCO files) |
 | `name`, `row`, `col`, `transform`, `crs` | always | The patch's file name, top-left pixel, affine transform and CRS |
 
-`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones), and for a detection dataset written without COCO files.
+`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones), and for a detection dataset written without COCO files. A file it reads (the manifest, a split list, `stats.json`, a COCO file or, per item, a patch file) that leads through a symbolic link out of `root` is a `ValueError` naming it; links inside `root` are fine.
 
 ### `export_hf_parquet`, `terratorch_config`, `export_webdataset`, `export_zarr`
 

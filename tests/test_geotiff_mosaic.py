@@ -189,6 +189,73 @@ def test_files_that_do_not_fit_together_are_refused(
         assert isinstance(open_geotiff_source(_region(raster), fixed), GeoTiffMosaicSource)
 
 
+def _jitter(path: Path, scale: float, shift_px: float) -> None:
+    """Scale a tile's pixel size by ``1 + scale`` and move its origin by ``shift_px``."""
+    with rasterio.open(path) as src:
+        t = src.transform
+    _retag(
+        path,
+        transform=Affine(
+            t.a * (1 + scale), 0, t.c + shift_px * t.a, 0, t.e * (1 + scale), t.f + shift_px * t.e
+        ),
+    )
+
+
+def test_rounding_noise_in_the_georeferencing_of_real_tiles_is_accepted(
+    tmp_path: Path,
+) -> None:
+    # Like the SpaceNet 2 chips: WGS-84 tiles of 2.7e-6 degree pixels whose pixel sizes
+    # differ by ~1e-8 relative and whose origins are ~1e-5 px off one grid.
+    raster = make_raster(tmp_path, epsg=4326, pixel=2.7e-6, width=640, height=512)
+    region = raster.region()
+    labels = write_labels(tmp_path, region)
+    _cut(raster.path, tmp_path / "exact", 2, 3)
+    noisy = _cut(raster.path, tmp_path / "noisy", 2, 3)
+    noise = [(0.0, 0.0), (1e-8, 1e-5), (-1e-8, -1e-5), (5.7e-9, 4e-6), (-3e-9, 2e-5), (8e-9, -2e-5)]
+    for path, (scale, shift) in zip(noisy, noise):
+        _jitter(path, scale, shift)
+    # Noise in the first tile, whose grid the mosaic takes, too.
+    _jitter(noisy[0], 7e-9, -8e-6)
+    for folder in ("exact", "noisy"):
+        run_generate(
+            config_for(
+                tmp_path,
+                {"path": str(tmp_path / folder / "*.tif")},
+                region,
+                labels=labels,
+                staging=f"out_{folder}",
+            )
+        )
+    for folder in ("Images", "Masks"):
+        exact = sorted((tmp_path / "out_exact" / folder).iterdir())
+        assert exact
+        assert [p.name for p in exact] == sorted(
+            p.name for p in (tmp_path / "out_noisy" / folder).iterdir()
+        )
+        for path in exact:
+            assert path.read_bytes() == (tmp_path / "out_noisy" / folder / path.name).read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("scale", "shift", "message"),
+    [
+        (0.0, 0.1, r"not on the same pixel grid .*offset by \+0\.100"),
+        (0.0, 2e-3, "not on the same pixel grid"),
+        (1e-4, 0.0, "resample the files to one pixel size"),
+        (1e-5, 0.0, "resample the files to one pixel size"),
+    ],
+)
+def test_tiles_genuinely_off_the_grid_are_still_refused(
+    tmp_path: Path, scale: float, shift: float, message: str
+) -> None:
+    raster = make_raster(tmp_path, epsg=4326, pixel=2.7e-6, width=640, height=512)
+    tiles = _cut(raster.path, tmp_path / "tiles", 1, 2)
+    _jitter(tiles[1], scale, shift)
+    config = GeoTiffImageryConfig(path=str(tmp_path / "tiles" / "*.tif"))
+    with pytest.raises(ValueError, match=message):
+        open_geotiff_source(_region(raster), config)
+
+
 def test_patterns_need_local_files_that_exist(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="local files only"):
         GeoTiffImageryConfig(path="https://example.com/tiles/*.tif")

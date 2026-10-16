@@ -5,8 +5,9 @@
     Hugging Face Hub and ``datasets.load_dataset("parquet", ...)`` read. Every patch
     file becomes a ``{bytes, path}`` column, exactly as written (PNG/JPEG columns are
     typed as ``datasets.Image``; NPY/GeoTIFF columns hold the file's bytes), with the
-    patch's place (``row``, ``col``, ``crs``, ``transform``) and, for classification,
-    its labels. Needs pyarrow (``pip install "mapcv[export]"``).
+    patch's place (``row``, ``col``, ``crs``, ``transform``), for classification its
+    labels and for detection and instance its ``annotations``: the patch's COCO
+    annotations, as in ``annotations/instances_<split>.json``. Needs pyarrow (``pip install "mapcv[export]"``).
 ``webdataset``, ``zarr``
     Few large files instead of one per patch: see :mod:`mapcv.shards`.
 ``terratorch``
@@ -51,6 +52,24 @@ def _entries_by_split(root: Path, manifest: Manifest) -> dict[str, list[Manifest
         names = (root / "splits" / f"{split}.txt").read_text(encoding="utf-8").split()
         result[split] = [by_name[name] for name in names if name in by_name]
     return result
+
+
+def _annotations(root: Path, manifest: Manifest) -> dict[str, list[dict[str, Any]]]:
+    """Each patch's COCO annotations by image name (detection and instance), built from
+    the stored objects like the dataset's COCO files, so a dataset written with
+    ``detection.formats: [yolo]`` has them too."""
+    from mapcv.writers import detection, instance
+    from mapcv.writers.detection import load_objects
+
+    if manifest.task == "instance":
+        document = instance.coco_document(manifest, load_objects(manifest, root, "instances"))
+    else:
+        document = detection.coco_document(manifest, load_objects(manifest, root))
+    names = {image["id"]: image["file_name"] for image in document["images"]}
+    found: dict[str, list[dict[str, Any]]] = {name: [] for name in names.values()}
+    for annotation in document["annotations"]:
+        found[names[annotation["image_id"]]].append(annotation)
+    return found
 
 
 def _stats(root: Path) -> dict[str, Any]:
@@ -120,6 +139,48 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
         fields.append(pa.field("labels", pa.list_(pa.int64())))
         # Class IDs as in the manifest (the card lists their names).
         features["labels"] = {"feature": {"dtype": "int64", "_type": "Value"}, "_type": "Sequence"}
+    objects = _annotations(root, manifest) if manifest.task in ("detection", "instance") else None
+    if objects is not None:
+        # A list of COCO annotations per patch (pixel xywh boxes, class IDs as category_id;
+        # for instance, the mask as compressed RLE).
+        value = {
+            "id": pa.int64(),
+            "image_id": pa.int64(),
+            "category_id": pa.int64(),
+            "bbox": pa.list_(pa.float64(), 4),
+            "area": pa.float64(),
+            "iscrowd": pa.int64(),
+            "truncated": pa.bool_(),
+        }
+        if manifest.task == "instance":
+            value["segmentation"] = pa.struct(
+                [("size", pa.list_(pa.int64(), 2)), ("counts", pa.string())]
+            )
+        fields.append(pa.field("annotations", pa.list_(pa.struct(list(value.items())))))
+        int64 = {"dtype": "int64", "_type": "Value"}
+        feature: dict[str, Any] = {
+            "id": int64,
+            "image_id": int64,
+            "category_id": int64,
+            "bbox": {
+                "feature": {"dtype": "float64", "_type": "Value"},
+                "length": 4,
+                "_type": "Sequence",
+            },
+            "area": {"dtype": "float64", "_type": "Value"},
+            "iscrowd": int64,
+            "truncated": {"dtype": "bool", "_type": "Value"},
+        }
+        if manifest.task == "instance":
+            feature["segmentation"] = {
+                "size": {
+                    "feature": int64,
+                    "length": 2,
+                    "_type": "Sequence",
+                },
+                "counts": {"dtype": "string", "_type": "Value"},
+            }
+        features["annotations"] = [feature]
     schema = pa.schema(
         fields, metadata={"huggingface": json.dumps({"info": {"features": features}})}
     )
@@ -156,6 +217,8 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
                     columns["labels"].append(
                         [int(label) for label in entry["summary"].get("labels") or []]
                     )
+                if objects is not None:
+                    columns["annotations"].append(objects[Path(entry["files"]["image"]).name])
             table = pa.table(columns, schema=schema)
             path = out / "data" / f"{split}-00000-of-00001.parquet"
             pq.write_table(table, path)

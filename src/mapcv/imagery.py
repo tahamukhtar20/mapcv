@@ -1345,14 +1345,19 @@ class GeoTiffRasterSource:
         """Nothing to release: the reader holds no open handles between reads."""
 
 
-# Mosaic files must share their pixel size to this relative tolerance, and their grids
-# must line up to this fraction of a pixel.
-_MOSAIC_SCALE_TOLERANCE = 1e-9
-_MOSAIC_ALIGN_TOLERANCE_PX = 1e-6
+# How far, in pixels, a mosaic file's pixels may sit from the first file's grid. Real tile
+# sets carry rounding noise in their georeferencing (pixel sizes ~1e-8 apart, origins ~1e-5
+# px off), which is accepted; a file this close is placed on the grid exactly.
+_MOSAIC_ALIGN_TOLERANCE_PX = 1e-3
 
 
-def _same_size(first: float, second: float) -> bool:
-    return abs(first - second) <= _MOSAIC_SCALE_TOLERANCE * abs(second)
+def _same_size(size: float, reference: float, pixels: int) -> bool:
+    """Whether ``pixels`` pixels of ``size`` span the same distance as of ``reference``.
+
+    The difference adds up across a file, so the last of its pixels may drift at most
+    the alignment tolerance from where the reference pixel size puts it.
+    """
+    return abs(size - reference) * max(pixels, 1) <= _MOSAIC_ALIGN_TOLERANCE_PX * abs(reference)
 
 
 class GeoTiffMosaicSource:
@@ -1425,19 +1430,24 @@ class GeoTiffMosaicSource:
         a, b, c, d, e, f = transforms[0]
         offsets = []
         full_a, _, _, _, full_e, _ = self._tifs[0].info.transform or (0.0,) * 6
-        for (ta, tb, tc, td, te, tf), name, tif in zip(transforms, names, self._tifs):
+        for (ta, tb, tc, td, te, tf), name, tif, (file_h, file_w) in zip(
+            transforms, names, self._tifs, sizes
+        ):
             if tb or td or b or d:
                 raise ValueError(
                     f"imagery.path: '{name}' is rotated; a mosaic needs north-up files"
                 )
             file_a, _, _, _, file_e, _ = tif.info.transform or (0.0,) * 6
-            if not (_same_size(file_a, full_a) and _same_size(file_e, full_e)):
+            if not (
+                _same_size(file_a, full_a, tif.info.width)
+                and _same_size(file_e, full_e, tif.info.height)
+            ):
                 raise ValueError(
                     f"imagery.path: '{name}' has pixel size {file_a} x {-file_e} but "
                     f"'{names[0]}' has {full_a} x {-full_e}; resample the files to one pixel "
                     "size first"
                 )
-            if not (_same_size(ta, a) and _same_size(te, e)):
+            if not (_same_size(ta, a, file_w) and _same_size(te, e, file_h)):
                 # Same pixels, but the overviews were not built on a common grid (a file
                 # whose size is not a multiple of the overview factor is rounded).
                 raise ValueError(

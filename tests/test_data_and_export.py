@@ -335,7 +335,7 @@ def test_hf_parquet_export(tmp_path: Path, scene: dict[str, Any]) -> None:
     card = (tmp_path / "hf" / "README.md").read_text(encoding="utf-8")
     front = yaml.safe_load(card.split("---\n")[1])
     assert front["configs"][0]["data_files"][0] == {"split": "train", "path": "data/train-*"}
-    with pytest.raises(ValueError, match="new folder"):
+    with pytest.raises(ValueError, match="outside the dataset folder"):
         export_hf_parquet(root, root)
 
 
@@ -502,6 +502,34 @@ def test_hf_parquet_refuses_a_folder_that_is_not_its_own(
     afile.write_text("x")
     with pytest.raises(ValueError, match="is a file"):
         export_hf_parquet(root, afile)
+
+
+def test_hf_parquet_refuses_a_folder_inside_the_dataset(
+    tmp_path: Path, scene: dict[str, Any]
+) -> None:
+    pytest.importorskip("pyarrow.parquet")
+    from mapcv.shards import export_webdataset
+
+    root = _png_dataset(tmp_path, scene)
+    before = sorted(p.relative_to(root) for p in root.rglob("*"))
+    (tmp_path / "link").symlink_to(root, target_is_directory=True)
+    for out in (root / "out", root / "images" / "out", tmp_path / "link" / "out"):
+        with pytest.raises(ValueError) as refused:
+            export_hf_parquet(root, out)
+        with pytest.raises(ValueError) as webdataset:
+            export_webdataset(root, out)
+        assert str(refused.value) == str(webdataset.value)
+        assert "outside the dataset folder" in str(refused.value)
+    result = runner.invoke(
+        app, ["export", str(root), "-f", "hf-parquet", "-o", str(root / "out")], env=ENV
+    )
+    assert result.exit_code == 1, result.output
+    assert "Cannot export the dataset: export to a folder outside the dataset folder" in (
+        result.output
+    )
+    assert sorted(p.relative_to(root) for p in root.rglob("*")) == before
+    export_hf_parquet(root, tmp_path / "next-to-it")
+    assert (tmp_path / "next-to-it" / "README.md").exists()
 
 
 def _unfinish(root: Path) -> None:

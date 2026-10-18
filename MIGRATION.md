@@ -87,6 +87,7 @@ A few label files give other class IDs or masks than with 0.2. `mapcv plan` prin
 - **A `label_field` that no feature has is an error** in GeoJSON and KML too, as it was for GeoPackage and Shapefile, instead of a dataset whose masks are all background. KML labels come from `<ExtendedData>` fields, not from the placemark's `<name>`.
 - **A label raster's NoData tag no longer overrides `labels.classes`.** A value the file tags as NoData but `labels.classes` maps to a class is that class (with a warning), not `labels.ignore_index`.
 - **Polygons that reach the poles** are cut at latitude ±85.0511° on XYZ imagery instead of being left out of the masks, and a feature with a coordinate that is not a number (`NaN`, infinite) or a latitude beyond ±90° is skipped and counted in a warning.
+- **Longitudes in 0–360°** (since 0.3.1). A vector label or `region.path` feature east of 180° is moved by −360° (one that crosses 180° is cut there), and a region box in 0–360° is moved the same way, so it lands where the same data in −180…180 would. 0.3.0 left such labels out of the masks on GeoTIFF imagery in EPSG:4326 and on XYZ imagery, and refused such a region box. A dataset made by 0.3.0 from 0–360° labels does not record this, so generate it again into a new folder rather than resuming it. A `region.path` polygon that crosses 180° is refused, also when it is cut at 180° in −180…180 (0.3.0 made its box span every longitude).
 
 ## Patches without imagery
 

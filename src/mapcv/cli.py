@@ -64,6 +64,7 @@ from mapcv.config import (
     RasterLabelsConfig,
     StacCogImageryConfig,
     eopf_local_path,
+    region_longitudes,
 )
 from mapcv.labels import (
     MAX_CLASS_ID,
@@ -1702,6 +1703,12 @@ def _ask_bbox_or_file(
         except ValueError:
             _console.print("[red]Enter four numbers like[/red] 74.30,31.48,74.34,31.52")
             continue
+        if west < east and -90 <= south < north <= 90:
+            try:
+                west, east = region_longitudes(west, east)
+            except ValueError as exc:
+                _console.print(f"[red]{escape(str(exc))}[/red]")
+                continue
         if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
             _console.print("[red]Expected west < east and south < north, in lon/lat degrees.[/red]")
             if -90 <= west < east <= 90 and -180 <= south < north <= 180:

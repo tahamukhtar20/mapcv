@@ -349,6 +349,43 @@ _TILES_REMOVED = (
 WEB_MERCATOR_MAX_LATITUDE = 85.05112878
 
 
+def _crosses_antimeridian(geometry: Any) -> bool:
+    """Whether ``geometry`` (in -180..180) is cut at 180°: it reaches both -180° and 180°
+    but none of its parts does, as a polygon split there (RFC 7946, or by mapcv from
+    0..360° longitudes) is."""
+    west, _, east, _ = geometry.bounds
+    if not (west <= -180.0 and east >= 180.0):
+        return False
+    parts = getattr(geometry, "geoms", [geometry])
+    return not any(part.bounds[0] <= -180.0 and part.bounds[2] >= 180.0 for part in parts)
+
+
+def region_longitudes(west: float, east: float) -> tuple[float, float]:
+    """``west`` and ``east`` in -180..180, also when given as 0..360° longitudes.
+
+    A box east of 180° in 0..360 (both edges at 180..360) is moved by -360°, onto the
+    same place. A box that crosses 180° cannot be one box in -180..180, so it is an error.
+
+    Raises:
+        ValueError: A longitude outside -180..360, or a box that crosses 180°.
+    """
+    if 180.0 < east <= 360.0 and 180.0 <= west < east:
+        return west - 360.0, east - 360.0
+    if 180.0 < east <= 360.0 and -180.0 <= west < 180.0:
+        raise ValueError(
+            f"the region west={west:g}, east={east:g} crosses the antimeridian (180°), which "
+            "is not supported; split it at 180° into two runs, one with "
+            f"west={west:g}, east=180 and one with west=-180, east={east - 360.0:g}"
+        )
+    for name, value in (("west", west), ("east", east)):
+        if not -180.0 <= value <= 180.0:
+            raise ValueError(
+                f"region.{name} must be a longitude in -180..180 (or 0..360 for both west and "
+                f"east), got {value}"
+            )
+    return west, east
+
+
 class RegionConfig(NoBooleanNumbers):
     """The area of interest: a WGS-84 bounding box, or polygons in a vector file.
 
@@ -396,6 +433,13 @@ class RegionConfig(NoBooleanNumbers):
         polygons = area_polygons(path, raw.get("name_field"), raw.get("layer"))
         if not polygons:
             raise ValueError(f"region.path '{path.name}' holds no polygon")
+        if any(_crosses_antimeridian(geometry) for geometry, _ in polygons):
+            # Its box would span every longitude: a raster as wide as the world.
+            raise ValueError(
+                f"region.path: a polygon of '{path.name}' crosses the antimeridian (180°), "
+                "which is not supported; split the area at 180° into two files and make "
+                "one dataset from each"
+            )
         west = min(geometry.bounds[0] for geometry, _ in polygons)
         south = min(geometry.bounds[1] for geometry, _ in polygons)
         east = max(geometry.bounds[2] for geometry, _ in polygons)
@@ -412,10 +456,8 @@ class RegionConfig(NoBooleanNumbers):
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> RegionConfig:
-        for name in ("west", "east"):
-            value = getattr(self, name)
-            if not -180.0 <= value <= 180.0:
-                raise ValueError(f"region.{name} must be a longitude in -180..180, got {value}")
+        # 0..360° longitudes (common in climate and ocean data) are moved into -180..180.
+        self.west, self.east = region_longitudes(self.west, self.east)
         for name in ("south", "north"):
             value = getattr(self, name)
             if not -90.0 <= value <= 90.0:

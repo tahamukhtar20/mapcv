@@ -18,6 +18,7 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import shapely
+import shapely.affinity
 from shapely.geometry import MultiPolygon, shape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
@@ -307,6 +308,39 @@ def _invalid_coordinates(geometries: Sequence[BaseGeometry | None]) -> set[int]:
     return set(np.unique(owner[bad_vertex]).tolist())
 
 
+def _wrap_longitudes(geometries: Sequence[BaseGeometry | None]) -> list[BaseGeometry | None]:
+    """``geometries`` with 0..360° longitudes (common in climate and ocean data) moved
+    into -180..180.
+
+    Only a geometry with a vertex east of 180° and every vertex at 0..360 changes: one
+    that lies at 180..360 is moved by -360°, and one that crosses 180° is cut there and
+    its eastern part moved, so it becomes a multi-part geometry on both sides of the
+    antimeridian. Every other geometry is returned as it is (the same object).
+    """
+    result = list(geometries)
+    present = [index for index, geometry in enumerate(geometries) if geometry is not None]
+    if not present:
+        return result
+    array = np.empty(len(present), dtype=object)
+    array[:] = [geometries[index] for index in present]
+    bounds = shapely.bounds(array)
+    with np.errstate(invalid="ignore"):
+        wrapped = (bounds[:, 2] > 180.0) & (bounds[:, 0] >= 0.0) & (bounds[:, 2] <= 360.0)
+    for position in np.flatnonzero(wrapped).tolist():
+        geometry = array[position]
+        west, south, east, north = bounds[position]
+        if west >= 180.0:
+            moved = shapely.affinity.translate(geometry, xoff=-360.0)
+        else:
+            # Cutting needs a valid geometry (a self-intersecting ring would raise).
+            geometry = shapely.make_valid(geometry)
+            west_part = geometry.intersection(shapely.box(west, south, 180.0, north))
+            east_part = geometry.intersection(shapely.box(180.0, south, east, north))
+            moved = shapely.union(west_part, shapely.affinity.translate(east_part, xoff=-360.0))
+        result[present[position]] = moved
+    return result
+
+
 def _drop_invalid(
     geometries: list[BaseGeometry], labels: list[str | None]
 ) -> tuple[list[BaseGeometry], list[str | None], int]:
@@ -458,6 +492,7 @@ def parse_kml(
                 + " KML labels are read from <ExtendedData> <Data name=...> or <SimpleData "
                 "name=...> fields, not from the placemark's <name>."
             )
+    geometries = cast(list[BaseGeometry], _wrap_longitudes(geometries))
     geometries, labels, invalid = _drop_invalid(geometries, labels)
     return _with_class_ids(
         "KML",
@@ -675,6 +710,7 @@ def _polygon_features(
     kept: list[BaseGeometry] = []
     labels: list[str | None] = []
     non_polygon = 0
+    geometries = _wrap_longitudes(geometries)
     invalid = _invalid_coordinates(geometries)
     for index, parsed in enumerate(geometries):
         if parsed is None:

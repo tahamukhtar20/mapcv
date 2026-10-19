@@ -78,7 +78,7 @@ The warning starts with the format (`GeoJSON`, `KML`, `GeoPackage`, `Shapefile`,
 
 ### Roads, rivers and trees: buffer lines and points
 
-Lines and points have no area, so they are skipped unless you give them one. `labels.buffer` turns a line into a band of the given width and a point into a disc of the given diameter, both in metres on the ground (drawn in the UTM zone of each feature; the parts of a multi-part feature that lie in different zones each in their own), before they are rasterized like polygons:
+Lines and points have no area, so they are skipped unless you give them one. `labels.buffer` turns a line into a band of the given width and a point into a disc of the given diameter, both in metres on the ground (drawn in the UTM zone of each feature; a long line that crosses zones is cut at the zone edges, and each piece, like each part of a multi-part feature, is drawn in its own zone), before they are rasterized like polygons:
 
 ```yaml
 labels:

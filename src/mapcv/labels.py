@@ -18,7 +18,7 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import shapely
-from shapely.geometry import MultiPolygon, shape
+from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, shape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 
@@ -39,10 +39,14 @@ _LINE_TYPES = frozenset({"LineString", "MultiLineString", "LinearRing"})
 BufferDistances = tuple[float | None, float | None]
 
 
+def _utm_zone(lon: float) -> int:
+    """The number (1-60) of the UTM zone holding a longitude."""
+    return min(60, max(1, int((lon + 180.0) // 6.0) + 1))
+
+
 def _utm_epsg(lon: float, lat: float) -> int:
     """The WGS-84 UTM zone (EPSG code) holding a lon/lat position."""
-    zone = min(60, max(1, int((lon + 180.0) // 6.0) + 1))
-    return (32600 if lat >= 0.0 else 32700) + zone
+    return (32600 if lat >= 0.0 else 32700) + _utm_zone(lon)
 
 
 @lru_cache(maxsize=128)
@@ -71,25 +75,51 @@ def _buffer_in_zone(geometry: BaseGeometry, distance: float) -> BaseGeometry:
     return shapely.transform(projected.buffer(distance, quad_segs=8), project(to_lonlat))
 
 
+def _zone_pieces(part: BaseGeometry) -> list[tuple[int, BaseGeometry]]:
+    """``part`` with the UTM zone (EPSG code) to buffer it in, cut at the zone edges when
+    it crosses them: a line from 0 to 30 degrees east becomes five lines, one per zone."""
+    west, south, east, north = part.bounds
+    first, last = _utm_zone(west), _utm_zone(east)
+    if first == last:
+        centroid = part.centroid
+        return [(_utm_epsg(centroid.x, centroid.y), part)]
+    pieces: list[tuple[int, BaseGeometry]] = []
+    for zone in range(first, last + 1):
+        zone_west = -180.0 + 6.0 * (zone - 1)
+        # Zones 1 and 60 also take what lies beyond +/-180 degrees, as _utm_zone does.
+        strip_west = min(west, zone_west) if zone == 1 else zone_west
+        strip_east = max(east, zone_west + 6.0) if zone == 60 else zone_west + 6.0
+        strip = shapely.clip_by_rect(part, strip_west, south - 1.0, strip_east, north + 1.0)
+        for piece in shapely.get_parts(strip):
+            # A line only touching the strip's edge clips to a point; the next strip has it.
+            if piece.geom_type == "LineString" and not piece.is_empty:
+                lat = piece.centroid.y
+                pieces.append((_utm_epsg(zone_west + 3.0, lat), piece))
+    return pieces
+
+
 def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
     """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
 
     The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
-    metre to within 0.1%, and the polygon is brought back to lon/lat. The parts of a
-    multi-part geometry that lie in different zones are each buffered in their own zone
-    (one zone for a feature with parts far apart would stretch the distance by a lot),
-    and the buffers are merged.
+    metre to within 0.1%, and the polygon is brought back to lon/lat. A feature that
+    spans several zones is buffered piece by piece, each in its own zone (one zone for a
+    long line or for parts far apart would stretch the distance by a lot), and the
+    buffers are merged: the parts of a multi-part geometry are grouped by zone, and a
+    line that crosses a zone edge is cut there. A point is always in one zone.
     """
-    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else []
-    if len(parts) > 1:
-        zones: dict[int, list[BaseGeometry]] = {}
-        for part in parts:
-            if not part.is_empty:
-                centroid = part.centroid
-                zones.setdefault(_utm_epsg(centroid.x, centroid.y), []).append(part)
-        if len(zones) > 1:
-            kind = type(geometry)
-            buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else [geometry]
+    zones: dict[int, list[BaseGeometry]] = {}
+    for part in parts:
+        if not part.is_empty:
+            for epsg, piece in _zone_pieces(part):
+                zones.setdefault(epsg, []).append(piece)
+    if len(zones) > 1:
+        kind = MultiPoint if geometry.geom_type in _POINT_TYPES else MultiLineString
+        buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+        # A buffer reaching over +/-180 degrees comes back wrapped and invalid, and cannot be
+        # merged; such a feature is buffered in one zone, as before.
+        if all(buffer.is_valid for buffer in buffers):
             return shapely.union_all(buffers)
     return _buffer_in_zone(geometry, distance)
 

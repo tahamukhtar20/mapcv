@@ -85,7 +85,7 @@ from mapcv.splitter import SplitterConfig
 from mapcv.stac import local_paths_checked
 from mapcv.stats import dataset_stats, write_stats
 from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
-from mapcv.verify import verify_dataset, write_checksums
+from mapcv.verify import _write_checksums, verify_dataset
 from mapcv.writer import WriterConfig
 from mapcv.writers.detection import categories
 
@@ -1967,6 +1967,8 @@ def stats(state: ToolState, dataset: str, split: str = "train", save: bool = Fal
                 path, values = write_stats(folder, split)
             else:
                 path, values = None, dataset_stats(folder, split)
+    except LinkEscapeError as exc:
+        raise ToolFailure(f"Unsafe link: {exc}") from None
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         raise ToolFailure(f"Cannot compute the statistics: {exc}") from None
     notes = _warning_texts(caught)
@@ -1997,16 +1999,20 @@ def verify(
     if write_sums:
         sandbox.require_write("verify with write_sums=true")
     folder, _ = _checked_dataset(state, dataset)
-    report = verify_dataset(folder, deep=deep)
-    written: str | None = None
-    if write_sums and (report.ok or report.only_rewritten):
-        # Files that split, stats and card rewrite are recorded with their new hashes.
-        try:
-            written = sandbox.rel(write_checksums(folder))
-        except OSError as exc:
-            raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
-        if not report.ok:
-            report = verify_dataset(folder, deep=deep)
+    try:
+        report = verify_dataset(folder, deep=deep)
+        written: str | None = None
+        if write_sums and (report.ok or report.only_rewritten):
+            # Files that split, stats and card rewrite are recorded with their new hashes;
+            # verify_dataset checked the folder's links already.
+            try:
+                written = sandbox.rel(_write_checksums(folder))
+            except OSError as exc:
+                raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
+            if not report.ok:
+                report = verify_dataset(folder, deep=deep)
+    except LinkEscapeError as exc:
+        raise ToolFailure(f"Unsafe link: {exc}") from None
     out = {
         "dataset": sandbox.rel(folder),
         "ok": report.ok,

@@ -36,7 +36,7 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image
 
-from mapcv._confine import check_inside
+from mapcv._confine import check_folder_links, check_inside
 from mapcv.manifest import Manifest, ManifestEntry
 
 _SPLITS = ("train", "val", "test")
@@ -91,7 +91,8 @@ class MapcvDataset:
         FileNotFoundError: No manifest, or no list for ``split``.
         LinkEscapeError: A file it reads (the manifest, a split list, ``stats.json``, a
             COCO file or, when an item is read, a patch file) is a symbolic link, or lies
-            below one, that resolves outside ``root``. A ``ValueError``.
+            below one, that resolves outside ``root``; for a Zarr store, any link in it
+            does. A ``ValueError``.
         ValueError: A Zarr store with an array that is not numeric or names a codec other
             than the plain compressors (reading it could run code).
     """
@@ -118,6 +119,8 @@ class MapcvDataset:
 
             from mapcv._zarr_safety import check_group
 
+            # zarr reads the chunk files itself, so the whole store is checked once here.
+            check_folder_links(self.root, "the dataset folder")
             group = zarr.open_group(str(self.root), mode="r")
             # A downloaded store decides how its arrays decode: check before reading any.
             check_group(group, str(self.root))

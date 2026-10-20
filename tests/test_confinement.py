@@ -9,7 +9,7 @@ import os
 import threading
 import time
 import urllib.error
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -250,6 +250,90 @@ def test_library_split_refuses_a_link_out_of_the_dataset(tmp_path: Path, entry_p
     with pytest.raises(LinkEscapeError, match="splits/train.txt is a link"):
         run_split(staging) if entry_point == "run_split" else split(staging)
     assert outside.read_bytes() == before
+
+
+def _library_call(name: str, staging: Path, out: Path) -> object:
+    """Call the library function behind ``mapcv stats``, ``card``, ``verify`` or ``export``."""
+    from mapcv import card, export, shards, stats, verify
+
+    calls: dict[str, Callable[[], object]] = {
+        "dataset_stats": lambda: stats.dataset_stats(staging),
+        "write_stats": lambda: stats.write_stats(staging),
+        "card_text": lambda: card.card_text(staging),
+        "write_card": lambda: card.write_card(staging, overwrite=True),
+        "verify_dataset": lambda: verify.verify_dataset(staging, deep=True),
+        "write_checksums": lambda: verify.write_checksums(staging),
+        "terratorch_config": lambda: export.terratorch_config(staging),
+        "export_terratorch": lambda: export.export_terratorch(staging),
+        "export_hf_parquet": lambda: export.export_hf_parquet(staging, out),
+        "export_webdataset": lambda: shards.export_webdataset(staging, out),
+        "export_zarr": lambda: shards.export_zarr(staging, out),
+    }
+    return calls[name]()
+
+
+_LIBRARY_CALLS = [
+    "dataset_stats",
+    "write_stats",
+    "card_text",
+    "write_card",
+    "verify_dataset",
+    "write_checksums",
+    "terratorch_config",
+    "export_terratorch",
+    "export_hf_parquet",
+    "export_webdataset",
+    "export_zarr",
+]
+_NEEDS = {"export_hf_parquet": "pyarrow", "export_zarr": "zarr"}
+
+
+@pytest.mark.parametrize("name", _LIBRARY_CALLS)
+def test_library_dataset_functions_refuse_a_link_out_of_the_dataset(
+    tmp_path: Path, name: str
+) -> None:
+    if name in _NEEDS:
+        pytest.importorskip(_NEEDS[name])
+    staging = _dataset(tmp_path)
+    image = Manifest.load(staging / "manifest.json").patches[0]["files"]["image"]
+    outside = _link_out(staging, image, tmp_path)
+    before = outside.read_bytes()
+    (tmp_path / "outside.txt").write_text("precious\n")
+    for rel in ("stats.json", "README.md", "terratorch.yaml", "SHA256SUMS"):
+        (staging / rel).unlink(missing_ok=True)
+        (staging / rel).symlink_to(tmp_path / "outside.txt")
+    out = tmp_path / "export"
+
+    with pytest.raises(LinkEscapeError, match="the dataset folder: .* is a link to"):
+        _library_call(name, staging, out)
+    assert outside.read_bytes() == before
+    assert (tmp_path / "outside.txt").read_text() == "precious\n"
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("name", _LIBRARY_CALLS)
+def test_library_dataset_functions_read_links_inside_the_dataset(tmp_path: Path, name: str) -> None:
+    if name in _NEEDS:
+        pytest.importorskip(_NEEDS[name])
+    staging = _dataset(tmp_path)
+    image = staging / Manifest.load(staging / "manifest.json").patches[0]["files"]["image"]
+    image.rename(staging / "moved.png")
+    image.symlink_to(staging / "moved.png")
+    _library_call(name, staging, tmp_path / "export")
+
+
+def test_mapcv_dataset_refuses_a_link_out_of_a_zarr_store(tmp_path: Path) -> None:
+    pytest.importorskip("zarr")
+    from mapcv.shards import export_zarr
+
+    store = export_zarr(_dataset(tmp_path), tmp_path / "d.zarr")
+    MapcvDataset(store, "all", as_tensors=False)[0]
+    chunk = min(path for path in (store / "images").rglob("*") if path.name[0].isdigit())
+    rel = chunk.relative_to(store).as_posix()
+    _link_out(store, rel, tmp_path)
+
+    with pytest.raises(LinkEscapeError, match=f"{rel} is a link to"):
+        MapcvDataset(store, "all", as_tensors=False)
 
 
 # ── Paths in a manifest and in SHA256SUMS (D-3) ──────────────────────────────

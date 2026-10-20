@@ -285,7 +285,7 @@ One split (`train`, `val`, `test`, `10/labeled`, ..., or `all`) of a dataset, as
 | `boxes`, `categories`, `annotations` | detection, instance | `(N, 4)` `[x, y, width, height]` boxes in pixels, their class IDs, and the COCO records (from the split's COCO files) |
 | `name`, `row`, `col`, `transform`, `crs` | always | The patch's file name, top-left pixel, affine transform and CRS |
 
-`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones), and for a detection dataset written without COCO files. A file it reads (the manifest, a split list, `stats.json`, a COCO file or, per item, a patch file) that leads through a symbolic link out of `root` is a `ValueError` naming it; links inside `root` are fine.
+`normalize=True` uses the per-band mean and standard deviation of the train split from `stats.json` (computing them if the file is missing) and sets pixels without data to 0. Arrays are torch tensors when torch is installed (`uint16` widened to `int32`) unless `as_tensors=False`; mapcv does not depend on torch. Raises `FileNotFoundError` for a missing manifest or split list (the message lists the available ones), and for a detection dataset written without COCO files. A file it reads (the manifest, a split list, `stats.json`, a COCO file or, per item, a patch file) that leads through a symbolic link out of `root` is a `ValueError` naming it, and so is any such link in a Zarr store; links inside `root` are fine.
 
 ### `export_hf_parquet`, `terratorch_config`, `export_webdataset`, `export_zarr`
 
@@ -300,7 +300,7 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = 1_000_000_000) -
 def export_zarr(root: Path, out: Path) -> Path
 ```
 
-The functions behind [`mapcv export`](/mapcv/reference/cli/#mapcv-export).
+The functions behind [`mapcv export`](/mapcv/reference/cli/#mapcv-export). Like the command, they raise a `ValueError` naming the link (`LinkEscapeError`) when the dataset folder holds a symbolic link pointing outside it.
 
 ### `write_stats`, `write_card`, `verify_dataset`
 
@@ -317,7 +317,7 @@ def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport
 def write_checksums(staging_dir: Path) -> Path
 ```
 
-The functions behind [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats), [`mapcv card`](/mapcv/reference/cli/#mapcv-card) and [`mapcv verify`](/mapcv/reference/cli/#mapcv-verify). `dataset_stats` and `card_text` return what the other two write. `VerifyReport` has `patches`, `files`, `checked_hashes`, `problems` and `notes` (lists of messages) and `ok` (no problems).
+The functions behind [`mapcv stats`](/mapcv/reference/cli/#mapcv-stats), [`mapcv card`](/mapcv/reference/cli/#mapcv-card) and [`mapcv verify`](/mapcv/reference/cli/#mapcv-verify). `dataset_stats` and `card_text` return what the other two write. `VerifyReport` has `patches`, `files`, `checked_hashes`, `problems` and `notes` (lists of messages) and `ok` (no problems). Like the commands, each raises a `ValueError` naming the link (`LinkEscapeError`) when the dataset folder holds a symbolic link pointing outside it.
 
 ## Manifests
 

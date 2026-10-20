@@ -25,6 +25,7 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image
 
+from mapcv._confine import check_folder_links
 from mapcv.manifest import Manifest, ManifestEntry, warn_if_incomplete
 
 STATS_FILENAME = "stats.json"
@@ -216,7 +217,14 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
 
     Raises:
         FileNotFoundError: The folder has no ``manifest.json``.
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
     """
+    check_folder_links(staging_dir, "the dataset folder")
+    return _dataset_stats(staging_dir, split)
+
+
+def _dataset_stats(staging_dir: Path, split: str) -> dict[str, Any]:
     manifest_path = staging_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")
@@ -309,8 +317,15 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
 
 
 def write_stats(staging_dir: Path, split: str = "train") -> tuple[Path, dict[str, Any]]:
-    """Compute :func:`dataset_stats` and write it to ``stats.json`` in the dataset folder."""
-    stats = dataset_stats(staging_dir, split)
+    """Compute :func:`dataset_stats` and write it to ``stats.json`` in the dataset folder.
+
+    Raises:
+        FileNotFoundError: The folder has no ``manifest.json``.
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
+    check_folder_links(staging_dir, "the dataset folder")
+    stats = _dataset_stats(staging_dir, split)
     path = staging_dir / STATS_FILENAME
     path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8", newline="\n")
     return path, stats

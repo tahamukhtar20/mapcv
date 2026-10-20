@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from mapcv._confine import is_dataset_path
+from mapcv._confine import check_folder_links, is_dataset_path
 from mapcv.locking import LOCK_FILENAME
 from mapcv.manifest import Manifest, ManifestEntry, ManifestMismatchError, patch_folders
 
@@ -120,7 +120,17 @@ def _dataset_files(staging_dir: Path, manifest: Manifest) -> list[str]:
 
 
 def write_checksums(staging_dir: Path) -> Path:
-    """Write ``SHA256SUMS`` (``<hash>  <path>`` per line, as ``sha256sum`` writes it)."""
+    """Write ``SHA256SUMS`` (``<hash>  <path>`` per line, as ``sha256sum`` writes it).
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
+    check_folder_links(staging_dir, "the dataset folder")
+    return _write_checksums(staging_dir)
+
+
+def _write_checksums(staging_dir: Path) -> Path:
     manifest = Manifest.load(staging_dir / "manifest.json")
     lines = [
         f"{_sha256(staging_dir / rel)}  {rel}" for rel in _dataset_files(staging_dir, manifest)
@@ -275,7 +285,13 @@ def _check_splits(staging_dir: Path, manifest: Manifest, report: VerifyReport) -
 
 
 def verify_dataset(staging_dir: Path, deep: bool = False) -> VerifyReport:
-    """Check the dataset in ``staging_dir``; see the module docs."""
+    """Check the dataset in ``staging_dir``; see the module docs.
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
+    check_folder_links(staging_dir, "the dataset folder")
     report = VerifyReport()
     manifest_path = staging_dir / "manifest.json"
     if not manifest_path.exists():

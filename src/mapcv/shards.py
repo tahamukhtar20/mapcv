@@ -40,6 +40,7 @@ from typing import Any
 
 import numpy as np
 
+from mapcv._confine import check_folder_links
 from mapcv.data import read_image, read_mask, splits_of
 from mapcv.manifest import Manifest, ManifestEntry, require_complete
 
@@ -201,10 +202,16 @@ def _add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 
 
 def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> list[Path]:
-    """Write the tar shards and ``shards.json``; returns the shards (see the module docs)."""
+    """Write the tar shards and ``shards.json``; returns the shards (see the module docs).
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
     if shard_bytes < 1:
         raise ValueError("shard_bytes must be positive")
     _check_out(root, out)
+    check_folder_links(root, "the dataset folder")
     manifest = _load(root)
     objects = _coco_by_image(root) if manifest.task in ("detection", "instance") else None
     with export_folder(out, "WebDataset", _is_webdataset_file, "shards.json"):
@@ -268,9 +275,15 @@ def _zarr() -> Any:
 
 
 def export_zarr(root: Path, out: Path) -> Path:
-    """Write the Zarr group (see the module docs); returns ``out``."""
+    """Write the Zarr group (see the module docs); returns ``out``.
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
     zarr = _zarr()
     _check_out(root, out)
+    check_folder_links(root, "the dataset folder")
     manifest = _load(root)
     split_of = {
         manifest.patch_name(entry): split

@@ -51,13 +51,15 @@ fn check_strategy(strategy: &str) -> Result<(), String> {
     }
 }
 
-/// The most anchors one call builds (grid or random).
+/// The most anchors one run enumerates (grid or random).
 ///
-/// Python holds each anchor as a tuple of two ints, about 150 bytes, so this keeps the
-/// anchor lists of one run near 450 MB. A larger request is refused before anything is
-/// allocated: how many anchors there would be is computed from the dimensions alone, so
-/// a crafted size cannot ask for memory the system only runs out of while filling it.
-pub const MAX_ANCHORS: u64 = 3_000_000;
+/// A run holds its anchors compactly: a grid as its row and column positions, random
+/// anchors and those over an area of interest as one `u64` each (see
+/// [`random_positions`]), so this keeps them near 400 MB. A larger request is refused
+/// before anything is allocated: how many anchors there would be is computed from the
+/// dimensions alone, so a crafted size cannot ask for memory the system only runs out
+/// of while filling it.
+pub const MAX_ANCHORS: u64 = 50_000_000;
 
 /// An empty vector with room for `n` items, or an error when that much memory
 /// cannot be allocated (instead of aborting the process).
@@ -210,6 +212,33 @@ pub fn grid_anchors(
     Ok(anchors)
 }
 
+/// The grid anchor positions along one axis: the rows (or columns) of [`grid_anchors`].
+///
+/// A grid is every pair of a row and a column position, so a run can hold the two axes
+/// instead of every anchor.
+///
+/// # Errors
+/// Returns an error if `dim`, `patch_size` or `stride` is zero, if `strategy` is
+/// unknown, or if the axis alone has more than [`MAX_ANCHORS`] positions.
+pub fn grid_axis(
+    dim: usize,
+    patch_size: usize,
+    stride: usize,
+    strategy: &str,
+) -> Result<Vec<u64>, String> {
+    let (count, _, _) = grid_anchor_count(dim, 1, patch_size, stride, strategy)?;
+    if count > u128::from(MAX_ANCHORS) {
+        return Err(format!(
+            "the grid has {count} positions along one axis, more than the limit of \
+             {MAX_ANCHORS}; raise the stride, use a smaller area or split it into parts"
+        ));
+    }
+    let positions = dim_anchors(dim, patch_size, stride, strategy)?;
+    let mut out = with_room(positions.len(), "patch anchors")?;
+    out.extend(positions.into_iter().map(|p| p as u64));
+    Ok(out)
+}
+
 /// Number of positions along one axis from which random anchors are drawn.
 fn random_axis_len(dim: usize, patch_size: usize, strategy: &str) -> usize {
     if dim >= patch_size {
@@ -247,6 +276,112 @@ pub fn random_anchor_capacity(
         .ok_or_else(|| "raster is too large to enumerate anchors".to_string())
 }
 
+/// Which values Floyd's algorithm has picked: an open-addressing table of indices into
+/// the picked values, so each value is stored once (4 bytes a slot instead of the 9 to
+/// 18 bytes a value a `HashSet<u64>` takes, on top of the list).
+struct PickedSet {
+    slots: Vec<u32>,
+}
+
+impl PickedSet {
+    /// An empty slot (an index is below [`MAX_ANCHORS`], far below `u32::MAX`).
+    const EMPTY: u32 = u32::MAX;
+
+    /// Room for `n` values at a load of at most two thirds.
+    fn with_room(n: usize) -> Result<Self, String> {
+        let len = n + n / 2 + 1;
+        let mut slots = with_room(len, "random patch anchors")?;
+        slots.resize(len, Self::EMPTY);
+        Ok(Self { slots })
+    }
+
+    /// The slot a value's probe starts at.
+    fn start(&self, value: u64) -> usize {
+        let mut mixed = value;
+        let hash = splitmix64(&mut mixed);
+        ((u128::from(hash) * self.slots.len() as u128) >> 64) as usize
+    }
+
+    /// Whether `value` is among `picked`, the values inserted so far in order.
+    fn contains(&self, picked: &[u64], value: u64) -> bool {
+        let mut slot = self.start(value);
+        loop {
+            let index = self.slots[slot];
+            if index == Self::EMPTY {
+                return false;
+            }
+            if picked[index as usize] == value {
+                return true;
+            }
+            slot = (slot + 1) % self.slots.len();
+        }
+    }
+
+    /// Record that `picked[index]` holds `value`, which is not in the set yet.
+    fn insert(&mut self, index: usize, value: u64) {
+        let mut slot = self.start(value);
+        while self.slots[slot] != Self::EMPTY {
+            slot = (slot + 1) % self.slots.len();
+        }
+        self.slots[slot] = index as u32;
+    }
+}
+
+/// Up to `count` distinct positions `row * cols + col` on the grid random anchors are
+/// drawn from (`cols` wide), in a seeded shuffle; returns them with `cols`.
+fn random_flat(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    count: usize,
+    seed: u64,
+    strategy: &str,
+) -> Result<(Vec<u64>, u64), String> {
+    check_strategy(strategy)?;
+    let capacity = random_anchor_capacity(height, width, patch_size, strategy)? as u64;
+    let cols = random_axis_len(width, patch_size, strategy) as u64;
+    let wanted = (count as u64).min(capacity);
+    if wanted == 0 {
+        return Ok((Vec::new(), cols));
+    }
+    if wanted > MAX_ANCHORS {
+        return Err(format!(
+            "{wanted} random patches were asked for (the raster has room for {capacity}), \
+             more than the limit of {MAX_ANCHORS}; ask for fewer"
+        ));
+    }
+    let mut state = seed;
+    // Sized with `try_reserve` so a request too large to hold is an error, not
+    // an allocation abort.
+    let wanted_len = wanted as usize;
+    let mut flat: Vec<u64> = if wanted == capacity {
+        let mut all = with_room(wanted_len, "random patch anchors")?;
+        all.extend(0..capacity);
+        all
+    } else {
+        // Floyd's algorithm: `wanted` distinct values from [0, capacity) in
+        // O(wanted) time and memory. The Vec keeps insertion order so the
+        // output never depends on hash iteration order.
+        let mut taken = PickedSet::with_room(wanted_len)?;
+        let mut picked = with_room(wanted_len, "random patch anchors")?;
+        for j in (capacity - wanted)..capacity {
+            let t = uniform(&mut state, j + 1);
+            // `j` is above every value picked before it, so it is never taken yet.
+            let value = if taken.contains(&picked, t) { j } else { t };
+            taken.insert(picked.len(), value);
+            picked.push(value);
+        }
+        picked
+    };
+    // Fisher-Yates shuffle (Floyd's order is not uniform, and the full
+    // enumeration is row-major).
+    for i in (1..flat.len()).rev() {
+        let j = uniform(&mut state, i as u64 + 1) as usize;
+        flat.swap(i, j);
+    }
+    Ok((flat, cols))
+}
+
 /// Generate up to `count` distinct random anchor positions using a seeded PRNG.
 ///
 /// Anchors are drawn uniformly *without replacement* from every position whose
@@ -270,60 +405,50 @@ pub fn random_anchors(
     seed: u64,
     strategy: &str,
 ) -> Result<Vec<(usize, usize)>, String> {
-    check_strategy(strategy)?;
-    let capacity = random_anchor_capacity(height, width, patch_size, strategy)? as u64;
-    let cols = random_axis_len(width, patch_size, strategy) as u64;
-    let wanted = (count as u64).min(capacity);
-    if wanted == 0 {
-        return Ok(Vec::new());
-    }
-    if wanted > MAX_ANCHORS {
-        return Err(format!(
-            "{wanted} random patches were asked for (the raster has room for {capacity}), \
-             more than the limit of {MAX_ANCHORS}; ask for fewer"
-        ));
-    }
-    let mut state = seed;
-    // Sized with `try_reserve` so a request too large to hold is an error, not
-    // an allocation abort.
-    let wanted_len = wanted as usize;
-    let mut flat: Vec<u64> = if wanted == capacity {
-        let mut all = with_room(wanted_len, "random patch anchors")?;
-        all.extend(0..capacity);
-        all
-    } else {
-        // Floyd's algorithm: `wanted` distinct values from [0, capacity) in
-        // O(wanted) time and memory. The Vec keeps insertion order so the
-        // output never depends on hash iteration order.
-        let mut taken = std::collections::HashSet::new();
-        taken
-            .try_reserve(wanted_len)
-            .map_err(|_| allocation_error(wanted_len, "random patch anchors"))?;
-        let mut picked = with_room(wanted_len, "random patch anchors")?;
-        for j in (capacity - wanted)..capacity {
-            let t = uniform(&mut state, j + 1);
-            let value = if taken.insert(t) {
-                t
-            } else {
-                taken.insert(j);
-                j
-            };
-            picked.push(value);
-        }
-        picked
-    };
-    // Fisher-Yates shuffle (Floyd's order is not uniform, and the full
-    // enumeration is row-major).
-    for i in (1..flat.len()).rev() {
-        let j = uniform(&mut state, i as u64 + 1) as usize;
-        flat.swap(i, j);
-    }
+    let (flat, cols) = random_flat(height, width, patch_size, count, seed, strategy)?;
     let mut anchors = with_room(flat.len(), "random patch anchors")?;
     anchors.extend(
         flat.into_iter()
             .map(|v| ((v / cols) as usize, (v % cols) as usize)),
     );
     Ok(anchors)
+}
+
+/// The anchors of [`random_anchors`] as `row * width + col`, one `u64` each, grouped by
+/// the chunk of `chunk_rows` rows they fall in.
+///
+/// Chunks come top to bottom; within a chunk the anchors keep the order of
+/// [`random_anchors`]. This is how a run holds random anchors: a quarter of the memory
+/// of two `usize` each, and none of the Python objects a list of pairs would need.
+///
+/// # Errors
+/// The errors of [`random_anchors`], and an error if `chunk_rows` is zero or
+/// `height * width` does not fit in 64 bits.
+pub fn random_positions(
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    count: usize,
+    seed: u64,
+    strategy: &str,
+    chunk_rows: usize,
+) -> Result<Vec<u64>, String> {
+    if chunk_rows == 0 {
+        return Err("chunk_rows must be > 0".to_string());
+    }
+    if (height as u64).checked_mul(width as u64).is_none() {
+        return Err("raster is too large to enumerate anchors".to_string());
+    }
+    let (mut flat, cols) = random_flat(height, width, patch_size, count, seed, strategy)?;
+    let width = width as u64;
+    // Below `height * width`, which fits: every anchor is inside the raster.
+    for value in &mut flat {
+        *value = *value / cols * width + *value % cols;
+    }
+    let chunk_rows = chunk_rows as u64;
+    // Stable, so each chunk keeps the shuffled order.
+    flat.sort_by_key(|value| value / width / chunk_rows);
+    Ok(flat)
 }
 
 #[cfg(test)]
@@ -618,23 +743,105 @@ mod tests {
 
     #[test]
     fn grid_over_the_limit_is_refused_before_allocating() {
-        // 4,063 x 4,063 = 16 million anchors would be 256 MB here and ~2.4 GB in Python.
-        let err = grid_anchors(4_063, 4_063, 64, 1, "pad").unwrap_err();
-        assert!(err.contains("more than the limit of 3000000"), "{err}");
-        assert!(err.contains("4063 x 4063 = 16507969"), "{err}");
-        // Exactly at the limit is fine: 1,500 x 2,000 = 3,000,000.
-        let anchors = grid_anchors(1_500, 2_000, 1, 1, "pad").unwrap();
-        assert_eq!(anchors.len() as u64, MAX_ANCHORS);
-        assert!(grid_anchors(1_500, 2_001, 1, 1, "pad").is_err());
+        // 7,072 x 7,072 = 50,013,184 anchors: over the limit, refused before any is built.
+        let err = grid_anchors(7_072, 7_072, 64, 1, "pad").unwrap_err();
+        assert!(err.contains("more than the limit of 50000000"), "{err}");
+        assert!(err.contains("7072 x 7072 = 50013184"), "{err}");
+        // Exactly at the limit is fine: 5,000 x 10,000 = 50,000,000 (counted, not built).
+        let (_, _, total) = grid_anchor_count(5_000, 10_000, 1, 1, "pad").unwrap();
+        assert_eq!(total, u128::from(MAX_ANCHORS));
+        assert!(grid_anchors(5_000, 10_001, 1, 1, "pad").is_err());
+    }
+
+    #[test]
+    fn grid_axes_are_the_rows_and_columns_of_the_grid() {
+        for strategy in ["pad", "drop", "shift"] {
+            for (height, width, patch, stride) in [
+                (10, 10, 4, 4),
+                (37, 11, 8, 3),
+                (64, 64, 64, 7),
+                (5, 130, 32, 33),
+            ] {
+                let rows = grid_axis(height, patch, stride, strategy).unwrap();
+                let cols = grid_axis(width, patch, stride, strategy).unwrap();
+                let product: Vec<(usize, usize)> = rows
+                    .iter()
+                    .flat_map(|&r| cols.iter().map(move |&c| (r as usize, c as usize)))
+                    .collect();
+                assert_eq!(
+                    product,
+                    grid_anchors(height, width, patch, stride, strategy).unwrap()
+                );
+            }
+        }
+        let err = grid_axis(MAX_ANCHORS as usize + 1, 1, 1, "pad").unwrap_err();
+        assert!(err.contains("more than the limit"), "{err}");
+        assert!(grid_axis(10, 4, 0, "pad").is_err());
+        assert!(grid_axis(10, 4, 4, "wrap").is_err());
+    }
+
+    /// Floyd's algorithm with a `HashSet`, as before the compact set: the reference.
+    fn floyd_with_hash_set(capacity: u64, wanted: u64, seed: u64) -> Vec<u64> {
+        let mut state = seed;
+        let mut taken = HashSet::new();
+        let mut picked = Vec::new();
+        for j in (capacity - wanted)..capacity {
+            let t = uniform(&mut state, j + 1);
+            let value = if taken.insert(t) {
+                t
+            } else {
+                taken.insert(j);
+                j
+            };
+            picked.push(value);
+        }
+        for i in (1..picked.len()).rev() {
+            let j = uniform(&mut state, i as u64 + 1) as usize;
+            picked.swap(i, j);
+        }
+        picked
+    }
+
+    #[test]
+    fn the_compact_set_picks_what_a_hash_set_picks() {
+        // Dense draws (many collisions) and sparse ones, on a 100 x 100 position grid.
+        for (count, seed) in [(1, 0), (50, 3), (5_000, 7), (9_999, 11), (2_000, 42)] {
+            let (flat, cols) = random_flat(131, 131, 32, count, seed, "drop").unwrap();
+            assert_eq!(cols, 100);
+            assert_eq!(flat, floyd_with_hash_set(10_000, count as u64, seed));
+        }
+    }
+
+    #[test]
+    fn random_positions_are_the_anchors_grouped_by_chunk() {
+        for (height, width, patch, count, chunk_rows) in [
+            (300, 200, 16, 500, 64),
+            (300, 200, 16, 100_000, 7),
+            (20, 20, 32, 5, 4),
+            (1_000, 3, 1, 2_000, 1_000),
+        ] {
+            let anchors = random_anchors(height, width, patch, count, 9, "pad").unwrap();
+            let mut expected: Vec<(usize, usize)> = anchors.clone();
+            expected.sort_by_key(|&(row, _)| row / chunk_rows);
+            let positions =
+                random_positions(height, width, patch, count, 9, "pad", chunk_rows).unwrap();
+            let got: Vec<(usize, usize)> = positions
+                .iter()
+                .map(|&p| ((p / width as u64) as usize, (p % width as u64) as usize))
+                .collect();
+            assert_eq!(got, expected);
+        }
+        assert!(random_positions(10, 10, 4, 3, 1, "pad", 0).is_err());
+        assert!(random_positions(usize::MAX, usize::MAX, 1, 1, 1, "pad", 1).is_err());
     }
 
     #[test]
     fn random_over_the_limit_is_refused() {
-        let err = random_anchors(100_000, 100_000, 64, 3_000_001, 1, "drop").unwrap_err();
-        assert!(err.contains("more than the limit of 3000000"), "{err}");
+        let err = random_anchors(100_000, 100_000, 64, 50_000_001, 1, "drop").unwrap_err();
+        assert!(err.contains("more than the limit of 50000000"), "{err}");
         // A count above the raster's capacity is capped first, so this stays valid.
         assert_eq!(
-            random_anchors(10, 10, 4, 3_000_001, 1, "drop")
+            random_anchors(10, 10, 4, 50_000_001, 1, "drop")
                 .unwrap()
                 .len(),
             49

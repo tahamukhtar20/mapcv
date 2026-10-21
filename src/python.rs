@@ -14,8 +14,8 @@ use crate::{
 };
 use numpy::ndarray::{Dimension, Ix3, Ix4};
 use numpy::{
-    IntoPyArray, PyArray, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray, PyUntypedArray,
-    PyUntypedArrayMethods,
+    IntoPyArray, PyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray,
+    PyUntypedArray, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -412,6 +412,56 @@ fn random_sample_anchors(
 ) -> PyResult<Vec<(usize, usize)>> {
     sampler::random_anchors(height, width, patch_size, count, seed, edge_strategy)
         .map_err(PyValueError::new_err)
+}
+
+/// The grid anchor positions along one axis of `dim` pixels, as a `uint64` array.
+///
+/// The rows of `grid_sample_anchors` are this along the height, its columns this along
+/// the width; every pair of the two is an anchor.
+#[pyfunction]
+#[pyo3(signature = (dim, patch_size, stride, edge_strategy = "pad"))]
+fn grid_axis_anchors(
+    py: Python,
+    dim: usize,
+    patch_size: usize,
+    stride: usize,
+    edge_strategy: &str,
+) -> PyResult<Py<PyArray1<u64>>> {
+    let positions = sampler::grid_axis(dim, patch_size, stride, edge_strategy)
+        .map_err(PyValueError::new_err)?;
+    Ok(positions.into_pyarray(py).unbind())
+}
+
+/// The anchors of `random_sample_anchors` as `row * width + col` in a `uint64` array,
+/// grouped by the chunk of `chunk_rows` rows they fall in (top to bottom, each chunk in
+/// the sampled order).
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, count, seed, edge_strategy, chunk_rows))]
+fn random_anchor_positions(
+    py: Python,
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    count: usize,
+    seed: u64,
+    edge_strategy: &str,
+    chunk_rows: usize,
+) -> PyResult<Py<PyArray1<u64>>> {
+    let positions = py
+        .detach(|| {
+            sampler::random_positions(
+                height,
+                width,
+                patch_size,
+                count,
+                seed,
+                edge_strategy,
+                chunk_rows,
+            )
+        })
+        .map_err(PyValueError::new_err)?;
+    Ok(positions.into_pyarray(py).unbind())
 }
 
 /// Number of distinct anchors `random_sample_anchors` can return.
@@ -975,6 +1025,8 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(grid_anchor_count, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
+    m.add_function(wrap_pyfunction!(grid_axis_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(random_anchor_positions, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(tile_decoder::decode_tile_window, m)?)?;

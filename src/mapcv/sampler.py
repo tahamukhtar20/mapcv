@@ -15,8 +15,10 @@ from typing_extensions import NotRequired, TypedDict
 from mapcv._mapcv_rs import (
     MAX_ANCHORS,
     grid_anchor_count,
+    grid_axis_anchors,
     grid_sample_anchors,
     random_anchor_capacity,
+    random_anchor_positions,
     random_sample_anchors,
 )
 from mapcv._numbers import NoBooleanNumbers
@@ -60,7 +62,8 @@ class PatchMeta(TypedDict):
 
 
 #: The most patches one run enumerates (grid or random): the anchors of a run are held in
-#: memory, about 150 bytes each, so a larger request is refused before any is built.
+#: memory (a grid as its rows and columns, other anchors as 8 bytes each), so a larger
+#: request is refused before any is built.
 MAX_PATCHES = int(MAX_ANCHORS)
 
 
@@ -120,6 +123,24 @@ def grid_anchors_for(height: int, width: int, config: SamplerConfig) -> list[tup
     )
 
 
+def grid_axes_for(
+    height: int, width: int, config: SamplerConfig
+) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.uint64]]:
+    """The rows and the columns of the grid of ``config``: every pair of the two is an anchor.
+
+    Raises :class:`TooManyPatchesError` above the limit.
+    """
+    check_patch_limit(height, width, config)
+    if grid_patch_count(height, width, config) == 0:
+        empty = np.empty(0, dtype=np.uint64)
+        return empty, empty
+    size, stride, strategy = config.patch_size, config.stride, config.edge_strategy
+    return (
+        grid_axis_anchors(height, size, stride, strategy),
+        grid_axis_anchors(width, size, stride, strategy),
+    )
+
+
 def random_anchors_for(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
     """Distinct random anchors for ``config``, warning when fewer than requested exist.
 
@@ -138,17 +159,40 @@ def random_anchors_for(height: int, width: int, config: SamplerConfig) -> list[t
             config.edge_strategy,
         )
     )
-    if len(anchors) < config.random_count:
+    _warn_when_short(len(anchors), height, width, config)
+    return anchors
+
+
+def random_positions_for(
+    height: int, width: int, config: SamplerConfig, chunk_rows: int
+) -> npt.NDArray[np.uint64]:
+    """The anchors of :func:`random_anchors_for` as ``row * width + col``, grouped by the
+    chunk of ``chunk_rows`` rows they fall in (each chunk in the sampled order)."""
+    check_patch_limit(height, width, config)
+    positions = random_anchor_positions(
+        height,
+        width,
+        config.patch_size,
+        config.random_count,
+        config.random_seed,
+        config.edge_strategy,
+        chunk_rows,
+    )
+    _warn_when_short(len(positions), height, width, config)
+    return positions
+
+
+def _warn_when_short(found: int, height: int, width: int, config: SamplerConfig) -> None:
+    if found < config.random_count:
         warnings.warn(
-            f"sampler.random_count is {config.random_count} but only {len(anchors)} distinct "
+            f"sampler.random_count is {config.random_count} but only {found} distinct "
             f"patch position(s) exist on a {height}x{width} raster with patch_size "
             f"{config.patch_size} and edge_strategy {config.edge_strategy!r}; "
-            f"using {'all of them' if anchors else 'none'}. Lower random_count or enlarge the "
-            "region" + ("." if anchors else " (or use edge_strategy: pad)."),
+            f"using {'all of them' if found else 'none'}. Lower random_count or enlarge the "
+            "region" + ("." if found else " (or use edge_strategy: pad)."),
             UserWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
-    return anchors
 
 
 def random_patch_capacity(height: int, width: int, config: SamplerConfig) -> int:

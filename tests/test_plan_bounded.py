@@ -18,7 +18,14 @@ import pytest
 from test_crafted_inputs import _bounded
 
 from mapcv._mapcv_rs import MAX_ANCHORS, grid_anchor_count, grid_sample_anchors
-from mapcv.sampler import MAX_PATCHES, SamplerConfig, TooManyPatchesError, grid_patch_count
+from mapcv.sampler import (
+    MAX_PATCHES,
+    SamplerConfig,
+    TooManyPatchesError,
+    check_patch_limit,
+    grid_axes_for,
+    grid_patch_count,
+)
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="the subprocess is watched through /proc"
@@ -94,7 +101,7 @@ def test_the_plan_command_shows_the_count_and_why_generate_would_refuse(tmp_path
     code, _, output = out.partition("\n")
     assert code == "1"
     assert "52,756,480" in output
-    assert "8,960 x 5,888 = 52,756,480 patches, more than the limit of 3,000,000" in output
+    assert "8,960 x 5,888 = 52,756,480 patches, more than the limit of 50,000,000" in output
     assert "Raise sampler.stride" in output
     assert "shrink the region or split it" in output
 
@@ -118,7 +125,7 @@ def test_the_mcp_plan_tool_counts_a_huge_grid_in_bounded_memory(tmp_path: Path) 
     )
     data = json.loads(out)
     assert data["patches"] == data["pixels"] > MAX_PATCHES
-    assert "more than the limit of 3,000,000" in data["blocking"][0]
+    assert "more than the limit of 50,000,000" in data["blocking"][0]
     assert "generate will refuse this config" in data["summary"]
 
 
@@ -147,7 +154,7 @@ def test_generate_refuses_a_grid_over_the_limit_before_writing(tmp_path: Path) -
     )
     assert "refused:" in out, out
     assert "the grid has 8,960 x 5,888 = 52,756,480 patches" in out
-    assert "more than the limit of 3,000,000 for one run" in out
+    assert "more than the limit of 50,000,000 for one run" in out
     assert "Raise sampler.stride" in out
     assert not (staging / "manifest.json").exists()
 
@@ -170,13 +177,13 @@ def test_the_generate_command_stops_on_a_grid_over_the_limit(tmp_path: Path) -> 
     code, _, output = out.partition("\n")
     assert code == "1"
     assert "This config cannot be built" in output
-    assert "more than the limit of 3,000,000" in output
+    assert "more than the limit of 50,000,000" in output
     assert "Generation failed" not in output
     assert not (tmp_path / "out" / "manifest.json").exists()
 
 
 def test_a_random_count_over_the_limit_is_refused_too(tmp_path: Path) -> None:
-    config = _FINE.replace("stride: 1, mode: grid", "mode: random, random_count: 4000000")
+    config = _FINE.replace("stride: 1, mode: grid", "mode: random, random_count: 51000000")
     config = config.replace("staging_dir: out", f"staging_dir: {tmp_path / 'out'}")
     (tmp_path / "mapcv.yaml").write_text(config)
     out = _run(
@@ -195,19 +202,75 @@ def test_a_random_count_over_the_limit_is_refused_too(tmp_path: Path) -> None:
             print("refused:", exc)
         """
     )
-    assert out.startswith("4000000 1\n")
-    assert "sampler.random_count asks for 4,000,000 patches" in out
-    assert "more than the limit of 3,000,000" in out
+    assert out.startswith("51000000 1\n")
+    assert "sampler.random_count asks for 51,000,000 patches" in out
+    assert "more than the limit of 50,000,000" in out
 
 
 def test_a_grid_just_within_the_limit_is_not_refused() -> None:
     config = SamplerConfig(patch_size=1, stride=1)
-    count = grid_patch_count(1_500, 2_000, config)
-    assert count == MAX_PATCHES == int(MAX_ANCHORS)
-    assert len(grid_sample_anchors(1_500, 2_000, 1, 1, "pad")) == count
-    with pytest.raises(ValueError, match="more than the limit of 3000000"):
-        grid_sample_anchors(1_500, 2_001, 1, 1, "pad")
+    count = grid_patch_count(5_000, 10_000, config)
+    assert count == MAX_PATCHES == int(MAX_ANCHORS) == 50_000_000
+    check_patch_limit(5_000, 10_000, config)
+    with pytest.raises(TooManyPatchesError, match="more than the limit of 50,000,000"):
+        check_patch_limit(5_000, 10_001, config)
+    rows, cols = grid_axes_for(5_000, 10_000, config)
+    assert len(rows) * len(cols) == count
+    with pytest.raises(ValueError, match="more than the limit of 50000000"):
+        grid_sample_anchors(5_000, 10_001, 1, 1, "pad")
     assert issubclass(TooManyPatchesError, ValueError)
+
+
+#: Above what a run near the limit holds for its anchors (a grid as its rows and columns,
+#: random anchors 8 bytes each), far below the 7 GB that 50,000,000 anchors took as
+#: Python tuples of about 150 bytes.
+_ANCHOR_MEMORY = 900 << 20
+
+_ANCHOR_GROUPS = """
+import resource
+from types import SimpleNamespace
+from mapcv import pipeline
+from mapcv.config import MapcvConfig
+
+config = MapcvConfig.model_validate({{
+    "region": {{"west": 10.0, "south": 50.0, "east": 10.03, "north": 50.03}},
+    "imagery": {{"type": "xyz", "zoom": 18,
+                 "url_template": "http://127.0.0.1:9/{{z}}/{{x}}/{{y}}.png"}},
+    "sampler": {sampler},
+    "writer": {{"staging_dir": "out"}},
+}})
+meta = SimpleNamespace(height={height}, width={width}, chunk_rows=1024, bands=[1, 2, 3],
+                       dtype="uint8")
+chunks = pipeline._anchor_groups(config, [SimpleNamespace(metadata=meta)], None)
+print(sum(len(chunk) for chunk in chunks), len(chunks))
+"""
+
+
+@pytest.mark.parametrize(
+    ("sampler", "height", "width", "expected"),
+    [
+        ({"patch_size": 64, "stride": 1}, 7_000, 7_100, 49_700_000),
+        (
+            {"patch_size": 64, "mode": "random", "random_count": 20_000_000},
+            6_000,
+            6_000,
+            20_000_000,
+        ),
+    ],
+    ids=["grid", "random"],
+)
+def test_a_run_near_the_limit_holds_its_anchors_in_bounded_memory(
+    sampler: dict[str, object], height: int, width: int, expected: int
+) -> None:
+    # Before anchors were held compactly these were refused (over 3,000,000), and a
+    # grid of this size took several GB as Python tuples.
+    out = _bounded(
+        _ANCHOR_GROUPS.format(sampler=sampler, height=height, width=width), _ANCHOR_MEMORY
+    )
+    assert out.returncode == 0, f"exit {out.returncode}: {out.stderr[-1500:]}"
+    total, chunks = (int(value) for value in out.stdout.split())
+    assert total == expected
+    assert chunks == -(-height // 1024)
 
 
 # ── The per-axis count equals the enumeration ───────────────────────────────────────
@@ -260,13 +323,11 @@ def test_the_count_of_a_grid_too_big_to_build_is_exact() -> None:
 
 
 def test_the_message_for_a_grid_over_the_limit_says_how_to_fix_it() -> None:
-    from mapcv.sampler import check_patch_limit
-
     config = SamplerConfig(patch_size=64, stride=1)
     with pytest.raises(TooManyPatchesError) as raised:
-        check_patch_limit(5_000, 5_000, config)
+        check_patch_limit(8_000, 8_000, config)
     text = textwrap.dedent(str(raised.value))
-    assert "5,000 x 5,000 = 25,000,000 patches" in text
-    assert "limit of 3,000,000" in text
+    assert "8,000 x 8,000 = 64,000,000 patches" in text
+    assert "limit of 50,000,000" in text
     assert "sampler.stride" in text
     check_patch_limit(100, 100, config)  # within the limit: no error

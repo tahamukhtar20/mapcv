@@ -49,7 +49,7 @@ from mapcv.config import (
     _validate_eopf_path,
     eopf_local_path,
 )
-from mapcv.downloader import resolve_url_template
+from mapcv.downloader import is_placeholder_tile, resolve_url_template
 from mapcv.geotiff import GeoTiff
 from mapcv.tile_cache import CacheHeaders, TileCache
 
@@ -443,6 +443,8 @@ class XYZRasterSource:
         self.tiles_requested = 0
         self.tiles_cached = 0
         self.tiles_failed = 0
+        # Tiles the server answered with its "no imagery here" placeholder: left empty.
+        self.tiles_without_imagery = 0
         self.failure_causes: Counter[str] = Counter()
         self.failure_example: str | None = None
 
@@ -594,7 +596,11 @@ class XYZRasterSource:
         if cache is not None:
             for x, y in missing:
                 cached = cache.get(x, y, self._zoom)
-                if cached is not None:
+                if cached is not None and is_placeholder_tile(cached):
+                    # Cached by an earlier mapcv: drop it, and it is fetched (and left
+                    # empty) below.
+                    cache.discard(x, y, self._zoom)
+                elif cached is not None:
                     self._tiles[(x, y)] = cached
             hits = sum(1 for key in missing if key in self._tiles)
             self.tiles_cached += hits
@@ -624,6 +630,11 @@ class XYZRasterSource:
         if example and self.failure_example is None:
             self.failure_example = example
         for tile, payload, headers in results:
+            if is_placeholder_tile(payload):
+                # No imagery here: the tile stays empty (NoData), as a failed one does,
+                # and is not cached.
+                self.tiles_without_imagery += 1
+                continue
             self._tiles[(tile.x, tile.y)] = payload
             # Black fills of failed tiles have no headers and are never cached; the others
             # are once they have decoded.

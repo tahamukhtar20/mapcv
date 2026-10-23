@@ -12,14 +12,17 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 from typer.testing import CliRunner
 
 from mapcv import tile_cache
 from mapcv._mapcv_rs import TileIndex, fetch_tiles
 from mapcv.cli import app
-from mapcv.config import MapcvConfig
+from mapcv.config import MapcvConfig, RegionConfig, XYZImageryConfig
+from mapcv.downloader import download_region, is_placeholder_tile
+from mapcv.imagery import XYZRasterSource
 from mapcv.pipeline import run_generate
 from mapcv.tile_cache import DEFAULT_TTL, TileCache, freshness_lifetime
 
@@ -197,6 +200,28 @@ def _png(x: int, y: int) -> bytes:
     return buffer.getvalue()
 
 
+def _placeholder() -> bytes:
+    """A light grey JPEG with dark text-like strokes, as Esri's "Map data not yet
+    available" tile: every pixel is non-zero, so it would pass as imagery."""
+    image = Image.new("RGB", (256, 256), (204, 204, 204))
+    ImageDraw.Draw(image).text((40, 120), "Map data not yet available", fill=(160, 160, 160))
+    buffer = BytesIO()
+    image.save(buffer, "JPEG", quality=75)
+    return buffer.getvalue()
+
+
+PLACEHOLDER = _placeholder()
+
+
+@pytest.fixture
+def placeholder_known(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the test placeholder one of the known placeholder tiles."""
+    monkeypatch.setattr(
+        "mapcv.downloader.PLACEHOLDER_TILES",
+        frozenset({(len(PLACEHOLDER), hashlib.sha256(PLACEHOLDER).hexdigest())}),
+    )
+
+
 class TileServer:
     """Serves ``/{z}/{x}/{y}.png`` with chosen caching headers; counts requests."""
 
@@ -204,6 +229,8 @@ class TileServer:
         self.requests: list[str] = []
         self.headers: dict[str, str] = {}
         self.failing: set[tuple[int, int]] = set()
+        # Tiles answered, with HTTP 200, by the "no imagery here" placeholder.
+        self.placeholder: set[tuple[int, int]] = set()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -214,7 +241,7 @@ class TileServer:
                     self.send_response(404)
                     self.end_headers()
                     return
-                body = _png(x, y)
+                body = PLACEHOLDER if (x, y) in owner.placeholder else _png(x, y)
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(body)))
@@ -398,3 +425,88 @@ def test_mcp_generate_never_uses_the_cache(server: TileServer, tmp_path: Path) -
     )
     kept, xyz = _without_tile_cache(geotiff).sources
     assert kept is geotiff.sources[0] and xyz.cache is False  # type: ignore[union-attr]
+
+
+# ── Placeholder tiles ("no imagery here", sent with HTTP 200) ────────────────
+
+
+def test_placeholder_tiles_are_recognised_by_their_exact_bytes(placeholder_known: None) -> None:
+    assert is_placeholder_tile(PLACEHOLDER)
+    assert not is_placeholder_tile(PLACEHOLDER[:-1] + b"\x00")
+    assert not is_placeholder_tile(_png(1, 1))
+    assert not is_placeholder_tile(b"")
+
+
+def test_esri_placeholder_fingerprint_is_known() -> None:
+    from mapcv.downloader import PLACEHOLDER_TILES
+
+    # Esri's grey "Map data not yet available" JPEG (World_Imagery, World_Topo_Map and
+    # World_Street_Map past their coverage, e.g. tile 20/400000/200000).
+    assert (
+        2521,
+        "9eafd300d61393184a4abc1d458564cfd1cd9b6f9c4e9c74687045c0a0e5b858",
+    ) in PLACEHOLDER_TILES
+
+
+def _source(server: TileServer) -> XYZRasterSource:
+    region = RegionConfig(west=4.9, south=52.30, east=4.915, north=52.31)
+    return XYZRasterSource(
+        region, XYZImageryConfig(zoom=16, url_template=server.template, max_connections=4)
+    )
+
+
+def test_placeholder_tiles_are_nodata_not_imagery(
+    server: TileServer, placeholder_known: None
+) -> None:
+    source = _source(server)
+    height, width = source.metadata.height, source.metadata.width
+    corner = (source._min_x, source._min_y)
+    server.placeholder = {corner}
+    window, valid = source.read_window(0, height, 0, width)
+    # The placeholder tile is empty, like a failed one, and every other tile is imagery.
+    assert not valid[:256, :256].any() and not window[:256, :256].any()
+    assert valid[256:, :].all() and valid[:, 256:].all()
+    assert (source.tiles_without_imagery, source.tiles_failed) == (1, 0)
+    # It is not cached: a later source asks for it (and only it) again.
+    requests = len(server.requests)
+    again = _source(server)
+    again.read_window(0, height, 0, width)
+    assert _requested_tiles(server)[requests:] == [corner]
+    assert again.tiles_without_imagery == 1
+
+
+def test_a_cached_placeholder_is_dropped_and_fetched_again(
+    server: TileServer, placeholder_known: None
+) -> None:
+    source = _source(server)
+    corner = (source._min_x, source._min_y)
+    TileCache(server.template).put(*corner, 16, PLACEHOLDER, ("max-age=3600", None, None, None))
+    height, width = source.metadata.height, source.metadata.width
+    _, valid = source.read_window(0, height, 0, width)
+    assert valid[:256, :256].all()  # the server has imagery there now
+    assert TileCache(server.template).get(*corner, 16) == _png(*corner)
+
+
+def test_run_reports_tiles_without_imagery(
+    server: TileServer, placeholder_known: None, tmp_path: Path
+) -> None:
+    first = run_generate(_config(server, tmp_path / "probe"))
+    server.placeholder = set(_requested_tiles(server))
+    tile_cache.clear()
+    result = run_generate(_config(server, tmp_path / "a"))
+    assert (result.tiles_failed, result.tiles_without_imagery) == (0, first.tiles_requested)
+    assert result.new_patches == 0 and result.patches_without_imagery > 0
+
+
+def test_download_region_returns_placeholders_black(
+    server: TileServer, placeholder_known: None
+) -> None:
+    tiles = download_region(4.9, 52.30, 4.915, 52.31, 16, url_template=server.template)
+    server.placeholder = {(tiles[0][0].x, tiles[0][0].y)}
+    region = (4.9, 52.30, 4.915, 52.31, 16)
+    again = {
+        (t.x, t.y): payload for t, payload in download_region(*region, url_template=server.template)
+    }
+    assert len(again) == len(tiles)
+    with Image.open(BytesIO(again[(tiles[0][0].x, tiles[0][0].y)])) as image:
+        assert not np.asarray(image).any()

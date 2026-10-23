@@ -104,11 +104,11 @@ Code that mapcv derived from other projects is acknowledged in
 - rayon-core 1.13.0: MIT OR Apache-2.0
 - reqwest 0.13.5: MIT OR Apache-2.0
 - rustc-hash 2.1.2: Apache-2.0 OR MIT
-- rustls 0.23.45: Apache-2.0 OR ISC OR MIT
+- rustls 0.23.46: Apache-2.0 OR ISC OR MIT
 - rustls-native-certs 0.8.4: Apache-2.0 OR ISC OR MIT
 - rustls-pki-types 1.14.1: MIT OR Apache-2.0
 - rustls-platform-verifier 0.7.1: MIT OR Apache-2.0
-- rustls-webpki 0.103.15: ISC
+- rustls-webpki 0.103.16: ISC
 - schannel 0.1.29: MIT
 - security-framework 3.7.0: MIT OR Apache-2.0
 - security-framework-sys 2.17.0: MIT OR Apache-2.0
@@ -1123,7 +1123,7 @@ Used by: untrusted 0.9.0
 
 ### ISC License
 
-Used by: rustls-webpki 0.103.15
+Used by: rustls-webpki 0.103.16
 
 ``````text
 Except as otherwise noted, this project is licensed under the following
@@ -1806,7 +1806,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Used by: hyper-rustls 0.27.9, rustls-native-certs 0.8.4, rustls 0.23.45
+Used by: hyper-rustls 0.27.9, rustls-native-certs 0.8.4, rustls 0.23.46
 
 ``````text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>

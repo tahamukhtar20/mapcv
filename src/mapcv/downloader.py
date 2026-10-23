@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
+from functools import cache
+from io import BytesIO
 
 import numpy as np
 import numpy.typing as npt
+from PIL import Image
 
 from mapcv._mapcv_rs import (
     TileIndex,
@@ -33,7 +37,30 @@ URL_TEMPLATES: dict[str, str] = {
     "cartodb_dark_matter": "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
 }
 
+# Tiles servers send with HTTP 200 where they have no imagery, by (size, SHA-256): they
+# are NoData, not imagery. Esri's grey "Map data not yet available" tile, the same
+# bytes for World_Imagery, World_Topo_Map and World_Street_Map at any zoom past
+# their coverage.
+PLACEHOLDER_TILES: frozenset[tuple[int, str]] = frozenset(
+    {(2521, "9eafd300d61393184a4abc1d458564cfd1cd9b6f9c4e9c74687045c0a0e5b858")}
+)
+
 _log = logging.getLogger(__name__)
+
+
+def is_placeholder_tile(payload: bytes) -> bool:
+    """Whether a tile is a server's "no imagery here" placeholder (see PLACEHOLDER_TILES)."""
+    return any(
+        len(payload) == size and hashlib.sha256(payload).hexdigest() == digest
+        for size, digest in PLACEHOLDER_TILES
+    )
+
+
+@cache
+def _black_tile() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (256, 256)).save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 def resolve_url_template(url_template: str | None, source: str | None) -> str:
@@ -65,6 +92,8 @@ def download_region(
 
     policy controls failure handling: "strict" raises on any failure, "lenient"
     skips failed tiles, "ignore" fills them with black NoData pixels.
+    A server's "no imagery here" placeholder tile comes back black (NoData), as a
+    failed tile does under "ignore", without counting as failed.
     snap_to_tiles expands the bbox outward to tile boundaries before fetching.
     ``progress(done, total)`` is called with the tiles finished so far. Prints
     nothing; the outcome is logged to the ``mapcv`` logger.
@@ -88,6 +117,17 @@ def download_region(
         policy=policy,
         max_failed_ratio=max_failed_ratio,
     )
+
+    placeholders = sum(1 for _, payload in results if is_placeholder_tile(payload))
+    if placeholders:
+        results = [
+            (tile, _black_tile() if is_placeholder_tile(payload) else payload)
+            for tile, payload in results
+        ]
+        _log.info(
+            "%d tile(s) had no imagery (the server sent its placeholder tile) and are black",
+            placeholders,
+        )
 
     fetched = len(results)
     if policy == "ignore":

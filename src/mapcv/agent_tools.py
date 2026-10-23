@@ -1704,6 +1704,7 @@ def _generate_result(
         "new_patches": result.new_patches,
         "tiles_requested": result.tiles_requested,
         "tiles_failed": result.tiles_failed,
+        "tiles_without_imagery": result.tiles_without_imagery,
         "splits": result.split_counts,
         "seconds": round(result.seconds, 1),
         "files": files,

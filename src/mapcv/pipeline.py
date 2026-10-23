@@ -82,6 +82,8 @@ class GenerateResult:
     tiles_cached: int = 0
     # Patches left out of this run because they had no pixel of imagery at all.
     patches_without_imagery: int = 0
+    # XYZ tiles the server answered with its "no imagery here" placeholder, left empty.
+    tiles_without_imagery: int = 0
 
 
 def _global_anchors(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
@@ -660,6 +662,14 @@ def _generate_locked(
         requested = sum(int(getattr(each, "tiles_requested", 0)) for each in opened)
         failed = sum(int(getattr(each, "tiles_failed", 0)) for each in opened)
         cached = sum(int(getattr(each, "tiles_cached", 0)) for each in opened)
+        placeholders = sum(int(getattr(each, "tiles_without_imagery", 0)) for each in opened)
+        if placeholders:
+            _log.info(
+                '%s had no imagery (the server sent its "no data" placeholder) and %s left '
+                "empty; a lower imagery.zoom may have imagery there.",
+                _tiles(placeholders),
+                "was" if placeholders == 1 else "were",
+            )
         reasons = "; ".join(
             text for each in opened if (text := str(getattr(each, "failure_reasons", "") or ""))
         )
@@ -702,6 +712,7 @@ def _generate_locked(
             seconds=time.monotonic() - started,
             tiles_cached=cached,
             patches_without_imagery=counts["no_imagery"],
+            tiles_without_imagery=placeholders,
         )
 
     split_counts: dict[str, int] | None = None
@@ -748,6 +759,7 @@ def _generate_locked(
         seconds=time.monotonic() - started,
         tiles_cached=cached,
         patches_without_imagery=counts["no_imagery"],
+        tiles_without_imagery=placeholders,
     )
 
 

@@ -1080,9 +1080,14 @@ def _print_result(result: GenerateResult) -> None:
         table.add_row("Shape", escape(f"{shape} {source.dtype or ''}".strip()))
     if result.tiles_requested or result.tiles_cached:
         cached = f" · {result.tiles_cached:,} from the cache" if result.tiles_cached else ""
+        empty = (
+            f" · {result.tiles_without_imagery:,} without imagery"
+            if result.tiles_without_imagery
+            else ""
+        )
         table.add_row(
             "Tiles",
-            f"{result.tiles_requested:,} fetched{cached} · {result.tiles_failed:,} failed",
+            f"{result.tiles_requested:,} fetched{cached} · {result.tiles_failed:,} failed{empty}",
         )
     if result.split_counts is not None:
         table.add_row("Splits", _split_line(result.split_counts))

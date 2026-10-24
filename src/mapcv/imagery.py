@@ -1015,8 +1015,9 @@ def geotiff_fingerprint(location: str, *, trust_host: bool = True) -> dict[str, 
     last 64 KiB (where the TIFF headers and, for non-COG files, the directory live). The
     modification time catches pixels edited in place, which leave the size and both ends
     unchanged; hashing the whole file would cost a full read of every file on every run.
-    A copy that does not keep modification times (``cp`` without ``-p``) therefore counts
-    as another file, which refuses a resume rather than mixing two versions.
+    The manifest also records the SHA-256 of each whole file once, so a resume whose files
+    only have new modification times (``cp`` without ``-p``) hashes those files and refuses
+    other content rather than mixing two versions.
     URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
     ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
     Nothing reads the whole file, whatever its size.

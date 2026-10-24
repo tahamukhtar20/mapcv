@@ -8,6 +8,7 @@ was in their folder before; patches without any imagery are left out.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -28,9 +29,11 @@ from typer.testing import CliRunner
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
 import rasterio
+import rasterio.windows
 from rasterio.transform import Affine
 from test_geotiff_imagery import config_for, make_raster, write_labels
 
+from mapcv import manifest as manifest_module
 from mapcv import pipeline
 from mapcv.agent_tools import Sandbox, ToolState
 from mapcv.agent_tools import info as mcp_info
@@ -188,12 +191,112 @@ def test_resume_refuses_a_geotiff_whose_pixels_changed_in_place(tmp_path: Path) 
     with rasterio.open(path, "r+") as dst:  # a cloud painted over, in the middle
         dst.write(np.zeros((3, 100, 100), dtype=np.uint8), window=((200, 300), (50, 150)))
     os.utime(path, ns=(mtime + 10**9, mtime + 10**9))
-    with pytest.raises(ManifestMismatchError, match="modification time"):
+    with pytest.raises(ManifestMismatchError, match="imagery file content") as caught:
         run_generate(config)
+    # The recorded hash tells the content changed: restoring the time would be wrong.
+    assert "touch -d" not in str(caught.value) and "LastWriteTimeUtc" not in str(caught.value)
     # Size and both ends of the file are unchanged: only the modification time tells.
     after = geotiff_fingerprint(str(path))
     for key in ("size", "sha256_head_tail"):
         assert after[key] == before[key]
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_resume_confirms_the_content_of_a_geotiff_whose_time_alone_changed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ortho.tif"
+    region = _striped_raster(path)
+    whole = config_for(tmp_path, {"path": str(path), "chunk_rows": 64}, region, staging="whole")
+    run_generate(whole)
+    config = config_for(tmp_path, {"path": str(path), "chunk_rows": 64}, region)
+    _interrupt_after(config, 2)
+    manifest_path = tmp_path / "dataset" / "manifest.json"
+    assert Manifest.load(manifest_path).source.sha256 == _sha256(path)
+
+    # A copy without its times, a fresh checkout or `touch`: same bytes, a new time.
+    later = path.stat().st_mtime_ns + 5 * 10**9 + 7
+    os.utime(path, ns=(later, later))
+    result = run_generate(config)
+    assert result.manifest.complete is True and result.new_patches > 0
+    recorded = Manifest.load(manifest_path).source
+    assert recorded.fingerprint is not None and recorded.fingerprint["mtime_ns"] == later
+    assert recorded.sha256 == _sha256(path)
+    assert _tree(tmp_path / "dataset", "Images") == _tree(tmp_path / "whole", "Images")
+    # The new time is recorded, so the next run needs no hash.
+    assert run_generate(config).new_patches == 0
+
+
+def test_resume_hashes_only_the_mosaic_files_whose_time_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "ortho.tif"
+    region = _striped_raster(source)
+    tiles = tmp_path / "tiles"
+    tiles.mkdir()
+    with rasterio.open(source) as src:
+        for index, (row0, row1) in enumerate(((0, 256), (256, 512))):
+            window = rasterio.windows.Window(0, row0, src.width, row1 - row0)
+            profile = src.profile | {
+                "height": row1 - row0,
+                "transform": src.window_transform(window),
+            }
+            with rasterio.open(tiles / f"t{index}.tif", "w", **profile) as dst:
+                dst.write(src.read(window=window))
+    config = config_for(tmp_path, {"path": str(tiles / "*.tif"), "chunk_rows": 64}, region)
+    _interrupt_after(config, 2)
+    manifest_path = tmp_path / "dataset" / "manifest.json"
+    recorded = Manifest.load(manifest_path).source.sha256
+    assert recorded == {name: _sha256(tiles / name) for name in ("t0.tif", "t1.tif")}
+
+    # One tile's pixels change in place, keeping its size and both ends; the other is only
+    # touched. The content check names the source; no command restores a time.
+    tile = tiles / "t1.tif"
+    original, mtime = tile.read_bytes(), tile.stat().st_mtime_ns
+    with rasterio.open(tile, "r+") as dst:
+        dst.write(np.zeros((3, 50, 50), dtype=np.uint8), window=((100, 150), (100, 150)))
+    os.utime(tile, ns=(mtime + 10**9, mtime + 10**9))
+    os.utime(tiles / "t0.tif", ns=(mtime + 2 * 10**9, mtime + 2 * 10**9))
+    with pytest.raises(ManifestMismatchError, match="imagery file content") as caught:
+        run_generate(config)
+    assert "touch -d" not in str(caught.value)
+
+    # The edited tile back as it was (same bytes, a new time): the dataset resumes.
+    tile.write_bytes(original)
+    hashed: list[str] = []
+    real = manifest_module._file_sha256
+
+    def file_sha256(path: str) -> str:
+        hashed.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(manifest_module, "_file_sha256", file_sha256)
+    result = run_generate(config)
+    assert result.manifest.complete is True and result.new_patches > 0
+    assert sorted(hashed) == ["t0.tif", "t1.tif"]
+    # Both new times are recorded: a run with the files untouched hashes nothing.
+    hashed.clear()
+    assert run_generate(config).new_patches == 0 and hashed == []
+
+
+def test_a_manifest_without_hashes_still_names_the_restore_command(tmp_path: Path) -> None:
+    path = tmp_path / "ortho.tif"
+    region = _striped_raster(path)
+    config = config_for(tmp_path, {"path": str(path), "chunk_rows": 64}, region)
+    _interrupt_after(config, 2)
+    # As mapcv 0.3.0 wrote it: no hash of the file to confirm its content with.
+    manifest_path = tmp_path / "dataset" / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    del data["sources"][0]["sha256"]
+    manifest_path.write_text(json.dumps(data))
+    later = path.stat().st_mtime_ns + 10**9
+    os.utime(path, ns=(later, later))
+    with pytest.raises(ManifestMismatchError, match="modification time") as caught:
+        run_generate(config)
+    assert "restore the recorded time" in str(caught.value)
 
 
 # ── D-4: a smaller region ────────────────────────────────────────────────────

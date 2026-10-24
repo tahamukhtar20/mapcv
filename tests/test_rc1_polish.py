@@ -427,6 +427,11 @@ def test_the_printed_touch_command_restores_the_time_and_the_resume_works(tmp_pa
     recorded = raster.path.stat().st_mtime_ns + 123  # not a whole second
     os.utime(raster.path, ns=(recorded, recorded))
     _interrupt_after(config, 2)
+    # A dataset from mapcv 0.3.0, which recorded no hash to confirm the content with.
+    manifest_path = config.writer.staging_dir / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    del data["sources"][0]["sha256"]
+    manifest_path.write_text(json.dumps(data))
     later = recorded + 7 * 10**9 + 456
     os.utime(raster.path, ns=(later, later))
 

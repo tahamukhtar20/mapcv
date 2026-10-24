@@ -8,7 +8,9 @@ upgraded in memory; see :meth:`Manifest.load`.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import math
 import os
 import posixpath
@@ -37,6 +39,8 @@ from typing_extensions import TypedDict
 
 from mapcv._confine import first_outside_path
 from mapcv.labels import ClassMap
+
+_log = logging.getLogger(__name__)
 
 MANIFEST_VERSION: int = 3
 Transform = tuple[float, float, float, float, float, float]
@@ -133,11 +137,15 @@ class SourceRecord(BaseModel):
     # mosaic, a STAC item or Earth Engine settings), so a resumed run refuses a different
     # one. Absent for sources that have none.
     fingerprint: dict[str, Any] | None = None
+    # The SHA-256 of each whole local GeoTIFF (a mosaic's by file name), so a resumed run
+    # whose files only have new modification times can confirm their content. Absent
+    # before mapcv 0.3.1 and for sources without local files.
+    sha256: str | dict[str, str] | None = None
 
     @model_serializer(mode="wrap")
     def _omit_missing_fields(self, handler: Any) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
-        for key in ("width", "height", "fingerprint"):
+        for key in ("width", "height", "fingerprint", "sha256"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data
@@ -467,6 +475,10 @@ _SOURCE_FIELD_LABELS = {
         "imagery file modification time: the file was edited, or copied without its times "
         "(cp -p and rsync -a keep them)"
     ),
+    "content": (
+        "imagery file content: a file's modification time changed and its SHA-256 differs "
+        "from the recorded one"
+    ),
     "width": "region",
     "height": "region",
 }
@@ -509,7 +521,11 @@ _TARGET_FIELDS = {
 }
 
 
-def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
+def _resume_mismatches(
+    manifest: Manifest, expected: Manifest, changed: frozenset[str] = frozenset()
+) -> list[str]:
+    """The labels of what differs; a source in ``changed`` has files whose content is
+    known to differ from the recorded hashes."""
     mismatches: list[str] = []
     if manifest.task != expected.task:
         mismatches.append("task")
@@ -519,7 +535,10 @@ def _resume_mismatches(manifest: Manifest, expected: Manifest) -> list[str]:
         for have, want in zip(manifest.sources, expected.sources):
             prefix = f"{have.name}: " if len(expected.sources) > 1 else ""
             mismatches.extend(
-                prefix + _SOURCE_FIELD_LABELS.get(name, name)
+                prefix
+                + _SOURCE_FIELD_LABELS.get(
+                    "content" if name == "mtime" and have.name in changed else name, name
+                )
                 for name in _source_mismatches(have, want)
             )
             if _transforms_differ(have.transform, want.transform):
@@ -575,15 +594,24 @@ def format_file_time(mtime_ns: int, path: str, windows: bool | None = None) -> s
 
 
 _MOST_FILES_NAMED = 3
+_HASH_BLOCK = 1 << 20
+# Hashing this much imagery takes long enough to say so.
+_HASH_NOTICE_BYTES = 1 << 30
 
 
 def _restore_times_hint(
-    manifest: Manifest, expected: Manifest, locations: Mapping[str, Mapping[str, str]]
+    manifest: Manifest,
+    expected: Manifest,
+    locations: Mapping[str, Mapping[str, str]],
+    changed: frozenset[str] = frozenset(),
 ) -> str:
     """How to set back the modification times that make a resume refuse the imagery: the
-    command per changed file (a few, then a count), for a file whose content is unchanged."""
+    command per changed file (a few, then a count), for a file whose content is unchanged.
+    Sources in ``changed``, whose content is known to differ, get none."""
     commands: list[str] = []
     for have, want in zip(manifest.sources, expected.sources):
+        if have.name in changed:
+            continue
         if _without_times(have.fingerprint) != _without_times(want.fingerprint):
             continue
         recorded, current = _file_times(have.fingerprint), _file_times(want.fingerprint)
@@ -603,6 +631,86 @@ def _restore_times_hint(
     )
 
 
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(_HASH_BLOCK), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fingerprint_bytes(fingerprint: Any) -> int:
+    """The total size of the files a fingerprint describes."""
+    if not isinstance(fingerprint, dict):
+        return 0
+    files = fingerprint.get("files")
+    items: list[Any] = files if isinstance(files, list) else [fingerprint]
+    return sum(
+        item["size"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("size"), int)
+    )
+
+
+def _recorded_sha256(source: SourceRecord) -> dict[str, str]:
+    """A source's recorded file hashes, keyed as ``_file_times`` keys its times."""
+    if isinstance(source.sha256, str):
+        return {"": source.sha256}
+    return dict(source.sha256 or {})
+
+
+def _record_content(manifest: Manifest, locations: Mapping[str, Mapping[str, str]]) -> None:
+    """Record the SHA-256 of every local file behind the sources' fingerprints.
+
+    This reads each file once more, so a later run whose files only have new modification
+    times (a copy without its times, a fresh checkout, ``touch``) can confirm them.
+    """
+    for source in manifest.sources:
+        times = _file_times(source.fingerprint)
+        where = locations.get(source.name) or {}
+        if not times or any(key not in where for key in times):
+            continue
+        total = _fingerprint_bytes(source.fingerprint)
+        _log.log(
+            logging.INFO if total >= _HASH_NOTICE_BYTES else logging.DEBUG,
+            "Hashing %d imagery file(s) of %s (%.1f GB) so a resume can confirm their content",
+            len(times),
+            source.name,
+            total / 1e9,
+        )
+        digests = {key: _file_sha256(where[key]) for key in times}
+        source.sha256 = digests[""] if list(digests) == [""] else digests
+
+
+def _confirm_content(
+    manifest: Manifest, expected: Manifest, locations: Mapping[str, Mapping[str, str]]
+) -> frozenset[str]:
+    """Hash the files whose modification time alone changed and compare them with the
+    recorded hashes. A source whose files all match takes the new times, so it resumes;
+    the names of the sources with a file whose content differs are returned. A source
+    without recorded hashes (made before mapcv 0.3.1) or file locations is left as is."""
+    changed: set[str] = set()
+    for have, want in zip(manifest.sources, expected.sources):
+        if have.fingerprint == want.fingerprint or _without_times(
+            have.fingerprint
+        ) != _without_times(want.fingerprint):
+            continue
+        recorded, current = _file_times(have.fingerprint), _file_times(want.fingerprint)
+        retimed = [key for key, mtime_ns in recorded.items() if current.get(key) != mtime_ns]
+        digests, where = _recorded_sha256(have), locations.get(have.name) or {}
+        if any(key not in digests or key not in where for key in retimed):
+            continue
+        _log.info(
+            "Checking the content of %d imagery file(s) whose modification time changed",
+            len(retimed),
+        )
+        if all(_file_sha256(where[key]) == digests[key] for key in retimed):
+            have.fingerprint = want.fingerprint
+        else:
+            changed.add(have.name)
+    return frozenset(changed)
+
+
 def load_or_create_manifest(
     path: Path,
     expected: Manifest,
@@ -616,7 +724,10 @@ def load_or_create_manifest(
     upgrading: mapcv 0.2 had no ignore index, so they resume only with
     ``labels.ignore_index: null``. ``file_locations`` maps a source's name to the local
     files of its fingerprint (the key ``""`` for one file, else the names in the
-    fingerprint), so a refused modification time names the command that restores it.
+    fingerprint), so the SHA-256 of each file is recorded in a new manifest and a file
+    whose modification time alone changed is hashed and compared with it on resume: the
+    same content resumes (and records the new time), other content is refused. Without a
+    recorded hash, a refused modification time names the command that restores it.
 
     Raises:
         ManifestMismatchError: The existing manifest is version 1, a version-2
@@ -624,6 +735,7 @@ def load_or_create_manifest(
             configuration (the message names what differs).
     """
     if not path.exists():
+        _record_content(expected, file_locations or {})
         return expected
 
     manifest = Manifest.load(path)
@@ -639,6 +751,10 @@ def load_or_create_manifest(
             "writer.staging_dir ('mapcv split' still reads it)"
         )
     mismatches = _resume_mismatches(manifest, expected)
+    changed: frozenset[str] = frozenset()
+    if mismatches and all("modification time" in mismatch for mismatch in mismatches):
+        changed = _confirm_content(manifest, expected, file_locations or {})
+        mismatches = _resume_mismatches(manifest, expected, changed)
     if mismatches:
         # What a 0.2 dataset needs to resume (MIGRATION.md), named so one edit fixes it.
         needs: list[str] = []
@@ -651,7 +767,7 @@ def load_or_create_manifest(
                 needs.append('writer.jpg_subsampling: "4:4:4" (mapcv 0.2 wrote 4:4:4 JPEGs)')
         hint = f". To resume this mapcv 0.2 dataset, set {' and '.join(needs)}" if needs else ""
         if any("modification time" in mismatch for mismatch in mismatches):
-            hint += _restore_times_hint(manifest, expected, file_locations or {})
+            hint += _restore_times_hint(manifest, expected, file_locations or {}, changed)
         raise ManifestMismatchError(
             f"{path} was generated with a different configuration "
             f"({', '.join(mismatches)}); use a new writer.staging_dir or remove the old "

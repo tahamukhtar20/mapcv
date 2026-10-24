@@ -8,6 +8,7 @@ own transform. Alignment errors would otherwise be silent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -646,11 +647,11 @@ def test_resume_accepts_the_same_file_and_refuses_another(tmp_path: Path) -> Non
     moved = config_for(tmp_path, {"path": str(copied)}, region)
     assert run_generate(moved).new_patches == 0
 
-    # One that does not may have been edited: pixels changed in place keep the size and
-    # both ends of the file, so only the time tells.
+    # So is one that does not: only its time changed, and the hash of the whole file
+    # recorded by the first run confirms the content.
     os.utime(copied, (1_000_000_000, 1_000_000_000))
-    with pytest.raises(ManifestMismatchError, match="modification time"):
-        run_generate(moved)
+    assert run_generate(moved).new_patches == 0
+    assert first.manifest.source.sha256 == hashlib.sha256(copied.read_bytes()).hexdigest()
 
     # Same name and size, different pixels.
     other = make_raster(tmp_path, seed=99)

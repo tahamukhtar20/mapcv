@@ -218,12 +218,15 @@ def test_resume_confirms_the_content_of_a_geotiff_whose_time_alone_changed(
     assert Manifest.load(manifest_path).source.sha256 == _sha256(path)
 
     # A copy without its times, a fresh checkout or `touch`: same bytes, a new time.
-    later = path.stat().st_mtime_ns + 5 * 10**9 + 7
+    mtime = path.stat().st_mtime_ns
+    later = mtime + 5 * 10**9 + 7
     os.utime(path, ns=(later, later))
     result = run_generate(config)
     assert result.manifest.complete is True and result.new_patches > 0
     recorded = Manifest.load(manifest_path).source
-    assert recorded.fingerprint is not None and recorded.fingerprint["mtime_ns"] == later
+    # Compared with the file's own time: Windows keeps it in 100-ns ticks.
+    assert recorded.fingerprint is not None
+    assert recorded.fingerprint["mtime_ns"] == path.stat().st_mtime_ns != mtime
     assert recorded.sha256 == _sha256(path)
     assert _tree(tmp_path / "dataset", "Images") == _tree(tmp_path / "whole", "Images")
     # The new time is recorded, so the next run needs no hash.

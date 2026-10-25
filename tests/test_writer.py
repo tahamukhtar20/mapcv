@@ -9,10 +9,11 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import pytest
-from PIL import Image, JpegImagePlugin
+from PIL import Image, ImageDraw, JpegImagePlugin
 from pydantic import ValidationError
 
 from mapcv import SamplerConfig, sample_patches
+from mapcv._mapcv_rs import write_patches as _write_patch_files
 from mapcv.manifest import Manifest, TargetRecord
 from mapcv.sampler import PatchMeta
 from mapcv.writer import WriterConfig, write_patches
@@ -494,3 +495,97 @@ def test_manifest_round_trip_with_entries(tmp_path: Path) -> None:
     assert len(loaded.patches) == len(m.patches)
     for orig, reloaded in zip(m.patches, loaded.patches):
         assert orig == reloaded
+
+
+def _label_masks() -> npt.NDArray[np.uint8]:
+    """Masks shaped like rasterized labels: one empty, the rest filled quadrilaterals."""
+    rng = np.random.default_rng(0)
+    masks = [np.zeros((256, 256), dtype=np.uint8)]
+    for count in (5, 20, 60):
+        mask = Image.new("L", (256, 256), 0)
+        draw = ImageDraw.Draw(mask)
+        for _ in range(count):
+            x, y = (int(v) for v in rng.integers(0, 256, 2))
+            w, h = (int(v) for v in rng.integers(6, 40, 2))
+            draw.polygon(
+                [(x, y), (x + w, y + 3), (x + w - 2, y + h), (x - 2, y + h - 4)],
+                fill=int(rng.integers(1, 3)),
+            )
+        masks.append(np.asarray(mask))
+    return np.stack(masks)
+
+
+def test_png_masks_are_as_small_as_pillows_on_both_paths(tmp_path: Path) -> None:
+    # PNG images send uint8 masks to the Rust encoder, NPY images to Pillow: both must
+    # decode to the same pixels, and the Rust masks must not be larger.
+    masks = _label_masks()
+    images = np.zeros((*masks.shape, 3), dtype=np.uint8)
+    meta: list[PatchMeta] = [
+        {"row": 0, "col": index * 256, "padded": False} for index in range(len(masks))
+    ]
+    sizes = {}
+    for image_format in ("png", "npy"):
+        staging = tmp_path / image_format
+        cfg = WriterConfig(staging_dir=staging, image_format=image_format)
+        write_patches(images, masks, meta, cfg, Manifest())
+        files = sorted((staging / "Masks").glob("*.png"))
+        assert len(files) == len(masks)
+        for path, mask in zip(files, masks):
+            with Image.open(path) as decoded:
+                assert decoded.mode == "L"
+                np.testing.assert_array_equal(np.asarray(decoded), mask)
+        sizes[image_format] = [path.stat().st_size for path in files]
+    assert sum(sizes["png"]) <= sum(sizes["npy"]), sizes
+    # An empty mask stays a few hundred bytes, not kilobytes.
+    assert sizes["png"][0] <= 2 * sizes["npy"][0], sizes
+
+
+def _zlib_header(path: Path) -> bytes:
+    data = path.read_bytes()
+    start = data.index(b"IDAT") + 4
+    return data[start : start + 2]
+
+
+def test_resumed_dataset_keeps_the_mask_encoding_it_has(tmp_path: Path) -> None:
+    masks = _label_masks()
+    images = np.zeros((*masks.shape, 3), dtype=np.uint8)
+    meta: list[PatchMeta] = [
+        {"row": 0, "col": index * 256, "padded": False} for index in range(len(masks))
+    ]
+    for existing, expected in (("fast", b"\x78\x01"), ("default", b"\x78\x9c")):
+        staging = tmp_path / existing
+        cfg = WriterConfig(staging_dir=staging)
+        manifest = Manifest()
+        write_patches(images[:2], masks[:2], meta[:2], cfg, manifest)
+        if existing == "fast":
+            # As mapcv 0.3.0 wrote them: the fast deflate with the Sub filter.
+            _write_patch_files(
+                images[:2],
+                masks[:2],
+                [(0, 0, False), (0, 256, False)],
+                0,
+                0,
+                str(staging / "Images"),
+                str(staging / "Masks"),
+                mask_compression="fast",
+            )
+        write_patches(images[2:], masks[2:], meta[2:], cfg, manifest)
+        files = sorted((staging / "Masks").glob("*.png"))
+        assert [_zlib_header(path) for path in files] == [expected] * len(masks)
+        for path, mask in zip(files, masks):
+            with Image.open(path) as decoded:
+                np.testing.assert_array_equal(np.asarray(decoded), mask)
+
+
+def test_unknown_mask_compression_is_a_value_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mask_compression must be 'default' or 'fast'"):
+        _write_patch_files(
+            np.zeros((1, 4, 4, 3), dtype=np.uint8),
+            np.zeros((1, 4, 4), dtype=np.uint8),
+            [(0, 0, False)],
+            0,
+            0,
+            str(tmp_path),
+            str(tmp_path),
+            mask_compression="best",
+        )

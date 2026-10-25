@@ -212,6 +212,7 @@ def write_patches(
     image_format: str = "png",
     jpg_quality: int = 95,
     jpg_subsampling: str = "4:2:0",
+    mask_compression: str = "default",
 ) -> list[tuple[str, str | None, int, int, bool, int, list[tuple[int, int]], float]]: ...
 def write_geotiffs(
     data: npt.NDArray[np.uint8],

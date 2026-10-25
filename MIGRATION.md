@@ -114,6 +114,10 @@ The host a URL in your config names is still connected wherever it resolves (a d
 
 `mapcv.bounds` and `mapcv.snap_bbox` (and `tile`, `xy`, `xy_bounds`, `tile_transform` of `mapcv._mapcv_rs`) used to clamp invalid input and return a plausible answer: a `NaN` position became a real tile, zoom 64 became 32, and tile column 8 at zoom 3 got the bounds of column 7. They raise `ValueError` now: for a coordinate that is not a number, for a zoom above 32, and for a tile column or row that does not exist at its zoom. Valid input gives what it gave before, and a position beyond the world (longitude 200) is still moved onto the edge.
 
+## Smaller PNG masks
+
+Since 0.3.1, `uint8` PNG masks written next to PNG or JPG images are encoded with zlib's default level and no row filter instead of the fastest level and the Sub filter: they are a quarter to 40 % of their 0.3.0 size, and no larger than the masks written next to `npy` and `tif` images. The pixels are the same. A dataset started by mapcv 0.3.0 or 0.2 resumes as before and keeps the old encoding for the masks it still needs, so it ends up byte for byte what the old version would have written. The same config generated again from scratch gives different mask bytes than 0.3.0 did, so a `SHA256SUMS` made for the 0.3.0 dataset does not match it; write a new one with `mapcv verify --write-checksums`.
+
 # Migrating to mapcv 0.2
 
 ## Imagery configuration

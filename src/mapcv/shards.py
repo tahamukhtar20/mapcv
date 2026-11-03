@@ -73,7 +73,8 @@ def _split_lists(root: Path, manifest: Manifest) -> dict[str, list[ManifestEntry
     }
 
 
-def _check_out(root: Path, out: Path) -> None:
+def check_out(root: Path, out: Path) -> None:
+    """Refuse an export folder ``out`` that is the dataset folder ``root`` or inside it."""
     if out.resolve() == root.resolve() or root.resolve() in out.resolve().parents:
         raise ValueError("export to a folder outside the dataset folder")
 
@@ -204,7 +205,7 @@ def export_webdataset(root: Path, out: Path, shard_bytes: int = SHARD_BYTES) -> 
     """Write the tar shards and ``shards.json``; returns the shards (see the module docs)."""
     if shard_bytes < 1:
         raise ValueError("shard_bytes must be positive")
-    _check_out(root, out)
+    check_out(root, out)
     manifest = _load(root)
     objects = _coco_by_image(root) if manifest.task in ("detection", "instance") else None
     with export_folder(out, "WebDataset", _is_webdataset_file, "shards.json"):
@@ -270,7 +271,7 @@ def _zarr() -> Any:
 def export_zarr(root: Path, out: Path) -> Path:
     """Write the Zarr group (see the module docs); returns ``out``."""
     zarr = _zarr()
-    _check_out(root, out)
+    check_out(root, out)
     manifest = _load(root)
     split_of = {
         manifest.patch_name(entry): split

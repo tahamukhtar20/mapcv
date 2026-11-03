@@ -25,7 +25,7 @@ from typing import Any
 
 from mapcv.data import splits_of
 from mapcv.manifest import Manifest, ManifestEntry, require_complete
-from mapcv.shards import export_folder
+from mapcv.shards import check_out, export_folder
 
 FORMATS = ("hf-parquet", "terratorch", "webdataset", "zarr")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
@@ -69,7 +69,7 @@ def _stats(root: Path) -> dict[str, Any]:
 
 def export_hf_parquet(root: Path, out: Path) -> list[Path]:
     """Write ``out/data/<split>-00000-of-00001.parquet`` and ``out/README.md``; returns the
-    Parquet files. ``out`` must not be the dataset folder. It must be a new or empty
+    Parquet files. ``out`` must be outside the dataset folder. It must be a new or empty
     folder, or hold an earlier export of this format, which is replaced whole (no split
     file of it is left behind); an export that fails part way removes what it wrote."""
     try:
@@ -80,8 +80,7 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
             "the hf-parquet export needs pyarrow: pip install 'mapcv[export]'"
         ) from exc
     root, out = root.resolve(), out.resolve()
-    if out == root:
-        raise ValueError("export to a new folder, not the dataset folder itself")
+    check_out(root, out)
     manifest = _manifest(root)
     by_split = _entries_by_split(root, manifest)
     keys = list(manifest.patches[0]["files"]) if manifest.patches else []

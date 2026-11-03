@@ -362,6 +362,74 @@ def test_hf_parquet_classification_and_binary_columns(
         assert row["image"]["path"].endswith(".npy")
 
 
+@pytest.mark.parametrize("task", ["detection", "instance"])
+def test_hf_parquet_carries_the_coco_annotations(
+    tmp_path: Path, scene: dict[str, Any], task: str
+) -> None:
+    pq = pytest.importorskip("pyarrow.parquet")
+    from test_dataset_tools import _small_boxes
+
+    labels = {
+        "path": str(_small_boxes(tmp_path, scene["region"])),
+        "label_field": "kind",
+        "classes": {"a": 1},
+    }
+    rgb = {"type": "geotiff", "path": str(tmp_path / "rgb.tif")}
+    root = _generate(
+        tmp_path, scene, task, task=task, imagery=rgb, labels=labels, writer={"image_format": "png"}
+    )
+    export_hf_parquet(root, tmp_path / "hf")
+    found = 0
+    for split in ("train", "val", "test"):
+        coco = json.loads((root / "annotations" / f"instances_{split}.json").read_text())
+        expected: dict[str, list[dict[str, Any]]] = {
+            image["file_name"]: [] for image in coco["images"]
+        }
+        for annotation in coco["annotations"]:
+            image = next(i for i in coco["images"] if i["id"] == annotation["image_id"])
+            expected[image["file_name"]].append(annotation)
+        table = pq.read_table(tmp_path / "hf" / "data" / f"{split}-00000-of-00001.parquet")
+        rows = table.to_pylist()
+        assert sorted(row["name"] for row in rows) == sorted(expected)
+        for row in rows:
+            assert row["annotations"] == expected[row["name"]]
+            found += len(row["annotations"])
+        features = json.loads(table.schema.metadata[b"huggingface"])["info"]["features"]
+        assert list(features["annotations"][0]) == [
+            field.name for field in table.schema.field("annotations").type.value_type
+        ]
+    assert found > 0
+    if task == "instance":
+        mask = pytest.importorskip("pycocotools.mask")
+        table = pq.read_table(tmp_path / "hf" / "data" / "train-00000-of-00001.parquet")
+        for row in table.to_pylist():
+            for annotation in row["annotations"]:
+                rle = dict(annotation["segmentation"])
+                decoded = mask.decode({**rle, "counts": rle["counts"].encode()})
+                assert decoded.sum() == annotation["area"] > 0
+                assert mask.toBbox(mask.encode(decoded)).tolist() == annotation["bbox"]
+    else:
+        # Built from the stored boxes, so a dataset without COCO files has them too.
+        yolo = _generate(
+            tmp_path,
+            scene,
+            "yolo",
+            task=task,
+            imagery=rgb,
+            labels=labels,
+            writer={"image_format": "png"},
+            detection={"formats": ["yolo"]},
+        )
+        assert not list((yolo / "annotations").glob("instances_*.json"))
+        export_hf_parquet(yolo, tmp_path / "hf-yolo")
+        for split in ("train", "val", "test"):
+            name = f"{split}-00000-of-00001.parquet"
+            assert (
+                pq.read_table(tmp_path / "hf-yolo" / "data" / name)["annotations"]
+                == pq.read_table(tmp_path / "hf" / "data" / name)["annotations"]
+            )
+
+
 def test_hf_parquet_needs_pyarrow(
     tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

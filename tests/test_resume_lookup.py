@@ -34,7 +34,7 @@ def test_the_completed_positions_are_sorted_and_unique() -> None:
         {"row": 3, "col": 4},
         {"row": 1, "col": 0},
     ]
-    done = _completed_positions(patches, WIDTH)  # type: ignore[arg-type]
+    done = _completed_positions(patches, WIDTH)
     assert done.dtype == np.uint64
     assert done.tolist() == [9, 1_000, 3_004]
     assert len(_completed_positions([], WIDTH)) == 0
@@ -59,7 +59,7 @@ def test_the_remaining_anchors_are_those_a_set_lookup_leaves(seed: int) -> None:
             {"row": int(value) // WIDTH, "col": int(value) % WIDTH}
             for value in np.concatenate([written, written[:5]])
         ]
-        done = _completed_positions(patches, WIDTH)  # type: ignore[arg-type]
+        done = _completed_positions(patches, WIDTH)
         for chunk in chunks:
             expected = _reference(chunk, {int(value) for value in written})
             left = _remaining(chunk, done)

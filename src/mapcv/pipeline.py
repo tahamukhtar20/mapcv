@@ -13,7 +13,7 @@ import os
 import time
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -433,7 +433,9 @@ def _check_chunk_sizes(chunks: list[_Chunk], chunk_rows: int) -> None:
             )
 
 
-def _completed_positions(patches: list[dict[str, Any]], width: int) -> npt.NDArray[np.uint64]:
+def _completed_positions(
+    patches: Sequence[Mapping[str, Any]], width: int
+) -> npt.NDArray[np.uint64]:
     """The positions (``row * width + col``) of the written ``patches``, sorted and unique.
 
     Sorted once here: :func:`_remaining` looks up in it for every chunk.

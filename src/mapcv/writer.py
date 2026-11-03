@@ -253,6 +253,35 @@ def _write_world_files(
         (directory / f"{stem}.{suffix}").write_text(text, encoding="ascii", newline="\n")
 
 
+# The zlib header of the fast deflate (level 0 of 3 in FLEVEL) that PNG masks were
+# written with before mapcv 0.3.1; the default encoding's header is 78 9c.
+_FAST_ZLIB_HEADER = b"\x78\x01"
+
+
+def _mask_compression(manifest: Manifest, staging_dir: Path) -> str:
+    """The Rust writer's ``mask_compression`` for new PNG masks of this dataset.
+
+    ``"fast"`` when the dataset's first mask is a PNG with the fast deflate that mapcv
+    0.3.0 and earlier wrote masks with, so a resumed dataset keeps one encoding and ends
+    up byte for byte what an uninterrupted run wrote; ``"default"`` otherwise.
+    """
+    mask = manifest.patches[0]["files"].get("mask") if manifest.patches else None
+    if mask is None or not mask.endswith(".png"):
+        return "default"
+    try:
+        with open(staging_dir / mask, "rb") as file:
+            head = file.read(64)
+    except OSError:
+        return "default"
+    offset = 8  # the PNG signature, then (length, type, data, CRC) chunks
+    while offset + 10 <= len(head):
+        length = int.from_bytes(head[offset : offset + 4], "big")
+        if head[offset + 4 : offset + 8] == b"IDAT":
+            return "fast" if head[offset + 8 : offset + 10] == _FAST_ZLIB_HEADER else "default"
+        offset += 12 + length
+    return "default"
+
+
 def _write_python_masks(
     masks: npt.NDArray[Any],
     stems: list[str],
@@ -373,6 +402,7 @@ def write_patches(
             config.image_format,
             config.jpg_quality,
             config.jpg_subsampling,
+            _mask_compression(manifest, config.staging_dir) if rust_masks else "default",
         )
         # The sampler's ratio counts pixels without valid imagery (NoData, NaN, outside the
         # raster), the same measure the masks use; the Rust writer's all-black ratio is the

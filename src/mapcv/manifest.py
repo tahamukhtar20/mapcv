@@ -18,6 +18,7 @@ import re
 import shlex
 import warnings
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
@@ -137,10 +138,12 @@ class SourceRecord(BaseModel):
     # mosaic, a STAC item or Earth Engine settings), so a resumed run refuses a different
     # one. Absent for sources that have none.
     fingerprint: dict[str, Any] | None = None
-    # The SHA-256 of each whole local GeoTIFF (a mosaic's by file name), so a resumed run
-    # whose files only have new modification times can confirm their content. Absent
+    # The SHA-256 of each whole local GeoTIFF the run reads, so a resumed run whose files
+    # only have new modification times can confirm their content: a string for one file;
+    # for a mosaic, a list in the order of the fingerprint's ``files`` (names can repeat
+    # across folders), ``None`` for a file outside the region, which is never read. Absent
     # before mapcv 0.3.1 and for sources without local files.
-    sha256: str | dict[str, str] | None = None
+    sha256: str | list[str | None] | None = None
 
     @model_serializer(mode="wrap")
     def _omit_missing_fields(self, handler: Any) -> dict[str, Any]:
@@ -561,14 +564,15 @@ def _resume_mismatches(
 
 
 def _file_times(fingerprint: Any) -> dict[str, int]:
-    """A fingerprint's files and their modification times in nanoseconds: ``""`` for a
-    single file, the file names for a mosaic."""
+    """A fingerprint's files and their modification times in nanoseconds, keyed ``""`` for
+    a single file and, for a mosaic, by the file's position in ``files`` (``"0"``, ``"1"``,
+    ...): a name alone can repeat, as in ``17/1234/5678.tif`` and ``17/1235/5678.tif``."""
     if not isinstance(fingerprint, dict):
         return {}
     if isinstance(fingerprint.get("files"), list):
         return {
-            str(item.get("name")): item["mtime_ns"]
-            for item in fingerprint["files"]
+            str(index): item["mtime_ns"]
+            for index, item in enumerate(fingerprint["files"])
             if isinstance(item, dict) and isinstance(item.get("mtime_ns"), int)
         }
     mtime = fingerprint.get("mtime_ns")
@@ -639,47 +643,60 @@ def _file_sha256(path: str) -> str:
     return digest.hexdigest()
 
 
-def _fingerprint_bytes(fingerprint: Any) -> int:
-    """The total size of the files a fingerprint describes."""
-    if not isinstance(fingerprint, dict):
-        return 0
-    files = fingerprint.get("files")
-    items: list[Any] = files if isinstance(files, list) else [fingerprint]
-    return sum(
-        item["size"]
-        for item in items
-        if isinstance(item, dict) and isinstance(item.get("size"), int)
-    )
+def _mosaic_files(fingerprint: Any) -> list[Any] | None:
+    """A mosaic fingerprint's ``files``, or ``None`` for any other fingerprint."""
+    files = fingerprint.get("files") if isinstance(fingerprint, dict) else None
+    return files if isinstance(files, list) else None
 
 
 def _recorded_sha256(source: SourceRecord) -> dict[str, str]:
-    """A source's recorded file hashes, keyed as ``_file_times`` keys its times."""
-    if isinstance(source.sha256, str):
-        return {"": source.sha256}
-    return dict(source.sha256 or {})
+    """A source's recorded file hashes, keyed as ``_file_times`` keys its times. A record
+    that does not fit the fingerprint (a list of another length) confirms nothing."""
+    files = _mosaic_files(source.fingerprint)
+    if files is None:
+        return {"": source.sha256} if isinstance(source.sha256, str) else {}
+    if not isinstance(source.sha256, list) or len(source.sha256) != len(files):
+        return {}
+    return {str(index): digest for index, digest in enumerate(source.sha256) if digest}
 
 
-def _record_content(manifest: Manifest, locations: Mapping[str, Mapping[str, str]]) -> None:
-    """Record the SHA-256 of every local file behind the sources' fingerprints.
+def _record_content(
+    manifest: Manifest,
+    locations: Mapping[str, Mapping[str, str]],
+    reads: Mapping[str, AbstractSet[str]],
+) -> None:
+    """Record the SHA-256 of the local files behind the sources' fingerprints that the run
+    reads (a mosaic's files outside the region are left out).
 
-    This reads each file once more, so a later run whose files only have new modification
-    times (a copy without its times, a fresh checkout, ``touch``) can confirm them.
+    This reads each such file once more, so a later run whose files only have new
+    modification times (a copy without its times, a fresh checkout, ``touch``) can
+    confirm them.
     """
     for source in manifest.sources:
-        times = _file_times(source.fingerprint)
         where = locations.get(source.name) or {}
-        if not times or any(key not in where for key in times):
+        read = reads.get(source.name)
+        keys = [
+            key
+            for key in _file_times(source.fingerprint)
+            if key in where and (read is None or key in read)
+        ]
+        if not keys:
             continue
-        total = _fingerprint_bytes(source.fingerprint)
+        total = sum(os.path.getsize(where[key]) for key in keys)
         _log.log(
             logging.INFO if total >= _HASH_NOTICE_BYTES else logging.DEBUG,
             "Hashing %d imagery file(s) of %s (%.1f GB) so a resume can confirm their content",
-            len(times),
+            len(keys),
             source.name,
             total / 1e9,
         )
-        digests = {key: _file_sha256(where[key]) for key in times}
-        source.sha256 = digests[""] if list(digests) == [""] else digests
+        digests = {key: _file_sha256(where[key]) for key in keys}
+        files = _mosaic_files(source.fingerprint)
+        source.sha256 = (
+            digests[""]
+            if files is None
+            else [digests.get(str(index)) for index in range(len(files))]
+        )
 
 
 def _confirm_content(
@@ -696,9 +713,15 @@ def _confirm_content(
         ) != _without_times(want.fingerprint):
             continue
         recorded, current = _file_times(have.fingerprint), _file_times(want.fingerprint)
-        retimed = [key for key, mtime_ns in recorded.items() if current.get(key) != mtime_ns]
+        retimed = [
+            key
+            for key in dict.fromkeys([*recorded, *current])
+            if recorded.get(key) != current.get(key)
+        ]
         digests, where = _recorded_sha256(have), locations.get(have.name) or {}
-        if any(key not in digests or key not in where for key in retimed):
+        # Every file whose time changed must hash to its recorded content; with no file
+        # to hash, nothing is confirmed and the source stays refused.
+        if not retimed or any(key not in digests or key not in where for key in retimed):
             continue
         _log.info(
             "Checking the content of %d imagery file(s) whose modification time changed",
@@ -715,6 +738,7 @@ def load_or_create_manifest(
     path: Path,
     expected: Manifest,
     file_locations: Mapping[str, Mapping[str, str]] | None = None,
+    files_read: Mapping[str, AbstractSet[str]] | None = None,
 ) -> Manifest:
     """Load the manifest at ``path`` for resuming, or return ``expected`` when there is none.
 
@@ -723,10 +747,12 @@ def load_or_create_manifest(
     sampler and writer. Version-2 manifests (mapcv 0.2) are compared after
     upgrading: mapcv 0.2 had no ignore index, so they resume only with
     ``labels.ignore_index: null``. ``file_locations`` maps a source's name to the local
-    files of its fingerprint (the key ``""`` for one file, else the names in the
-    fingerprint), so the SHA-256 of each file is recorded in a new manifest and a file
-    whose modification time alone changed is hashed and compared with it on resume: the
-    same content resumes (and records the new time), other content is refused. Without a
+    files of its fingerprint (the key ``""`` for one file, else the file's position in the
+    fingerprint's ``files`` as a string, since names can repeat), so the SHA-256 of each
+    file is recorded in a new manifest and a file whose modification time alone changed is
+    hashed and compared with it on resume: the same content resumes (and records the new
+    time), other content is refused. ``files_read`` limits, per source, the files hashed
+    to those keys (the files the run reads; all when a source is not named). Without a
     recorded hash, a refused modification time names the command that restores it.
 
     Raises:
@@ -735,7 +761,7 @@ def load_or_create_manifest(
             configuration (the message names what differs).
     """
     if not path.exists():
-        _record_content(expected, file_locations or {})
+        _record_content(expected, file_locations or {}, files_read or {})
         return expected
 
     manifest = Manifest.load(path)

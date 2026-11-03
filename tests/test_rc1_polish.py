@@ -470,7 +470,8 @@ def test_a_mosaic_names_a_few_files_then_a_count() -> None:
 
     recorded = {f"f{i}.tif": 10**18 + i for i in range(5)}
     current = {**recorded, "f0.tif": 1, "f1.tif": 2, "f3.tif": 3, "f4.tif": 4}
-    locations = {"image": {name: f"/d/{name}" for name in recorded}}
+    # Files are found by their position in the fingerprint: names can repeat.
+    locations = {"image": {str(index): f"/d/{name}" for index, name in enumerate(recorded)}}
     old, new = Manifest(sources=[source(recorded)]), Manifest(sources=[source(current)])
     hint = _restore_times_hint(old, new, locations)
     # One restore command per named file: `touch -d`, or PowerShell on Windows.

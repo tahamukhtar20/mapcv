@@ -41,7 +41,7 @@ from mapcv.cli import app
 from mapcv.config import MapcvConfig
 from mapcv.imagery import geotiff_fingerprint
 from mapcv.locking import LOCK_FILENAME, DatasetBusyError, StagingDirError, dataset_lock
-from mapcv.manifest import Manifest, ManifestMismatchError
+from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, load_or_create_manifest
 from mapcv.pipeline import run_generate, run_split
 from mapcv.shards import export_webdataset, export_zarr
 from mapcv.splitter import SplitterConfig
@@ -233,27 +233,43 @@ def test_resume_confirms_the_content_of_a_geotiff_whose_time_alone_changed(
     assert run_generate(config).new_patches == 0
 
 
+def _split_rows(source: Path, top: Path, bottom: Path) -> None:
+    """Write the top and bottom halves of the striped ``source`` as two GeoTIFFs."""
+    with rasterio.open(source) as src:
+        for path, (row0, row1) in ((top, (0, 256)), (bottom, (256, 512))):
+            window = rasterio.windows.Window(0, row0, src.width, row1 - row0)
+            profile = src.profile | {
+                "height": row1 - row0,
+                "transform": src.window_transform(window),
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with rasterio.open(path, "w", **profile) as dst:
+                dst.write(src.read(window=window))
+
+
+def _edit_in_place(path: Path, seconds: int = 1) -> None:
+    """Paint over pixels in the middle of ``path``, keeping its size and both ends, and
+    give it a new modification time."""
+    mtime = path.stat().st_mtime_ns
+    with rasterio.open(path, "r+") as dst:
+        dst.write(np.zeros((3, 50, 50), dtype=np.uint8), window=((100, 150), (100, 150)))
+    later = mtime + seconds * 10**9
+    os.utime(path, ns=(later, later))
+
+
 def test_resume_hashes_only_the_mosaic_files_whose_time_changed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "ortho.tif"
     region = _striped_raster(source)
     tiles = tmp_path / "tiles"
-    tiles.mkdir()
-    with rasterio.open(source) as src:
-        for index, (row0, row1) in enumerate(((0, 256), (256, 512))):
-            window = rasterio.windows.Window(0, row0, src.width, row1 - row0)
-            profile = src.profile | {
-                "height": row1 - row0,
-                "transform": src.window_transform(window),
-            }
-            with rasterio.open(tiles / f"t{index}.tif", "w", **profile) as dst:
-                dst.write(src.read(window=window))
+    _split_rows(source, tiles / "t0.tif", tiles / "t1.tif")
     config = config_for(tmp_path, {"path": str(tiles / "*.tif"), "chunk_rows": 64}, region)
     _interrupt_after(config, 2)
     manifest_path = tmp_path / "dataset" / "manifest.json"
     recorded = Manifest.load(manifest_path).source.sha256
-    assert recorded == {name: _sha256(tiles / name) for name in ("t0.tif", "t1.tif")}
+    # In the order of the fingerprint's files.
+    assert recorded == [_sha256(tiles / name) for name in ("t0.tif", "t1.tif")]
 
     # One tile's pixels change in place, keeping its size and both ends; the other is only
     # touched. The content check names the source; no command restores a time.
@@ -283,6 +299,108 @@ def test_resume_hashes_only_the_mosaic_files_whose_time_changed(
     # Both new times are recorded: a run with the files untouched hashes nothing.
     hashed.clear()
     assert run_generate(config).new_patches == 0 and hashed == []
+
+
+def test_resume_refuses_an_edited_mosaic_tile_whose_name_another_tile_shares(
+    tmp_path: Path,
+) -> None:
+    # Tiles in z/x/y folders: both files are named 5678.tif.
+    source = tmp_path / "ortho.tif"
+    region = _striped_raster(source)
+    tiles = tmp_path / "tiles"
+    first, second = tiles / "17" / "1234" / "5678.tif", tiles / "17" / "1235" / "5678.tif"
+    _split_rows(source, first, second)
+    config = config_for(tmp_path, {"path": str(tiles / "**" / "*.tif"), "chunk_rows": 64}, region)
+    _interrupt_after(config, 2)
+    manifest_path = tmp_path / "dataset" / "manifest.json"
+    assert Manifest.load(manifest_path).source.sha256 == [_sha256(first), _sha256(second)]
+
+    # The first tile's pixels change in place: same size, same ends, a new time.
+    original = first.read_bytes()
+    _edit_in_place(first)
+    with pytest.raises(ManifestMismatchError, match="imagery file content") as caught:
+        run_generate(config)
+    assert "touch -d" not in str(caught.value) and "LastWriteTimeUtc" not in str(caught.value)
+
+    # Without recorded hashes (a mapcv 0.3.0 dataset), the time refuses it and the restore
+    # command names the first tile, not the other file of the same name.
+    data = json.loads(manifest_path.read_text())
+    del data["sources"][0]["sha256"]
+    manifest_path.write_text(json.dumps(data))
+    with pytest.raises(ManifestMismatchError, match="modification time") as caught:
+        run_generate(config)
+    message = str(caught.value)
+    assert str(first) in message or str(first).replace("'", "''") in message
+    assert str(second) not in message
+
+    # The tile's own bytes back (a new time again): hashing it confirms the content.
+    first.write_bytes(original)
+    data["sources"][0]["sha256"] = [_sha256(first), _sha256(second)]
+    manifest_path.write_text(json.dumps(data))
+    result = run_generate(config)
+    assert result.manifest.complete is True and result.new_patches > 0
+
+
+def test_a_retimed_source_with_nothing_left_to_hash_is_refused(tmp_path: Path) -> None:
+    image = tmp_path / "ortho.tif"
+    image.write_bytes(b"pixels")
+
+    def record(mtime_ns: str) -> SourceRecord:
+        fingerprint = {"kind": "file", "size": 6, "sha256_head_tail": "x", "mtime_ns": mtime_ns}
+        return SourceRecord(name="image", fingerprint=fingerprint, sha256=_sha256(image))
+
+    # The times differ but neither is a number, so no file is left to hash: nothing
+    # confirms the change, and the resume is refused.
+    path = tmp_path / "manifest.json"
+    Manifest(sources=[record("then")]).save(path)
+    with pytest.raises(ManifestMismatchError, match="modification time"):
+        load_or_create_manifest(
+            path, Manifest(sources=[record("now")]), {"image": {"": str(image)}}
+        )
+
+
+def test_the_first_run_hashes_only_the_mosaic_files_the_region_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "ortho.tif"
+    whole = _striped_raster(source)
+    tiles = tmp_path / "tiles"
+    top, bottom = tiles / "t0.tif", tiles / "t1.tif"
+    _split_rows(source, top, bottom)
+    from pyproj import Transformer
+
+    # The upper 200 rows: inside the top tile only.
+    to_lonlat = Transformer.from_crs("EPSG:32631", "EPSG:4326", always_xy=True)
+    _, south = to_lonlat.transform(448_128.0, 5_412_000.0 - 200)
+    region = {**whole, "south": south}
+    hashed: list[str] = []
+    real = manifest_module._file_sha256
+
+    def file_sha256(path: str) -> str:
+        hashed.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(manifest_module, "_file_sha256", file_sha256)
+    config = config_for(tmp_path, {"path": str(tiles / "*.tif"), "chunk_rows": 64}, region)
+    _interrupt_after(config, 1)
+    assert hashed == ["t0.tif"]
+    manifest_path = tmp_path / "dataset" / "manifest.json"
+    assert Manifest.load(manifest_path).source.sha256 == [_sha256(top), None]
+
+    # The unread tile has no hash: a new time on it is refused, with the restore command.
+    mtime = bottom.stat().st_mtime_ns
+    os.utime(bottom, ns=(mtime + 10**9, mtime + 10**9))
+    with pytest.raises(ManifestMismatchError, match="modification time") as caught:
+        run_generate(config)
+    assert "restore the recorded time" in str(caught.value)
+    os.utime(bottom, ns=(mtime, mtime))
+    # The tile the region reads is confirmed by its hash.
+    later = top.stat().st_mtime_ns + 10**9
+    os.utime(top, ns=(later, later))
+    hashed.clear()
+    result = run_generate(config)
+    assert result.manifest.complete is True and result.new_patches > 0
+    assert hashed == ["t0.tif"]
 
 
 def test_a_manifest_without_hashes_still_names_the_restore_command(tmp_path: Path) -> None:

@@ -465,8 +465,13 @@ def _remaining(chunk: _Chunk, completed: npt.NDArray[np.uint64]) -> _Chunk:
         return chunk
     inside = completed[start:stop]
     positions = chunk.positions()
-    at = np.searchsorted(inside, positions)
-    done = inside[np.minimum(at, len(inside) - 1)] == positions
+    # Looked up in increasing order: unsorted keys (random anchors) bisect all over a large
+    # ``inside``, missing the cache on every step.
+    order = np.argsort(positions, kind="stable")
+    ordered = positions[order]
+    at = np.searchsorted(inside, ordered)
+    done = np.empty(len(positions), dtype=bool)
+    done[order] = inside[np.minimum(at, len(inside) - 1)] == ordered
     if not done.any():
         return chunk
     return _Positions(positions[~done], chunk.width)

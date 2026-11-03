@@ -66,6 +66,11 @@ class PatchMeta(TypedDict):
 #: request is refused before any is built.
 MAX_PATCHES = int(MAX_ANCHORS)
 
+#: The most anchors one chunk of a run reads at once. A chunk is listed as ``(row, col)``
+#: pairs and its kept patches are stacked into one array, so its memory grows with this
+#: count; 3,000,000 is what a whole run could hold before :data:`MAX_PATCHES` was raised.
+MAX_CHUNK_ANCHORS = 3_000_000
+
 
 class TooManyPatchesError(ValueError):
     """The sampler settings describe more patches than one run can hold."""

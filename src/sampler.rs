@@ -55,7 +55,9 @@ fn check_strategy(strategy: &str) -> Result<(), String> {
 ///
 /// A run holds its anchors compactly: a grid as its row and column positions, random
 /// anchors and those over an area of interest as one `u64` each (see
-/// [`random_positions`]), so this keeps them near 400 MB. A larger request is refused
+/// [`random_positions`]), so this keeps them near 400 MB while the run lasts (under 1 GB at
+/// the peak, while random positions are drawn). The limit covers the positions only: each
+/// patch written also costs the manifest about 1 KB. A larger request is refused
 /// before anything is allocated: how many anchors there would be is computed from the
 /// dimensions alone, so a crafted size cannot ask for memory the system only runs out
 /// of while filling it.

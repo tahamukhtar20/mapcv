@@ -21,8 +21,15 @@ from test_geotiff_imagery import config_for, make_raster, write_labels
 
 from mapcv import pipeline
 from mapcv.manifest import Manifest
-from mapcv.pipeline import _column_windows, run_generate
+from mapcv.pipeline import (
+    _check_chunk_sizes,
+    _column_windows,
+    _GridBlock,
+    iter_patches,
+    run_generate,
+)
 from mapcv.planning import plan
+from mapcv.sampler import MAX_CHUNK_ANCHORS, TooManyPatchesError
 from mapcv.writers import create_writer
 
 PATCH = 64
@@ -322,3 +329,33 @@ def test_the_plan_estimates_memory_for_a_column_window(
     # 192-row windows (128 chunk rows + one patch), 256 instead of ~1,250 columns.
     assert capped * 4 < whole
     assert capped == 192 * 256 * (3 * 2 + 2)
+
+
+def test_a_chunk_over_the_limit_is_refused_with_what_to_change() -> None:
+    def block(rows: int, cols: int) -> _GridBlock:
+        return _GridBlock(np.arange(rows, dtype=np.uint64), np.arange(cols, dtype=np.uint64), 9_000)
+
+    assert MAX_CHUNK_ANCHORS == 3_000_000  # what a whole run held before the limit was raised
+    _check_chunk_sizes([block(1_000, 3_000), block(10, 10)], 1_024)  # exactly at the limit
+    with pytest.raises(TooManyPatchesError) as raised:
+        _check_chunk_sizes([block(10, 10), block(1_024, 7_000)], 1_024)
+    text = str(raised.value)
+    assert "chunk 2 of 2 would read 7,168,000 patches" in text
+    assert "limit of 3,000,000 for one chunk" in text
+    assert "sampler.stride" in text and "chunk_rows" in text
+
+
+def test_a_run_with_a_chunk_over_the_limit_stops_before_reading_or_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _wide_config(tmp_path, stride=48)  # 3 rows x 25 columns = 75 anchors per chunk
+    staging = config.writer.staging_dir
+    monkeypatch.setattr(pipeline, "MAX_CHUNK_ANCHORS", 74)
+    with pytest.raises(TooManyPatchesError, match="chunk 1 of 2 would read 75 patches"):
+        run_generate(config)
+    assert not (staging / "Images").exists() and not (staging / "manifest.json").exists()
+    with pytest.raises(TooManyPatchesError, match="limit of 74 for one chunk"):
+        next(iter_patches(config))
+
+    monkeypatch.setattr(pipeline, "MAX_CHUNK_ANCHORS", 75)
+    assert len(run_generate(config).manifest.patches) == 100  # 75 + 25 anchors

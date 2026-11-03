@@ -37,8 +37,10 @@ from mapcv.imagery import (
 from mapcv.locking import LOCK_FILENAME, StagingDirError, dataset_lock
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
+    MAX_CHUNK_ANCHORS,
     PatchMeta,
     SamplerConfig,
+    TooManyPatchesError,
     check_patch_limit,
     grid_axes_for,
     random_positions_for,
@@ -254,6 +256,14 @@ class _GridBlock:
         """The anchors as ``row * width + col``, in order."""
         return (self.rows[:, None] * np.uint64(self.width) + self.cols).ravel()
 
+    def bounds(self) -> tuple[int, int]:
+        """The least and the greatest position of the chunk (without building it)."""
+        width = self.width
+        return (
+            int(self.rows.min()) * width + int(self.cols.min()),
+            int(self.rows.max()) * width + int(self.cols.max()),
+        )
+
     def anchors(self) -> list[tuple[int, int]]:
         """The anchors as ``(row, col)`` pairs, in order."""
         cols = self.cols.tolist()
@@ -273,6 +283,10 @@ class _Positions:
     def positions(self) -> npt.NDArray[np.uint64]:
         """The anchors as ``row * width + col``, in order."""
         return self.values
+
+    def bounds(self) -> tuple[int, int]:
+        """The least and the greatest position of the chunk."""
+        return int(self.values.min()), int(self.values.max())
 
     def anchors(self) -> list[tuple[int, int]]:
         """The anchors as ``(row, col)`` pairs, in order."""
@@ -401,15 +415,59 @@ def _anchor_groups(
     return chunks
 
 
+def _check_chunk_sizes(chunks: list[_Chunk], chunk_rows: int) -> None:
+    """Refuse a run whose chunk would read more than :data:`MAX_CHUNK_ANCHORS` anchors.
+
+    A run may hold up to :data:`~mapcv.sampler.MAX_PATCHES` anchors compactly, but a chunk is
+    read as a list of pairs and its kept patches are stacked into one array, so its memory
+    grows with its anchors (a stride of 1 over a 1,024-row chunk puts millions into one).
+    Checked before anything is read or written."""
+    for index, chunk in enumerate(chunks):
+        if len(chunk) > MAX_CHUNK_ANCHORS:
+            raise TooManyPatchesError(
+                f"chunk {index + 1} of {len(chunks)} would read {len(chunk):,} patches at once, "
+                f"more than the limit of {MAX_CHUNK_ANCHORS:,} for one chunk (a chunk is "
+                f"{chunk_rows:,} rows of the raster). Raise sampler.stride (or patch_size), or "
+                "lower the imagery's chunk_rows (strip_rows for XYZ imagery) so a chunk covers "
+                "fewer rows"
+            )
+
+
+def _completed_positions(patches: list[dict[str, Any]], width: int) -> npt.NDArray[np.uint64]:
+    """The positions (``row * width + col``) of the written ``patches``, sorted and unique.
+
+    Sorted once here: :func:`_remaining` looks up in it for every chunk.
+    """
+    return np.unique(
+        np.fromiter(
+            (patch["row"] * width + patch["col"] for patch in patches),
+            dtype=np.uint64,
+            count=len(patches),
+        )
+    )
+
+
 def _remaining(chunk: _Chunk, completed: npt.NDArray[np.uint64]) -> _Chunk:
-    """The anchors of ``chunk`` whose position is not in ``completed`` (sorted), in order."""
+    """The anchors of ``chunk`` whose position is not in ``completed``, in order.
+
+    ``completed`` must be sorted and unique (:func:`_completed_positions`). Only the part of
+    it inside the chunk's range is searched, by bisection, so the work for a chunk does not
+    grow with the patches already written; a chunk with none in range is not built.
+    """
     if len(completed) == 0:
         return chunk
-    positions = chunk.positions()
-    left = ~np.isin(positions, completed)
-    if left.all():
+    low, high = chunk.bounds()
+    start = int(np.searchsorted(completed, np.uint64(low), side="left"))
+    stop = int(np.searchsorted(completed, np.uint64(high), side="right"))
+    if start == stop:
         return chunk
-    return _Positions(positions[left], chunk.width)
+    inside = completed[start:stop]
+    positions = chunk.positions()
+    at = np.searchsorted(inside, positions)
+    done = inside[np.minimum(at, len(inside) - 1)] == positions
+    if not done.any():
+        return chunk
+    return _Positions(positions[~done], chunk.width)
 
 
 @dataclass
@@ -485,7 +543,9 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
         source = opened[0]
         target.prepare(source.metadata)
         crs = source.metadata.crs
-        for group in _anchor_groups(config, opened, _area_of_interest(config, source)):
+        groups = _anchor_groups(config, opened, _area_of_interest(config, source))
+        _check_chunk_sizes(groups, source.metadata.chunk_rows)
+        for group in groups:
             images, annotations, metadata, other_patches, _ = _process_anchor_chunk(
                 source, group.anchors(), config.sampler, target, others
             )
@@ -696,14 +756,9 @@ def _generate_locked(
         resumed_patches = len(manifest.patches)
         patch_size = config.sampler.patch_size
         groups = _anchor_groups(config, opened, aoi)
+        _check_chunk_sizes(groups, source.metadata.chunk_rows)
         width = source.metadata.width
-        completed = np.unique(
-            np.fromiter(
-                (patch["row"] * width + patch["col"] for patch in manifest.patches),
-                dtype=np.uint64,
-                count=len(manifest.patches),
-            )
-        )
+        completed = _completed_positions(manifest.patches, width)
         # Number chunks over the whole raster so a resumed run records the same
         # chunk index for each patch as an uninterrupted one.
         chunks = []

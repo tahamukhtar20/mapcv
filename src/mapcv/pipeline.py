@@ -550,7 +550,13 @@ def _generate_locked(
             for name, each in zip(names, opened)
             if (files := getattr(each, "file_locations", None))
         }
-        manifest = load_or_create_manifest(manifest_path, expected, locations)
+        # A mosaic reads only the files its region overlaps; only these are hashed.
+        reads = {
+            name: keys
+            for name, each in zip(names, opened)
+            if (keys := getattr(each, "files_read", None)) is not None
+        }
+        manifest = load_or_create_manifest(manifest_path, expected, locations, reads)
         # Whether the dataset on disk was finished (None: a manifest from before mapcv 0.3).
         was_complete = manifest.complete if manifest_path.exists() else False
         broken = _first_broken_patch(staging, manifest)

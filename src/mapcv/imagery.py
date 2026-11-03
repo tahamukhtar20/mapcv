@@ -1026,8 +1026,9 @@ def geotiff_fingerprint(location: str, *, trust_host: bool = True) -> dict[str, 
     last 64 KiB (where the TIFF headers and, for non-COG files, the directory live). The
     modification time catches pixels edited in place, which leave the size and both ends
     unchanged; hashing the whole file would cost a full read of every file on every run.
-    A copy that does not keep modification times (``cp`` without ``-p``) therefore counts
-    as another file, which refuses a resume rather than mixing two versions.
+    The manifest also records the SHA-256 of each whole file the run reads once, so a
+    resume whose files only have new modification times (``cp`` without ``-p``) hashes
+    those files and refuses other content rather than mixing two versions.
     URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
     ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
     Nothing reads the whole file, whatever its size.
@@ -1541,7 +1542,14 @@ class GeoTiffMosaicSource:
         ]
         self._dtype = np.dtype(reference.dtype)
         _log.debug("GeoTIFF mosaic of %d file(s), %dx%d px in %s", len(files), width, height, crs)
-        self.file_locations = {name: str(path) for name, path in zip(names, files)}
+        # Where each file of the fingerprint is, by its position there (names can repeat
+        # across folders), and the files the region's window overlaps: only these are read.
+        self.file_locations = {str(index): str(path) for index, path in enumerate(files)}
+        self.files_read = frozenset(
+            str(index)
+            for index, (f_r0, f_r1, f_c0, f_c1) in enumerate(self._places)
+            if f_r0 < row1 and row0 < f_r1 and f_c0 < col1 and col0 < f_c1
+        )
         self.metadata = RasterMetadata(
             source_type="geotiff",
             product_id=f"{pattern} ({len(files)} files)",

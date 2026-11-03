@@ -1329,7 +1329,12 @@ def inspect_labels(
     if scan.bounds is not None:
         west, south, east, north = scan.bounds
         extent = {"west": west, "south": south, "east": east, "north": north}
-        if not (-180 <= west and east <= 180 and -90 <= south and north <= 90):
+        if 180 < east <= 360 and 0 <= west and -90 <= south and north <= 90:
+            notes.append(
+                "The longitudes are 0..360 rather than -180..180; mapcv moves features east "
+                "of 180° by -360°, so give the region in either convention."
+            )
+        elif not (-180 <= west and east <= 180 and -90 <= south and north <= 90):
             notes.append(
                 "The coordinates are outside longitude/latitude ranges: the file is probably "
                 "projected. mapcv reads labels as WGS-84 lon/lat; reproject it to EPSG:4326."

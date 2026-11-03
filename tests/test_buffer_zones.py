@@ -10,7 +10,7 @@ import shapely
 from pyproj import Geod
 from shapely.geometry import LineString, MultiLineString, MultiPoint, Point, Polygon
 
-from mapcv.labels import _buffer_in_zone, buffer_metres
+from mapcv.labels import _buffer_in_zone, _zone_pieces, buffer_metres
 
 GEOD = Geod(ellps="WGS84")
 
@@ -104,6 +104,44 @@ def test_a_line_crossing_one_zone_edge_is_buffered_on_both_sides() -> None:
         assert _half_width_north(result, lon, 45.0) == pytest.approx(50.0, rel=0.003), lon
 
 
+def _half_width_towards(polygon: Any, lon: float, lat: float, azimuth: float) -> float:
+    low, high = 0.0, 100.0
+    for _ in range(50):
+        middle = (low + high) / 2
+        x, y, _ = GEOD.fwd(lon, lat, azimuth, middle)
+        if polygon.contains(Point(x, y)):
+            low = middle
+        else:
+            high = middle
+    return low
+
+
+def test_a_segment_along_a_zone_edge_is_buffered_in_both_zones() -> None:
+    # The segment from (12, 0) to (12, 5) lies on the edge of zones 32 and 33. Clipping to
+    # a zone's strip dropped it from both, leaving a gap in the band along 12 degrees east.
+    line = LineString([(10.0, 0.0), (12.0, 0.0), (12.0, 5.0), (14.0, 5.0)])
+    result = buffer_metres(line, 50.0)
+    assert isinstance(result, Polygon), "no gap: the buffers merge into one band"
+    assert result.covers(Point(12.0, 2.5))
+    for lat in (0.5, 1.5, 2.5, 3.5, 4.5):
+        for azimuth in (90.0, 270.0):  # across the segment, east and west of it
+            width = _half_width_towards(result, 12.0, lat, azimuth)
+            assert width == pytest.approx(50.0, rel=0.003), (lat, azimuth)
+    # The whole line is covered, and the band is not wider than a buffer should be.
+    assert result.covers(line)
+    area = abs(GEOD.geometry_area_perimeter(result)[0])
+    assert area == pytest.approx(GEOD.geometry_length(line) * 100.0, rel=0.01)
+
+
+def test_a_line_along_a_zone_edge_only_is_buffered() -> None:
+    line = LineString([(12.0, 40.0), (12.0, 41.0)])
+    result = buffer_metres(line, 50.0)
+    assert result.covers(line)
+    for azimuth in (90.0, 270.0):
+        width = _half_width_towards(result, 12.0, 40.5, azimuth)
+        assert width == pytest.approx(50.0, rel=0.003)
+
+
 def test_a_multiline_with_a_part_across_zones_is_cut_there() -> None:
     near = [(74.30, 31.485), (74.31, 31.485)]
     long = list(_parallel(140.0, 160.0, 31.485).coords)
@@ -140,3 +178,19 @@ def test_a_line_reaching_the_antimeridian_is_buffered_as_before(west: float, eas
     # the others: the line is buffered in one zone, as before, rather than raising.
     line = _parallel(west, east, 10.0)
     assert buffer_metres(line, 5.0).equals_exact(_buffer_in_zone(line, 5.0), 0.0)
+
+
+@pytest.mark.parametrize(
+    ("west", "east", "zones"),
+    [(170.0, 190.0, {59, 60}), (-190.0, -170.0, {1, 2}), (-185.0, 185.0, set(range(1, 61)))],
+)
+def test_zones_1_and_60_take_the_line_beyond_the_antimeridian(
+    west: float, east: float, zones: set[int]
+) -> None:
+    # Zone 60 reaches east of +180 and zone 1 west of -180, as the zone of a position does;
+    # no part of the line is lost to the strips.
+    line = _parallel(west, east, 10.0)
+    pieces = _zone_pieces(line)
+    assert {epsg - 32600 for epsg, _ in pieces} == zones
+    assert sum(piece.length for _, piece in pieces) == pytest.approx(line.length, rel=1e-9)
+    assert shapely.union_all([piece for _, piece in pieces]).equals(line)

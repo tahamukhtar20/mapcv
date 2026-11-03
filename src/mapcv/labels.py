@@ -92,9 +92,13 @@ def _zone_pieces(part: BaseGeometry) -> list[tuple[int, BaseGeometry]]:
         # Zones 1 and 60 also take what lies beyond +/-180 degrees, as _utm_zone does.
         strip_west = min(west, zone_west) if zone == 1 else zone_west
         strip_east = max(east, zone_west + 6.0) if zone == 60 else zone_west + 6.0
-        strip = shapely.clip_by_rect(part, strip_west, south - 1.0, strip_east, north + 1.0)
+        # Not clip_by_rect: it drops a segment lying exactly on the strip's edge from both
+        # strips. Intersection keeps it in both, and the union of the buffers merges them.
+        strip = shapely.intersection(
+            part, shapely.box(strip_west, south - 1.0, strip_east, north + 1.0)
+        )
         for piece in shapely.get_parts(strip):
-            # A line only touching the strip's edge clips to a point; the next strip has it.
+            # A line only touching the strip's edge meets it in a point; the next strip has it.
             if piece.geom_type == "LineString" and not piece.is_empty:
                 lat = piece.centroid.y
                 pieces.append((_utm_epsg(zone_west + 3.0, lat), piece))
@@ -121,7 +125,8 @@ def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
         kind = MultiPoint if geometry.geom_type in _POINT_TYPES else MultiLineString
         buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
         # A buffer reaching over +/-180 degrees comes back wrapped and invalid, and cannot be
-        # merged; such a feature is buffered in one zone, as before.
+        # merged. If any zone's buffer is invalid, the whole feature (every part of a
+        # multi-part one too) is buffered in one zone, as before.
         if all(buffer.is_valid for buffer in buffers):
             return shapely.union_all(buffers)
     return _buffer_in_zone(geometry, distance)

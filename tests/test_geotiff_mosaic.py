@@ -7,6 +7,9 @@ tiles the same bytes as one generated from the whole raster.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +142,46 @@ def test_a_dataset_from_tiles_equals_one_from_the_whole_raster(tmp_path: Path) -
     for folder in ("Images", "Masks"):
         names = sorted(p.name for p in (tmp_path / "a" / folder).iterdir())
         assert names == sorted(p.name for p in (tmp_path / "b" / folder).iterdir())
+        for name in names:
+            assert (tmp_path / "a" / folder / name).read_bytes() == (
+                tmp_path / "b" / folder / name
+            ).read_bytes()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sets RLIMIT_NOFILE, which is POSIX")
+def test_a_mosaic_of_more_files_than_the_open_file_limit(tmp_path: Path) -> None:
+    # 100 tiles under a limit of 64 open files: the readers must not hold one each.
+    raster = make_raster(tmp_path, width=640, height=512, count=3)
+    _cut(raster.path, tmp_path / "tiles", 10, 10)
+    region = raster.region()
+    labels = write_labels(tmp_path, region)
+    whole = config_for(tmp_path, {"path": str(raster.path)}, region, labels=labels, staging="a")
+    tiles = config_for(
+        tmp_path,
+        {"path": str(tmp_path / "tiles" / "*.tif")},
+        region,
+        labels=labels,
+        staging="b",
+    )
+    run_generate(whole)
+    code = f"""
+        import resource
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        from mapcv.config import MapcvConfig
+        from mapcv.pipeline import run_generate
+        run_generate(MapcvConfig.model_validate_json({tiles.model_dump_json()!r}))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    for folder in ("Images", "Masks"):
+        names = sorted(p.name for p in (tmp_path / "a" / folder).iterdir())
+        assert names and names == sorted(p.name for p in (tmp_path / "b" / folder).iterdir())
         for name in names:
             assert (tmp_path / "a" / folder / name).read_bytes() == (
                 tmp_path / "b" / folder / name

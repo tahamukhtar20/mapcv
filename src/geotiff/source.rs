@@ -59,53 +59,77 @@ fn check_range(offset: u64, length: usize, size: u64, what: &str) -> Result<()> 
 }
 
 /// A local file read with positioned reads, so several threads can share it.
+///
+/// The file is opened for each batch of reads and closed after it, not held
+/// open: a mosaic of thousands of tiles keeps one `LocalFile` per tile, and
+/// holding a descriptor for each would run past the process's open-file limit
+/// (often 1,024). Opening costs a few microseconds against the milliseconds a
+/// window takes to decode.
 pub struct LocalFile {
-    file: File,
     size: u64,
     path: String,
 }
 
 impl LocalFile {
-    /// Open the file at `path`.
+    /// Check that the file at `path` can be opened and record its size.
     ///
     /// # Errors
     /// Returns [`GeoTiffError::Io`] when the file cannot be opened.
     pub fn open(path: &str) -> Result<Self> {
+        let (_, size) = Self::open_file(path)?;
+        Ok(LocalFile {
+            size,
+            path: path.to_owned(),
+        })
+    }
+
+    /// Open `path` for reading, with its current size.
+    fn open_file(path: &str) -> Result<(File, u64)> {
         let file =
             File::open(path).map_err(|e| GeoTiffError::Io(format!("cannot open {path}: {e}")))?;
         let size = file
             .metadata()
             .map_err(|e| GeoTiffError::Io(format!("cannot read the size of {path}: {e}")))?
             .len();
-        Ok(LocalFile {
-            file,
-            size,
-            path: path.to_owned(),
-        })
+        Ok((file, size))
     }
 
-    #[cfg(unix)]
-    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-        use std::os::unix::fs::FileExt;
-        self.file.read_exact_at(buf, offset)
-    }
-
-    #[cfg(windows)]
-    fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
-        use std::os::windows::fs::FileExt;
-        while !buf.is_empty() {
-            match self.file.seek_read(buf, offset) {
-                Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
-                Ok(n) => {
-                    buf = &mut buf[n..];
-                    offset += n as u64;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
-            }
+    /// Open the file again for a batch of reads; a file whose size changed since
+    /// [`LocalFile::open`] was replaced or rewritten, and its structure no longer holds.
+    fn reopen(&self) -> Result<File> {
+        let (file, size) = Self::open_file(&self.path)?;
+        if size != self.size {
+            return Err(GeoTiffError::Io(format!(
+                "{} changed while it was being read (was {} bytes, now {size}); \
+                 leave the input files alone until the run finishes",
+                self.path, self.size
+            )));
         }
-        Ok(())
+        Ok(file)
     }
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_read(buf, offset) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 impl ByteSource for LocalFile {
@@ -114,12 +138,18 @@ impl ByteSource for LocalFile {
     }
 
     fn read_ranges(&self, ranges: &[(u64, usize)]) -> Result<Vec<Vec<u8>>> {
+        for &(offset, length) in ranges {
+            check_range(offset, length, self.size, &self.path)?;
+        }
+        if ranges.is_empty() {
+            return Ok(Vec::new());
+        }
+        let file = self.reopen()?;
         ranges
             .iter()
             .map(|&(offset, length)| {
-                check_range(offset, length, self.size, &self.path)?;
                 let mut buf = vec![0u8; length];
-                self.read_exact_at(&mut buf, offset).map_err(|e| {
+                read_exact_at(&file, &mut buf, offset).map_err(|e| {
                     GeoTiffError::Io(format!(
                         "cannot read {length} bytes at offset {offset} of {}: {e}",
                         self.path
@@ -705,6 +735,29 @@ mod tests {
         let max = MAX_REQUEST_BYTES / BLOCK_SIZE;
         let many: Vec<u64> = (0..max + 5).collect();
         assert_eq!(coalesce(&many), vec![(0, max), (max, 5)]);
+    }
+
+    #[test]
+    fn local_files_are_opened_per_read_and_a_changed_file_is_refused() {
+        let path = std::env::temp_dir().join(format!("mapcv-local-{}.bin", std::process::id()));
+        std::fs::write(&path, b"0123456789").unwrap();
+        let name = path.to_str().unwrap();
+        let file = LocalFile::open(name).unwrap();
+        assert_eq!(
+            file.read_ranges(&[(2, 3), (8, 2)]).unwrap(),
+            vec![b"234".to_vec(), b"89".to_vec()]
+        );
+        assert_eq!(file.read_ranges(&[]).unwrap().len(), 0);
+        // No handle is held between reads: the file can be replaced and the change is seen.
+        std::fs::write(&path, b"abcdefghij").unwrap();
+        assert_eq!(file.read_at(0, 3).unwrap(), b"abc".to_vec());
+        std::fs::write(&path, b"abc").unwrap();
+        let err = file.read_at(0, 3).unwrap_err().to_string();
+        assert!(err.contains("changed while it was being read"), "{err}");
+        std::fs::remove_file(&path).unwrap();
+        let err = file.read_at(0, 3).unwrap_err().to_string();
+        assert!(err.contains("cannot open"), "{err}");
+        assert!(LocalFile::open(name).is_err());
     }
 
     #[test]

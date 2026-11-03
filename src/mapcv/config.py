@@ -349,28 +349,29 @@ _TILES_REMOVED = (
 WEB_MERCATOR_MAX_LATITUDE = 85.05112878
 
 
-def _crosses_antimeridian(geometry: Any) -> bool:
-    """Whether ``geometry`` (in -180..180) is cut at 180°: it reaches both -180° and 180°
-    but none of its parts does, as a polygon split there (RFC 7946, or by mapcv from
-    0..360° longitudes) is."""
-    west, _, east, _ = geometry.bounds
-    if not (west <= -180.0 and east >= 180.0):
-        return False
-    parts = getattr(geometry, "geoms", [geometry])
-    return not any(part.bounds[0] <= -180.0 and part.bounds[2] >= 180.0 for part in parts)
-
-
 def region_longitudes(west: float, east: float) -> tuple[float, float]:
     """``west`` and ``east`` in -180..180, also when given as 0..360° longitudes.
 
     A box east of 180° in 0..360 (both edges at 180..360) is moved by -360°, onto the
-    same place. A box that crosses 180° cannot be one box in -180..180, so it is an error.
+    same place. A box across 0° in 0..360 (``west`` east of 180°, ``east`` at 0..180) has
+    its ``west`` moved, so ``west=350, east=10`` is -10..10. A box that crosses 180°
+    cannot be one box in -180..180, so it is an error.
 
     Raises:
-        ValueError: A longitude outside -180..360, or a box that crosses 180°.
+        ValueError: A longitude outside -180..360, a box that crosses 180°, or a box
+            across 0° wider than 180° (``west`` and ``east`` are probably swapped).
     """
     if 180.0 < east <= 360.0 and 180.0 <= west < east:
         return west - 360.0, east - 360.0
+    if 180.0 < west <= 360.0 and 0.0 <= east <= 180.0 and west - 360.0 < east:
+        if east - (west - 360.0) <= 180.0:
+            return west - 360.0, east
+        raise ValueError(
+            f"the region west={west:g}, east={east:g} has west east of east; in 0..360 "
+            f"longitudes that is the {east - (west - 360.0):g}° wide box across 0° that "
+            f"-180..180 writes west={west - 360.0:g}, east={east:g}. Give it like that if "
+            "you mean it; otherwise west and east are swapped"
+        )
     if 180.0 < east <= 360.0 and -180.0 <= west < 180.0:
         raise ValueError(
             f"the region west={west:g}, east={east:g} crosses the antimeridian (180°), which "
@@ -430,20 +431,25 @@ class RegionConfig(NoBooleanNumbers):
             )
         if not path.exists():
             raise ValueError(f"region.path not found: {path}")
-        polygons = area_polygons(path, raw.get("name_field"), raw.get("layer"))
+        from mapcv.labels import count_moved_longitudes
+
+        with count_moved_longitudes() as moved:
+            polygons = area_polygons(path, raw.get("name_field"), raw.get("layer"))
         if not polygons:
             raise ValueError(f"region.path '{path.name}' holds no polygon")
-        if any(_crosses_antimeridian(geometry) for geometry, _ in polygons):
-            # Its box would span every longitude: a raster as wide as the world.
-            raise ValueError(
-                f"region.path: a polygon of '{path.name}' crosses the antimeridian (180°), "
-                "which is not supported; split the area at 180° into two files and make "
-                "one dataset from each"
-            )
         west = min(geometry.bounds[0] for geometry, _ in polygons)
         south = min(geometry.bounds[1] for geometry, _ in polygons)
         east = max(geometry.bounds[2] for geometry, _ in polygons)
         north = max(geometry.bounds[3] for geometry, _ in polygons)
+        if moved and east - west > 180.0:
+            # Polygons in 0..360 on both sides of 180° (one polygon across it, or several):
+            # in -180..180 their box would span (nearly) every longitude.
+            raise ValueError(
+                f"region.path: the area of '{path.name}' crosses the antimeridian (180°), "
+                "which is not supported (its polygons are in 0..360° longitudes and lie on "
+                "both sides of 180°); split the area at 180° into two files and make one "
+                "dataset from each"
+            )
         return {**raw, "west": west, "south": south, "east": east, "north": north}
 
     @model_serializer(mode="wrap")

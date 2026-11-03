@@ -95,6 +95,10 @@ def _foreground(root: Path) -> int:
         (199.5, 200.5, (-160.5, -159.5)),
         (180.0, 200.0, (-180.0, -160.0)),
         (300.0, 360.0, (-60.0, 0.0)),
+        # Across 0° in 0..360: west is east of east.
+        (350.0, 10.0, (-10.0, 10.0)),
+        (359.5, 0.0, (-0.5, 0.0)),
+        (270.0, 90.0, (-90.0, 90.0)),
         (10.0, 20.0, (10.0, 20.0)),
         (-170.0, 180.0, (-170.0, 180.0)),
     ],
@@ -120,7 +124,15 @@ def test_a_region_box_in_0_360_is_moved_into_minus_180_180(
         (-10.0, 200.0, "crosses the antimeridian"),
         (10.0, 370.0, "region.east must be a longitude in -180..180 (or 0..360 for both"),
         (-190.0, 10.0, "region.west must be a longitude in -180..180 (or 0..360 for both"),
-        (200.0, 170.0, "region.west must be a longitude in -180..180"),
+        (
+            200.0,
+            170.0,
+            (
+                "the region west=200, east=170 has west east of east; in 0..360 longitudes "
+                "that is the 330° wide box across 0° that -180..180 writes west=-160, east=170"
+            ),
+        ),
+        (190.0, 200.0 - 360.0, "region.west must be a longitude in -180..180"),
     ],
 )
 def test_a_region_box_that_cannot_be_moved_is_refused(
@@ -198,6 +210,70 @@ def test_a_label_that_crosses_180_is_cut_there(tmp_path: Path, side: float) -> N
     )
 
 
+@pytest.mark.parametrize(("crs", "res"), [("EPSG:4326", 0.0001), ("EPSG:3857", 10.0)])
+def test_a_label_across_0_in_0_360_is_the_polygon_around_0(
+    tmp_path: Path, crs: str, res: float
+) -> None:
+    # Around Greenwich in 0..360 a polygon has vertices at 359.99 and 0.01. On the first
+    # version of this change it became a band 359.98° wide (every mask pixel set).
+    lat = 20.0
+    image = _raster(tmp_path / "image.tif", crs, 0.0, lat, res)
+    region = {"west": -0.009, "south": lat - 0.009, "east": 0.009, "north": lat + 0.009}
+    # Vertices off the pixel edges: -0.01 + 360 - 360 is not exactly -0.01.
+    standard = Polygon(
+        [(-0.01013, 19.99517), (0.01007, 19.99843), (0.00517, 20.00631), (-0.00693, 20.00419)]
+    )
+    shifted = Polygon([(x + 360.0 if x < 0 else x, y) for x, y in standard.exterior.coords])
+    assert shifted.bounds[0] > 0.0 and shifted.bounds[2] > 359.0
+    reference = _generate(
+        tmp_path, "standard", region, image, _geojson(tmp_path / "s.geojson", [standard])
+    )
+    pixels = len(list((reference / "Masks").iterdir())) * PATCH * PATCH
+    assert 1000 < _foreground(reference) < 0.75 * pixels
+    labels = _geojson(tmp_path / "shifted.geojson", [shifted])
+    assert _files(_generate(tmp_path, "shifted", region, image, labels)) == _files(reference)
+
+
+@pytest.mark.parametrize(
+    ("geometry", "expected"),
+    [
+        # A box across 0° given by its corners.
+        (box(5.0, 0.0, 355.0, 1.0), box(-5.0, 0.0, 5.0, 1.0)),
+        (
+            Polygon([(355.0, 0.0), (360.0, 0.0), (5.0, 0.0), (5.0, 1.0), (355.0, 1.0)]),
+            Polygon([(-5.0, 0.0), (0.0, 0.0), (5.0, 0.0), (5.0, 1.0), (-5.0, 1.0)]),
+        ),
+        (LineString([(359.0, 0.0), (1.0, 0.0)]), LineString([(-1.0, 0.0), (1.0, 0.0)])),
+        # Parts on both sides of 0° (no edge across it): the part east of 180° moves.
+        (
+            MultiPolygon([box(355.0, 0.0, 359.0, 1.0), box(1.0, 0.0, 5.0, 1.0)]),
+            MultiPolygon([box(-5.0, 0.0, -1.0, 1.0), box(1.0, 0.0, 5.0, 1.0)]),
+        ),
+    ],
+)
+def test_a_geometry_across_0_in_0_360_stays_small(geometry: Any, expected: Any) -> None:
+    (moved,), unplaced = _wrap_longitudes([geometry])
+    assert unplaced == 0 and moved is not None
+    assert moved.normalize().equals_exact(expected.normalize(), 1e-12)
+
+
+def test_a_band_round_the_globe_in_0_360_is_kept_whole() -> None:
+    # Its edges run 0° -> 360°, all the way round, not the short way across 0°.
+    (moved,), unplaced = _wrap_longitudes([box(0.0, -23.0, 360.0, 23.0)])
+    assert unplaced == 0 and moved is not None
+    assert moved.bounds == (-180.0, -23.0, 180.0, 23.0)
+    assert moved.area == pytest.approx(360.0 * 46.0)
+
+
+def test_a_label_across_both_0_and_180_is_skipped_and_counted(tmp_path: Path) -> None:
+    # 170 -> 190 crosses 180° and 350 -> 10 crosses 0°: no reading of it is narrow.
+    both = Polygon([(170.0, 0.0), (190.0, 0.0), (350.0, 1.0), (10.0, 1.0)])
+    path = _geojson(tmp_path / "labels.geojson", [both, box(200.0, 0.0, 201.0, 1.0)])
+    with pytest.warns(UserWarning, match=r"skipped 1 in 0\.\.360° longitudes that cross both"):
+        (kept,) = load_vector_labels(path)[0]
+    assert kept[0].equals_exact(box(-160.0, 0.0, -159.0, 1.0), 1e-12)
+
+
 def test_every_vector_format_reads_0_360(tmp_path: Path) -> None:
     square = box(200.0, 20.0, 200.01, 20.01)
     kml = tmp_path / "labels.kml"
@@ -240,7 +316,8 @@ def test_geometries_in_minus_180_180_are_left_as_they_are() -> None:
         # Not 0..360 either (a vertex west of 0): left for the existing checks.
         LineString([(-10.0, 0.0), (190.0, 0.0)]),
     ]
-    result = _wrap_longitudes(geometries)
+    result, unplaced = _wrap_longitudes(geometries)
+    assert unplaced == 0
     assert all(a is b for a, b in zip(result, geometries))
 
 
@@ -259,18 +336,47 @@ def test_inspect_labels_tells_0_360_from_projected(
 
 
 @pytest.mark.parametrize(
-    "polygon",
+    "polygons",
     [
-        box(179.99, 20.0, 180.01, 20.01),
-        MultiPolygon([box(179.99, 20.0, 180.0, 20.01), box(-180.0, 20.0, -179.99, 20.01)]),
+        [box(179.99, 20.0, 180.01, 20.01)],
+        # Separate polygons on both sides of 180° (main refused 181..190 as a longitude).
+        [box(170.0, 20.0, 179.0, 20.01), box(181.0, 20.0, 190.0, 20.01)],
+        [MultiPolygon([box(170.0, 20.0, 179.0, 20.01), box(181.0, 20.0, 190.0, 20.01)])],
     ],
-    ids=["0_360", "rfc7946_split"],
+    ids=["one_polygon_across", "two_polygons", "one_multipolygon"],
 )
-def test_an_area_of_interest_across_180_is_refused(tmp_path: Path, polygon: Any) -> None:
-    # Its box would span every longitude (a raster as wide as the world).
-    path = _geojson(tmp_path / "aoi.geojson", [polygon])
+def test_an_area_of_interest_in_0_360_across_180_is_refused(
+    tmp_path: Path, polygons: list[Any]
+) -> None:
+    # In -180..180 its box would span every longitude (a raster as wide as the world).
+    path = _geojson(tmp_path / "aoi.geojson", polygons)
     with pytest.raises(ValidationError, match=r"crosses the antimeridian \(180°\)"):
         RegionConfig.model_validate({"path": str(path)})
+
+
+def test_an_area_of_interest_in_0_360_on_one_side_is_accepted(tmp_path: Path) -> None:
+    path = _geojson(
+        tmp_path / "aoi.geojson",
+        [box(181.0, 20.0, 190.0, 20.01), box(300.0, 20.0, 359.0, 20.01)],
+    )
+    region = RegionConfig.model_validate({"path": str(path)})
+    assert (region.west, region.east) == (-179.0, -1.0)
+
+
+def test_an_area_of_interest_in_0_360_across_0_is_the_box_around_0(tmp_path: Path) -> None:
+    path = _geojson(tmp_path / "aoi.geojson", [box(0.01, 51.0, 359.99, 51.01)])
+    region = RegionConfig.model_validate({"path": str(path)})
+    assert (region.west, region.east) == pytest.approx((-0.01, 0.01), abs=1e-9)
+
+
+def test_an_area_of_interest_cut_at_180_in_minus_180_180_is_kept(tmp_path: Path) -> None:
+    # The RFC 7946 form of a polygon across 180° (Fiji, Chukotka, the Aleutians in
+    # boundary files) generated a dataset on main, on UTM GeoTIFFs and XYZ alike: its
+    # box spans every longitude, but patches are only made over the polygons.
+    split = MultiPolygon([box(179.99, 20.0, 180.0, 20.01), box(-180.0, 20.0, -179.99, 20.01)])
+    path = _geojson(tmp_path / "aoi.geojson", [split])
+    region = RegionConfig.model_validate({"path": str(path)})
+    assert (region.west, region.east) == (-180.0, 180.0)
 
 
 def test_an_area_of_interest_around_the_world_is_still_accepted(tmp_path: Path) -> None:
@@ -290,10 +396,19 @@ def test_the_wizard_takes_a_box_in_0_360(tmp_path: Path) -> None:
     assert (region.west, region.east) == (-160.5, -159.5)
 
 
+def test_the_wizard_takes_a_box_across_0_in_0_360(tmp_path: Path) -> None:
+    from test_cli_polish import _wizard
+
+    answers = ["esri", "359.99,19.5,0.01,19.51", "17", "", "256", "./ds", "n"]
+    _, out = _wizard(tmp_path, answers)
+    region = MapcvConfig.from_yaml(out).region
+    assert (region.west, region.east) == pytest.approx((-0.01, 0.01), abs=1e-9)
+
+
 def test_a_self_intersecting_label_across_180_is_cut_without_an_error() -> None:
     bowtie = Polygon([(179.9, 0.0), (180.1, 1.0), (180.1, 0.0), (179.9, 1.0)])
     assert not bowtie.is_valid
-    (moved,) = _wrap_longitudes([bowtie])
+    (moved,), _ = _wrap_longitudes([bowtie])
     assert moved is not None and moved.is_valid
     west, _, east, _ = moved.bounds
     assert (west, east) == (-180.0, 180.0)

@@ -11,8 +11,12 @@ You give mapcv everything in **longitude/latitude** (WGS-84, EPSG:4326). The pix
 
 - `region` is `west, south, east, north` in degrees.
 - Label coordinates are `[longitude, latitude]` (x before y), as GeoJSON requires. A swapped file produces polygons somewhere else entirely, which mapcv reports as *"no label polygon intersects the imagery extent"*.
-- Regions crossing the antimeridian (180°) are not supported; `west` must be less than `east`.
-- Longitudes in 0…360° (common in climate and ocean data) are accepted for the region box, `region.path` polygons and vector labels, and are moved into −180…180: anything east of 180° moves by −360°, so it lands where the same data in −180…180 would, and the dataset is byte-identical. A label feature that crosses 180° is cut there into a part on each side. A region box that crosses 180° is still refused.
+- Regions crossing the antimeridian (180°) are not supported; `west` must be less than `east` (in −180…180).
+- Longitudes in 0…360° (common in climate and ocean data) are accepted for the region box, `region.path` polygons and vector labels, and are moved into −180…180, so they land in the same place as the same data given in −180…180:
+  - a feature east of 180° moves by −360°;
+  - a feature that crosses 0° (an edge from 355° to 5°, say) becomes the feature around 0°, at −5…5, and a region box across 0° such as `west: 350, east: 10` becomes −10…10;
+  - a label feature that crosses 180° is cut there into a part on each side; one that crosses both 0° and 180° cannot be placed, so it is skipped and counted in a warning;
+  - a region box, or a `region.path` area, in 0…360° that crosses 180° is refused, as its box in −180…180 would span every longitude.
 
 ## XYZ: the Web Mercator tile grid
 

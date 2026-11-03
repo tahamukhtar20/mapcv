@@ -1708,7 +1708,7 @@ def _ask_bbox_or_file(
         except ValueError:
             _console.print("[red]Enter four numbers like[/red] 74.30,31.48,74.34,31.52")
             continue
-        if west < east and -90 <= south < north <= 90:
+        if -90 <= south < north <= 90:
             try:
                 west, east = region_longitudes(west, east)
             except ValueError as exc:

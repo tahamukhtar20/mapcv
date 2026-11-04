@@ -427,6 +427,11 @@ def test_the_printed_touch_command_restores_the_time_and_the_resume_works(tmp_pa
     recorded = raster.path.stat().st_mtime_ns + 123  # not a whole second
     os.utime(raster.path, ns=(recorded, recorded))
     _interrupt_after(config, 2)
+    # A dataset from mapcv 0.3.0, which recorded no hash to confirm the content with.
+    manifest_path = config.writer.staging_dir / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    del data["sources"][0]["sha256"]
+    manifest_path.write_text(json.dumps(data))
     later = recorded + 7 * 10**9 + 456
     os.utime(raster.path, ns=(later, later))
 
@@ -465,7 +470,8 @@ def test_a_mosaic_names_a_few_files_then_a_count() -> None:
 
     recorded = {f"f{i}.tif": 10**18 + i for i in range(5)}
     current = {**recorded, "f0.tif": 1, "f1.tif": 2, "f3.tif": 3, "f4.tif": 4}
-    locations = {"image": {name: f"/d/{name}" for name in recorded}}
+    # Files are found by their position in the fingerprint: names can repeat.
+    locations = {"image": {str(index): f"/d/{name}" for index, name in enumerate(recorded)}}
     old, new = Manifest(sources=[source(recorded)]), Manifest(sources=[source(current)])
     hint = _restore_times_hint(old, new, locations)
     # One restore command per named file: `touch -d`, or PowerShell on Windows.

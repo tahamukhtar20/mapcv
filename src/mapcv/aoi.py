@@ -61,28 +61,33 @@ class AreaOfInterest:
         self._order = {name: index for index, name in reversed(list(enumerate(self._names)))}
         self._tree = shapely.STRtree(self._pixels)
 
-    def _boxes(self, anchors: Sequence[tuple[int, int]], size: int) -> npt.NDArray[np.object_]:
-        rows = np.fromiter((row for row, _ in anchors), dtype=np.float64, count=len(anchors))
-        cols = np.fromiter((col for _, col in anchors), dtype=np.float64, count=len(anchors))
-        return cast(npt.NDArray[np.object_], shapely.box(cols, rows, cols + size, rows + size))
-
-    def keep(self, anchors: list[tuple[int, int]], size: int) -> list[tuple[int, int]]:
-        """The anchors whose ``size`` x ``size`` patch overlaps a polygon, in order.
+    def keep_mask(
+        self, rows: npt.NDArray[Any], cols: npt.NDArray[Any], size: int
+    ) -> npt.NDArray[np.bool_]:
+        """Whether the ``size`` x ``size`` patch at each ``(rows[i], cols[i])`` overlaps a
+        polygon.
 
         Anchors are tested in batches, so the boxes (a Python object each) of a large
         grid never exist all at once.
         """
-        kept: list[tuple[int, int]] = []
-        for start in range(0, len(anchors), _KEEP_BATCH):
-            batch = anchors[start : start + _KEEP_BATCH]
-            boxes = self._boxes(batch, size)
+        kept = np.zeros(len(rows), dtype=bool)
+        for start in range(0, len(rows), _KEEP_BATCH):
+            top = rows[start : start + _KEEP_BATCH].astype(np.float64)
+            left = cols[start : start + _KEEP_BATCH].astype(np.float64)
+            boxes = shapely.box(left, top, left + size, top + size)
             box_index, polygon_index = self._tree.query(boxes, predicate="intersects")
             overlap = shapely.area(
                 shapely.intersection(boxes[box_index], self._pixels[polygon_index])
             )
-            hit = set(box_index[overlap > 0].tolist())
-            kept.extend(anchor for index, anchor in enumerate(batch) if index in hit)
+            kept[start + box_index[overlap > 0]] = True
         return kept
+
+    def keep(self, anchors: Sequence[tuple[int, int]], size: int) -> list[tuple[int, int]]:
+        """The anchors whose ``size`` x ``size`` patch overlaps a polygon, in order."""
+        rows = np.fromiter((row for row, _ in anchors), dtype=np.int64, count=len(anchors))
+        cols = np.fromiter((col for _, col in anchors), dtype=np.int64, count=len(anchors))
+        mask = self.keep_mask(rows, cols, size)
+        return [anchor for anchor, kept in zip(anchors, mask.tolist()) if kept]
 
     def region_of(self, row: int, col: int, size: int) -> str:
         """The name of the region covering most of the patch at ``(row, col)``."""
@@ -107,18 +112,10 @@ class AreaOfInterest:
         return record
 
 
-def column_clusters(group: list[tuple[int, int]], patch_size: int) -> list[list[tuple[int, int]]]:
-    """``group`` split where its columns leave a gap wider than two patches, so a chunk
-    of far-apart polygons reads several small windows instead of one wide one. The
-    anchors keep their order within each cluster; clusters go left to right."""
-    columns = sorted({col for _, col in group})
-    cluster_of: dict[int, int] = {}
-    cluster = 0
-    for previous, column in zip([None, *columns], columns):
-        if previous is not None and column - previous > 2 * patch_size:
-            cluster += 1
-        cluster_of[column] = cluster
-    clusters: list[list[tuple[int, int]]] = [[] for _ in range(cluster + 1)]
-    for anchor in group:
-        clusters[cluster_of[anchor[1]]].append(anchor)
-    return clusters
+def column_clusters(cols: npt.NDArray[np.uint64], patch_size: int) -> npt.NDArray[np.intp]:
+    """The cluster of each of ``cols``: clusters split where the columns leave a gap wider
+    than two patches, so a chunk of far-apart polygons reads several small windows
+    instead of one wide one. Clusters are numbered left to right from 0."""
+    columns = np.unique(cols)
+    starts = np.concatenate(([0], np.cumsum(np.diff(columns) > 2 * patch_size)))
+    return cast(npt.NDArray[np.intp], starts[np.searchsorted(columns, cols)])

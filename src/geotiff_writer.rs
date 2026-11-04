@@ -650,11 +650,13 @@ mod tests {
         georef: &Georef,
         options: &Options<'_>,
         tag: &str,
-    ) -> GeoTiff {
+    ) -> (TempDir, GeoTiff) {
+        // The reader opens the file for each read, so the directory must outlive it.
         let dir = temp_dir(tag);
         let path = dir.join("p.tif");
         std::fs::write(&path, encode(pixels, fmt, georef, options).unwrap()).unwrap();
-        GeoTiff::open(path.to_str().unwrap(), 0).unwrap()
+        let tiff = GeoTiff::open(path.to_str().unwrap(), 0).unwrap();
+        (dir, tiff)
     }
 
     fn read_all(tiff: &GeoTiff) -> Samples {
@@ -692,7 +694,7 @@ mod tests {
             geographic: false,
             transform: NORTH_UP,
         };
-        let tiff = write_and_open(&pixels, &fmt, &georef, &options(None), "rgb");
+        let (_dir, tiff) = write_and_open(&pixels, &fmt, &georef, &options(None), "rgb");
         assert_eq!((tiff.width(), tiff.height(), tiff.band_count()), (w, h, 3));
         assert_eq!(tiff.dtype(), DType::U8);
         assert_eq!(tiff.epsg(), Ok(32633));
@@ -765,7 +767,7 @@ mod tests {
                 geographic: false,
                 transform: NORTH_UP,
             };
-            let tiff = write_and_open(&pixels, &fmt, &georef, &options(None), dtype.name());
+            let (_dir, tiff) = write_and_open(&pixels, &fmt, &georef, &options(None), dtype.name());
             assert_eq!(tiff.dtype(), dtype);
             assert_eq!(tiff.predictor(), predictor_for(dtype), "{}", dtype.name());
             assert_eq!(read_all(&tiff), expected, "{}", dtype.name());
@@ -794,7 +796,8 @@ mod tests {
                 level: Some(level),
                 ..options(None)
             };
-            let tiff = write_and_open(&pixels, &fmt, &georef, &opts, &format!("lvl{level}"));
+            let (_dir, tiff) =
+                write_and_open(&pixels, &fmt, &georef, &opts, &format!("lvl{level}"));
             assert_eq!(
                 read_all(&tiff),
                 Samples::U8(pixels.clone()),
@@ -819,7 +822,7 @@ mod tests {
             geographic: true,
             transform: [0.001, 0.0, 10.0, 0.0, -0.001, 45.0],
         };
-        let tiff = write_and_open(
+        let (_dir, tiff) = write_and_open(
             &bytes_of(&v),
             &fmt,
             &georef,
@@ -854,7 +857,7 @@ mod tests {
             geographic: false,
             transform: NORTH_UP,
         };
-        let tiff = write_and_open(&[255u8; 16], &fmt, &georef, &options(Some(255.0)), "nd");
+        let (_dir, tiff) = write_and_open(&[255u8; 16], &fmt, &georef, &options(Some(255.0)), "nd");
         assert_eq!(tiff.nodata(), Some(255.0));
     }
 
@@ -875,7 +878,7 @@ mod tests {
                 geographic: false,
                 transform,
             };
-            let tiff = write_and_open(&[7u8; 25], &fmt, &georef, &options(None), "rot");
+            let (_dir, tiff) = write_and_open(&[7u8; 25], &fmt, &georef, &options(None), "rot");
             assert_eq!(tiff.transform(), Some(transform));
         }
     }
@@ -898,7 +901,7 @@ mod tests {
             geographic: false,
             transform: NORTH_UP,
         };
-        let tiff = write_and_open(&pixels, &fmt, &georef, &options(None), "strips");
+        let (_dir, tiff) = write_and_open(&pixels, &fmt, &georef, &options(None), "strips");
         assert!(!tiff.tiled());
         assert_eq!(read_all(&tiff), Samples::U8(pixels));
     }

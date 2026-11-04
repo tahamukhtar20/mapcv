@@ -7,9 +7,12 @@ few seconds and when the run stops, keeping only the entries of finished chunks.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 import pytest
 
 pytest.importorskip("rasterio", reason="these tests write their rasters with rasterio")
@@ -18,8 +21,15 @@ from test_geotiff_imagery import config_for, make_raster, write_labels
 
 from mapcv import pipeline
 from mapcv.manifest import Manifest
-from mapcv.pipeline import _column_windows, run_generate
+from mapcv.pipeline import (
+    _check_chunk_sizes,
+    _column_windows,
+    _GridBlock,
+    iter_patches,
+    run_generate,
+)
 from mapcv.planning import plan
+from mapcv.sampler import MAX_CHUNK_ANCHORS, TooManyPatchesError
 from mapcv.writers import create_writer
 
 PATCH = 64
@@ -62,32 +72,140 @@ def _windows(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
     return seen
 
 
+def _cols(*values: int) -> npt.NDArray[np.uint64]:
+    return np.array(values, dtype=np.uint64)
+
+
 def test_column_windows_keep_a_small_group_whole() -> None:
-    group = [(row, col) for row in (0, 64) for col in range(0, 1024, 64)]
-    assert _column_windows(group, PATCH, pixel_bytes=3) == [group]
+    assert _column_windows(0, 64, _cols(*range(0, 1024, 64)), PATCH, pixel_bytes=3) is None
 
 
 def test_column_windows_split_a_wide_group_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "_WINDOW_BYTES", 128 * 300 * 3)
-    group = [(row, col) for row in (0, 64) for col in range(0, 1024, 64)]
-    parts = _column_windows(group, PATCH, pixel_bytes=3)
-    assert len(parts) > 1
-    assert sorted(a for part in parts for a in part) == sorted(group)
-    for part in parts:
-        width = max(c for _, c in part) + PATCH - min(c for _, c in part)
-        assert 128 * width * 3 <= pipeline._WINDOW_BYTES
-        # Anchors keep their order inside a part, and parts run left to right.
-        assert part == [a for a in group if a in part]
-    assert [min(c for _, c in p) for p in parts] == sorted(min(c for _, c in p) for p in parts)
+    cols = _cols(*range(0, 1024, 64))
+    keys = _column_windows(0, 64, cols, PATCH, pixel_bytes=3)
+    assert keys is not None and len(set(keys.tolist())) > 1
+    # Windows are numbered left to right, and each stays within the budget.
+    assert keys.tolist() == sorted(keys.tolist())
+    for key in set(keys.tolist()):
+        part = cols[keys == key]
+        assert 128 * (int(part.max()) + PATCH - int(part.min())) * 3 <= pipeline._WINDOW_BYTES
 
 
 def test_column_windows_never_go_below_two_patches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "_WINDOW_BYTES", 1)
-    group = [(0, col) for col in range(0, 512, 32)]
-    parts = _column_windows(group, PATCH, pixel_bytes=3)
-    assert sorted(a for part in parts for a in part) == sorted(group)
-    for part in parts:
-        assert max(c for _, c in part) + PATCH - min(c for _, c in part) <= 2 * PATCH
+    cols = _cols(*range(0, 512, 32))
+    keys = _column_windows(0, 0, cols, PATCH, pixel_bytes=3)
+    assert keys is not None
+    for key in set(keys.tolist()):
+        part = cols[keys == key]
+        assert int(part.max()) + PATCH - int(part.min()) <= 2 * PATCH
+
+
+# ── The compact chunks are the chunks of the anchor lists they replaced ─────────────
+
+
+def _list_windows(group: list[tuple[int, int]], pixel_bytes: int) -> list[list[tuple[int, int]]]:
+    """How mapcv 0.3.0 split a group of anchors into column windows."""
+    rows = max(r for r, _ in group) + PATCH - min(r for r, _ in group)
+    first = min(c for _, c in group)
+    width = max(c for _, c in group) + PATCH - first
+    max_width = pipeline._max_window_width(rows, width, pixel_bytes, PATCH)
+    if max_width >= width:
+        return [group]
+    split: dict[int, list[tuple[int, int]]] = {}
+    for anchor in group:
+        split.setdefault((anchor[1] - first) // (max_width - PATCH), []).append(anchor)
+    return [split[key] for key in sorted(split)]
+
+
+def _list_clusters(group: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """How mapcv 0.3.0 split a group of anchors over an area of interest at column gaps."""
+    columns = sorted({c for _, c in group})
+    cluster_of: dict[int, int] = {}
+    cluster = 0
+    for previous, column in zip([None, *columns], columns):
+        if previous is not None and column - previous > 2 * PATCH:
+            cluster += 1
+        cluster_of[column] = cluster
+    clusters: list[list[tuple[int, int]]] = [[] for _ in range(cluster + 1)]
+    for anchor in group:
+        clusters[cluster_of[anchor[1]]].append(anchor)
+    return clusters
+
+
+def _list_chunks(
+    anchors: list[tuple[int, int]], chunk_rows: int, pixel_bytes: int, aoi: bool
+) -> list[list[tuple[int, int]]]:
+    """The chunks mapcv 0.3.0 read, from the full list of anchors."""
+    if aoi:
+        anchors = [anchor for anchor in anchors if _Strips.inside(*anchor)]
+    grouped: dict[int, list[tuple[int, int]]] = {}
+    for anchor in anchors:
+        grouped.setdefault(anchor[0] // chunk_rows, []).append(anchor)
+    groups = [grouped[key] for key in sorted(grouped)]
+    if aoi:
+        groups = [cluster for group in groups for cluster in _list_clusters(group)]
+    return [part for group in groups for part in _list_windows(group, pixel_bytes)]
+
+
+class _Strips:
+    """An area of interest of three column strips, with every third row left out."""
+
+    @staticmethod
+    def inside(row: int, col: int) -> bool:
+        return row % 3 != 1 and (col < 90 or 400 <= col < 470 or col >= 900)
+
+    def keep_mask(
+        self, rows: npt.NDArray[Any], cols: npt.NDArray[Any], size: int
+    ) -> npt.NDArray[np.bool_]:
+        return np.array([self.inside(int(r), int(c)) for r, c in zip(rows, cols)], dtype=bool)
+
+
+@pytest.mark.parametrize("aoi", [False, True], ids=["whole", "aoi"])
+@pytest.mark.parametrize("budget", [256 * 2**20, 128 * 300 * 3 + 7], ids=["one", "windows"])
+@pytest.mark.parametrize(
+    "sampler",
+    [
+        {"stride": 48, "edge_strategy": "pad"},
+        {"stride": 40, "edge_strategy": "shift"},
+        {"stride": 17, "edge_strategy": "drop"},
+        {"mode": "random", "random_count": 700, "random_seed": 5},
+        {"mode": "random", "random_count": 10**9, "edge_strategy": "drop"},
+    ],
+    ids=["pad", "shift", "drop", "random", "random-all"],
+)
+def test_chunks_hold_the_same_anchors_in_the_same_order(
+    monkeypatch: pytest.MonkeyPatch, sampler: dict[str, Any], budget: int, aoi: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from mapcv.config import MapcvConfig
+    from mapcv.sampler import grid_anchors_for, random_anchors_for
+
+    monkeypatch.setattr(pipeline, "_WINDOW_BYTES", budget)
+    config = MapcvConfig.model_validate(
+        {
+            "region": {"west": 10.0, "south": 50.0, "east": 10.03, "north": 50.03},
+            "imagery": {"type": "xyz", "zoom": 18, "url_template": "http://x/{z}/{x}/{y}.png"},
+            "sampler": {"patch_size": PATCH, **sampler},
+            "writer": {"staging_dir": "out"},
+        }
+    )
+    height, width, chunk_rows = 300, 1_200, 128
+    meta = SimpleNamespace(
+        height=height, width=width, chunk_rows=chunk_rows, bands=[1, 2, 3], dtype="uint8"
+    )
+    source: Any = SimpleNamespace(metadata=meta)
+    with pytest.warns() if sampler.get("random_count") == 10**9 else nullcontext():
+        chunks = pipeline._anchor_groups(config, [source], _Strips() if aoi else None)  # type: ignore[arg-type]
+        if config.sampler.mode == "random":
+            anchors = random_anchors_for(height, width, config.sampler)
+        else:
+            anchors = grid_anchors_for(height, width, config.sampler)
+    expected = _list_chunks(anchors, chunk_rows, 3, aoi)
+    assert len(expected) >= (7 if budget < 2**20 else 2)
+    assert [chunk.anchors() for chunk in chunks] == expected
 
 
 def test_a_wide_raster_is_read_in_bounded_windows_with_the_same_patches(
@@ -211,3 +329,33 @@ def test_the_plan_estimates_memory_for_a_column_window(
     # 192-row windows (128 chunk rows + one patch), 256 instead of ~1,250 columns.
     assert capped * 4 < whole
     assert capped == 192 * 256 * (3 * 2 + 2)
+
+
+def test_a_chunk_over_the_limit_is_refused_with_what_to_change() -> None:
+    def block(rows: int, cols: int) -> _GridBlock:
+        return _GridBlock(np.arange(rows, dtype=np.uint64), np.arange(cols, dtype=np.uint64), 9_000)
+
+    assert MAX_CHUNK_ANCHORS == 3_000_000  # what a whole run held before the limit was raised
+    _check_chunk_sizes([block(1_000, 3_000), block(10, 10)], 1_024)  # exactly at the limit
+    with pytest.raises(TooManyPatchesError) as raised:
+        _check_chunk_sizes([block(10, 10), block(1_024, 7_000)], 1_024)
+    text = str(raised.value)
+    assert "chunk 2 of 2 would read 7,168,000 patches" in text
+    assert "limit of 3,000,000 for one chunk" in text
+    assert "sampler.stride" in text and "chunk_rows" in text
+
+
+def test_a_run_with_a_chunk_over_the_limit_stops_before_reading_or_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _wide_config(tmp_path, stride=48)  # 3 rows x 25 columns = 75 anchors per chunk
+    staging = config.writer.staging_dir
+    monkeypatch.setattr(pipeline, "MAX_CHUNK_ANCHORS", 74)
+    with pytest.raises(TooManyPatchesError, match="chunk 1 of 2 would read 75 patches"):
+        run_generate(config)
+    assert not (staging / "Images").exists() and not (staging / "manifest.json").exists()
+    with pytest.raises(TooManyPatchesError, match="limit of 74 for one chunk"):
+        next(iter_patches(config))
+
+    monkeypatch.setattr(pipeline, "MAX_CHUNK_ANCHORS", 75)
+    assert len(run_generate(config).manifest.patches) == 100  # 75 + 25 anchors

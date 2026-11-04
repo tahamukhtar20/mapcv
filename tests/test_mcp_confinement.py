@@ -76,6 +76,32 @@ def test_split_refuses_a_link_out_of_the_dataset_inside_the_root(tmp_path: Path)
     assert other.read_text() == "OTHER ORIGINAL CONTENT\n"
 
 
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [("stats", {}), ("stats", {"save": True}), ("verify", {}), ("verify", {"write_sums": True})],
+)
+def test_stats_and_verify_refuse_a_link_out_of_the_dataset_inside_the_root(
+    tmp_path: Path, tool: str, args: dict[str, Any]
+) -> None:
+    """A link to another file under the root passes the root's check, not the dataset's."""
+    root = tmp_path / "root"
+    staging = _dataset(root)
+    other = root / "other.png"
+    image = min((staging / "Images").iterdir())
+    other.write_bytes(image.read_bytes())
+    image.unlink()
+    image.symlink_to(other)
+
+    async def scenario(client: Client) -> str:
+        result = await call(client, tool, dataset="dataset", **args)
+        assert result.is_error
+        return text_of(result)
+
+    shown = run_client(root, scenario)
+    assert "Unsafe link" in shown and image.name in shown
+    assert not (staging / "stats.json").exists() and not (staging / "SHA256SUMS").exists()
+
+
 def test_generate_refuses_a_link_out_of_the_staging_dir_inside_the_root(tmp_path: Path) -> None:
     root = tmp_path / "root"
     staging = _dataset(root)

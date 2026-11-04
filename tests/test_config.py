@@ -242,7 +242,9 @@ def test_invalid_region_bounds_raise(tmp_path: Path) -> None:
     ("old", "new", "message"),
     [
         ("  west: 74.20", "  west: -200", "longitude in -180..180"),
-        ("  east: 74.40", "  east: 181", "longitude in -180..180"),
+        ("  east: 74.40", "  east: 361", "longitude in -180..180"),
+        # 74.2..181 in 0..360 longitudes: across 180°.
+        ("  east: 74.40", "  east: 181", "crosses the antimeridian"),
         ("  south: 31.40", "  south: -95", "latitude in -90..90"),
         # Swapped lon/lat: 74.3 is a valid longitude but not a latitude.
         ("  north: 31.60", "  north: 91", "not swapped"),

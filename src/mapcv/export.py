@@ -5,8 +5,9 @@
     Hugging Face Hub and ``datasets.load_dataset("parquet", ...)`` read. Every patch
     file becomes a ``{bytes, path}`` column, exactly as written (PNG/JPEG columns are
     typed as ``datasets.Image``; NPY/GeoTIFF columns hold the file's bytes), with the
-    patch's place (``row``, ``col``, ``crs``, ``transform``) and, for classification,
-    its labels. Needs pyarrow (``pip install "mapcv[export]"``).
+    patch's place (``row``, ``col``, ``crs``, ``transform``), for classification its
+    labels and for detection and instance its ``annotations``: the patch's COCO
+    annotations, as in ``annotations/instances_<split>.json``. Needs pyarrow (``pip install "mapcv[export]"``).
 ``webdataset``, ``zarr``
     Few large files instead of one per patch: see :mod:`mapcv.shards`.
 ``terratorch``
@@ -23,9 +24,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mapcv._confine import check_folder_links
 from mapcv.data import splits_of
 from mapcv.manifest import Manifest, ManifestEntry, require_complete
-from mapcv.shards import export_folder
+from mapcv.shards import check_out, export_folder
 
 FORMATS = ("hf-parquet", "terratorch", "webdataset", "zarr")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
@@ -53,15 +55,33 @@ def _entries_by_split(root: Path, manifest: Manifest) -> dict[str, list[Manifest
     return result
 
 
+def _annotations(root: Path, manifest: Manifest) -> dict[str, list[dict[str, Any]]]:
+    """Each patch's COCO annotations by image name (detection and instance), built from
+    the stored objects like the dataset's COCO files, so a dataset written with
+    ``detection.formats: [yolo]`` has them too."""
+    from mapcv.writers import detection, instance
+    from mapcv.writers.detection import load_objects
+
+    if manifest.task == "instance":
+        document = instance.coco_document(manifest, load_objects(manifest, root, "instances"))
+    else:
+        document = detection.coco_document(manifest, load_objects(manifest, root))
+    names = {image["id"]: image["file_name"] for image in document["images"]}
+    found: dict[str, list[dict[str, Any]]] = {name: [] for name in names.values()}
+    for annotation in document["annotations"]:
+        found[names[annotation["image_id"]]].append(annotation)
+    return found
+
+
 def _stats(root: Path) -> dict[str, Any]:
     path = root / "stats.json"
     if path.exists():
         stats: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         if stats.get("split") in ("train", "all"):
             return stats
-    from mapcv.stats import dataset_stats
+    from mapcv.stats import _dataset_stats
 
-    return dataset_stats(root, "train")
+    return _dataset_stats(root, "train")
 
 
 # ── Hugging Face Parquet ─────────────────────────────────────────────────────
@@ -69,9 +89,14 @@ def _stats(root: Path) -> dict[str, Any]:
 
 def export_hf_parquet(root: Path, out: Path) -> list[Path]:
     """Write ``out/data/<split>-00000-of-00001.parquet`` and ``out/README.md``; returns the
-    Parquet files. ``out`` must not be the dataset folder. It must be a new or empty
+    Parquet files. ``out`` must be outside the dataset folder. It must be a new or empty
     folder, or hold an earlier export of this format, which is replaced whole (no split
-    file of it is left behind); an export that fails part way removes what it wrote."""
+    file of it is left behind); an export that fails part way removes what it wrote.
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -80,8 +105,8 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
             "the hf-parquet export needs pyarrow: pip install 'mapcv[export]'"
         ) from exc
     root, out = root.resolve(), out.resolve()
-    if out == root:
-        raise ValueError("export to a new folder, not the dataset folder itself")
+    check_out(root, out)
+    check_folder_links(root, "the dataset folder")
     manifest = _manifest(root)
     by_split = _entries_by_split(root, manifest)
     keys = list(manifest.patches[0]["files"]) if manifest.patches else []
@@ -120,6 +145,48 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
         fields.append(pa.field("labels", pa.list_(pa.int64())))
         # Class IDs as in the manifest (the card lists their names).
         features["labels"] = {"feature": {"dtype": "int64", "_type": "Value"}, "_type": "Sequence"}
+    objects = _annotations(root, manifest) if manifest.task in ("detection", "instance") else None
+    if objects is not None:
+        # A list of COCO annotations per patch (pixel xywh boxes, class IDs as category_id;
+        # for instance, the mask as compressed RLE).
+        value = {
+            "id": pa.int64(),
+            "image_id": pa.int64(),
+            "category_id": pa.int64(),
+            "bbox": pa.list_(pa.float64(), 4),
+            "area": pa.float64(),
+            "iscrowd": pa.int64(),
+            "truncated": pa.bool_(),
+        }
+        if manifest.task == "instance":
+            value["segmentation"] = pa.struct(
+                [("size", pa.list_(pa.int64(), 2)), ("counts", pa.string())]
+            )
+        fields.append(pa.field("annotations", pa.list_(pa.struct(list(value.items())))))
+        int64 = {"dtype": "int64", "_type": "Value"}
+        feature: dict[str, Any] = {
+            "id": int64,
+            "image_id": int64,
+            "category_id": int64,
+            "bbox": {
+                "feature": {"dtype": "float64", "_type": "Value"},
+                "length": 4,
+                "_type": "Sequence",
+            },
+            "area": {"dtype": "float64", "_type": "Value"},
+            "iscrowd": int64,
+            "truncated": {"dtype": "bool", "_type": "Value"},
+        }
+        if manifest.task == "instance":
+            feature["segmentation"] = {
+                "size": {
+                    "feature": int64,
+                    "length": 2,
+                    "_type": "Sequence",
+                },
+                "counts": {"dtype": "string", "_type": "Value"},
+            }
+        features["annotations"] = [feature]
     schema = pa.schema(
         fields, metadata={"huggingface": json.dumps({"info": {"features": features}})}
     )
@@ -156,6 +223,8 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
                     columns["labels"].append(
                         [int(label) for label in entry["summary"].get("labels") or []]
                     )
+                if objects is not None:
+                    columns["annotations"].append(objects[Path(entry["files"]["image"]).name])
             table = pa.table(columns, schema=schema)
             path = out / "data" / f"{split}-00000-of-00001.parquet"
             pq.write_table(table, path)
@@ -167,9 +236,9 @@ def export_hf_parquet(root: Path, out: Path) -> list[Path]:
 
 
 def _hf_card(root: Path, splits: list[str]) -> str:
-    from mapcv.card import card_text
+    from mapcv.card import _card_text
 
-    card = card_text(root)
+    card = _card_text(root)
     configs = ["configs:", "- config_name: default", "  data_files:"]
     for split in splits:
         configs += [f"  - split: {split}", f"    path: data/{split}-*"]
@@ -186,8 +255,14 @@ def terratorch_config(root: Path, batch_size: int = 8, num_workers: int = 4) -> 
     Raises:
         ValueError: The dataset is not a single-source segmentation or regression
             dataset, or its patches are NPY files (TerraTorch reads them with GDAL).
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
     """
-    root = root.resolve()
+    check_folder_links(root, "the dataset folder")
+    return _terratorch_config(root.resolve(), batch_size, num_workers)
+
+
+def _terratorch_config(root: Path, batch_size: int = 8, num_workers: int = 4) -> str:
     manifest = _manifest(root)
     if manifest.task not in ("segmentation", "regression") or len(manifest.sources) != 1:
         raise ValueError(
@@ -270,7 +345,13 @@ def _round(value: float | None) -> float:
 
 
 def export_terratorch(root: Path, out: Path | None = None) -> Path:
-    """Write :func:`terratorch_config` to ``out`` (default ``<dataset>/terratorch.yaml``)."""
+    """Write :func:`terratorch_config` to ``out`` (default ``<dataset>/terratorch.yaml``).
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
+    check_folder_links(root, "the dataset folder")
     path = out or root / "terratorch.yaml"
-    path.write_text(terratorch_config(root), encoding="utf-8", newline="\n")
+    path.write_text(_terratorch_config(root.resolve()), encoding="utf-8", newline="\n")
     return path

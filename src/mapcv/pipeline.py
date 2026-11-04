@@ -12,8 +12,8 @@ import logging
 import os
 import time
 import warnings
-from collections import Counter, defaultdict
-from collections.abc import Callable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +37,13 @@ from mapcv.imagery import (
 from mapcv.locking import LOCK_FILENAME, StagingDirError, dataset_lock
 from mapcv.manifest import Manifest, SourceRecord, load_or_create_manifest, mapcv_version
 from mapcv.sampler import (
+    MAX_CHUNK_ANCHORS,
     PatchMeta,
     SamplerConfig,
+    TooManyPatchesError,
     check_patch_limit,
-    grid_anchors_for,
-    random_anchors_for,
+    grid_axes_for,
+    random_positions_for,
     sample_annotated_patches,
 )
 from mapcv.splitter import SplitLists, SplitterConfig, split_manifest
@@ -82,19 +84,8 @@ class GenerateResult:
     tiles_cached: int = 0
     # Patches left out of this run because they had no pixel of imagery at all.
     patches_without_imagery: int = 0
-
-
-def _global_anchors(height: int, width: int, config: SamplerConfig) -> list[tuple[int, int]]:
-    if config.mode == "random":
-        return random_anchors_for(height, width, config)
-    return grid_anchors_for(height, width, config)
-
-
-def _group_anchors(anchors: list[tuple[int, int]], chunk_rows: int) -> list[list[tuple[int, int]]]:
-    grouped: defaultdict[int, list[tuple[int, int]]] = defaultdict(list)
-    for anchor in anchors:
-        grouped[anchor[0] // chunk_rows].append(anchor)
-    return [grouped[index] for index in sorted(grouped)]
+    # XYZ tiles the server answered with its "no imagery here" placeholder, left empty.
+    tiles_without_imagery: int = 0
 
 
 # Above this share of failed tiles a run is very likely misconfigured.
@@ -249,44 +240,241 @@ def _max_window_width(rows: int, width: int, pixel_bytes: int, patch_size: int) 
     return max(2 * patch_size, _WINDOW_BYTES // (rows * pixel_bytes))
 
 
+@dataclass(eq=False)
+class _GridBlock:
+    """The anchors of one chunk of a grid: every ``(row, col)`` of ``rows`` x ``cols``,
+    row by row. Held as the two axes until the chunk is read."""
+
+    rows: npt.NDArray[np.uint64]
+    cols: npt.NDArray[np.uint64]
+    width: int
+
+    def __len__(self) -> int:
+        return len(self.rows) * len(self.cols)
+
+    def positions(self) -> npt.NDArray[np.uint64]:
+        """The anchors as ``row * width + col``, in order."""
+        return (self.rows[:, None] * np.uint64(self.width) + self.cols).ravel()
+
+    def bounds(self) -> tuple[int, int]:
+        """The least and the greatest position of the chunk (without building it)."""
+        width = self.width
+        return (
+            int(self.rows.min()) * width + int(self.cols.min()),
+            int(self.rows.max()) * width + int(self.cols.max()),
+        )
+
+    def anchors(self) -> list[tuple[int, int]]:
+        """The anchors as ``(row, col)`` pairs, in order."""
+        cols = self.cols.tolist()
+        return [(row, col) for row in self.rows.tolist() for col in cols]
+
+
+@dataclass(eq=False)
+class _Positions:
+    """The anchors of one chunk as ``row * width + col``, one ``uint64`` each, in order."""
+
+    values: npt.NDArray[np.uint64]
+    width: int
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def positions(self) -> npt.NDArray[np.uint64]:
+        """The anchors as ``row * width + col``, in order."""
+        return self.values
+
+    def bounds(self) -> tuple[int, int]:
+        """The least and the greatest position of the chunk."""
+        return int(self.values.min()), int(self.values.max())
+
+    def anchors(self) -> list[tuple[int, int]]:
+        """The anchors as ``(row, col)`` pairs, in order."""
+        rows, cols = np.divmod(self.values, np.uint64(self.width))
+        return list(zip(rows.tolist(), cols.tolist()))
+
+
+#: The anchors of one chunk, held compactly until it is read.
+_Chunk = _GridBlock | _Positions
+
+
+def _split(values: npt.NDArray[Any], keys: npt.NDArray[Any] | None) -> list[npt.NDArray[Any]]:
+    """``values`` split by ``keys``, in increasing key order, each part keeping its order."""
+    if keys is None or len(values) == 0:
+        return [values]
+    order = np.argsort(keys, kind="stable")
+    ordered = keys[order]
+    bounds = np.flatnonzero(ordered[1:] != ordered[:-1]) + 1
+    return np.split(values[order], bounds)
+
+
 def _column_windows(
-    group: list[tuple[int, int]], patch_size: int, pixel_bytes: int
-) -> list[list[tuple[int, int]]]:
-    """``group`` as it is, or, when its window would pass :data:`_WINDOW_BYTES`, split
-    into column ranges whose windows stay below it (left to right, order kept)."""
-    rows = max(row for row, _ in group) + patch_size - min(row for row, _ in group)
-    first = min(col for _, col in group)
-    width = max(col for _, col in group) + patch_size - first
+    first_row: int, last_row: int, cols: npt.NDArray[np.uint64], patch_size: int, pixel_bytes: int
+) -> npt.NDArray[np.uint64] | None:
+    """The column window each of ``cols`` is read in, numbered left to right, or ``None``
+    when a single window over rows ``first_row`` to ``last_row`` (anchors) holds them all.
+
+    A window whose pixels would pass :data:`_WINDOW_BYTES` is split into column ranges
+    whose windows stay below it."""
+    rows = last_row + patch_size - first_row
+    first = int(cols.min())
+    width = int(cols.max()) + patch_size - first
     max_width = _max_window_width(rows, width, pixel_bytes, patch_size)
     if max_width >= width:
-        return [group]
-    step = max_width - patch_size
-    split: dict[int, list[tuple[int, int]]] = {}
-    for anchor in group:
-        split.setdefault((anchor[1] - first) // step, []).append(anchor)
-    return [split[key] for key in sorted(split)]
+        return None
+    return (cols - np.uint64(first)) // np.uint64(max_width - patch_size)
+
+
+def _position_chunks(
+    values: npt.NDArray[np.uint64], width: int, patch_size: int, pixel_bytes: int, clusters: bool
+) -> Iterator[_Positions]:
+    """The chunks of one row chunk's anchors ``values``: split into column clusters (with
+    ``clusters``, for an area of interest), then into column windows."""
+    parts = [values]
+    if clusters:
+        parts = _split(values, column_clusters(values % np.uint64(width), patch_size))
+    for part in parts:
+        # Positions grow with the row, so the first and last rows come from the extremes.
+        first_row, last_row = int(part.min()) // width, int(part.max()) // width
+        cols = part % np.uint64(width)
+        keys = _column_windows(first_row, last_row, cols, patch_size, pixel_bytes)
+        del cols
+        for each in _split(part, keys):
+            yield _Positions(each, width)
+
+
+def _grid_rows_kept(
+    rows: npt.NDArray[np.uint64],
+    cols: npt.NDArray[np.uint64],
+    width: int,
+    patch_size: int,
+    aoi: AreaOfInterest,
+) -> npt.NDArray[np.uint64]:
+    """The anchors of ``rows`` x ``cols`` over the area of interest, as positions in order.
+
+    Tested a few rows at a time, so a block of the grid is never built whole."""
+    per_batch = max(1, _GRID_BATCH // len(cols))
+    kept = []
+    for start in range(0, len(rows), per_batch):
+        batch = rows[start : start + per_batch]
+        anchor_rows = np.repeat(batch, len(cols))
+        anchor_cols = np.tile(cols, len(batch))
+        mask = aoi.keep_mask(anchor_rows, anchor_cols, patch_size)
+        kept.append(anchor_rows[mask] * np.uint64(width) + anchor_cols[mask])
+    return np.concatenate(kept)
+
+
+# Grid anchors of an area of interest built at a time, before the polygons are applied.
+_GRID_BATCH = 1_000_000
 
 
 def _anchor_groups(
     config: MapcvConfig,
     sources: list[WindowedRasterSource],
     aoi: AreaOfInterest | None,
-) -> list[list[tuple[int, int]]]:
-    """Every patch anchor of the raster, grouped into the chunks they are read in."""
+) -> list[_Chunk]:
+    """Every patch anchor of the raster, in the chunks they are read in.
+
+    Chunks of ``chunk_rows`` rows, top to bottom; with an area of interest only anchors
+    over the polygons, split where they leave wide gaps; and a chunk whose window would
+    pass :data:`_WINDOW_BYTES` split into column windows. Anchors are held compactly: a
+    chunk of the grid as its rows and columns, other anchors as 8 bytes each.
+    """
     meta = sources[0].metadata
-    patch_size = config.sampler.patch_size
-    anchors = _global_anchors(meta.height, meta.width, config.sampler)
-    groups = _group_anchors(anchors, meta.chunk_rows)
-    if aoi is not None:
-        # Only patches over the polygons, read in windows around them.
-        anchors = aoi.keep(anchors, patch_size)
-        groups = [
-            cluster
-            for group in _group_anchors(anchors, meta.chunk_rows)
-            for cluster in column_clusters(group, patch_size)
-        ]
+    sampler = config.sampler
+    patch_size, width, chunk_rows = sampler.patch_size, meta.width, meta.chunk_rows
     pixel_bytes = _pixel_bytes(sources)
-    return [part for group in groups for part in _column_windows(group, patch_size, pixel_bytes)]
+    chunks: list[_Chunk] = []
+    if sampler.mode == "random":
+        positions = random_positions_for(meta.height, width, sampler, chunk_rows)
+        firsts = np.arange(chunk_rows, meta.height, chunk_rows, dtype=np.uint64) * np.uint64(width)
+        # The positions are grouped by chunk, so each chunk's first is found by bisection.
+        for group in np.split(positions, np.searchsorted(positions, firsts)):
+            if len(group) == 0:
+                continue
+            if aoi is not None:
+                rows, cols = np.divmod(group, np.uint64(width))
+                group = group[aoi.keep_mask(rows, cols, patch_size)]
+                if len(group) == 0:
+                    continue
+            chunks.extend(_position_chunks(group, width, patch_size, pixel_bytes, aoi is not None))
+        return chunks
+    rows, cols = grid_axes_for(meta.height, width, sampler)
+    if len(rows) == 0 or len(cols) == 0:
+        return chunks
+    for block_rows in _split(rows, rows // np.uint64(chunk_rows)):
+        if aoi is not None:
+            kept = _grid_rows_kept(block_rows, cols, width, patch_size, aoi)
+            if len(kept):
+                chunks.extend(_position_chunks(kept, width, patch_size, pixel_bytes, True))
+            continue
+        keys = _column_windows(
+            int(block_rows[0]), int(block_rows[-1]), cols, patch_size, pixel_bytes
+        )
+        chunks.extend(_GridBlock(block_rows, part, width) for part in _split(cols, keys))
+    return chunks
+
+
+def _check_chunk_sizes(chunks: list[_Chunk], chunk_rows: int) -> None:
+    """Refuse a run whose chunk would read more than :data:`MAX_CHUNK_ANCHORS` anchors.
+
+    A run may hold up to :data:`~mapcv.sampler.MAX_PATCHES` anchors compactly, but a chunk is
+    read as a list of pairs and its kept patches are stacked into one array, so its memory
+    grows with its anchors (a stride of 1 over a 1,024-row chunk puts millions into one).
+    Checked before anything is read or written."""
+    for index, chunk in enumerate(chunks):
+        if len(chunk) > MAX_CHUNK_ANCHORS:
+            raise TooManyPatchesError(
+                f"chunk {index + 1} of {len(chunks)} would read {len(chunk):,} patches at once, "
+                f"more than the limit of {MAX_CHUNK_ANCHORS:,} for one chunk (a chunk is "
+                f"{chunk_rows:,} rows of the raster). Raise sampler.stride (or patch_size), or "
+                "lower the imagery's chunk_rows (strip_rows for XYZ imagery) so a chunk covers "
+                "fewer rows"
+            )
+
+
+def _completed_positions(
+    patches: Sequence[Mapping[str, Any]], width: int
+) -> npt.NDArray[np.uint64]:
+    """The positions (``row * width + col``) of the written ``patches``, sorted and unique.
+
+    Sorted once here: :func:`_remaining` looks up in it for every chunk.
+    """
+    return np.unique(
+        np.fromiter(
+            (patch["row"] * width + patch["col"] for patch in patches),
+            dtype=np.uint64,
+            count=len(patches),
+        )
+    )
+
+
+def _remaining(chunk: _Chunk, completed: npt.NDArray[np.uint64]) -> _Chunk:
+    """The anchors of ``chunk`` whose position is not in ``completed``, in order.
+
+    ``completed`` must be sorted and unique (:func:`_completed_positions`). Only the part of
+    it inside the chunk's range is searched, by bisection, so the work for a chunk does not
+    grow with the patches already written; a chunk with none in range is not built.
+    """
+    if len(completed) == 0:
+        return chunk
+    low, high = chunk.bounds()
+    start = int(np.searchsorted(completed, np.uint64(low), side="left"))
+    stop = int(np.searchsorted(completed, np.uint64(high), side="right"))
+    if start == stop:
+        return chunk
+    inside = completed[start:stop]
+    positions = chunk.positions()
+    # Looked up in increasing order: unsorted keys (random anchors) bisect all over a large
+    # ``inside``, missing the cache on every step.
+    order = np.argsort(positions, kind="stable")
+    ordered = positions[order]
+    at = np.searchsorted(inside, ordered)
+    done = np.empty(len(positions), dtype=bool)
+    done[order] = inside[np.minimum(at, len(inside) - 1)] == ordered
+    if not done.any():
+        return chunk
+    return _Positions(positions[~done], chunk.width)
 
 
 @dataclass
@@ -362,9 +550,11 @@ def iter_patches(config: ConfigLike) -> Iterator[Patch]:
         source = opened[0]
         target.prepare(source.metadata)
         crs = source.metadata.crs
-        for group in _anchor_groups(config, opened, _area_of_interest(config, source)):
+        groups = _anchor_groups(config, opened, _area_of_interest(config, source))
+        _check_chunk_sizes(groups, source.metadata.chunk_rows)
+        for group in groups:
             images, annotations, metadata, other_patches, _ = _process_anchor_chunk(
-                source, group, config.sampler, target, others
+                source, group.anchors(), config.sampler, target, others
             )
             for index, item in enumerate(metadata):
                 yield Patch(
@@ -548,7 +738,13 @@ def _generate_locked(
             for name, each in zip(names, opened)
             if (files := getattr(each, "file_locations", None))
         }
-        manifest = load_or_create_manifest(manifest_path, expected, locations)
+        # A mosaic reads only the files its region overlaps; only these are hashed.
+        reads = {
+            name: keys
+            for name, each in zip(names, opened)
+            if (keys := getattr(each, "files_read", None)) is not None
+        }
+        manifest = load_or_create_manifest(manifest_path, expected, locations, reads)
         # Whether the dataset on disk was finished (None: a manifest from before mapcv 0.3).
         was_complete = manifest.complete if manifest_path.exists() else False
         broken = _first_broken_patch(staging, manifest)
@@ -567,13 +763,15 @@ def _generate_locked(
         resumed_patches = len(manifest.patches)
         patch_size = config.sampler.patch_size
         groups = _anchor_groups(config, opened, aoi)
-        completed_anchors = {(patch["row"], patch["col"]) for patch in manifest.patches}
+        _check_chunk_sizes(groups, source.metadata.chunk_rows)
+        width = source.metadata.width
+        completed = _completed_positions(manifest.patches, width)
         # Number chunks over the whole raster so a resumed run records the same
         # chunk index for each patch as an uninterrupted one.
         chunks = []
         for chunk_index, group in enumerate(groups):
-            remaining = [anchor for anchor in group if anchor not in completed_anchors]
-            if remaining:
+            remaining = _remaining(group, completed)
+            if len(remaining):
                 chunks.append((chunk_index, remaining))
         to_go = sum(len(group) for _, group in chunks)
         _log.debug(
@@ -607,8 +805,9 @@ def _generate_locked(
         saved = time.monotonic()
         complete = len(manifest.patches)  # entries of fully finished chunks
         try:
-            for done, (chunk_index, chunk_anchors) in enumerate(chunks, start=1):
+            for done, (chunk_index, chunk) in enumerate(chunks, start=1):
                 chunk_started = time.perf_counter()
+                chunk_anchors = chunk.anchors()
                 images, per_patch, metadata, other_patches, window = _process_anchor_chunk(
                     source, chunk_anchors, config.sampler, target, others, counts
                 )
@@ -660,6 +859,14 @@ def _generate_locked(
         requested = sum(int(getattr(each, "tiles_requested", 0)) for each in opened)
         failed = sum(int(getattr(each, "tiles_failed", 0)) for each in opened)
         cached = sum(int(getattr(each, "tiles_cached", 0)) for each in opened)
+        placeholders = sum(int(getattr(each, "tiles_without_imagery", 0)) for each in opened)
+        if placeholders:
+            _log.info(
+                '%s had no imagery (the server sent its "no data" placeholder) and %s left '
+                "empty; a lower imagery.zoom may have imagery there.",
+                _tiles(placeholders),
+                "was" if placeholders == 1 else "were",
+            )
         reasons = "; ".join(
             text for each in opened if (text := str(getattr(each, "failure_reasons", "") or ""))
         )
@@ -702,6 +909,7 @@ def _generate_locked(
             seconds=time.monotonic() - started,
             tiles_cached=cached,
             patches_without_imagery=counts["no_imagery"],
+            tiles_without_imagery=placeholders,
         )
 
     split_counts: dict[str, int] | None = None
@@ -748,6 +956,7 @@ def _generate_locked(
         seconds=time.monotonic() - started,
         tiles_cached=cached,
         patches_without_imagery=counts["no_imagery"],
+        tiles_without_imagery=placeholders,
     )
 
 

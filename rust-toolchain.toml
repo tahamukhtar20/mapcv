@@ -2,6 +2,6 @@
 # CI without a code change; Dependabot proposes upgrades. CI, the release builds
 # (maturin-action) and local cargo all read this file.
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
 profile = "minimal"

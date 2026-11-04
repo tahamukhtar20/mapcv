@@ -7,6 +7,9 @@ tiles the same bytes as one generated from the whole raster.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +148,46 @@ def test_a_dataset_from_tiles_equals_one_from_the_whole_raster(tmp_path: Path) -
             ).read_bytes()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="sets RLIMIT_NOFILE, which is POSIX")
+def test_a_mosaic_of_more_files_than_the_open_file_limit(tmp_path: Path) -> None:
+    # 100 tiles under a limit of 64 open files: the readers must not hold one each.
+    raster = make_raster(tmp_path, width=640, height=512, count=3)
+    _cut(raster.path, tmp_path / "tiles", 10, 10)
+    region = raster.region()
+    labels = write_labels(tmp_path, region)
+    whole = config_for(tmp_path, {"path": str(raster.path)}, region, labels=labels, staging="a")
+    tiles = config_for(
+        tmp_path,
+        {"path": str(tmp_path / "tiles" / "*.tif")},
+        region,
+        labels=labels,
+        staging="b",
+    )
+    run_generate(whole)
+    code = f"""
+        import resource
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        from mapcv.config import MapcvConfig
+        from mapcv.pipeline import run_generate
+        run_generate(MapcvConfig.model_validate_json({tiles.model_dump_json()!r}))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    for folder in ("Images", "Masks"):
+        names = sorted(p.name for p in (tmp_path / "a" / folder).iterdir())
+        assert names and names == sorted(p.name for p in (tmp_path / "b" / folder).iterdir())
+        for name in names:
+            assert (tmp_path / "a" / folder / name).read_bytes() == (
+                tmp_path / "b" / folder / name
+            ).read_bytes()
+
+
 def _retag(path: Path, **changes: Any) -> None:
     """Rewrite a tile with another transform, CRS or dtype."""
     with rasterio.open(path) as src:
@@ -187,6 +230,73 @@ def test_files_that_do_not_fit_together_are_refused(
     if change == "nodata":  # one NoData value for all files makes it acceptable
         fixed = GeoTiffImageryConfig(path=str(tmp_path / "tiles" / "*.tif"), nodata=7)
         assert isinstance(open_geotiff_source(_region(raster), fixed), GeoTiffMosaicSource)
+
+
+def _jitter(path: Path, scale: float, shift_px: float) -> None:
+    """Scale a tile's pixel size by ``1 + scale`` and move its origin by ``shift_px``."""
+    with rasterio.open(path) as src:
+        t = src.transform
+    _retag(
+        path,
+        transform=Affine(
+            t.a * (1 + scale), 0, t.c + shift_px * t.a, 0, t.e * (1 + scale), t.f + shift_px * t.e
+        ),
+    )
+
+
+def test_rounding_noise_in_the_georeferencing_of_real_tiles_is_accepted(
+    tmp_path: Path,
+) -> None:
+    # Like the SpaceNet 2 chips: WGS-84 tiles of 2.7e-6 degree pixels whose pixel sizes
+    # differ by ~1e-8 relative and whose origins are ~1e-5 px off one grid.
+    raster = make_raster(tmp_path, epsg=4326, pixel=2.7e-6, width=640, height=512)
+    region = raster.region()
+    labels = write_labels(tmp_path, region)
+    _cut(raster.path, tmp_path / "exact", 2, 3)
+    noisy = _cut(raster.path, tmp_path / "noisy", 2, 3)
+    noise = [(0.0, 0.0), (1e-8, 1e-5), (-1e-8, -1e-5), (5.7e-9, 4e-6), (-3e-9, 2e-5), (8e-9, -2e-5)]
+    for path, (scale, shift) in zip(noisy, noise):
+        _jitter(path, scale, shift)
+    # Noise in the first tile, whose grid the mosaic takes, too.
+    _jitter(noisy[0], 7e-9, -8e-6)
+    for folder in ("exact", "noisy"):
+        run_generate(
+            config_for(
+                tmp_path,
+                {"path": str(tmp_path / folder / "*.tif")},
+                region,
+                labels=labels,
+                staging=f"out_{folder}",
+            )
+        )
+    for folder in ("Images", "Masks"):
+        exact = sorted((tmp_path / "out_exact" / folder).iterdir())
+        assert exact
+        assert [p.name for p in exact] == sorted(
+            p.name for p in (tmp_path / "out_noisy" / folder).iterdir()
+        )
+        for path in exact:
+            assert path.read_bytes() == (tmp_path / "out_noisy" / folder / path.name).read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("scale", "shift", "message"),
+    [
+        (0.0, 0.1, r"not on the same pixel grid .*offset by \+0\.100"),
+        (0.0, 2e-3, "not on the same pixel grid"),
+        (1e-4, 0.0, "resample the files to one pixel size"),
+        (1e-5, 0.0, "resample the files to one pixel size"),
+    ],
+)
+def test_tiles_genuinely_off_the_grid_are_still_refused(
+    tmp_path: Path, scale: float, shift: float, message: str
+) -> None:
+    raster = make_raster(tmp_path, epsg=4326, pixel=2.7e-6, width=640, height=512)
+    tiles = _cut(raster.path, tmp_path / "tiles", 1, 2)
+    _jitter(tiles[1], scale, shift)
+    config = GeoTiffImageryConfig(path=str(tmp_path / "tiles" / "*.tif"))
+    with pytest.raises(ValueError, match=message):
+        open_geotiff_source(_region(raster), config)
 
 
 def test_patterns_need_local_files_that_exist(tmp_path: Path) -> None:

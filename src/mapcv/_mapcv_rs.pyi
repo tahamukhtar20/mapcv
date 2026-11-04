@@ -32,10 +32,12 @@ __all__ = [
     "decode_tile_window",
     "fetch_tiles",
     "grid_anchor_count",
+    "grid_axis_anchors",
     "grid_sample_anchors",
     "kml_fields",
     "parse_kml",
     "random_anchor_capacity",
+    "random_anchor_positions",
     "random_sample_anchors",
     "rasterize",
     "set_public_only",
@@ -181,6 +183,18 @@ def random_sample_anchors(
 def random_anchor_capacity(
     height: int, width: int, patch_size: int, edge_strategy: str = "pad"
 ) -> int: ...
+def grid_axis_anchors(
+    dim: int, patch_size: int, stride: int, edge_strategy: str = "pad"
+) -> npt.NDArray[np.uint64]: ...
+def random_anchor_positions(
+    height: int,
+    width: int,
+    patch_size: int,
+    count: int,
+    seed: int,
+    edge_strategy: str,
+    chunk_rows: int,
+) -> npt.NDArray[np.uint64]: ...
 def rasterize(
     polygons: Sequence[tuple[Sequence[Sequence[tuple[float, float]]], int]],
     height: int,
@@ -212,6 +226,7 @@ def write_patches(
     image_format: str = "png",
     jpg_quality: int = 95,
     jpg_subsampling: str = "4:2:0",
+    mask_compression: str = "default",
 ) -> list[tuple[str, str | None, int, int, bool, int, list[tuple[int, int]], float]]: ...
 def write_geotiffs(
     data: npt.NDArray[np.uint8],

@@ -46,13 +46,15 @@ In a script or CI (no terminal), it refuses with exit code 2 instead:
 This is a large job. Re-run with --yes to confirm.
 ```
 
-A job with more than **3,000,000** patches is not a large job but a refused one: every patch position is held in memory during a run, so `generate` stops before it starts, and `plan` lists the same problem under its warnings (and ends with exit code 1, without the `Looks right?` line):
+A job with more than **50,000,000** patch positions is not a large job but a refused one: every position is held in memory during a run (about 400 MB at the limit, under 1 GB while random positions are drawn), so `generate` stops before it starts, and `plan` lists the same problem under its warnings (and ends with exit code 1, without the `Looks right?` line):
 
 ```text
-This config cannot be built: the grid has 8,960 x 5,888 = 52,756,480 patches, more than the limit of 3,000,000 for one run. Raise sampler.stride (or patch_size), shrink the region or split it into several smaller ones.
+This config cannot be built: the grid has 8,960 x 5,888 = 52,756,480 patches, more than the limit of 50,000,000 for one run. Raise sampler.stride (or patch_size), shrink the region or split it into several smaller ones.
 ```
 
 A stride of 1 on a region of a few square kilometres gives tens of millions of positions; there is one position per stride in each direction, so doubling the stride divides the count by four. `plan` itself counts patches per axis and never builds them, so it answers at once for any region.
+
+The limit covers the positions, not the patches you write. Each written patch is an entry in the manifest: about 1 KB of memory for a segmentation patch (more with more files or classes), and about 200 bytes of `manifest.json`, which is rewritten every 10 seconds. A run that writes tens of millions of patches needs tens of GB, so a run near the limit is practical when filters (`max_empty_ratio`, `min_label_ratio`, `region.path`) drop most positions; otherwise split the job into several runs. A chunk also reads at most 3,000,000 positions at once (a stride of 1 over a 1,024-row chunk can pass that); `generate` stops before it reads anything and says to raise the stride or lower `chunk_rows`.
 
 Pass `--yes` (`-y`) once you have read the plan. In a log, progress is a plain line per tenth of the chunks (`Reading imagery and writing patches: 40/400 chunks (10%), 3m 12s`) instead of a bar; add `-q` to drop it too: `mapcv -q generate big.yaml --yes`.
 
@@ -131,7 +133,8 @@ A resume is refused, **before** any imagery is read or written, if the existing 
 | `labels` | any other `labels` setting, the **contents** of the label file (a SHA-256 hash is recorded), or adding or removing `labels` |
 | `source_type`, `product_id`, `bands`, `dtype` | the imagery type, `source`, the product, or `bands` |
 | `imagery file, URL template or read settings` | the imagery file itself (a GeoTIFF's size and a hash of its first and last 64 KiB, or a remote file's `ETag`, size and first 64 KiB; every file of a mosaic), a custom `url_template` (another layer, year, style or key on the same host), `overview`, `nodata`, the STAC item, `scl_mask`, or the Earth Engine image and rendering |
-| `imagery file modification time` | a local GeoTIFF's modification time: the file was edited in place (which can keep its size and both ends), re-exported, or copied without its times. Copy with `cp -p` or `rsync -a` to keep them. When the content is unchanged, the message names the recorded time and the command that restores it (`touch -d '2026-10-08T09:14:03.123456789Z' file.tif` on Linux and macOS, a `LastWriteTimeUtc` assignment on Windows); run it and generate again. For a mosaic, only the files whose time changed are named |
+| `imagery file content` | a local GeoTIFF whose modification time changed and whose content no longer matches the SHA-256 recorded when the dataset was made: the file was edited in place (which can keep its size and both ends) or re-exported. A file whose time alone changed (copied without its times, checked out again from git-LFS or DVC, `touch`ed) is hashed and resumes; a run that writes patches records its new time. The first `generate` reads each file it hashes once more: a single GeoTIFF in full, however small the region, and of a mosaic only the files the region overlaps |
+| `imagery file modification time` | a local GeoTIFF's modification time, in a dataset made before mapcv 0.3.1 (which records no SHA-256 of the file to check the content with), or of a mosaic file outside the region (never read, so not hashed). Copy with `cp -p` or `rsync -a` to keep times. When the content is unchanged, the message names the recorded time and the command that restores it (`touch -d '2026-10-08T09:14:03.123456789Z' file.tif` on Linux and macOS, a `LastWriteTimeUtc` assignment on Windows); run it and generate again. For a mosaic, only the files whose time changed are named |
 | `sources` | the names of the imagery sources, or their number |
 | `patch_shape` | `sampler.patch_size`, `bands`, `image_format` between NPY/TIF and PNG/JPG |
 | `crs`, `transform` | `region` (if it snaps to a different tile/pixel grid), `zoom`, `resolution` |

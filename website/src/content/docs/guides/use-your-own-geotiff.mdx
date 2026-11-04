@@ -154,7 +154,7 @@ imagery:
   path: ortho/tiles/*.tif       # or ortho/**/*.tif to include subfolders
 ```
 
-`mapcv plan` shows the pattern and how many files it matched (`*.tif (24 files)`). The files have to be pieces of one grid: the same CRS, data type, band count, NoData value, pixel size, and pixel corners that line up. Otherwise the error names the file and what differs. Where tiles overlap, the first file in sorted path order that has data at a pixel wins, and a pixel that is NoData in one file is taken from the next. Gaps between tiles are empty, like the area outside a single file. Patches cut from a mosaic are byte-identical to patches cut from the same raster as one file.
+`mapcv plan` shows the pattern and how many files it matched (`*.tif (24 files)`). The files have to be pieces of one grid: the same CRS, data type, band count, NoData value, pixel size, and pixel corners that line up. Rounding noise in the georeferencing (pixel sizes that differ by about 1e-8 of their size, corners 1e-5 px off) is fine as long as no pixel moves by more than 0.001 px; the [configuration reference](/mapcv/reference/configuration/#geotiff-and-cloud-optimized-geotiff-type-geotiff) has the exact rule. Otherwise the error names the file and what differs. Where tiles overlap, the first file in sorted path order that has data at a pixel wins, and a pixel that is NoData in one file is taken from the next. Gaps between tiles are empty, like the area outside a single file. Patches cut from a mosaic are byte-identical to patches cut from the same raster as one file.
 
 Patterns work for local files only; a remote COG is always one URL. Files on different grids (another CRS or resolution) have to be warped onto one grid first, for example with `gdalwarp`.
 

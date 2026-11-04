@@ -49,7 +49,7 @@ from typer.core import TyperGroup
 
 import mapcv
 from mapcv import doctor
-from mapcv._confine import LinkEscapeError, check_folder_links, check_inside
+from mapcv._confine import LinkEscapeError, check_inside
 from mapcv._inputs import check_regular_file
 from mapcv._mapcv_rs import kml_fields as _kml_fields
 from mapcv._redact import REDACTOR, RedactingFormatter
@@ -64,6 +64,7 @@ from mapcv.config import (
     RasterLabelsConfig,
     StacCogImageryConfig,
     eopf_local_path,
+    region_longitudes,
 )
 from mapcv.labels import (
     MAX_CLASS_ID,
@@ -1080,9 +1081,14 @@ def _print_result(result: GenerateResult) -> None:
         table.add_row("Shape", escape(f"{shape} {source.dtype or ''}".strip()))
     if result.tiles_requested or result.tiles_cached:
         cached = f" · {result.tiles_cached:,} from the cache" if result.tiles_cached else ""
+        empty = (
+            f" · {result.tiles_without_imagery:,} without imagery"
+            if result.tiles_without_imagery
+            else ""
+        )
         table.add_row(
             "Tiles",
-            f"{result.tiles_requested:,} fetched{cached} · {result.tiles_failed:,} failed",
+            f"{result.tiles_requested:,} fetched{cached} · {result.tiles_failed:,} failed{empty}",
         )
     if result.split_counts is not None:
         table.add_row("Splits", _split_line(result.split_counts))
@@ -1702,6 +1708,12 @@ def _ask_bbox_or_file(
         except ValueError:
             _console.print("[red]Enter four numbers like[/red] 74.30,31.48,74.34,31.52")
             continue
+        if -90 <= south < north <= 90:
+            try:
+                west, east = region_longitudes(west, east)
+            except ValueError as exc:
+                _console.print(f"[red]{escape(str(exc))}[/red]")
+                continue
         if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
             _console.print("[red]Expected west < east and south < north, in lon/lat degrees.[/red]")
             if -90 <= west < east <= 90 and -180 <= south < north <= 180:
@@ -2486,11 +2498,11 @@ def _fit_title(text: str) -> str:
     return text if len(text) <= room else "…" + text[-(room - 1) :]
 
 
-def _require_dataset(staging_dir: Path, files: bool = True) -> None:
+def _require_dataset(staging_dir: Path) -> None:
     """Exit with the same message from every dataset command when there is no dataset.
 
-    A command that reads or writes the dataset's ``files`` also refuses a folder holding
-    a link that leaves it (a downloaded dataset may carry one).
+    The library functions behind the commands refuse a folder holding a link that leaves
+    it (a downloaded dataset may carry one), so the folder is walked only once.
     """
     manifest = staging_dir / "manifest.json"
     if staging_dir.is_file():
@@ -2505,17 +2517,6 @@ def _require_dataset(staging_dir: Path, files: bool = True) -> None:
             "Pass the dataset folder that [bold]mapcv generate[/bold] wrote "
             "(the config's writer.staging_dir).",
         )
-    if files:
-        _check_links(staging_dir, "the dataset folder")
-
-
-def _check_links(folder: Path, what: str) -> None:
-    """Exit if a link below ``folder`` would let mapcv read or write outside it."""
-    try:
-        check_folder_links(folder, what)
-    except LinkEscapeError as exc:
-        _debug_traceback(exc)
-        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -2632,7 +2633,7 @@ def info(
     ),
 ) -> None:
     """Summarize a generated dataset: source, shapes, class balance and splits."""
-    _require_dataset(staging_dir, files=False)
+    _require_dataset(staging_dir)
     split_lists = [staging_dir / "splits" / f"{name}.txt" for name in ("train", "val", "test")]
     try:
         # Only the files info reads, so it stays quick on a dataset of millions of patches.
@@ -2762,8 +2763,7 @@ def split(
         _debug_traceback(exc)
         option, message = _validation_items(exc, options=True)[0]
         raise typer.BadParameter(message, param_hint=f"'{option}'") from None
-    # run_split refuses a link out of the dataset itself.
-    _require_dataset(staging_dir, files=False)
+    _require_dataset(staging_dir)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -2826,6 +2826,9 @@ def stats(
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             path, values = write_stats(staging_dir, split_name)
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         _debug_traceback(exc)
         _fail(f"[red]Cannot compute the statistics:[/red] {escape(str(exc))}")
@@ -2872,6 +2875,9 @@ def card(
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             path = write_card(staging_dir, overwrite=force)
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
     except FileExistsError as exc:
         _debug_traceback(exc)
         _fail(f"[red]{escape(str(exc))}[/red]")
@@ -2908,10 +2914,14 @@ def verify(
     ),
 ) -> None:
     """Check that every file is present and intact (and SHA256SUMS, when there is one)."""
-    from mapcv.verify import CHECKSUMS_FILENAME, verify_dataset, write_checksums
+    from mapcv.verify import CHECKSUMS_FILENAME, _write_checksums, verify_dataset
 
     _require_dataset(staging_dir)
-    report = verify_dataset(staging_dir, deep=deep)
+    try:
+        report = verify_dataset(staging_dir, deep=deep)
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
     for note in report.notes:
         _console.print(f"[yellow]⚠[/yellow]  {escape(note)}")
     if write_checksums_ and report.only_rewritten:
@@ -2951,7 +2961,8 @@ def verify(
     )
     if write_checksums_:
         try:
-            path = write_checksums(staging_dir)
+            # verify_dataset checked the folder's links already.
+            path = _write_checksums(staging_dir)
         except OSError as exc:
             _debug_traceback(exc)
             _fail(f"[red]Cannot write {CHECKSUMS_FILENAME}:[/red] {escape(str(exc))}")
@@ -3105,6 +3116,9 @@ def export(
                 f"TerraTorch data config written to [bold]{escape(str(path))}[/bold]; "
                 "paste it into your training config."
             )
+    except LinkEscapeError as exc:
+        _debug_traceback(exc)
+        _fail(f"[red]Unsafe link:[/red] {escape(str(exc))}")
     except (OSError, ValueError, RuntimeError) as exc:
         _debug_traceback(exc)
         _fail(f"[red]Cannot export the dataset:[/red] {escape(str(exc))}")

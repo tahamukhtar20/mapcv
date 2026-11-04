@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mapcv._confine import check_folder_links
 from mapcv.manifest import Manifest, SourceRecord, warn_if_incomplete
 from mapcv.stats import STATS_FILENAME
 
@@ -109,7 +110,17 @@ def _split_counts(staging_dir: Path) -> dict[str, int]:
 
 
 def card_text(staging_dir: Path) -> str:
-    """The card of the dataset in ``staging_dir`` (see the module docs)."""
+    """The card of the dataset in ``staging_dir`` (see the module docs).
+
+    Raises:
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
+    """
+    check_folder_links(staging_dir, "the dataset folder")
+    return _card_text(staging_dir)
+
+
+def _card_text(staging_dir: Path) -> str:
     manifest = Manifest.load(staging_dir / "manifest.json")
     warn_if_incomplete(manifest, "the card describes only the patches written so far")
     stats: dict[str, Any] = {}
@@ -235,9 +246,12 @@ def write_card(staging_dir: Path, overwrite: bool = False) -> Path:
 
     Raises:
         FileExistsError: ``README.md`` exists and ``overwrite`` is false.
+        LinkEscapeError: The folder holds a symbolic link that resolves outside it. A
+            ``ValueError``.
     """
+    check_folder_links(staging_dir, "the dataset folder")
     path = staging_dir / CARD_FILENAME
     if path.exists() and not overwrite:
         raise FileExistsError(f"{path} exists; pass --force to replace it")
-    path.write_text(card_text(staging_dir), encoding="utf-8", newline="\n")
+    path.write_text(_card_text(staging_dir), encoding="utf-8", newline="\n")
     return path

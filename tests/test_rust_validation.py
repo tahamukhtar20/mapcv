@@ -22,8 +22,10 @@ from mapcv._mapcv_rs import (
     TileIndex,
     bounds,
     fetch_tiles,
+    grid_axis_anchors,
     grid_sample_anchors,
     parse_kml,
+    random_anchor_positions,
     random_sample_anchors,
     rasterize,
     stitch_tiles,
@@ -305,15 +307,24 @@ def test_anchors_reject_unknown_edge_strategy(strategy: str) -> None:
 
 
 def test_anchors_reject_unallocatable_requests() -> None:
-    with pytest.raises(ValueError, match="more than the limit of 3000000"):
+    with pytest.raises(ValueError, match="more than the limit of 50000000"):
         grid_sample_anchors(2**63, 2**63, 1, 1, "pad")
     # A count beyond the raster's capacity is capped to it (not an allocation request),
     # so only a raster with too many positions to hold can fail.
     assert len(random_sample_anchors(10, 10, 4, U64_MAX, 42, "pad")) == 49
-    with pytest.raises(ValueError, match="more than the limit of 3000000"):
+    with pytest.raises(ValueError, match="more than the limit of 50000000"):
         random_sample_anchors(2**30, 2**30, 1, U64_MAX, 42, "pad")
     with pytest.raises(ValueError, match="too large"):
         random_sample_anchors(U64_MAX, U64_MAX, 1, 1, 42, "pad")
+    # The compact forms a run holds check the same limits.
+    with pytest.raises(ValueError, match="more than the limit of 50000000"):
+        grid_axis_anchors(2**63, 1, 1, "pad")
+    with pytest.raises(ValueError, match="more than the limit of 50000000"):
+        random_anchor_positions(2**30, 2**30, 1, U64_MAX, 42, "pad", 1024)
+    with pytest.raises(ValueError, match="too large"):
+        random_anchor_positions(2**33, 2**33, 1, 1, 42, "pad", 1024)
+    with pytest.raises(ValueError, match="chunk_rows must be > 0"):
+        random_anchor_positions(10, 10, 4, 3, 42, "pad", 0)
 
 
 def test_anchors_with_huge_stride_do_not_overflow() -> None:

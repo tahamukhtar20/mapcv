@@ -85,7 +85,7 @@ from mapcv.splitter import SplitterConfig
 from mapcv.stac import local_paths_checked
 from mapcv.stats import dataset_stats, write_stats
 from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
-from mapcv.verify import verify_dataset, write_checksums
+from mapcv.verify import _write_checksums, verify_dataset
 from mapcv.writer import WriterConfig
 from mapcv.writers.detection import categories
 
@@ -1329,7 +1329,12 @@ def inspect_labels(
     if scan.bounds is not None:
         west, south, east, north = scan.bounds
         extent = {"west": west, "south": south, "east": east, "north": north}
-        if not (-180 <= west and east <= 180 and -90 <= south and north <= 90):
+        if 180 < east <= 360 and 0 <= west and -90 <= south and north <= 90:
+            notes.append(
+                "The longitudes are 0..360 rather than -180..180; mapcv moves features east "
+                "of 180° by -360°, so give the region in either convention."
+            )
+        elif not (-180 <= west and east <= 180 and -90 <= south and north <= 90):
             notes.append(
                 "The coordinates are outside longitude/latitude ranges: the file is probably "
                 "projected. mapcv reads labels as WGS-84 lon/lat; reproject it to EPSG:4326."
@@ -1704,6 +1709,7 @@ def _generate_result(
         "new_patches": result.new_patches,
         "tiles_requested": result.tiles_requested,
         "tiles_failed": result.tiles_failed,
+        "tiles_without_imagery": result.tiles_without_imagery,
         "splits": result.split_counts,
         "seconds": round(result.seconds, 1),
         "files": files,
@@ -1967,6 +1973,8 @@ def stats(state: ToolState, dataset: str, split: str = "train", save: bool = Fal
                 path, values = write_stats(folder, split)
             else:
                 path, values = None, dataset_stats(folder, split)
+    except LinkEscapeError as exc:
+        raise ToolFailure(f"Unsafe link: {exc}") from None
     except (OSError, ValueError) as exc:  # ManifestMismatchError is a ValueError
         raise ToolFailure(f"Cannot compute the statistics: {exc}") from None
     notes = _warning_texts(caught)
@@ -1997,16 +2005,20 @@ def verify(
     if write_sums:
         sandbox.require_write("verify with write_sums=true")
     folder, _ = _checked_dataset(state, dataset)
-    report = verify_dataset(folder, deep=deep)
-    written: str | None = None
-    if write_sums and (report.ok or report.only_rewritten):
-        # Files that split, stats and card rewrite are recorded with their new hashes.
-        try:
-            written = sandbox.rel(write_checksums(folder))
-        except OSError as exc:
-            raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
-        if not report.ok:
-            report = verify_dataset(folder, deep=deep)
+    try:
+        report = verify_dataset(folder, deep=deep)
+        written: str | None = None
+        if write_sums and (report.ok or report.only_rewritten):
+            # Files that split, stats and card rewrite are recorded with their new hashes;
+            # verify_dataset checked the folder's links already.
+            try:
+                written = sandbox.rel(_write_checksums(folder))
+            except OSError as exc:
+                raise ToolFailure(f"Cannot write SHA256SUMS: {exc}") from None
+            if not report.ok:
+                report = verify_dataset(folder, deep=deep)
+    except LinkEscapeError as exc:
+        raise ToolFailure(f"Unsafe link: {exc}") from None
     out = {
         "dataset": sandbox.rel(folder),
         "ok": report.ok,

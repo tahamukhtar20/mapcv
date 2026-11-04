@@ -104,11 +104,11 @@ Code that mapcv derived from other projects is acknowledged in
 - rayon-core 1.13.0: MIT OR Apache-2.0
 - reqwest 0.13.5: MIT OR Apache-2.0
 - rustc-hash 2.1.2: Apache-2.0 OR MIT
-- rustls 0.23.45: Apache-2.0 OR ISC OR MIT
+- rustls 0.23.46: Apache-2.0 OR ISC OR MIT
 - rustls-native-certs 0.8.4: Apache-2.0 OR ISC OR MIT
 - rustls-pki-types 1.14.1: MIT OR Apache-2.0
 - rustls-platform-verifier 0.7.1: MIT OR Apache-2.0
-- rustls-webpki 0.103.15: ISC
+- rustls-webpki 0.103.16: ISC
 - schannel 0.1.29: MIT
 - security-framework 3.7.0: MIT OR Apache-2.0
 - security-framework-sys 2.17.0: MIT OR Apache-2.0
@@ -123,7 +123,7 @@ Code that mapcv derived from other projects is acknowledged in
 - sync_wrapper 1.0.2: Apache-2.0
 - synstructure 0.13.2: MIT
 - tinystr 0.8.3: Unicode-3.0
-- tokio 1.53.2: MIT
+- tokio 1.54.1: MIT
 - tokio-rustls 0.26.4: MIT OR Apache-2.0
 - tower 0.5.3: MIT
 - tower-http 0.6.8: MIT
@@ -150,9 +150,9 @@ Code that mapcv derived from other projects is acknowledged in
 - zerotrie 0.2.4: Unicode-3.0
 - zerovec 0.11.6: Unicode-3.0
 - zerovec-derive 0.11.3: Unicode-3.0
-- zstd 0.14.0: BSD-3-Clause
-- zstd-safe 8.0.0: BSD-3-Clause
-- zstd-sys 2.1.0+zstd.1.5.7: BSD-3-Clause
+- zstd 0.14.3: BSD-3-Clause
+- zstd-safe 8.2.0: BSD-3-Clause
+- zstd-sys 2.1.2+zstd.1.5.7: BSD-3-Clause
 - zune-core 0.5.3: MIT OR Apache-2.0 OR Zlib
 - zune-jpeg 0.5.15: MIT OR Apache-2.0 OR Zlib
 
@@ -871,7 +871,7 @@ pub(crate) static GB18030_2022_OVERRIDE_BYTES: [[u8; 2]; 18] = [
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Used by: zstd-safe 8.0.0, zstd-sys 2.1.0+zstd.1.5.7, zstd 0.14.0
+Used by: zstd-safe 8.2.0, zstd-sys 2.1.2+zstd.1.5.7, zstd 0.14.3
 
 ``````text
 BSD 3-Clause License
@@ -907,7 +907,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Used by: zstd-sys 2.1.0+zstd.1.5.7
+Used by: zstd-sys 2.1.2+zstd.1.5.7
 
 ``````text
 BSD License
@@ -1016,7 +1016,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### BSD 3-Clause "New" or "Revised" License
 
-Used by: zstd-sys 2.1.0+zstd.1.5.7
+Used by: zstd-sys 2.1.2+zstd.1.5.7
 
 ``````text
 The auto-generated bindings are under the 3-clause BSD license:
@@ -1123,7 +1123,7 @@ Used by: untrusted 0.9.0
 
 ### ISC License
 
-Used by: rustls-webpki 0.103.15
+Used by: rustls-webpki 0.103.16
 
 ``````text
 Except as otherwise noted, this project is licensed under the following
@@ -1806,7 +1806,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-Used by: hyper-rustls 0.27.9, rustls-native-certs 0.8.4, rustls 0.23.45
+Used by: hyper-rustls 0.27.9, rustls-native-certs 0.8.4, rustls 0.23.46
 
 ``````text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -2677,7 +2677,7 @@ SOFTWARE.
 
 ### MIT License
 
-Used by: tokio 1.53.2
+Used by: tokio 1.54.1
 
 ``````text
 MIT License

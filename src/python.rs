@@ -14,8 +14,8 @@ use crate::{
 };
 use numpy::ndarray::{Dimension, Ix3, Ix4};
 use numpy::{
-    IntoPyArray, PyArray, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray, PyUntypedArray,
-    PyUntypedArrayMethods,
+    IntoPyArray, PyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray,
+    PyUntypedArray, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -414,6 +414,56 @@ fn random_sample_anchors(
         .map_err(PyValueError::new_err)
 }
 
+/// The grid anchor positions along one axis of `dim` pixels, as a `uint64` array.
+///
+/// The rows of `grid_sample_anchors` are this along the height, its columns this along
+/// the width; every pair of the two is an anchor.
+#[pyfunction]
+#[pyo3(signature = (dim, patch_size, stride, edge_strategy = "pad"))]
+fn grid_axis_anchors(
+    py: Python,
+    dim: usize,
+    patch_size: usize,
+    stride: usize,
+    edge_strategy: &str,
+) -> PyResult<Py<PyArray1<u64>>> {
+    let positions = sampler::grid_axis(dim, patch_size, stride, edge_strategy)
+        .map_err(PyValueError::new_err)?;
+    Ok(positions.into_pyarray(py).unbind())
+}
+
+/// The anchors of `random_sample_anchors` as `row * width + col` in a `uint64` array,
+/// grouped by the chunk of `chunk_rows` rows they fall in (top to bottom, each chunk in
+/// the sampled order).
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (height, width, patch_size, count, seed, edge_strategy, chunk_rows))]
+fn random_anchor_positions(
+    py: Python,
+    height: usize,
+    width: usize,
+    patch_size: usize,
+    count: usize,
+    seed: u64,
+    edge_strategy: &str,
+    chunk_rows: usize,
+) -> PyResult<Py<PyArray1<u64>>> {
+    let positions = py
+        .detach(|| {
+            sampler::random_positions(
+                height,
+                width,
+                patch_size,
+                count,
+                seed,
+                edge_strategy,
+                chunk_rows,
+            )
+        })
+        .map_err(PyValueError::new_err)?;
+    Ok(positions.into_pyarray(py).unbind())
+}
+
 /// Number of distinct anchors `random_sample_anchors` can return.
 #[pyfunction]
 #[pyo3(signature = (height, width, patch_size, edge_strategy = "pad"))]
@@ -473,7 +523,9 @@ fn rasterize(
 /// `mask_patches`  is an optional C-contiguous `(N, ps, ps)` uint8 array.
 /// `meta`          is a list of `(row, col, padded)` tuples, one per patch.
 /// `image_format`  is `"png"` or `"jpg"`; `jpg_quality` is in `1..=100`;
-/// `jpg_subsampling` is `"4:2:0"` or `"4:4:4"` (JPEG only).
+/// `jpg_subsampling` is `"4:2:0"` or `"4:4:4"` (JPEG only); `mask_compression` is
+/// `"default"` or `"fast"`, the masks' encoding before mapcv 0.3.1 (kept when resuming
+/// a dataset whose masks have it).
 ///
 /// Returns a list of `(filename, mask_filename, row, col, padded, strip_index,
 /// class_counts, empty_ratio)` in patch order. `class_counts` is a list of
@@ -489,7 +541,7 @@ fn rasterize(
     clippy::type_complexity
 )]
 #[pyfunction]
-#[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95, jpg_subsampling="4:2:0"))]
+#[pyo3(signature = (image_patches, mask_patches, meta, start_idx, strip_index, images_dir, masks_dir, image_format="png", jpg_quality=95, jpg_subsampling="4:2:0", mask_compression="default"))]
 fn write_patches<'py>(
     py: Python<'py>,
     image_patches: &Bound<'py, PyAny>,
@@ -502,6 +554,7 @@ fn write_patches<'py>(
     image_format: &str,
     jpg_quality: u8,
     jpg_subsampling: &str,
+    mask_compression: &str,
 ) -> PyResult<
     Vec<(
         String,
@@ -550,6 +603,7 @@ fn write_patches<'py>(
     }
     patch_writer::check_format(image_format, jpg_quality, jpg_subsampling)
         .map_err(PyValueError::new_err)?;
+    patch_writer::mask_png(mask_compression).map_err(PyValueError::new_err)?;
     if start_idx.checked_add(n_patches).is_none() {
         return Err(PyValueError::new_err(format!(
             "start_idx {start_idx} + {n_patches} patches overflows the patch index"
@@ -574,6 +628,7 @@ fn write_patches<'py>(
     let masks_path = std::path::PathBuf::from(masks_dir);
     let fmt = image_format.to_owned();
     let subsampling = jpg_subsampling.to_owned();
+    let mask_compression = mask_compression.to_owned();
 
     let results = py
         .detach(|| {
@@ -591,6 +646,7 @@ fn write_patches<'py>(
                 &fmt,
                 jpg_quality,
                 &subsampling,
+                &mask_compression,
             )
         })
         .map_err(PyRuntimeError::new_err)?;
@@ -975,6 +1031,8 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(grid_anchor_count, m)?)?;
     m.add_function(wrap_pyfunction!(random_sample_anchors, m)?)?;
     m.add_function(wrap_pyfunction!(random_anchor_capacity, m)?)?;
+    m.add_function(wrap_pyfunction!(grid_axis_anchors, m)?)?;
+    m.add_function(wrap_pyfunction!(random_anchor_positions, m)?)?;
     m.add_function(wrap_pyfunction!(stitch_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(tile_transform, m)?)?;
     m.add_function(wrap_pyfunction!(tile_decoder::decode_tile_window, m)?)?;

@@ -137,7 +137,8 @@ fn check_buffers(
 ///
 /// Files are named `patch_{global_idx:07}.{ext}` where `global_idx = start_idx + local_i`.
 /// Masks are always written as PNG regardless of `image_format`.
-/// `jpg_subsampling` (`"4:2:0"` or `"4:4:4"`) only affects JPEG output.
+/// `jpg_subsampling` (`"4:2:0"` or `"4:4:4"`) only affects JPEG output, and
+/// `mask_compression` (see [`mask_png`]) only the masks.
 /// Existing files are overwritten: the caller indexes from the manifest length, so any file
 /// at these indices is an orphan from an interrupted run, never a recorded patch.
 #[allow(clippy::too_many_arguments)]
@@ -155,9 +156,11 @@ pub fn write_patches(
     image_format: &str,
     jpg_quality: u8,
     jpg_subsampling: &str,
+    mask_compression: &str,
 ) -> Result<Vec<PatchResult>, String> {
     check_format(image_format, jpg_quality, jpg_subsampling)?;
     let subsampling = Subsampling::parse(jpg_subsampling)?;
+    let mask_settings = mask_png(mask_compression)?;
     check_buffers(
         image_data.len(),
         has_mask.then_some(mask_data.len()),
@@ -195,7 +198,7 @@ pub fn write_patches(
                 let msk_path: PathBuf = masks_dir.join(&msk_fname);
                 let msk_slice =
                     &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
-                encode_mask(msk_slice, patch_size, &msk_path)?;
+                encode_mask(msk_slice, patch_size, mask_settings, &msk_path)?;
                 Some(msk_fname)
             } else {
                 None
@@ -251,27 +254,64 @@ fn encode_image(
             .map_err(|e| e.to_string())?;
         std::fs::write(path, &out).map_err(|e| e.to_string())?;
     } else {
-        write_png(data, ps, ExtendedColorType::Rgb8, path)?;
+        write_png(data, ps, ExtendedColorType::Rgb8, IMAGE_PNG, path)?;
     }
     Ok(())
+}
+
+/// PNG settings for RGB images: fast deflate, with the Sub filter for photographic rows.
+const IMAGE_PNG: (CompressionType, FilterType) = (CompressionType::Fast, FilterType::Sub);
+
+/// PNG settings for label masks: zlib's default level (6) with no filter. Masks are long
+/// runs of a few values, which the fast deflate codes poorly and which a filter only
+/// breaks up into edge bytes: this writes them at a quarter to 40 % of the fast Sub
+/// encoding's size, no larger than Pillow's masks from the Python writer.
+const MASK_PNG: (CompressionType, FilterType) = (CompressionType::Default, FilterType::NoFilter);
+
+/// The PNG settings for masks named by `mask_compression`: `"default"` ([`MASK_PNG`]) or
+/// `"fast"`, the images' settings, which mapcv 0.3.0 and earlier used for masks too. A
+/// resumed dataset keeps the encoding its masks already have, so it stays byte for byte
+/// what an uninterrupted run would have written.
+///
+/// # Errors
+/// Returns a message naming the unsupported value.
+pub fn mask_png(mask_compression: &str) -> Result<(CompressionType, FilterType), String> {
+    match mask_compression {
+        "default" => Ok(MASK_PNG),
+        "fast" => Ok(IMAGE_PNG),
+        other => Err(format!(
+            "mask_compression must be 'default' or 'fast', got '{other}'"
+        )),
+    }
 }
 
 /// Encode *data* as a PNG straight from the borrowed pixels (no copy into an image
 /// buffer) in memory, then write it once, so a failed write is reported (a dropped
 /// `BufWriter` would lose the error of its last flush).
-fn write_png(data: &[u8], side: u32, color: ExtendedColorType, path: &Path) -> Result<(), String> {
+fn write_png(
+    data: &[u8],
+    side: u32,
+    color: ExtendedColorType,
+    (compression, filter): (CompressionType, FilterType),
+    path: &Path,
+) -> Result<(), String> {
     let mut out = Vec::with_capacity(data.len() / 2);
-    PngEncoder::new_with_quality(&mut out, CompressionType::Fast, FilterType::Sub)
+    PngEncoder::new_with_quality(&mut out, compression, filter)
         .write_image(data, side, side, color)
         .map_err(|e| e.to_string())?;
     std::fs::write(path, &out).map_err(|e| e.to_string())
 }
 
 /// Encode *data* (raw single-channel u8 bytes) as a lossless PNG and write to *path*.
-fn encode_mask(data: &[u8], patch_size: usize, path: &Path) -> Result<(), String> {
+fn encode_mask(
+    data: &[u8],
+    patch_size: usize,
+    settings: (CompressionType, FilterType),
+    path: &Path,
+) -> Result<(), String> {
     let ps = u32::try_from(patch_size)
         .map_err(|_| format!("patch size {patch_size} is too large to encode"))?;
-    write_png(data, ps, ExtendedColorType::L8, path)
+    write_png(data, ps, ExtendedColorType::L8, settings, path)
 }
 
 /// Count pixels by class label in *mask*.
@@ -342,6 +382,7 @@ mod tests {
             "png",
             95,
             "4:2:0",
+            "default",
         )
         .err()
         .unwrap_or_default()
@@ -366,6 +407,38 @@ mod tests {
         assert!(check_format("jpg", 1, "4:4:4").is_ok());
         assert!(check_format("jpg", 95, "4:2:2").is_err());
         assert!(check_format("jpg", 95, "420").is_err());
+    }
+
+    #[test]
+    fn mask_compression_names_the_mask_encoding() {
+        assert_eq!(
+            mask_png("default").unwrap(),
+            (CompressionType::Default, FilterType::NoFilter)
+        );
+        assert_eq!(mask_png("fast").unwrap(), IMAGE_PNG);
+        let err = mask_png("best").unwrap_err();
+        assert!(err.contains("'default' or 'fast'"), "{err}");
+        let image = [0u8; 4 * 4 * 3];
+        let dir = std::env::temp_dir();
+        let err = write_patches(
+            &image,
+            &[0u8; 4 * 4],
+            true,
+            1,
+            4,
+            &[(0, 0, false)],
+            0,
+            0,
+            &dir,
+            &dir,
+            "png",
+            95,
+            "4:2:0",
+            "Fast",
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(err.contains("mask_compression"), "{err}");
     }
 
     /// A smooth gradient with a hard diagonal edge, `ps x ps` RGB.
@@ -404,6 +477,7 @@ mod tests {
                 "jpg",
                 95,
                 sub,
+                "default",
             )
             .unwrap();
             // `image` decodes with zune-jpeg, which misreads streams that use one scan per

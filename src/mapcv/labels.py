@@ -9,7 +9,9 @@ import json
 import math
 import re
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from math import pi
 from pathlib import Path
@@ -18,7 +20,8 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 import shapely
-from shapely.geometry import MultiPolygon, shape
+import shapely.affinity
+from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, shape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry.base import BaseGeometry
 
@@ -39,10 +42,14 @@ _LINE_TYPES = frozenset({"LineString", "MultiLineString", "LinearRing"})
 BufferDistances = tuple[float | None, float | None]
 
 
+def _utm_zone(lon: float) -> int:
+    """The number (1-60) of the UTM zone holding a longitude."""
+    return min(60, max(1, int((lon + 180.0) // 6.0) + 1))
+
+
 def _utm_epsg(lon: float, lat: float) -> int:
     """The WGS-84 UTM zone (EPSG code) holding a lon/lat position."""
-    zone = min(60, max(1, int((lon + 180.0) // 6.0) + 1))
-    return (32600 if lat >= 0.0 else 32700) + zone
+    return (32600 if lat >= 0.0 else 32700) + _utm_zone(lon)
 
 
 @lru_cache(maxsize=128)
@@ -71,25 +78,56 @@ def _buffer_in_zone(geometry: BaseGeometry, distance: float) -> BaseGeometry:
     return shapely.transform(projected.buffer(distance, quad_segs=8), project(to_lonlat))
 
 
+def _zone_pieces(part: BaseGeometry) -> list[tuple[int, BaseGeometry]]:
+    """``part`` with the UTM zone (EPSG code) to buffer it in, cut at the zone edges when
+    it crosses them: a line from 0 to 30 degrees east becomes five lines, one per zone."""
+    west, south, east, north = part.bounds
+    first, last = _utm_zone(west), _utm_zone(east)
+    if first == last:
+        centroid = part.centroid
+        return [(_utm_epsg(centroid.x, centroid.y), part)]
+    pieces: list[tuple[int, BaseGeometry]] = []
+    for zone in range(first, last + 1):
+        zone_west = -180.0 + 6.0 * (zone - 1)
+        # Zones 1 and 60 also take what lies beyond +/-180 degrees, as _utm_zone does.
+        strip_west = min(west, zone_west) if zone == 1 else zone_west
+        strip_east = max(east, zone_west + 6.0) if zone == 60 else zone_west + 6.0
+        # Not clip_by_rect: it drops a segment lying exactly on the strip's edge from both
+        # strips. Intersection keeps it in both, and the union of the buffers merges them.
+        strip = shapely.intersection(
+            part, shapely.box(strip_west, south - 1.0, strip_east, north + 1.0)
+        )
+        for piece in shapely.get_parts(strip):
+            # A line only touching the strip's edge meets it in a point; the next strip has it.
+            if piece.geom_type == "LineString" and not piece.is_empty:
+                lat = piece.centroid.y
+                pieces.append((_utm_epsg(zone_west + 3.0, lat), piece))
+    return pieces
+
+
 def buffer_metres(geometry: BaseGeometry, distance: float) -> BaseGeometry:
     """``geometry`` (WGS-84 lon/lat) buffered by ``distance`` metres on the ground.
 
     The buffer is made in the UTM zone of the geometry's centroid, where a metre is a
-    metre to within 0.1%, and the polygon is brought back to lon/lat. The parts of a
-    multi-part geometry that lie in different zones are each buffered in their own zone
-    (one zone for a feature with parts far apart would stretch the distance by a lot),
-    and the buffers are merged.
+    metre to within 0.1%, and the polygon is brought back to lon/lat. A feature that
+    spans several zones is buffered piece by piece, each in its own zone (one zone for a
+    long line or for parts far apart would stretch the distance by a lot), and the
+    buffers are merged: the parts of a multi-part geometry are grouped by zone, and a
+    line that crosses a zone edge is cut there. A point is always in one zone.
     """
-    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else []
-    if len(parts) > 1:
-        zones: dict[int, list[BaseGeometry]] = {}
-        for part in parts:
-            if not part.is_empty:
-                centroid = part.centroid
-                zones.setdefault(_utm_epsg(centroid.x, centroid.y), []).append(part)
-        if len(zones) > 1:
-            kind = type(geometry)
-            buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+    parts = list(geometry.geoms) if geometry.geom_type.startswith("Multi") else [geometry]
+    zones: dict[int, list[BaseGeometry]] = {}
+    for part in parts:
+        if not part.is_empty:
+            for epsg, piece in _zone_pieces(part):
+                zones.setdefault(epsg, []).append(piece)
+    if len(zones) > 1:
+        kind = MultiPoint if geometry.geom_type in _POINT_TYPES else MultiLineString
+        buffers = [_buffer_in_zone(kind(group), distance) for group in zones.values()]
+        # A buffer reaching over +/-180 degrees comes back wrapped and invalid, and cannot be
+        # merged. If any zone's buffer is invalid, the whole feature (every part of a
+        # multi-part one too) is buffered in one zone, as before.
+        if all(buffer.is_valid for buffer in buffers):
             return shapely.union_all(buffers)
     return _buffer_in_zone(geometry, distance)
 
@@ -256,12 +294,18 @@ def _warn_skipped(
     non_polygon: int,
     points: bool = False,
     invalid: int = 0,
+    unplaced: int = 0,
 ) -> None:
     reasons = []
     if invalid:
         reasons.append(
             f"{invalid} with invalid coordinates (not a finite number, or a latitude beyond "
             "±90: the file must hold longitude, latitude)"
+        )
+    if unplaced:
+        reasons.append(
+            f"{unplaced} in 0..360° longitudes that cross both 0° and 180°, so where they "
+            "lie cannot be told (give them in -180..180, cut at 180°)"
         )
     if non_polygon:
         kinds = "lines" if points else "points/lines"
@@ -284,12 +328,13 @@ def _with_class_ids(
     points: bool = False,
     invalid: int = 0,
     max_classes: int | None = MAX_CLASS_ID,
+    unplaced: int = 0,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     ids, class_map = assign_class_ids(labels, label_field, classes, max_classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
-    _warn_skipped(source, unlabeled, unmapped, non_polygon, points, invalid)
+    _warn_skipped(source, unlabeled, unmapped, non_polygon, points, invalid, unplaced)
     return result, class_map
 
 
@@ -305,6 +350,107 @@ def _invalid_coordinates(geometries: Sequence[BaseGeometry | None]) -> set[int]:
     coords, owner = shapely.get_coordinates(array, return_index=True)
     bad_vertex = ~np.isfinite(coords).all(axis=1) | (np.abs(coords[:, 1]) > 90.0)
     return set(np.unique(owner[bad_vertex]).tolist())
+
+
+#: Set by :func:`count_moved_longitudes`: the readers add how many features they moved
+#: out of 0..360° longitudes.
+_moved_longitudes: ContextVar[list[int] | None] = ContextVar("_moved_longitudes", default=None)
+
+
+@contextmanager
+def count_moved_longitudes() -> Iterator[list[int]]:
+    """A list to which the vector readers called in the block append how many features
+    of a file they moved out of 0..360° longitudes (see :func:`_wrap_longitudes`)."""
+    moved: list[int] = []
+    token = _moved_longitudes.set(moved)
+    try:
+        yield moved
+    finally:
+        _moved_longitudes.reset(token)
+
+
+def _longitude_paths(geometry: BaseGeometry) -> Iterator[npt.NDArray[np.float64]]:
+    """The longitudes of each ring and line of ``geometry``, in vertex order."""
+    if isinstance(geometry, ShapelyPolygon):
+        for ring in (geometry.exterior, *geometry.interiors):
+            yield shapely.get_coordinates(ring)[:, 0]
+    elif hasattr(geometry, "geoms"):
+        for part in geometry.geoms:
+            yield from _longitude_paths(part)
+    elif geometry.geom_type in ("LineString", "LinearRing"):
+        yield shapely.get_coordinates(geometry)[:, 0]
+
+
+def _jumps_across_0(geometry: BaseGeometry) -> bool:
+    """Whether an edge of ``geometry`` (in 0..360 longitudes) spans more than 180°: the
+    short way between its ends crosses 0°, as at 355° -> 5°. An edge of exactly 360°
+    (0° -> 360°) goes round the globe instead, as a band given as 0..360 does."""
+    for longitudes in _longitude_paths(geometry):
+        steps = np.abs(np.diff(longitudes))
+        if np.any((steps > 180.0) & (steps < 360.0)):
+            return True
+    return False
+
+
+def _east_of_180_moved(coords: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """``coords`` (x, y rows) with the longitudes east of 180° moved by -360°."""
+    moved = coords.copy()
+    moved[:, 0] = np.where(coords[:, 0] > 180.0, coords[:, 0] - 360.0, coords[:, 0])
+    return moved
+
+
+def _wrap_longitudes(
+    geometries: Sequence[BaseGeometry | None],
+) -> tuple[list[BaseGeometry | None], int]:
+    """``geometries`` with 0..360° longitudes (common in climate and ocean data) moved
+    into -180..180, and how many could not be placed.
+
+    Only a geometry with a vertex east of 180° and every vertex at 0..360 changes:
+
+    * one that lies at 180..360 is moved by -360°;
+    * one whose edges cross 0° (an edge spans more than 180°, as 355° -> 5° does) is a
+      feature around 0°: its vertices east of 180° are moved by -360°, so 355..5 becomes
+      the 10° wide -5..5 rather than a band 350° wide;
+    * one that crosses 180° is cut there and its eastern part moved, so it becomes a
+      multi-part geometry on both sides of the antimeridian.
+
+    A geometry that crosses both 0° and 180° cannot be placed: it becomes ``None`` and
+    is counted. Every other geometry is returned as it is (the same object).
+    """
+    result = list(geometries)
+    present = [index for index, geometry in enumerate(geometries) if geometry is not None]
+    if not present:
+        return result, 0
+    array = np.empty(len(present), dtype=object)
+    array[:] = [geometries[index] for index in present]
+    bounds = shapely.bounds(array)
+    with np.errstate(invalid="ignore"):
+        wrapped = (bounds[:, 2] > 180.0) & (bounds[:, 0] >= 0.0) & (bounds[:, 2] <= 360.0)
+    moved_count = unplaced = 0
+    for position in np.flatnonzero(wrapped).tolist():
+        geometry = array[position]
+        west, south, east, north = bounds[position]
+        moved: BaseGeometry | None
+        if west >= 180.0:
+            moved = shapely.affinity.translate(geometry, xoff=-360.0)
+        elif _jumps_across_0(geometry):
+            moved = shapely.transform(geometry, _east_of_180_moved)
+            if _jumps_across_0(moved):
+                # It crosses 180° too: there is no telling how far it reaches.
+                moved = None
+                unplaced += 1
+        else:
+            # Cutting needs a valid geometry (a self-intersecting ring would raise).
+            geometry = shapely.make_valid(geometry)
+            west_part = geometry.intersection(shapely.box(west, south, 180.0, north))
+            east_part = geometry.intersection(shapely.box(180.0, south, east, north))
+            moved = shapely.union(west_part, shapely.affinity.translate(east_part, xoff=-360.0))
+        moved_count += moved is not None
+        result[present[position]] = moved
+    counter = _moved_longitudes.get()
+    if counter is not None and moved_count:
+        counter.append(moved_count)
+    return result, unplaced
 
 
 def _drop_invalid(
@@ -458,6 +604,10 @@ def parse_kml(
                 + " KML labels are read from <ExtendedData> <Data name=...> or <SimpleData "
                 "name=...> fields, not from the placemark's <name>."
             )
+    wrapped, unplaced = _wrap_longitudes(geometries)
+    placed = [index for index, geometry in enumerate(wrapped) if geometry is not None]
+    geometries = [cast(BaseGeometry, wrapped[index]) for index in placed]
+    labels = [labels[index] for index in placed]
     geometries, labels, invalid = _drop_invalid(geometries, labels)
     return _with_class_ids(
         "KML",
@@ -468,6 +618,7 @@ def parse_kml(
         non_polygon,
         invalid=invalid,
         max_classes=max_classes,
+        unplaced=unplaced,
     )
 
 
@@ -675,6 +826,7 @@ def _polygon_features(
     kept: list[BaseGeometry] = []
     labels: list[str | None] = []
     non_polygon = 0
+    geometries, unplaced = _wrap_longitudes(geometries)
     invalid = _invalid_coordinates(geometries)
     for index, parsed in enumerate(geometries):
         if parsed is None:
@@ -697,7 +849,16 @@ def _polygon_features(
         kept.append(geom)
         labels.append(_normalize_label(raw_labels[index]) if label_field else None)
     return _with_class_ids(
-        source, kept, labels, label_field, classes, non_polygon, points, len(invalid), max_classes
+        source,
+        kept,
+        labels,
+        label_field,
+        classes,
+        non_polygon,
+        points,
+        len(invalid),
+        max_classes,
+        unplaced,
     )
 
 

@@ -49,7 +49,7 @@ from mapcv.config import (
     _validate_eopf_path,
     eopf_local_path,
 )
-from mapcv.downloader import resolve_url_template
+from mapcv.downloader import is_placeholder_tile, resolve_url_template
 from mapcv.geotiff import GeoTiff
 from mapcv.tile_cache import CacheHeaders, TileCache
 
@@ -443,6 +443,8 @@ class XYZRasterSource:
         self.tiles_requested = 0
         self.tiles_cached = 0
         self.tiles_failed = 0
+        # Tiles the server answered with its "no imagery here" placeholder: left empty.
+        self.tiles_without_imagery = 0
         self.failure_causes: Counter[str] = Counter()
         self.failure_example: str | None = None
 
@@ -594,7 +596,11 @@ class XYZRasterSource:
         if cache is not None:
             for x, y in missing:
                 cached = cache.get(x, y, self._zoom)
-                if cached is not None:
+                if cached is not None and is_placeholder_tile(cached):
+                    # Cached by an earlier mapcv: drop it, and it is fetched (and left
+                    # empty) below.
+                    cache.discard(x, y, self._zoom)
+                elif cached is not None:
                     self._tiles[(x, y)] = cached
             hits = sum(1 for key in missing if key in self._tiles)
             self.tiles_cached += hits
@@ -624,6 +630,11 @@ class XYZRasterSource:
         if example and self.failure_example is None:
             self.failure_example = example
         for tile, payload, headers in results:
+            if is_placeholder_tile(payload):
+                # No imagery here: the tile stays empty (NoData), as a failed one does,
+                # and is not cached.
+                self.tiles_without_imagery += 1
+                continue
             self._tiles[(tile.x, tile.y)] = payload
             # Black fills of failed tiles have no headers and are never cached; the others
             # are once they have decoded.
@@ -1015,8 +1026,9 @@ def geotiff_fingerprint(location: str, *, trust_host: bool = True) -> dict[str, 
     last 64 KiB (where the TIFF headers and, for non-COG files, the directory live). The
     modification time catches pixels edited in place, which leave the size and both ends
     unchanged; hashing the whole file would cost a full read of every file on every run.
-    A copy that does not keep modification times (``cp`` without ``-p``) therefore counts
-    as another file, which refuses a resume rather than mixing two versions.
+    The manifest also records the SHA-256 of each whole file the run reads once, so a
+    resume whose files only have new modification times (``cp`` without ``-p``) hashes
+    those files and refuses other content rather than mixing two versions.
     URLs: the URL (credentials are rejected up front, so it is safe to record) plus the
     ``ETag``, total size and SHA-256 of the first 64 KiB, taken from one ranged request.
     Nothing reads the whole file, whatever its size.
@@ -1345,14 +1357,19 @@ class GeoTiffRasterSource:
         """Nothing to release: the reader holds no open handles between reads."""
 
 
-# Mosaic files must share their pixel size to this relative tolerance, and their grids
-# must line up to this fraction of a pixel.
-_MOSAIC_SCALE_TOLERANCE = 1e-9
-_MOSAIC_ALIGN_TOLERANCE_PX = 1e-6
+# How far, in pixels, a mosaic file's pixels may sit from the first file's grid. Real tile
+# sets carry rounding noise in their georeferencing (pixel sizes ~1e-8 apart, origins ~1e-5
+# px off), which is accepted; a file this close is placed on the grid exactly.
+_MOSAIC_ALIGN_TOLERANCE_PX = 1e-3
 
 
-def _same_size(first: float, second: float) -> bool:
-    return abs(first - second) <= _MOSAIC_SCALE_TOLERANCE * abs(second)
+def _same_size(size: float, reference: float, pixels: int) -> bool:
+    """Whether ``pixels`` pixels of ``size`` span the same distance as of ``reference``.
+
+    The difference adds up across a file, so the last of its pixels may drift at most
+    the alignment tolerance from where the reference pixel size puts it.
+    """
+    return abs(size - reference) * max(pixels, 1) <= _MOSAIC_ALIGN_TOLERANCE_PX * abs(reference)
 
 
 class GeoTiffMosaicSource:
@@ -1425,19 +1442,24 @@ class GeoTiffMosaicSource:
         a, b, c, d, e, f = transforms[0]
         offsets = []
         full_a, _, _, _, full_e, _ = self._tifs[0].info.transform or (0.0,) * 6
-        for (ta, tb, tc, td, te, tf), name, tif in zip(transforms, names, self._tifs):
+        for (ta, tb, tc, td, te, tf), name, tif, (file_h, file_w) in zip(
+            transforms, names, self._tifs, sizes
+        ):
             if tb or td or b or d:
                 raise ValueError(
                     f"imagery.path: '{name}' is rotated; a mosaic needs north-up files"
                 )
             file_a, _, _, _, file_e, _ = tif.info.transform or (0.0,) * 6
-            if not (_same_size(file_a, full_a) and _same_size(file_e, full_e)):
+            if not (
+                _same_size(file_a, full_a, tif.info.width)
+                and _same_size(file_e, full_e, tif.info.height)
+            ):
                 raise ValueError(
                     f"imagery.path: '{name}' has pixel size {file_a} x {-file_e} but "
                     f"'{names[0]}' has {full_a} x {-full_e}; resample the files to one pixel "
                     "size first"
                 )
-            if not (_same_size(ta, a) and _same_size(te, e)):
+            if not (_same_size(ta, a, file_w) and _same_size(te, e, file_h)):
                 # Same pixels, but the overviews were not built on a common grid (a file
                 # whose size is not a multiple of the overview factor is rounded).
                 raise ValueError(
@@ -1520,7 +1542,14 @@ class GeoTiffMosaicSource:
         ]
         self._dtype = np.dtype(reference.dtype)
         _log.debug("GeoTIFF mosaic of %d file(s), %dx%d px in %s", len(files), width, height, crs)
-        self.file_locations = {name: str(path) for name, path in zip(names, files)}
+        # Where each file of the fingerprint is, by its position there (names can repeat
+        # across folders), and the files the region's window overlaps: only these are read.
+        self.file_locations = {str(index): str(path) for index, path in enumerate(files)}
+        self.files_read = frozenset(
+            str(index)
+            for index, (f_r0, f_r1, f_c0, f_c1) in enumerate(self._places)
+            if f_r0 < row1 and row0 < f_r1 and f_c0 < col1 and col0 < f_c1
+        )
         self.metadata = RasterMetadata(
             source_type="geotiff",
             product_id=f"{pattern} ({len(files)} files)",

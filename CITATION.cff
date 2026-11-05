@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Mukhtar
     given-names: Muhammad Taha
-version: 0.3.0
-date-released: "2026-10-14"
+version: 0.3.1
+date-released: "2026-11-05"
 doi: 10.5281/zenodo.23149438
 identifiers:
   - type: doi

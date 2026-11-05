@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-11-05
+
+mapcv 0.3.1 updates dependencies with security fixes and fixes problems found with large mosaics, longitudes, exports and resuming. Datasets made by 0.3.0 keep working and resume as before. New datasets can differ from 0.3.0 in the ways listed under "Changes to new datasets"; see [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md).
+
+### Security
+
+- **Pillow:** Python 3.11 and newer now require Pillow 13.0 or later, which fixes known vulnerabilities, some of them critical, in earlier versions. Upgrading mapcv upgrades an older installed Pillow.
+- **Python 3.10 stays exposed:** Pillow 13 needs Python 3.11, so on Python 3.10 mapcv requires Pillow 12.3, which has no fix for these vulnerabilities. Use Python 3.11 or newer, especially if you read images from sources you don't trust.
+- **Rust dependencies in the wheels:** rustls 0.23.46, rustls-webpki 0.103.16, webpki-root-certs 1.0.11, tokio 1.54.1 and zstd 0.14.3, for RUSTSEC-2026-0346, -0347, -0348, -0349, -0382, -0383, -0391, -0398, -0403 and -0410, and an I/O-safety problem in tokio's `AsyncFd::new`.
+- **Links out of a dataset:** `mapcv.generate`, `mapcv.split`, `run_generate`, `run_split` and the Python functions behind `stats`, `card`, `verify` and `export` now refuse a dataset folder with a symbolic link that points outside it, as those commands already did on the command line. `mapcv info` and `MapcvDataset` refuse a manifest, split list or patch file they would read through such a link, and a Zarr export refuses a linked array.
+
+### Changes to new datasets
+
+- **Smaller PNG masks:** `uint8` PNG masks written next to PNG or JPG images are a quarter to 40 % of their 0.3.0 size, with the same pixels. A dataset started by 0.3.0 or 0.2 keeps the old encoding when resumed. The same config generated from scratch gives different mask bytes than 0.3.0, so a `SHA256SUMS` made with 0.3.0 no longer matches.
+- **Longitudes in 0–360°:** vector labels and `region.path` features east of 180° now land where the same data in −180…180 would, and a region box such as `west: 350, east: 10` is accepted. 0.3.0 left such labels out of the masks on GeoTIFF imagery in EPSG:4326 and on XYZ imagery, and refused such a box.
+- **Buffered lines across UTM zones:** with `labels.buffer`, a line that crosses a zone edge is buffered in each zone, so the band keeps its width along the whole line. In 0.3.0 it got narrower away from the zone of its centre (3 % at the ends of a line spanning 30° of longitude).
+
+### Features
+
+- **Larger runs:** one run can now hold 50,000,000 patches instead of 3,000,000, and memory stays low because patch positions are stored compactly. A single chunk is limited to 3,000,000 patches, and `generate` says what to change above that.
+- **Resuming after a time change:** a local GeoTIFF whose modification time changed but whose content didn't (copied without its times, checked out again from git-LFS or DVC, `touch`ed) no longer stops a resume. mapcv records each file's SHA-256 and refuses a file that was really edited. Datasets made before 0.3.1 have no recorded hash, so they still ask you to restore the time.
+- **`hf-parquet` annotations:** the export now carries detection and instance annotations in an `annotations` column.
+
+### Fixes
+
+- **Large mosaics:** local GeoTIFFs are opened per read, so a mosaic of thousands of files stays under the open-file limit.
+- **Mosaic georeferencing:** rounding noise in the pixel size or origin of mosaic tiles is accepted, up to 0.001 px. A tile that is really off the grid is still refused, and the message names the file.
+- **Esri:** tiles with Esri's "Map data not yet available" image are treated as having no imagery instead of being written as grey patches. `generate` reports how many.
+- **`export`:** `hf-parquet` refuses an output folder inside the dataset, as the other folder formats do.
+
 ## [0.3.0] - 2026-10-14
 
 mapcv 0.3 turns it from a segmentation tool for XYZ tiles into a dataset compiler for remote sensing: six tasks, your own GeoTIFFs and COGs, Sentinel-2 from STAC, Google Earth Engine, many label formats and OpenStreetMap, and tools to train on, check and share the result. See [MIGRATION.md](https://github.com/tahamukhtar20/mapcv/blob/main/MIGRATION.md) before upgrading: the manifest is now version 3, and masks mark pixels without imagery.

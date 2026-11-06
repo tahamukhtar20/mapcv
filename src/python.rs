@@ -1049,5 +1049,6 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The version this binary was built from; `mapcv doctor` compares it with the package's.
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("MAX_ANCHORS", sampler::MAX_ANCHORS)?;
+    m.add("MAX_TILES", tile_math::MAX_TILES)?;
     Ok(())
 }

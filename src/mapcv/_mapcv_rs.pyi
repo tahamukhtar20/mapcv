@@ -19,9 +19,11 @@ import numpy.typing as npt
 
 __version__: str
 MAX_ANCHORS: int
+MAX_TILES: int
 
 __all__ = [
     "MAX_ANCHORS",
+    "MAX_TILES",
     "BBox",
     "GeoTiff",
     "PyBBox",

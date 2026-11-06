@@ -124,6 +124,10 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`This config cannot be built: the grid has 8,960 x 5,888 = 52,756,480 patches, more than the limit of 50,000,000 for one run`** (`plan` and `generate`, exit code 1; `sampler.random_count asks for … patches` for random mode) The sampler settings give more patches than one run can hold. Raise `sampler.stride` (a stride of 1 gives a patch at every pixel), use a larger `patch_size`, shrink the region or split it into several smaller ones, one config each.
 
+**`This config cannot be built: chunk 1 of 8 would read 5,580,800 patches at once, more than the limit of 3,000,000 for one chunk`** (`plan` and `generate`, exit code 1) One chunk of `chunk_rows` rows holds too many patch positions to read at once. Raise `sampler.stride` (or `patch_size`), or lower the imagery's `chunk_rows` (`strip_rows` for XYZ imagery).
+
+**`This config cannot be built: bbox (…) covers … tiles at zoom [22], more than the limit of 16777216`** (`plan` and `generate`, exit code 1) An XYZ region lists more than 2^24 tiles, the whole world at zoom 12. Use a lower zoom or a smaller region.
+
 **`patch_size: true is a YAML boolean, not a number`** YAML reads `yes`, `on` and `true` as booleans. Write the number itself.
 
 **`This is a large job. Re-run with --yes to confirm.`** (exit code 2) You ran a job over 20,000 tiles, 5 GB or 1,000,000 patches without a terminal. Read the plan, then pass `--yes`.

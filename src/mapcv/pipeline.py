@@ -14,7 +14,7 @@ import time
 import warnings
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Union
@@ -381,13 +381,30 @@ def _anchor_groups(
     chunk of the grid as its rows and columns, other anchors as 8 bytes each.
     """
     meta = sources[0].metadata
+    return anchor_chunks(
+        config, meta.height, meta.width, meta.chunk_rows, _pixel_bytes(sources), aoi
+    )
+
+
+def anchor_chunks(
+    config: MapcvConfig,
+    height: int,
+    width: int,
+    chunk_rows: int,
+    pixel_bytes: int,
+    aoi: AreaOfInterest | None = None,
+) -> list[_Chunk]:
+    """The chunks :func:`run_generate` reads a ``height`` x ``width`` raster in, read
+    ``chunk_rows`` rows at a time with ``pixel_bytes`` bytes per pixel (every source together).
+
+    ``mapcv plan`` uses it to find a chunk over :data:`MAX_CHUNK_ANCHORS` without opening
+    the imagery."""
     sampler = config.sampler
-    patch_size, width, chunk_rows = sampler.patch_size, meta.width, meta.chunk_rows
-    pixel_bytes = _pixel_bytes(sources)
+    patch_size = sampler.patch_size
     chunks: list[_Chunk] = []
     if sampler.mode == "random":
-        positions = random_positions_for(meta.height, width, sampler, chunk_rows)
-        firsts = np.arange(chunk_rows, meta.height, chunk_rows, dtype=np.uint64) * np.uint64(width)
+        positions = random_positions_for(height, width, sampler, chunk_rows)
+        firsts = np.arange(chunk_rows, height, chunk_rows, dtype=np.uint64) * np.uint64(width)
         # The positions are grouped by chunk, so each chunk's first is found by bisection.
         for group in np.split(positions, np.searchsorted(positions, firsts)):
             if len(group) == 0:
@@ -399,7 +416,7 @@ def _anchor_groups(
                     continue
             chunks.extend(_position_chunks(group, width, patch_size, pixel_bytes, aoi is not None))
         return chunks
-    rows, cols = grid_axes_for(meta.height, width, sampler)
+    rows, cols = grid_axes_for(height, width, sampler)
     if len(rows) == 0 or len(cols) == 0:
         return chunks
     for block_rows in _split(rows, rows // np.uint64(chunk_rows)):
@@ -415,22 +432,31 @@ def _anchor_groups(
     return chunks
 
 
-def _check_chunk_sizes(chunks: list[_Chunk], chunk_rows: int) -> None:
-    """Refuse a run whose chunk would read more than :data:`MAX_CHUNK_ANCHORS` anchors.
+def chunk_too_large_message(chunks: Sequence[_Chunk], chunk_rows: int) -> str | None:
+    """Why a run with these chunks is refused, or ``None`` when every chunk reads at most
+    :data:`MAX_CHUNK_ANCHORS` anchors.
 
     A run may hold up to :data:`~mapcv.sampler.MAX_PATCHES` anchors compactly, but a chunk is
     read as a list of pairs and its kept patches are stacked into one array, so its memory
-    grows with its anchors (a stride of 1 over a 1,024-row chunk puts millions into one).
-    Checked before anything is read or written."""
+    grows with its anchors (a stride of 1 over a 1,024-row chunk puts millions into one)."""
     for index, chunk in enumerate(chunks):
         if len(chunk) > MAX_CHUNK_ANCHORS:
-            raise TooManyPatchesError(
+            return (
                 f"chunk {index + 1} of {len(chunks)} would read {len(chunk):,} patches at once, "
                 f"more than the limit of {MAX_CHUNK_ANCHORS:,} for one chunk (a chunk is "
                 f"{chunk_rows:,} rows of the raster). Raise sampler.stride (or patch_size), or "
                 "lower the imagery's chunk_rows (strip_rows for XYZ imagery) so a chunk covers "
                 "fewer rows"
             )
+    return None
+
+
+def _check_chunk_sizes(chunks: list[_Chunk], chunk_rows: int) -> None:
+    """Refuse a run whose chunk would read more than :data:`MAX_CHUNK_ANCHORS` anchors;
+    checked before any patch is read or written."""
+    message = chunk_too_large_message(chunks, chunk_rows)
+    if message is not None:
+        raise TooManyPatchesError(message)
 
 
 def _completed_positions(
@@ -601,7 +627,7 @@ def _is_foreign(name: str) -> bool:
     return name not in _OWN_BEFORE_MANIFEST and not name.startswith(".")
 
 
-def _check_staging_dir(staging: Path) -> None:
+def check_staging_dir(staging: Path) -> None:
     """Refuse a folder with files of its own and no manifest: mapcv would overwrite (and,
     for some layouts, remove) files such as ``train.txt`` or ``dataset.yaml`` there."""
     if not staging.is_dir() or (staging / _MANIFEST_FILENAME).exists():
@@ -665,10 +691,21 @@ def run_generate(
     started = time.monotonic()
     staging = config.writer.staging_dir
     check_folder_links(staging, "writer.staging_dir")
-    _check_staging_dir(staging)
+    check_staging_dir(staging)
+    created = not staging.exists()
     staging.mkdir(parents=True, exist_ok=True)
-    with dataset_lock(staging):
-        return _generate_locked(config, on_chunk, started)
+    try:
+        with dataset_lock(staging):
+            return _generate_locked(config, on_chunk, started)
+    except BaseException:
+        if created and not (staging / _MANIFEST_FILENAME).exists():
+            # A run refused before it wrote anything (such as a chunk over the limit) leaves
+            # no empty folder behind; one that wrote patches has saved its manifest and
+            # keeps them, to resume.
+            _remove_empty_folders(staging)
+            with suppress(OSError):
+                staging.rmdir()
+        raise
 
 
 def _generate_locked(

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +30,9 @@ from mapcv.manifest import Manifest, ManifestEntry, warn_if_incomplete
 
 STATS_FILENAME = "stats.json"
 _READ_THREADS = 8
+
+# Reads one patch file of an entry (its ``files`` key) as ``_read_array`` returns it.
+PatchReader = Callable[[ManifestEntry, str], tuple[npt.NDArray[Any], float | None]]
 
 
 @dataclass
@@ -224,7 +227,11 @@ def dataset_stats(staging_dir: Path, split: str = "train") -> dict[str, Any]:
     return _dataset_stats(staging_dir, split)
 
 
-def _dataset_stats(staging_dir: Path, split: str) -> dict[str, Any]:
+def _dataset_stats(
+    staging_dir: Path, split: str, read_patch: PatchReader | None = None
+) -> dict[str, Any]:
+    """:func:`dataset_stats` without the link check; ``read_patch`` replaces reading the
+    patch files (a Zarr export reads its arrays instead)."""
     manifest_path = staging_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest found at {manifest_path}")
@@ -246,7 +253,8 @@ def _dataset_stats(staging_dir: Path, split: str) -> dict[str, Any]:
             return ["image"]
         return [record.name if record.name in entry["files"] else "image" for record in sources]
 
-    def read(rel: str) -> tuple[npt.NDArray[Any], float | None]:
+    def read_file(entry: ManifestEntry, key: str) -> tuple[npt.NDArray[Any], float | None]:
+        rel = entry["files"][key]
         try:
             return _read_array(staging_dir / rel)
         except (OSError, ValueError) as exc:  # missing, truncated or not an image
@@ -254,10 +262,12 @@ def _dataset_stats(staging_dir: Path, split: str) -> dict[str, Any]:
                 f"{rel} cannot be read ({exc}); check the dataset with mapcv verify --deep"
             ) from exc
 
+    read = read_patch or read_file
+
     def load(entry: ManifestEntry) -> dict[str, Any]:
-        loaded: dict[str, Any] = {key: read(entry["files"][key]) for key in keys_for(entry)}
+        loaded: dict[str, Any] = {key: read(entry, key) for key in keys_for(entry)}
         if "mask" in entry["files"]:
-            loaded["mask"] = read(entry["files"]["mask"])
+            loaded["mask"] = read(entry, "mask")
         return loaded
 
     with ThreadPoolExecutor(max_workers=_READ_THREADS) as pool:

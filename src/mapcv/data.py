@@ -81,7 +81,7 @@ class MapcvDataset:
             ``all``. A dataset without split lists only has ``all``.
         normalize: Standardise each band with the train split's mean and standard
             deviation from ``stats.json`` (computed with :func:`mapcv.stats.dataset_stats`
-            when the file is missing); the image becomes ``float32`` and pixels without
+            when the file is missing, from the arrays for a Zarr export); the image becomes ``float32`` and pixels without
             data (``NaN``) become 0.
         transform: Called with each item dict; its return value is the item.
         as_tensors: ``True`` for torch tensors (torch must be installed), ``False`` for
@@ -181,9 +181,26 @@ class MapcvDataset:
         if path.exists():
             stats: dict[str, Any] = json.loads(self._inside(path).read_text(encoding="utf-8"))
             return stats
-        from mapcv.stats import dataset_stats
+        from mapcv.stats import _dataset_stats, dataset_stats
 
-        return dataset_stats(self.root, "train")
+        if self._zarr is None:
+            return dataset_stats(self.root, "train")
+        # A store without stats.json (exported before it carried one, or from a folder
+        # without one): the same statistics, from its arrays (its links are checked).
+        positions = {
+            self.manifest.patch_name(entry): index
+            for index, entry in enumerate(self.manifest.patches)
+        }
+
+        def read_patch(entry: ManifestEntry, key: str) -> tuple[npt.NDArray[Any], None]:
+            index = positions[self.manifest.patch_name(entry)]
+            if key == "mask":
+                return np.asarray(self._zarr["masks"][index])[:, :, np.newaxis], None
+            array = np.asarray(self._zarr["images"][key][index])
+            # (C, H, W) as (H, W, C), as the statistics read a patch file; a stack stays.
+            return (np.moveaxis(array, 0, -1) if array.ndim == 3 else array), None
+
+        return _dataset_stats(self.root, "train", read_patch)
 
     def _load_objects(self) -> dict[str, list[dict[str, Any]]]:
         """COCO annotations by image file name, from the COCO files of the dataset."""

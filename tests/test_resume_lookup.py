@@ -7,7 +7,7 @@ millions of patches written spent most of its restart on it before writing anyth
 
 from __future__ import annotations
 
-import time
+import tracemalloc
 
 import numpy as np
 import numpy.typing as npt
@@ -94,10 +94,12 @@ def test_a_chunk_that_is_all_written_has_nothing_left() -> None:
 
 @pytest.mark.parametrize("shape", ["bands", "scattered"])
 def test_the_lookup_does_not_grow_with_what_is_written(shape: str) -> None:
-    """1,000,000 written patches over 1,000 chunks of 5,000 anchors take seconds at most.
+    """Looking up 1,000 chunks of 5,000 anchors among 1,000,000 written patches allocates
+    memory in proportion to a chunk, never to what is written.
 
-    Sorting all of them again for every chunk (the old lookup) took about 5 s for this on a
-    laptop, and 30 s with 5,000,000 written; the bisection takes 0.1 to 1 s."""
+    Sorting all the written positions again for every chunk (the old lookup) copies them
+    each time, 8 MB here; the bisection allocates a few arrays the size of the chunk. The
+    memory is counted rather than the time taken, so a slow machine cannot fail the test."""
     rng = np.random.default_rng(0)
     written = np.arange(1_000_000, dtype=np.uint64) * np.uint64(2)
     span = int(written[-1]) + 1
@@ -110,9 +112,26 @@ def test_the_lookup_does_not_grow_with_what_is_written(shape: str) -> None:
             values = rng.integers(0, int(span * 1.2), 5_000, dtype=np.uint64)
         chunks.append(_Positions(values, WIDTH))
     done = np.unique(written)  # built once, as run_generate does
-    started = time.perf_counter()
-    kept = sum(len(_remaining(chunk, done)) for chunk in chunks)
-    seconds = time.perf_counter() - started
-    assert seconds < 5, f"{seconds:.1f} s for 1,000 chunks"
+    # Shared by every chunk, so sorting it in place is not a way around the copy either.
+    done.flags.writeable = False
+    was_tracing = tracemalloc.is_tracing()
+    if not was_tracing:
+        tracemalloc.start()
+    kept = 0
+    peak = 0
+    try:
+        for chunk in chunks:
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            left = _remaining(chunk, done)
+            peak = max(peak, tracemalloc.get_traced_memory()[1] - before)
+            kept += len(left)
+            del left
+    finally:
+        if not was_tracing:
+            tracemalloc.stop()
+    chunk_bytes = 5_000 * np.dtype(np.uint64).itemsize
+    # About 5 chunk-sized arrays today; a copy of what is written would be 200 of them.
+    assert peak < 16 * chunk_bytes, f"{peak:,} bytes for a chunk of {chunk_bytes:,}"
     # Even positions are written, so about half the anchors are left.
     assert 0.4 < kept / 5_000_000 < 0.6

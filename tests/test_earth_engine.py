@@ -74,8 +74,11 @@ class FakeEE:
         fail: str | None = None,
         *,
         per_image: bool = False,
+        fail_render: BaseException | None = None,
     ) -> None:
         self.base, self.map_id, self.fail = base, map_id, fail
+        # Raised by getMapId, as Earth Engine raises the server's refusals.
+        self.fail_render = fail_render
         # Like Earth Engine, give each image (its scenes and steps) a map ID of its own.
         self.per_image = per_image
         self.calls: list[Any] = []
@@ -91,6 +94,8 @@ class FakeEE:
         class Image:
             def getMapId(self, vis: dict[str, Any]) -> dict[str, Any]:
                 fake.calls.append(("getMapId", description, vis))
+                if fake.fail_render is not None:
+                    raise fake.fail_render
                 map_id = fake.map_id
                 if fake.per_image:
                     map_id += f"-{zlib.crc32(repr(description).encode()):08x}"
@@ -358,6 +363,89 @@ def test_a_refusal_says_how_to_log_in(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match="earthengine authenticate") as raised:
         earth_engine.tile_url(config)
     assert "Please authorize access" in str(raised.value)
+
+
+class EEException(Exception):
+    """Like ``ee.EEException``: Earth Engine's server refusals carry only the message."""
+
+
+class RefreshError(Exception):
+    """Like ``google.auth.exceptions.RefreshError``: an expired or revoked login."""
+
+
+RefreshError.__module__ = "google.auth.exceptions"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        EEException("Image.visualize: No band named 'nope'. Available band names: [elevation]."),
+        EEException(
+            "Image.load: Image asset 'NOT/A/REAL_ASSET' not found "
+            "(does not exist or caller does not have access)."
+        ),
+        EEException(
+            "Image.load: Image asset 'projects/my-project/assets/gone' not found "
+            "(does not exist or caller does not have access)."
+        ),
+        EEException("Collection.median: Unknown property 'foo'."),
+    ],
+)
+def test_a_config_error_keeps_earth_engines_message(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    monkeypatch.setitem(sys.modules, "ee", FakeEE("http://x", fail_render=error))
+    config = EarthEngineImageryConfig.model_validate(_engine(image="USGS/SRTMGL1_003"))
+    with pytest.raises(RuntimeError) as raised:
+        earth_engine.tile_url(config)
+    message = str(raised.value)
+    assert message == f"Earth Engine could not render 'USGS/SRTMGL1_003': {str(error)[:-1]}."
+    assert "earthengine authenticate" not in message and ".." not in message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        EEException("Project 'projects/nope' not found or deleted."),
+        EEException(
+            "Caller does not have required permission to use project nope. Grant the caller "
+            "the roles/serviceusage.serviceUsageConsumer role."
+        ),
+        EEException("Permission denied on resource project nope."),
+        EEException("Earth Engine API has not been used in project 123 before or it is disabled."),
+        EEException("Not signed up for Earth Engine or project is not registered."),
+        EEException("Request had invalid authentication credentials."),
+        EEException("The caller does not have permission"),
+        RefreshError("invalid_grant: Token has been expired or revoked."),
+    ],
+)
+def test_a_login_or_project_error_says_how_to_log_in(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    monkeypatch.setitem(sys.modules, "ee", FakeEE("http://x", fail_render=error))
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    with pytest.raises(RuntimeError, match="earthengine authenticate") as raised:
+        earth_engine.tile_url(config)
+    message = str(raised.value)
+    assert f": {str(error).rstrip('.')}. Log in once" in message
+    assert ".." not in message and message.endswith("registered for Earth Engine.")
+
+
+def test_an_initialize_error_is_on_one_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ee's own text when there are no credentials, blank lines and all.
+    fail = (
+        "Please authorize access to your Earth Engine account by running\n\n"
+        "earthengine authenticate\n\nin your command line, or ee.Authenticate() in Python, "
+        "and then retry."
+    )
+    monkeypatch.setitem(sys.modules, "ee", FakeEE("http://x", fail=fail))
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    with pytest.raises(RuntimeError) as raised:
+        earth_engine.tile_url(config)
+    message = str(raised.value)
+    assert "\n" not in message and ".." not in message
+    assert "account by running earthengine authenticate in your command line" in message
+    assert message.endswith("registered for Earth Engine.")
 
 
 def test_without_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:

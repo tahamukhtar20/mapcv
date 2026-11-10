@@ -51,8 +51,10 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
    Imagery [esri/sentinel2/custom/geotiff/gee] (esri):
 
    2/4 Area
-   Area: a bounding box west,south,east,north or a vector file (.geojson, .kml, .gpkg, .shp,
-   .parquet): 4.9375,52.3725,4.9515,52.3780
+   Area: a bounding box west,south,east,north or a vector file (.geojson, .kml, .gpkg,
+   .shp, .parquet): 4.9375,52.3725,4.9515,52.3780
+   Centre: longitude 4.9445, latitude 52.37525. The order is west,south,east,north:
+   longitude first.
      zoom    pixel size
        15    2.92 m
        16    1.46 m
@@ -67,10 +69,10 @@ You need Python 3.10+ and an internet connection. Everything below is real outpu
      field       example values
      class       building
      building    house, apartments, houseboat, yes, retail
-   Which field holds the class? (blank = every polygon is class 1) (): class
-     segmentation  a class mask per patch
-     detection     a box per object (COCO and YOLO)
-     instance      a mask per object (COCO RLE, optional instance-ID PNG)
+   Which field holds the class? (blank = every polygon is class 1): class
+     segmentation    a class mask per patch
+     detection       a box per object (COCO and YOLO)
+     instance        a mask per object (COCO RLE, optional instance-ID PNG)
      classification  a label (or set of labels) per patch, as a CSV
    Task [segmentation/detection/instance/classification] (segmentation):
 

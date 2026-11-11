@@ -8,6 +8,7 @@ and adds what the protocol needs: progress notifications and cancellation for
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import sys
@@ -24,7 +25,7 @@ import anyio.to_thread
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 import mapcv
 from mapcv import agent_tools as tools
@@ -91,6 +92,12 @@ def _ok(state: ToolState, result: ToolResult) -> CallToolResult:
     )
 
 
+# Result fields whose content the error message already states.
+_LISTED_IN_MESSAGE = frozenset(
+    {"valid", "errors", "error", "arguments", "required", "unknown_arguments"}
+)
+
+
 def _fail(state: ToolState, message: str, data: dict[str, Any] | None = None) -> CallToolResult:
     clean = ToolResult(
         state.redactor.scrub(message), state.redactor.scrub_data(data or {"error": message})
@@ -98,7 +105,7 @@ def _fail(state: ToolState, message: str, data: dict[str, Any] | None = None) ->
     if "error" not in clean.data:
         clean.data["error"] = clean.summary
     # A message that already lists the errors needs no second copy as JSON in the text.
-    text = clean.summary if set(clean.data) <= {"valid", "errors", "error"} else _content(clean)
+    text = clean.summary if set(clean.data) <= _LISTED_IN_MESSAGE else _content(clean)
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
         structured_content=clean.data,
@@ -158,7 +165,7 @@ def build_server(
         website_url="https://tahamukhtar20.github.io/mapcv/guides/use-with-ai-agents/",
     )
 
-    _redact_argument_errors(server, state)
+    _check_arguments(server, state)
 
     @server.tool(title="Describe the config schema", annotations=_READ)
     async def describe_config_schema(
@@ -388,24 +395,150 @@ def build_server(
     return server
 
 
-def _redact_argument_errors(server: MCPServer, state: ToolState) -> None:
-    """Pass the SDK's own errors (arguments that fail validation, which it raises before
-    a tool runs) through the redactor too: they may quote the arguments."""
+# The arguments that name a file or folder: tools differ (`path`, `config`, `dataset`), so
+# a caller that uses another tool's name, or a common synonym, is pointed at this tool's.
+_PATH_ARGUMENTS = ("path", "config", "dataset")
+_PATH_SYNONYMS = frozenset(
+    {
+        *_PATH_ARGUMENTS,
+        "file",
+        "filename",
+        "file_path",
+        "config_path",
+        "config_file",
+        "yaml",
+        "yaml_path",
+        "dataset_path",
+        "dataset_dir",
+        "folder",
+        "dir",
+        "directory",
+        "root",
+        "output",
+        "labels",
+        "label_file",
+    }
+)
+
+
+def _parameters(server: MCPServer, name: str) -> tuple[list[str], set[str]] | None:
+    """A tool's argument names in schema order and the required ones, or None if unknown."""
+    # The SDK has no public lookup of a tool by name.
+    tool = server._tool_manager.get_tool(name)
+    if tool is None:
+        return None
+    properties = tool.parameters.get("properties") or {}
+    return list(properties), set(tool.parameters.get("required") or ())
+
+
+def _suggestion(unknown: str, names: list[str], missing: list[str]) -> str | None:
+    """The argument a caller most likely meant by an argument name the tool does not take."""
+    if len(missing) == 1:
+        return missing[0]
+    close = difflib.get_close_matches(unknown, names, n=1, cutoff=0.6)
+    if close:
+        return close[0]
+    paths = [name for name in names if name in _PATH_ARGUMENTS]
+    if unknown.lower() in _PATH_SYNONYMS and len(paths) == 1:
+        return paths[0]
+    return None
+
+
+def _shown(name: str) -> str:
+    """An argument name the caller chose, on one line and of bounded length."""
+    flat = " ".join(name.split()).replace("`", "'")
+    return flat if len(flat) <= 60 else f"{flat[:57]}..."
+
+
+def _unknown_lines(unknown: list[str], names: list[str], missing: list[str]) -> list[str]:
+    lines = []
+    for argument in unknown:
+        meant = _suggestion(argument, names, missing)
+        hint = f": use `{meant}`" if meant else ""
+        lines.append(f"`{_shown(argument)}` is not an argument of this tool{hint}.")
+    return lines
+
+
+def _signature(names: list[str], required: set[str]) -> str:
+    if not names:
+        return "It takes no arguments."
+    listed = ", ".join(f"`{name}`" + (" (required)" if name in required else "") for name in names)
+    return f"It takes: {listed}."
+
+
+def _argument_error(
+    tool: str, names: list[str], required: set[str], given: dict[str, Any], exc: ValidationError
+) -> tuple[str, dict[str, Any]]:
+    """A mapcv message for arguments the SDK rejected: each problem by argument name, the
+    names the tool takes, and what to do. It never quotes the values (the caller's data)."""
+    missing: list[str] = []
+    problems: list[str] = []
+    for error in exc.errors(include_url=False, include_input=False, include_context=False):
+        where = ".".join(str(part) for part in error["loc"]) or "arguments"
+        if error["type"] == "missing" and len(error["loc"]) == 1:
+            missing.append(where)
+            problems.append(f"`{where}` is required but was not given.")
+        else:
+            problems.append(f"`{where}`: {error['msg']}.")
+    unknown = sorted(set(given) - set(names))
+    lines = [*_unknown_lines(unknown, names, missing), *problems]
+    message = "\n".join(
+        [
+            f"`{tool}` did not run: its arguments are wrong.",
+            *(f"- {line}" for line in lines),
+            _signature(names, required),
+            "Fix the arguments and call it again.",
+        ]
+    )
+    data: dict[str, Any] = {"error": message, "arguments": names, "required": sorted(required)}
+    if unknown:
+        data["unknown_arguments"] = [_shown(name) for name in unknown]
+    return message, data
+
+
+def _with_unknown_hint(
+    state: ToolState, result: CallToolResult, names: list[str], unknown: list[str]
+) -> CallToolResult:
+    """Add to a failed result which of the given arguments the tool ignored, and the name
+    meant: a failure such as `Give config or yaml_text` is often a mistyped argument."""
+    lines = [*_unknown_lines(unknown, names, []), "Arguments it does not take are ignored."]
+    hint = state.redactor.scrub(" ".join(lines))
+    content = list(result.content)
+    if content and isinstance(content[0], TextContent):
+        content[0] = TextContent(type="text", text=f"{content[0].text}\n{hint}")
+    data = dict(result.structured_content or {})
+    data["unknown_arguments"] = state.redactor.scrub_data([_shown(name) for name in unknown])
+    return result.model_copy(update={"content": content, "structured_content": data})
+
+
+def _check_arguments(server: MCPServer, state: ToolState) -> None:
+    """Turn the SDK's argument errors (it validates arguments before a tool runs) into
+    mapcv messages that name the expected arguments, and pass every message through the
+    redactor: the SDK's own text may quote the arguments."""
     call_tool = server.call_tool
 
-    async def redacted_call_tool(
+    async def checked_call_tool(
         name: str, arguments: dict[str, Any], context: Context | None = None
     ) -> Any:
         for value in arguments.values():
             if isinstance(value, str):
                 state.redactor.learn_text(value)
         state.redactor.learn_data(arguments)
+        parameters = _parameters(server, name)
         try:
-            return await call_tool(name, arguments, context)
+            result = await call_tool(name, arguments, context)
         except ToolError as exc:
+            if parameters is not None and isinstance(exc.__cause__, ValidationError):
+                message, data = _argument_error(name, *parameters, arguments, exc.__cause__)
+                return _fail(state, message, data)
             raise type(exc)(state.redactor.scrub(str(exc))) from exc.__cause__
+        if parameters is not None and isinstance(result, CallToolResult) and result.is_error:
+            unknown = sorted(set(arguments) - set(parameters[0]))
+            if unknown:
+                return _with_unknown_hint(state, result, parameters[0], unknown)
+        return result
 
-    server.call_tool = redacted_call_tool  # type: ignore[method-assign]
+    server.call_tool = checked_call_tool  # type: ignore[method-assign]
 
 
 class _Refused(Exception):

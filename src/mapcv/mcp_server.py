@@ -8,6 +8,7 @@ and adds what the protocol needs: progress notifications and cancellation for
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import sys
@@ -24,7 +25,7 @@ import anyio.to_thread
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 import mapcv
 from mapcv import agent_tools as tools
@@ -388,9 +389,95 @@ def build_server(
     return server
 
 
+# Arguments that name a file or folder; a client that knows one tool often tries it on another.
+_PATH_LIKE = ("path", "config", "dataset")
+_JSON_TYPES = {
+    "string": "a string",
+    "boolean": "true or false",
+    "integer": "an integer",
+    "number": "a number",
+    "array": "a list",
+    "object": "an object",
+}
+
+
+def _describe(schema: dict[str, Any]) -> str:
+    """The type of one argument in words, from its JSON schema."""
+    if "enum" in schema:
+        return "one of " + ", ".join(str(value) for value in schema["enum"])
+    kinds = [schema["type"]] if "type" in schema else []
+    kinds += [option["type"] for option in schema.get("anyOf", []) if "type" in option]
+    words = [_JSON_TYPES.get(kind, kind) for kind in kinds if kind != "null"]
+    return " or ".join(dict.fromkeys(words)) or "a different type"
+
+
+def _accepted(properties: dict[str, Any], required: list[str]) -> str:
+    names = [f"{name} ({'required' if name in required else 'optional'})" for name in properties]
+    return ", ".join(names) if names else "none"
+
+
+def _suggest(unknown: str, given: set[str], properties: dict[str, Any], missing: list[str]) -> str:
+    """The accepted name a mistaken one most likely meant, or an empty string."""
+    free = [name for name in properties if name not in given]
+    close = difflib.get_close_matches(unknown, free, n=1, cutoff=0.6)
+    if close:
+        return close[0]
+    if unknown in _PATH_LIKE:
+        like = [name for name in free if name in _PATH_LIKE]
+        if len(like) == 1:
+            return like[0]
+    if len(missing) == 1:
+        return missing[0]
+    return ""
+
+
+def _argument_error(
+    tool: str, schema: dict[str, Any], arguments: dict[str, Any], cause: ValidationError | None
+) -> str | None:
+    """A message for arguments that do not fit the tool, or None when they do.
+
+    Names the tool and the arguments that are missing, unknown or of the wrong type, offers
+    the accepted name when one is close, and lists every accepted argument.
+    """
+    properties: dict[str, Any] = schema.get("properties", {})
+    required: list[str] = schema.get("required", [])
+    missing = [name for name in required if name not in arguments]
+    unknown = [name for name in arguments if name not in properties]
+    problems = []
+    for name in unknown:
+        hint = _suggest(name, set(arguments), properties, missing)
+        problems.append(
+            f"unknown argument '{name}'" + (f" (did you mean '{hint}'?)" if hint else "")
+        )
+    problems += [f"missing required argument '{name}'" for name in missing]
+    if not problems and cause is not None:
+        seen: dict[str, str] = {}
+        for error in cause.errors():
+            name = str(error["loc"][0]) if error["loc"] else ""
+            if name in seen or name not in properties:
+                continue
+            if error["type"].endswith(("_type", "_parsing")) or error["type"] == "list_type":
+                seen[name] = f"must be {_describe(properties[name])}"
+            else:
+                seen[name] = str(error["msg"]).replace("Input should", "should")
+        problems = [f"argument '{name}' {detail}" for name, detail in seen.items()]
+    if not problems:
+        return None
+    return (
+        f"Cannot call {tool}: {'; '.join(problems)}. "
+        f"Arguments of {tool}: {_accepted(properties, required)}. Pass them by name."
+    )
+
+
 def _redact_argument_errors(server: MCPServer, state: ToolState) -> None:
-    """Pass the SDK's own errors (arguments that fail validation, which it raises before
-    a tool runs) through the redactor too: they may quote the arguments."""
+    """Report arguments that do not fit a tool in mapcv's words, redacted.
+
+    The SDK rejects them before a tool runs, with pydantic's text, which may quote the
+    arguments. This wraps the one entry point every tool goes through: it names the tool,
+    the missing, unknown or mistyped arguments and the accepted ones, and passes every
+    message through the redactor. The SDK ignores unknown arguments; a misspelt optional
+    argument would silently do nothing, so they are refused here.
+    """
     call_tool = server.call_tool
 
     async def redacted_call_tool(
@@ -400,10 +487,18 @@ def _redact_argument_errors(server: MCPServer, state: ToolState) -> None:
             if isinstance(value, str):
                 state.redactor.learn_text(value)
         state.redactor.learn_data(arguments)
+        schema = next((t.input_schema for t in await server.list_tools() if t.name == name), None)
+        if schema is not None:
+            message = _argument_error(name, schema, arguments, None)
+            if message is not None:
+                raise ToolError(state.redactor.scrub(message))
         try:
             return await call_tool(name, arguments, context)
         except ToolError as exc:
-            raise type(exc)(state.redactor.scrub(str(exc))) from exc.__cause__
+            text = str(exc)
+            if schema is not None and isinstance(exc.__cause__, ValidationError):
+                text = _argument_error(name, schema, arguments, exc.__cause__) or text
+            raise type(exc)(state.redactor.scrub(text)) from exc.__cause__
 
     server.call_tool = redacted_call_tool  # type: ignore[method-assign]
 

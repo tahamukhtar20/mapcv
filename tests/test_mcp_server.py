@@ -1071,3 +1071,76 @@ def test_a_single_class_is_named_with_a_label_file_class(project: Path) -> None:
         assert {row["name"] for row in found["class_balance"]} == {"background", "building"}
 
     run_client(project, scenario)
+
+
+# ── Arguments that do not fit a tool ─────────────────────────────────────────
+
+
+def test_wrong_argument_name_names_the_tool_and_the_right_argument(project: Path) -> None:
+    async def scenario(client: Client) -> None:
+        wrong = await call(client, "info", path="dataset")
+        assert wrong.is_error
+        text = text_of(wrong)
+        assert "Cannot call info" in text
+        assert "unknown argument 'path' (did you mean 'dataset'?)" in text
+        assert "missing required argument 'dataset'" in text
+        assert "dataset (required)" in text
+        for raw in ("validation error", "pydantic", "Field required", "Error executing"):
+            assert raw not in text
+
+        # The other direction: a config where the tool wants a path, and a typo.
+        config = await call(client, "validate_config", config="mapcv.yaml")
+        assert "unknown argument 'config' (did you mean 'path'?)" in text_of(config)
+        typo = await call(client, "stats", dataset="dataset", splt="val")
+        assert "unknown argument 'splt' (did you mean 'split'?)" in text_of(typo)
+        assert "split (optional)" in text_of(typo)
+
+    run_client(project, scenario)
+
+
+def test_missing_and_unknown_arguments_are_refused_before_the_tool_runs(project: Path) -> None:
+    async def scenario(client: Client) -> None:
+        missing = await call(client, "inspect_labels")
+        assert missing.is_error
+        assert "missing required argument 'path'" in text_of(missing)
+        assert "max_values (optional)" in text_of(missing)
+
+        # Everything required is there, but a misspelt option would otherwise do nothing.
+        extra = await call(client, "verify", dataset="dataset", deeep=True)
+        assert extra.is_error
+        assert "unknown argument 'deeep' (did you mean 'deep'?)" in text_of(extra)
+        nothing_like = await call(client, "verify", dataset="dataset", zzz=1)
+        assert "unknown argument 'zzz'" in text_of(nothing_like)
+        assert "did you mean" not in text_of(nothing_like)
+
+    run_client(project, scenario)
+
+
+def test_wrong_argument_type_names_the_argument_and_what_it_takes(project: Path) -> None:
+    async def scenario(client: Client) -> None:
+        wrong = await call(client, "stats", dataset="dataset", save="maybe")
+        text = text_of(wrong)
+        assert wrong.is_error
+        assert "Cannot call stats: argument 'save' must be true or false" in text
+        assert "dataset (required)" in text
+        assert "validation error" not in text
+        out_of_range = await call(client, "inspect_labels", path="labels.geojson", max_values=0)
+        assert "argument 'max_values' should be greater than or equal to 1" in text_of(out_of_range)
+        bad_choice = await call(client, "stats", dataset="dataset", split="everything")
+        assert "argument 'split'" in text_of(bad_choice)
+        assert "train" in text_of(bad_choice)
+
+    run_client(project, scenario)
+
+
+def test_argument_errors_do_not_leak_credentials(project: Path) -> None:
+    secret = "sk-not-for-the-model"
+
+    async def scenario(client: Client) -> None:
+        result = await call(
+            client, "validate_config", yaml_text=f"url_template: https://x/{secret}/a", save=1
+        )
+        assert result.is_error
+        assert secret not in text_of(result)
+
+    run_client(project, scenario)

@@ -141,6 +141,8 @@ To get an OSM extract over MCP, have the agent fetch it with `curl` and convert 
 
 Each result is structured JSON (also sent as text, for clients that only show text) with a one-line summary first. Errors are results marked as errors, with the message mapcv would print and no traceback.
 
+Arguments that do not fit a tool get the same treatment. The error names the tool, says which argument is missing, unknown or of the wrong type, suggests the accepted name when one is close, and lists every argument the tool takes, for example `Cannot call info: unknown argument 'path' (did you mean 'dataset'?); missing required argument 'dataset'. Arguments of info: dataset (required). Pass them by name.` A misspelt optional argument is refused as well, so it never silently does nothing. Note that the folder or file argument is `path` for `validate_config`, `inspect_labels` and `write_config`, `config` for `plan` and `generate`, and `dataset` for the tools that read a dataset.
+
 A few things worth knowing when you read the results:
 
 - **Naming the class.** Without `labels.label_field`, every polygon is class 1, shown as `labeled` (segmentation) or `object` (detection, instance, classification). Name it by listing the file under `labels.files` with a `class`: `labels: {files: [{path: buildings.geojson, class: building}]}`.

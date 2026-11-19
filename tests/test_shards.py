@@ -180,6 +180,61 @@ def test_zarr_store_reads_like_the_folder(
     ).read_text().split()
 
 
+_SOURCES = [
+    {"type": "geotiff", "name": "t1", "path": "multi.tif"},
+    {"type": "geotiff", "name": "t2", "path": "other.tif"},
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"image_format": "tif"},
+        {"image_format": "npy"},
+        {"image_format": "png", "rgb": True},
+        {"image_format": "tif", "sources": True},
+        {"image_format": "npy", "sources": True, "stack": True},
+    ],
+    ids=["tif", "npy", "png", "two-sources", "stack"],
+)
+@pytest.mark.parametrize("with_stats", [True, False], ids=["stats-file", "no-stats-file"])
+def test_zarr_store_normalizes_like_the_folder(
+    tmp_path: Path, scene: dict[str, Any], case: dict[str, Any], with_stats: bool
+) -> None:
+    # Issue #320: normalize=True on a store looked for the folder's image files.
+    pytest.importorskip("zarr")
+    from mapcv.stats import write_stats
+
+    changes: dict[str, Any] = {
+        "writer": {
+            "image_format": case["image_format"],
+            "mask_format": "png" if case["image_format"] == "png" else case["image_format"],
+            "stack_sources": bool(case.get("stack")),
+        }
+    }
+    if case.get("rgb"):
+        changes["imagery"] = {"type": "geotiff", "path": str(tmp_path / "rgb.tif")}
+    if case.get("sources"):
+        changes["imagery"] = [{**s, "path": str(tmp_path / s["path"])} for s in _SOURCES]
+    root = _generate(tmp_path, scene, "d", **changes)
+    if with_stats:
+        write_stats(root)
+    out = export_zarr(root, tmp_path / "d.zarr")
+    assert (out / "stats.json").exists() == with_stats
+    if with_stats:
+        assert (out / "stats.json").read_bytes() == (root / "stats.json").read_bytes()
+    folder = MapcvDataset(root, "train", normalize=True, as_tensors=False)
+    store = MapcvDataset(out, "train", normalize=True, as_tensors=False)
+    # Without the file, both compute the train statistics, from the files and the arrays.
+    assert store._stats == folder._stats
+    assert len(store) == len(folder) > 0
+    for a, b in zip(folder, store):
+        assert a["image"].dtype == b["image"].dtype == np.float32
+        np.testing.assert_array_equal(a["image"], b["image"])
+        for name in a.get("images", {}):
+            np.testing.assert_array_equal(a["images"][name], b["images"][name])
+
+
 def test_zarr_boxes_and_refusals(
     tmp_path: Path, scene: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

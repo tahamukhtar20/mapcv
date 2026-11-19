@@ -413,6 +413,18 @@ def _warn_about_shares(
         )
 
 
+def recorded_left_out(splits_dir: Path) -> int:
+    """How many overlapping patches the spatial or region split in ``splits_dir`` left
+    out, as ``split.json`` records it; ``0`` when it records none or cannot be read.
+
+    Patches in no split for another reason (``sample_limit``) are not counted."""
+    try:
+        record = json.loads((splits_dir / "split.json").read_text(encoding="utf-8"))
+        return max(int(record.get("dropped", 0)), 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
 def _split(
     manifest: Manifest,
     config: SplitterConfig,

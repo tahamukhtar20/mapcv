@@ -80,7 +80,7 @@ from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, patch_
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, ground_resolution_m, human_bytes
 from mapcv.planning import plan as make_plan
-from mapcv.splitter import SplitterConfig
+from mapcv.splitter import SplitterConfig, recorded_left_out
 from mapcv.writers.detection import categories
 
 
@@ -2635,9 +2635,10 @@ def info(
     """Summarize a generated dataset: source, shapes, class balance and splits."""
     _require_dataset(staging_dir)
     split_lists = [staging_dir / "splits" / f"{name}.txt" for name in ("train", "val", "test")]
+    split_record = staging_dir / "splits" / "split.json"
     try:
         # Only the files info reads, so it stays quick on a dataset of millions of patches.
-        for path in (staging_dir / "manifest.json", *split_lists):
+        for path in (staging_dir / "manifest.json", *split_lists, split_record):
             check_inside(staging_dir, path, "the dataset folder")
     except LinkEscapeError as exc:
         _debug_traceback(exc)
@@ -2689,6 +2690,7 @@ def info(
         for name, path in zip(("train", "val", "test"), split_lists):
             text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
             counts[name] = len(text.splitlines()) if text else 0
+        counts["dropped"] = recorded_left_out(splits_dir)
         table.add_row("Splits", _split_line(counts))
     if manifest.complete is False:
         table.add_row(

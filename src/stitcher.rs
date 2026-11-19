@@ -85,30 +85,35 @@ pub fn stitch_tiles<B: AsRef<[u8]> + Sync>(
     }
 
     // Decode all tiles in parallel; each thread produces (tx, ty, rgb_bytes).
-    let decoded: Vec<(u32, u32, Vec<u8>)> = tiles
-        .par_iter()
-        .map(|(tx, ty, tz, data)| {
-            let reader = ImageReader::new(Cursor::new(data.as_ref()))
-                .with_guessed_format()
-                .map_err(|e| StitchError::Failed(format!("tile format detection failed: {e}")))?;
-            let image = reader
-                .decode()
-                .map_err(|e| StitchError::Failed(format!("tile PNG decode failed: {e}")))?;
-            // The row copy below assumes exactly TILE_PX x TILE_PX pixels: a smaller
-            // tile would index out of bounds and a larger one would be scrambled.
-            if usize::try_from(image.width()) != Ok(TILE_PX)
-                || usize::try_from(image.height()) != Ok(TILE_PX)
-            {
-                return Err(StitchError::InvalidInput(format!(
-                    "stitch_tiles: tile {tz}/{tx}/{ty} is {}x{} pixels; every tile must be \
+    let decoded = crate::parallel::install(|| {
+        tiles
+            .par_iter()
+            .map(|(tx, ty, tz, data)| {
+                let reader = ImageReader::new(Cursor::new(data.as_ref()))
+                    .with_guessed_format()
+                    .map_err(|e| {
+                        StitchError::Failed(format!("tile format detection failed: {e}"))
+                    })?;
+                let image = reader
+                    .decode()
+                    .map_err(|e| StitchError::Failed(format!("tile PNG decode failed: {e}")))?;
+                // The row copy below assumes exactly TILE_PX x TILE_PX pixels: a smaller
+                // tile would index out of bounds and a larger one would be scrambled.
+                if usize::try_from(image.width()) != Ok(TILE_PX)
+                    || usize::try_from(image.height()) != Ok(TILE_PX)
+                {
+                    return Err(StitchError::InvalidInput(format!(
+                        "stitch_tiles: tile {tz}/{tx}/{ty} is {}x{} pixels; every tile must be \
                      {TILE_PX}x{TILE_PX}",
-                    image.width(),
-                    image.height()
-                )));
-            }
-            Ok((*tx, *ty, image.to_rgb8().into_raw()))
-        })
-        .collect::<Result<Vec<_>, StitchError>>()?;
+                        image.width(),
+                        image.height()
+                    )));
+                }
+                Ok((*tx, *ty, image.to_rgb8().into_raw()))
+            })
+            .collect::<Result<Vec<(u32, u32, Vec<u8>)>, StitchError>>()
+    })
+    .map_err(StitchError::Failed)??;
 
     let mut canvas = vec![0u8; canvas_bytes];
     for (tx, ty, pixels) in decoded {

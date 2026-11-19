@@ -561,10 +561,12 @@ pub fn encode(
     }
     let entries = tag_entries(fmt, rows_per_strip, georef, options)?;
     let predictor = predictor_for(fmt.dtype);
-    let strips: Vec<Vec<u8>> = pixels
-        .par_chunks(rows_per_strip * row_bytes)
-        .map(|raw| compress_strip(raw, row_bytes, fmt, predictor, level))
-        .collect::<Result<_, _>>()?;
+    let strips: Vec<Vec<u8>> = crate::parallel::install(|| {
+        pixels
+            .par_chunks(rows_per_strip * row_bytes)
+            .map(|raw| compress_strip(raw, row_bytes, fmt, predictor, level))
+            .collect::<Result<_, _>>()
+    })??;
     assemble(&strips, entries)
 }
 
@@ -601,13 +603,15 @@ pub fn write_all(
             files.len()
         ));
     }
-    pixels
-        .par_chunks(each)
-        .zip(files.par_iter())
-        .try_for_each(|(chunk, (name, georef))| {
-            let bytes = encode(chunk, fmt, georef, options)?;
-            std::fs::write(dir.join(name), bytes).map_err(|e| format!("{name}: {e}"))
-        })
+    crate::parallel::install(|| {
+        pixels
+            .par_chunks(each)
+            .zip(files.par_iter())
+            .try_for_each(|(chunk, (name, georef))| {
+                let bytes = encode(chunk, fmt, georef, options)?;
+                std::fs::write(dir.join(name), bytes).map_err(|e| format!("{name}: {e}"))
+            })
+    })?
 }
 
 #[cfg(test)]
@@ -771,6 +775,63 @@ mod tests {
             assert_eq!(tiff.dtype(), dtype);
             assert_eq!(tiff.predictor(), predictor_for(dtype), "{}", dtype.name());
             assert_eq!(read_all(&tiff), expected, "{}", dtype.name());
+        }
+    }
+
+    #[test]
+    fn small_reads_on_the_calling_thread_match_reads_on_the_pool() {
+        // Four strips of 341 rows: a small window inside one strip is read on the
+        // calling thread, one across strips (and the whole raster) on the thread pool.
+        let (width, height, band_count) = (512, 1024, 3);
+        let values: Vec<u16> = (0..width * height * band_count)
+            .map(|i| u16::try_from(i * 31 % 65_521).unwrap())
+            .collect();
+        let fmt = RasterFormat {
+            width,
+            height,
+            bands: band_count,
+            dtype: DType::U16,
+        };
+        let georef = Georef {
+            epsg: 32633,
+            geographic: false,
+            transform: NORTH_UP,
+        };
+        let (_dir, tiff) = write_and_open(
+            &bytes_of(&values),
+            &fmt,
+            &georef,
+            &options(Some(7.0)),
+            "serial",
+        );
+        let read = |row0: i64, col0: i64, rows: i64, cols: i64, bands: Option<&[usize]>| {
+            let window = Window {
+                row0,
+                row1: row0 + rows,
+                col0,
+                col1: col0 + cols,
+            };
+            match tiff.read_window(window, bands, 0).unwrap().samples {
+                Samples::U16(samples) => samples,
+                _ => unreachable!("the raster is u16"),
+            }
+        };
+        // The whole raster with an 8-pixel margin of nodata on every side.
+        let (margin, whole_width) = (8, 528);
+        for bands in [None, Some(&[2, 0][..])] {
+            let per_pixel = bands.map_or(band_count, <[usize]>::len);
+            let whole = read(-margin, -margin, 1032, 528, bands);
+            for (row0, col0) in [(-8, -8), (40, 100), (300, 480)] {
+                let small = read(row0, col0, 64, 48, bands);
+                for (r, small_row) in small.chunks(48 * per_pixel).enumerate() {
+                    let first = usize::try_from(row0 + margin).unwrap() + r;
+                    let pixel = first * whole_width + usize::try_from(col0 + margin).unwrap();
+                    assert_eq!(
+                        small_row,
+                        &whole[pixel * per_pixel..(pixel + 48) * per_pixel]
+                    );
+                }
+            }
         }
     }
 

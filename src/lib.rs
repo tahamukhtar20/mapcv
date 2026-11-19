@@ -13,6 +13,7 @@ pub mod geotiff;
 pub mod geotiff_writer;
 pub mod http_policy;
 pub mod kml_parser;
+pub mod parallel;
 pub mod patch_writer;
 #[cfg(feature = "python")]
 mod python;

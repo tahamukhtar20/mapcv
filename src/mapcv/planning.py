@@ -11,7 +11,8 @@ import numpy as np
 import shapely
 from shapely.geometry import box
 
-from mapcv._mapcv_rs import snap_bbox, tile
+from mapcv._confine import LinkEscapeError, check_folder_links
+from mapcv._mapcv_rs import MAX_TILES, snap_bbox, tile, tiles
 from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
@@ -26,7 +27,8 @@ from mapcv.config import (
     eopf_local_path,
 )
 from mapcv.imagery import open_geotiff_source
-from mapcv.pipeline import _max_window_width
+from mapcv.locking import StagingDirError
+from mapcv.pipeline import _check_staging_dir, _max_window_width, chunk_limit_message
 from mapcv.sampler import grid_patch_count, random_patch_capacity, too_many_patches_message
 from mapcv.targets.segmentation import check_ignore_index, load_labels
 
@@ -137,6 +139,21 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> tuple[int, in
     cols = bottom_right.x - top_left.x + 1
     rows = bottom_right.y - top_left.y + 1
     return rows * _TILE_PX, cols * _TILE_PX, rows * cols
+
+
+def _tile_cap_message(config: MapcvConfig, imagery: XYZImageryConfig) -> str:
+    """What the tile cover refuses for an XYZ source over the tile limit, as ``generate`` words it.
+
+    Asks the cover itself, which counts the tiles before it lists any, so the limit and the
+    wording are the cover's own.
+    """
+    region = config.region
+    snapped = snap_bbox(region.west, region.south, region.east, region.north, imagery.zoom)
+    try:
+        tiles(snapped.west, snapped.south, snapped.east, snapped.north, [imagery.zoom])
+    except ValueError as error:
+        return str(error)
+    return f"the region covers more than the limit of {MAX_TILES} tiles at zoom {imagery.zoom}"
 
 
 def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> tuple[int, int]:
@@ -495,10 +512,22 @@ def _plan(config: MapcvConfig) -> Plan:
 
     patches = _patch_count(height, width, config)
     too_many = too_many_patches_message(height, width, config.sampler)
-    if too_many is not None:
-        # generate stops on this before it writes anything; the plan says so up front.
-        blocking.append(too_many)
-        plan_warnings.append(too_many)
+    # generate stops on each of these before it writes anything; the plan says so up front,
+    # with the checks and the wording generate uses.
+    refusals = [too_many] if too_many is not None else []
+    for imagery, size in zip(config.sources, sizes):
+        if isinstance(imagery, XYZImageryConfig) and (size.tiles or 0) > MAX_TILES:
+            refusals.append(_tile_cap_message(config, imagery))
+    try:
+        # generate checks the folder's links first and reports an unsafe one as its own error.
+        check_folder_links(config.writer.staging_dir, "writer.staging_dir")
+        _check_staging_dir(config.writer.staging_dir)
+    except StagingDirError as error:
+        refusals.append(str(error))
+    except LinkEscapeError:
+        pass
+    blocking.extend(refusals)
+    plan_warnings.extend(refusals)
     if region.path is not None:
         # Only patches over the area of interest are made: scale by the share of the box
         # its polygons cover (an estimate; generate counts them exactly).
@@ -540,6 +569,12 @@ def _plan(config: MapcvConfig) -> Plan:
     # Window, validity mask, label mask and extracted patches each hold a copy; further
     # sources are read on the first one's grid, so their windows are as large. A patch
     # larger than the window (padded past the raster's edge) is held whole.
+    if too_many is None and region.path is None:
+        # An area of interest only removes anchors from a chunk, so it is left out here.
+        chunk_refusal = chunk_limit_message(config, height, width, primary.chunk_rows, pixel_bytes)
+        if chunk_refusal is not None:
+            blocking.append(chunk_refusal)
+            plan_warnings.append(chunk_refusal)
     chunk_memory = max(window_rows * window_width, patch_size * patch_size) * (pixel_bytes * 2 + 2)
 
     labels = summarize_labels(config)

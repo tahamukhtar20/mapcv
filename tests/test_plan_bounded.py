@@ -80,7 +80,8 @@ def test_plan_counts_a_huge_grid_in_bounded_memory(tmp_path: Path, config: str) 
     # Stride 1 with edge_strategy "pad": one patch for every pixel.
     assert patches == pixels
     assert patches > MAX_PATCHES
-    assert blocking == 1  # generate refuses it, and the plan says so
+    # generate refuses it, and the plan says so; the world at zoom 22 is also over the tile cap.
+    assert blocking == (2 if config == _WORLD else 1)
 
 
 def test_the_plan_command_shows_the_count_and_why_generate_would_refuse(tmp_path: Path) -> None:

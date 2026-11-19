@@ -1071,3 +1071,89 @@ def test_a_single_class_is_named_with_a_label_file_class(project: Path) -> None:
         assert {row["name"] for row in found["class_balance"]} == {"background", "building"}
 
     run_client(project, scenario)
+
+
+# ── Argument errors ──────────────────────────────────────────────────────────
+
+
+def _text(result: CallToolResult) -> str:
+    return "\n".join(block.text for block in result.content if hasattr(block, "text"))
+
+
+def test_a_wrong_argument_name_gets_a_mapcv_message(project: Path) -> None:
+    """The SDK's validation text (pydantic, a docs URL) becomes a message naming the argument."""
+
+    async def scenario(client: Client) -> list[CallToolResult]:
+        return [
+            await call(client, "info", path="dataset"),
+            await call(client, "inspect_labels"),
+            await call(client, "verify", datset="dataset"),
+        ]
+
+    renamed, missing, misspelt = run_client(project, scenario)
+    for result in (renamed, missing, misspelt):
+        assert result.is_error
+        text = _text(result)
+        for raw in ("validation error", "pydantic", "Arguments\n", "[type=", "input_value"):
+            assert raw not in text
+        assert text.endswith("Fix the arguments and call it again.")
+        assert "{" not in text  # the message only, not the data again as JSON
+    assert _text(renamed).splitlines() == [
+        "`info` did not run: its arguments are wrong.",
+        "- `path` is not an argument of this tool: use `dataset`.",
+        "- `dataset` is required but was not given.",
+        "It takes: `dataset` (required).",
+        "Fix the arguments and call it again.",
+    ]
+    assert data(renamed) == {
+        "error": _text(renamed),
+        "arguments": ["dataset"],
+        "required": ["dataset"],
+        "unknown_arguments": ["path"],
+    }
+    assert "- `path` is required but was not given." in _text(missing)
+    assert "It takes: `path` (required), `max_values`, `layer`." in _text(missing)
+    assert "`datset` is not an argument of this tool: use `dataset`." in _text(misspelt)
+
+
+def test_a_wrong_argument_value_names_the_argument_not_the_value(project: Path) -> None:
+    async def scenario(client: Client) -> list[CallToolResult]:
+        return [
+            await call(client, "stats", dataset="dataset", split="SECRETSPLIT"),
+            await call(client, "split", dataset="dataset", test_ratio=5, labeled_ratios=["x"]),
+        ]
+
+    split_name, ratios = run_client(project, scenario)
+    assert "- `split`: Input should be 'train', 'val', 'test' or 'all'." in _text(split_name)
+    assert "SECRETSPLIT" not in text_of(split_name)
+    assert "unknown_arguments" not in data(split_name)
+    lines = _text(ratios).splitlines()
+    assert "- `test_ratio`: Input should be less than or equal to 1." in lines
+    assert any(
+        line.startswith("- `labeled_ratios.0`: Input should be a valid number") for line in lines
+    )
+
+
+def test_another_tools_argument_name_is_pointed_out_when_the_tool_fails(project: Path) -> None:
+    """`path` on plan (or `config` on validate_config) is ignored; the failure says so."""
+
+    async def scenario(client: Client) -> list[CallToolResult]:
+        return [
+            await call(client, "plan", path="mapcv.yaml"),
+            await call(client, "validate_config", config="mapcv.yaml"),
+            await call(client, "validate_config", path="mapcv.yaml", config="mapcv.yaml"),
+        ]
+
+    plan_result, validate_result, valid = run_client(project, scenario)
+    assert _text(plan_result).splitlines() == [
+        "Give exactly one of `config` (a path to a YAML file) or `yaml_text`.",
+        (
+            "`path` is not an argument of this tool: use `config`. Arguments it does not take "
+            "are ignored."
+        ),
+    ]
+    assert data(plan_result)["unknown_arguments"] == ["path"]
+    assert "`config` is not an argument of this tool: use `path`." in _text(validate_result)
+    # A call that works is unchanged: an extra argument is still ignored, as before.
+    assert not valid.is_error and data(valid)["valid"] is True
+    assert "unknown_arguments" not in data(valid)

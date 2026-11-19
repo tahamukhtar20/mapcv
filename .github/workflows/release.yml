@@ -37,11 +37,12 @@ jobs:
             echo "::error::Date the CHANGELOG.md heading, e.g. '## [${VERSION}] - $(date +%F)'"
             exit 1
           fi
-      - name: Verify tag matches pyproject.toml and Cargo.toml
+      - name: Verify tag matches pyproject.toml, Cargo.toml and CITATION.cff
         id: versions
         run: |
           PYPROJECT=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           CARGO=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CITATION=$(sed -n 's/^version: *"\{0,1\}\([^"[:space:]]*\)"\{0,1\} *$/\1/p' CITATION.cff | head -1)
           # A dry run (no tag) checks the version files against each other.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then TAG="${GITHUB_REF_NAME#v}"; else TAG="$PYPROJECT"; fi
           echo "version=$PYPROJECT" >> "$GITHUB_OUTPUT"
@@ -49,6 +50,7 @@ jobs:
           echo "Tag:          $TAG"
           echo "pyproject.toml: $PYPROJECT"
           echo "Cargo.toml:     $CARGO"
+          echo "CITATION.cff:   $CITATION"
 
           if [ "$TAG" != "$PYPROJECT" ]; then
             echo "::error::Tag v$TAG does not match pyproject.toml version $PYPROJECT"
@@ -56,6 +58,10 @@ jobs:
           fi
           if [ "$TAG" != "$CARGO" ]; then
             echo "::error::Tag v$TAG does not match Cargo.toml version $CARGO"
+            exit 1
+          fi
+          if [ "$TAG" != "$CITATION" ]; then
+            echo "::error::Tag v$TAG does not match CITATION.cff version '$CITATION'; set version and date-released in CITATION.cff and merge that to main before tagging"
             exit 1
           fi
           echo "All versions match: $TAG"

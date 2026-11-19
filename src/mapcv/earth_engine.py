@@ -14,6 +14,7 @@ project: mapcv only makes the requests the user asks for. Needs the ``gee`` extr
 from __future__ import annotations
 
 import importlib
+import re
 from typing import Any
 
 from mapcv.config import EarthEngineImageryConfig
@@ -22,6 +23,15 @@ _INSTALL_HINT = 'Earth Engine imagery needs the gee extra: pip install "mapcv[ge
 _LOGIN_HINT = (
     "Log in once with `earthengine authenticate` (or ee.Authenticate() in Python) and set "
     "imagery.earth_engine.project to a Cloud project registered for Earth Engine"
+)
+# What Earth Engine says when the login or the Cloud project is the problem. Anything
+# else (a wrong band, an unknown asset) is about the config, and its message says so.
+_LOGIN_ERRORS = re.compile(
+    r"authoriz|authenticat|credential|not signed up|not registered|no project found"
+    r"|quota project|serviceusage|permission to use project|caller does not have permission"
+    r"|permission denied on resource project|has not been used in project"
+    r"|project\b[^.]*\bnot found or deleted",
+    re.IGNORECASE,
 )
 
 
@@ -64,6 +74,16 @@ def _image(
     return getattr(collection, config.reducer)()
 
 
+def _detail(exc: BaseException) -> str:
+    """Earth Engine's message on one line, without its closing period."""
+    return " ".join(str(exc).split()).rstrip(". ") or type(exc).__name__
+
+
+def _is_login_error(exc: BaseException) -> bool:
+    # google.auth raises its own errors for a missing or expired login.
+    return type(exc).__module__.startswith("google.auth") or bool(_LOGIN_ERRORS.search(str(exc)))
+
+
 def tile_url(
     config: EarthEngineImageryConfig, bounds: tuple[float, float, float, float] | None = None
 ) -> str:
@@ -74,17 +94,25 @@ def tile_url(
     outside it may miss scenes, so it must cover every tile that will be read.
 
     Raises:
-        RuntimeError: The ``gee`` extra is missing, or Earth Engine refused (not logged
-            in, no project, an unknown asset): the message says what to do.
+        RuntimeError: The ``gee`` extra is missing, or Earth Engine refused. The message
+            is Earth Engine's own; the login hint follows it only when the login or the
+            project failed, not for a wrong band or an unknown asset.
     """
     ee = _ee()
+    what = config.image or config.collection
     try:
         ee.Initialize(project=config.project)
+    except Exception as exc:
+        # Initialize only reads the credentials and the project.
+        raise RuntimeError(
+            f"Earth Engine could not render {what!r}: {_detail(exc)}. {_LOGIN_HINT}."
+        ) from exc
+    try:
         map_id = _image(ee, config, bounds).getMapId(config.vis.params())
     except Exception as exc:
-        what = config.image or config.collection
+        hint = f" {_LOGIN_HINT}." if _is_login_error(exc) else ""
         raise RuntimeError(
-            f"Earth Engine could not render {what!r}: {exc}. {_LOGIN_HINT}."
+            f"Earth Engine could not render {what!r}: {_detail(exc)}.{hint}"
         ) from exc
     template = str(map_id["tile_fetcher"].url_format)
     for placeholder in ("{z}", "{x}", "{y}"):

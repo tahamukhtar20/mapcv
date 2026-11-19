@@ -18,7 +18,8 @@ is, so every other command keeps working on it. Re-split the dataset with
     ``(N, C, H, W)`` (``(N, T, C, H, W)`` for stacks), ``masks`` ``(N, H, W)``,
     ``split`` (``uint8``: 0 train, 1 val, 2 test, 255 none), ``row``/``col``, each chunked
     one patch per chunk; a copy of ``manifest.json`` sits next to the arrays (patch
-    ``i`` of the arrays is entry ``i``). Random access by index, for NPY-style
+    ``i`` of the arrays is entry ``i``), with the split lists, the COCO files and
+    ``stats.json`` when the folder has them. Random access by index, for NPY-style
     workflows; :class:`mapcv.data.MapcvDataset` reads it like a dataset folder.
 
 ``<out>`` must be a new or empty folder, or hold an earlier export of the same format,
@@ -84,7 +85,7 @@ _SHARD_NAME = re.compile(r"(train|val|test|all)-\d{6}\.tar")
 # What a Zarr export holds (zarr 2: .zgroup/.zattrs; a store opened by zarr 3: zarr.json).
 _ZARR_NAMES = frozenset(
     {".zgroup", ".zattrs", ".zmetadata", "zarr.json", "images", "masks", "split", "row", "col"}
-    | {"manifest.json", "splits", "annotations"}
+    | {"manifest.json", "stats.json", "splits", "annotations"}
 )
 
 
@@ -338,6 +339,9 @@ def _write_zarr(
     # The manifest goes next to the arrays as a file (Zarr ignores it), not into the
     # attributes, which are read whole whenever the group is opened.
     (out / "manifest.json").write_bytes((root / "manifest.json").read_bytes())
+    # The statistics too, so normalize=True uses the same values as on the folder.
+    if (root / "stats.json").is_file():
+        (out / "stats.json").write_bytes((root / "stats.json").read_bytes())
     # The split lists too, so MapcvDataset reads the store's splits (and labeled
     # subsets) exactly as the dataset folder's.
     splits = root / "splits"

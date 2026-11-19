@@ -115,9 +115,9 @@ class MapcvDataset:
         # A Zarr export (mapcv export --format zarr) holds the patches as arrays.
         self._zarr: Any = None
         if (self.root / ".zgroup").exists():
-            import zarr
+            from mapcv._zarr_safety import check_group, import_zarr2
 
-            from mapcv._zarr_safety import check_group
+            zarr = import_zarr2("reading a Zarr export")
 
             # zarr reads the chunk files itself, so the whole store is checked once here.
             check_folder_links(self.root, "the dataset folder")

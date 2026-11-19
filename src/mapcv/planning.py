@@ -190,14 +190,8 @@ def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> tuple[i
 def _utm_raster(config: MapcvConfig, res: int) -> tuple[int, int]:
     """Raster size of the region on the UTM grid of ``res`` metres, snapped outward."""
     region = config.region
-    try:
-        from pyproj import Transformer
-    except ImportError:  # without the zarr extra: kilometre approximation
-        width_km, height_km = region_size_km(region.west, region.south, region.east, region.north)
-        return (
-            max(1, math.ceil(height_km * 1000 / res)),
-            max(1, math.ceil(width_km * 1000 / res)),
-        )
+    from pyproj import Transformer
+
     lon = (region.west + region.east) / 2
     lat = (region.south + region.north) / 2
     zone = min(60, int((lon + 180) // 6) + 1)

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -2291,6 +2291,8 @@ docs = [
 ]
 export = [
     { name = "pyarrow" },
+    { name = "zarr", version = "2.18.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "zarr", version = "2.18.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and python_full_version < '3.14'" },
 ]
 gee = [
     { name = "earthengine-api" },
@@ -2304,8 +2306,6 @@ parquet = [
 zarr = [
     { name = "dask", extra = ["array"], marker = "python_full_version < '3.14'" },
     { name = "numba", marker = "python_full_version < '3.14'" },
-    { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and python_full_version < '3.14'" },
     { name = "pystac-client", marker = "python_full_version < '3.14'" },
     { name = "s3fs", marker = "python_full_version < '3.14'" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2368,7 +2368,6 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14" },
     { name = "pydantic", specifier = ">=2.5" },
     { name = "pyproj", specifier = ">=3.6" },
-    { name = "pyproj", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=3.6" },
     { name = "pyshp", specifier = ">=3.0" },
     { name = "pystac-client", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=0.8" },
     { name = "pytest", marker = "extra == 'dev'" },
@@ -2384,6 +2383,7 @@ requires-dist = [
     { name = "xarray", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2024.10,<2026.9" },
     { name = "xarray-eopf", marker = "python_full_version >= '3.11' and python_full_version < '3.14' and extra == 'zarr'", specifier = ">=0.2.9,<0.3" },
     { name = "xarray-eopf", marker = "python_full_version < '3.11' and extra == 'zarr'", specifier = "==0.2.5" },
+    { name = "zarr", marker = "python_full_version < '3.14' and extra == 'export'", specifier = ">=2.18,<3" },
     { name = "zarr", marker = "python_full_version < '3.14' and extra == 'zarr'", specifier = ">=2.18,<3" },
 ]
 provides-extras = ["dev", "parquet", "export", "docs", "zarr", "gee", "mcp"]

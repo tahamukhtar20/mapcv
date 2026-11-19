@@ -269,7 +269,7 @@ def test_zarr_boxes_and_refusals(
     with pytest.raises(ValueError, match="positive"):
         export_webdataset(boxes, tmp_path / "x", shard_bytes=0)
     monkeypatch.setitem(sys.modules, "zarr", None)
-    with pytest.raises(RuntimeError, match=r"mapcv\[zarr\]"):
+    with pytest.raises(RuntimeError, match=r"mapcv\[export\]"):
         export_zarr(boxes, tmp_path / "again.zarr")
 
 
@@ -290,3 +290,15 @@ def test_export_cli_for_shards(tmp_path: Path, scene: dict[str, Any]) -> None:
         app, ["export", str(root), "-f", "zarr", "-o", str(tmp_path / "z.zarr")], env=env
     )
     assert result.exit_code == 0 and "Zarr store written" in result.output
+
+
+def test_a_missing_zarr_names_the_export_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mapcv._zarr_safety import import_zarr2
+
+    monkeypatch.setitem(sys.modules, "zarr", None)
+    monkeypatch.setattr(sys, "version_info", (3, 13, 0, "final", 0))
+    with pytest.raises(RuntimeError, match=r"reading a Zarr export needs zarr 2.*mapcv\[export\]"):
+        import_zarr2("reading a Zarr export")
+    monkeypatch.setattr(sys, "version_info", (3, 14, 0, "final", 0))
+    with pytest.raises(RuntimeError, match=r"3\.14.*3\.10-3\.13.*mapcv\[export\]"):
+        import_zarr2("the zarr export")

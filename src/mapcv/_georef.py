@@ -80,8 +80,8 @@ def _identity(
 def to_lonlat(crs: str) -> LonLat:
     """A vectorised ``(x, y) -> (lon, lat)`` converter from ``crs`` to WGS-84.
 
-    Web Mercator and WGS-84 need nothing else; other CRSs need pyproj (installed
-    with ``pip install mapcv[zarr]``).
+    Web Mercator and WGS-84 need nothing else; other CRSs need pyproj (a
+    base dependency of mapcv).
 
     Raises:
         RuntimeError: pyproj is missing and ``crs`` is neither EPSG:3857 nor EPSG:4326.
@@ -95,8 +95,8 @@ def to_lonlat(crs: str) -> LonLat:
         from pyproj import Transformer
     except ImportError as exc:
         raise RuntimeError(
-            f"converting {crs} coordinates to WGS-84 needs pyproj; "
-            "install it with 'pip install mapcv[zarr]'"
+            f"converting {crs} coordinates to WGS-84 needs pyproj, which mapcv depends on "
+            "but cannot import here; reinstall it with 'pip install --force-reinstall pyproj'"
         ) from exc
     transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
 

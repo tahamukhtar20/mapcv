@@ -305,7 +305,8 @@ def _zarr_check(section: str) -> Check:
                 f"not available on Python {python[0]}.{python[1]} yet ({purpose})",
                 f"Use Python 3.13 or older for it, or follow {ISSUE_ZARR_PY314}",
             )
-        if _installed("xarray_eopf") or _installed("zarr"):
+        # zarr alone is what mapcv[export] installs for Zarr exports, not a half extra.
+        if _installed("xarray_eopf"):
             return Check(
                 section,
                 name,

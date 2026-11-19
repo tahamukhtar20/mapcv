@@ -16,6 +16,7 @@ So a downloaded store is checked before any of its arrays is opened:
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,7 +24,41 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["SAFE_CODECS", "array_problem", "check_group", "pickle_codec_refused"]
+__all__ = [
+    "SAFE_CODECS",
+    "array_problem",
+    "check_group",
+    "import_zarr2",
+    "pickle_codec_refused",
+]
+
+
+def import_zarr2(action: str) -> Any:
+    """Import zarr for a Zarr export (``action`` says what needs it, for the message).
+
+    Raises:
+        RuntimeError: zarr is missing, or is not 2.x. The message names the extra to
+            install (``mapcv[export]``, which does not pull in the Sentinel-2 packages).
+    """
+    try:
+        import zarr
+    except ImportError as exc:
+        if sys.version_info[:2] >= (3, 14):
+            raise RuntimeError(
+                f"{action} needs zarr 2, which has no Python 3.14 wheels (its numcodecs "
+                "dependency has none); use a Python 3.10-3.13 environment with "
+                "pip install 'mapcv[export]'"
+            ) from exc
+        raise RuntimeError(f"{action} needs zarr 2: pip install 'mapcv[export]'") from exc
+    version = str(getattr(zarr, "__version__", "2"))
+    if not version.split(".")[0].isdigit() or int(version.split(".")[0]) != 2:
+        raise RuntimeError(
+            f"{action} needs zarr 2.x (the format the export writes), but zarr {version} "
+            "is installed: pip install 'zarr>=2.18,<3' (or pip install 'mapcv[export]' "
+            "in a new environment)"
+        )
+    return zarr
+
 
 #: Compressors and filters that only transform numbers or bytes.
 SAFE_CODECS = frozenset({"blosc", "zstd", "zlib", "gzip", "lz4", "bz2", "lzma", "delta", "shuffle"})

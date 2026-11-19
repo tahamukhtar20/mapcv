@@ -88,9 +88,12 @@ dev = [
 parquet = [
     "pyarrow>=14",
 ]
-# `mapcv export --format hf-parquet` (Hugging Face Parquet).
+# `mapcv export` in every format: hf-parquet (pyarrow), zarr (zarr 2) and webdataset (no
+# extra), and reading a Zarr export with `MapcvDataset`. zarr 2's numcodecs has no
+# Python 3.14 wheels, so the zarr package is left out there.
 export = [
     "pyarrow>=14",
+    "zarr>=2.18,<3; python_version < '3.14'",
 ]
 docs = [
     "matplotlib",
@@ -106,7 +109,6 @@ zarr = [
     "dask[array]>=2024.10; python_version < '3.14'",
     "numba>=0.68; python_version < '3.14'",  # 0.68 is the first to support numpy 2.5
     "zarr>=2.18,<3; python_version < '3.14'",
-    "pyproj>=3.6; python_version < '3.14'",
     "s3fs>=2024.10; python_version < '3.14'",
     # xarray-eopf imports pystac_client when it registers the eopf-zarr engine but does
     # not declare it; without it the engine fails to load.

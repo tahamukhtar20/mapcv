@@ -240,11 +240,23 @@ def test_zarr_on_python_3_14_points_to_the_issue(monkeypatch: pytest.MonkeyPatch
     assert check.hint is not None and "issues/212" in check.hint
 
 
+def _installed_only(monkeypatch: pytest.MonkeyPatch, *names: str) -> None:
+    monkeypatch.setattr(sys, "version_info", (3, 13, 0, "final", 0))
+    monkeypatch.setattr(doctor, "_installed", lambda module: module in names)
+
+
 def test_a_half_installed_zarr_extra_is_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-    _hide_modules(monkeypatch, "xarray_eopf")
-    if sys.version_info[:2] >= (3, 14) or importlib.util.find_spec("zarr") is None:
-        pytest.skip("needs zarr installed on Python < 3.14")
-    assert doctor.extras_checks()[0].status == "warn"
+    _installed_only(monkeypatch, "xarray_eopf")
+    check = doctor.extras_checks()[0]
+    assert check.status == "warn" and "mapcv[zarr]" in (check.hint or "")
+
+
+def test_zarr_alone_from_the_export_extra_is_not_a_half_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed_only(monkeypatch, "zarr")
+    check = doctor.extras_checks()[0]
+    assert check.status == "info" and "not installed" in check.detail
 
 
 def test_mcp_1_is_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:

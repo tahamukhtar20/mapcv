@@ -68,7 +68,7 @@ pip install mapcv
 
 Requires Python 3.10 or newer. One pre-built wheel per platform (Linux x86-64 and aarch64 with glibc or musl, macOS, Windows) covers every supported Python version; other platforms build from source and need a Rust toolchain.
 
-Optional extras: `mapcv[zarr]` (Sentinel-2 EOPF Zarr, Python 3.10–3.13), `mapcv[gee]` (Google Earth Engine), `mapcv[parquet]` (GeoParquet labels), `mapcv[export]` (Hugging Face Parquet) and `mapcv[mcp]` (the MCP server for AI agents). XYZ tiles, GeoTIFF/COG and STAC need none of them.
+Optional extras: `mapcv[zarr]` (Sentinel-2 EOPF Zarr, Python 3.10–3.13), `mapcv[gee]` (Google Earth Engine), `mapcv[parquet]` (GeoParquet labels), `mapcv[export]` (every export format: Hugging Face Parquet, Zarr) and `mapcv[mcp]` (the MCP server for AI agents). XYZ tiles, GeoTIFF/COG and STAC need none of them.
 
 ## Quick start
 

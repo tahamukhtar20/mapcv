@@ -42,6 +42,7 @@ from typing import Any
 import numpy as np
 
 from mapcv._confine import check_folder_links
+from mapcv._zarr_safety import import_zarr2
 from mapcv.data import read_image, read_mask, splits_of
 from mapcv.manifest import Manifest, ManifestEntry, require_complete
 
@@ -261,19 +262,7 @@ def _write_shards(
 
 
 def _zarr() -> Any:
-    try:
-        import zarr
-    except ImportError as exc:
-        raise RuntimeError(
-            "the zarr export needs zarr: pip install 'mapcv[zarr]' (Python 3.10-3.13)"
-        ) from exc
-    version = str(getattr(zarr, "__version__", "2"))
-    if not version.split(".")[0].isdigit() or int(version.split(".")[0]) != 2:
-        raise RuntimeError(
-            f"the zarr export writes the zarr 2 format and needs zarr 2.x, but zarr {version} "
-            "is installed: pip install 'mapcv[zarr]' (it installs zarr<3)"
-        )
-    return zarr
+    return import_zarr2("the zarr export")
 
 
 def export_zarr(root: Path, out: Path) -> Path:

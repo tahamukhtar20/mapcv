@@ -5,13 +5,15 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import shapely
 from shapely.geometry import box
 
-from mapcv._mapcv_rs import snap_bbox, tile
+from mapcv._confine import LinkEscapeError, check_folder_links
+from mapcv._mapcv_rs import snap_bbox, tile, tile_count
 from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
@@ -26,8 +28,19 @@ from mapcv.config import (
     eopf_local_path,
 )
 from mapcv.imagery import open_geotiff_source
-from mapcv.pipeline import _max_window_width
-from mapcv.sampler import grid_patch_count, random_patch_capacity, too_many_patches_message
+from mapcv.locking import StagingDirError
+from mapcv.pipeline import (
+    _max_window_width,
+    anchor_chunks,
+    check_staging_dir,
+    chunk_too_large_message,
+)
+from mapcv.sampler import (
+    MAX_CHUNK_ANCHORS,
+    grid_patch_count,
+    random_patch_capacity,
+    too_many_patches_message,
+)
 from mapcv.targets.segmentation import check_ignore_index, labels_empty_message, load_labels
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
@@ -137,6 +150,36 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> tuple[int, in
     cols = bottom_right.x - top_left.x + 1
     rows = bottom_right.y - top_left.y + 1
     return rows * _TILE_PX, cols * _TILE_PX, rows * cols
+
+
+def _staging_dir_problems(staging: Path) -> list[str]:
+    """What ``generate`` refuses ``writer.staging_dir`` for, in its own words, or nothing.
+
+    It checks the links first and stops at one, then whether the folder holds other files."""
+    try:
+        check_folder_links(staging, "writer.staging_dir")
+        check_staging_dir(staging)
+    except LinkEscapeError as exc:
+        return [f"Unsafe link: {exc}"]
+    except StagingDirError as exc:
+        return [str(exc)]
+    return []
+
+
+def _too_many_tiles_message(config: MapcvConfig, imagery: XYZImageryConfig) -> str | None:
+    """Why ``generate`` refuses the tile cover of ``imagery`` (more than ``MAX_TILES``
+    tiles), in its own words, or ``None``.
+
+    Only the cover's tiles are counted, by the same Rust function that makes the XYZ
+    source's list and refuses above the limit, so the message comes from a count and
+    never from a list of tiles."""
+    region = config.region
+    snapped = snap_bbox(region.west, region.south, region.east, region.north, imagery.zoom)
+    try:
+        tile_count(snapped.west, snapped.south, snapped.east, snapped.north, [imagery.zoom])
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def _eopf_raster(config: MapcvConfig, imagery: EOPFZarrImageryConfig) -> tuple[int, int]:
@@ -465,9 +508,20 @@ def _plan(config: MapcvConfig) -> Plan:
     plan_warnings: list[str] = []
     patch_size = config.sampler.patch_size
 
+    blocking: list[str] = []
+    # generate checks the output folder before it opens any imagery.
+    blocking.extend(_staging_dir_problems(config.writer.staging_dir))
     sizes = [_source_size(config, imagery, plan_warnings) for imagery in config.sources]
     primary = sizes[0]
-    blocking: list[str] = []
+    # Opening an XYZ source lists its tiles; generate stops there above the limit, so
+    # there are no chunks to check either.
+    too_many_tiles = [
+        message
+        for imagery, size in zip(config.sources, sizes)
+        if isinstance(imagery, XYZImageryConfig)
+        and (message := _too_many_tiles_message(config, imagery)) is not None
+    ]
+    blocking.extend(too_many_tiles)
     if config.writer.stack_sources:
         for name, size in list(zip(config.source_names, sizes))[1:]:
             if (size.channels, size.dtype) != (primary.channels, primary.dtype):
@@ -478,7 +532,7 @@ def _plan(config: MapcvConfig) -> Plan:
                     "select matching bands or write the sources as separate files"
                 )
                 break
-        plan_warnings.extend(blocking)
+    plan_warnings.extend(blocking)
     height, width, resolution = primary.height, primary.width, primary.resolution
     tile_counts = [size.tiles for size in sizes if size.tiles is not None]
     tiles: int | None = sum(tile_counts) if tile_counts else None
@@ -496,6 +550,24 @@ def _plan(config: MapcvConfig) -> Plan:
         # generate stops on this before it writes anything; the plan says so up front.
         blocking.append(too_many)
         plan_warnings.append(too_many)
+    pixel_bytes = sum(size.channels * size.bytes_per_value for size in sizes)
+    if (
+        too_many is None
+        and not too_many_tiles
+        and config.sampler.mode == "grid"
+        and region.path is None
+        and patches > MAX_CHUNK_ANCHORS
+    ):
+        # Only a run of more patches than one chunk may read can have a chunk over the
+        # limit. A grid's chunks are built from its rows and columns, as generate builds
+        # them; random positions (drawn one by one) and an area of interest (applied on the
+        # imagery's grid) cost the plan too much, so generate alone checks those.
+        chunks = anchor_chunks(config, height, width, primary.chunk_rows, pixel_bytes)
+        too_large = chunk_too_large_message(chunks, primary.chunk_rows)
+        del chunks
+        if too_large is not None:
+            blocking.append(too_large)
+            plan_warnings.append(too_large)
     if region.path is not None:
         # Only patches over the area of interest are made: scale by the share of the box
         # its polygons cover (an estimate; generate counts them exactly).
@@ -531,7 +603,6 @@ def _plan(config: MapcvConfig) -> Plan:
     if config.task == "classification":
         output += patches * _CLASSIFICATION_BYTES
     window_rows = min(height, primary.chunk_rows + patch_size)
-    pixel_bytes = sum(size.channels * size.bytes_per_value for size in sizes)
     # A wide chunk is read in column windows that stay below the pipeline's budget.
     window_width = min(width, _max_window_width(window_rows, width, pixel_bytes, patch_size))
     # Window, validity mask, label mask and extracted patches each hold a copy; further

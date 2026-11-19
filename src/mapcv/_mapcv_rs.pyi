@@ -19,9 +19,11 @@ import numpy.typing as npt
 
 __version__: str
 MAX_ANCHORS: int
+MAX_TILES: int
 
 __all__ = [
     "MAX_ANCHORS",
+    "MAX_TILES",
     "BBox",
     "GeoTiff",
     "PyBBox",
@@ -44,6 +46,7 @@ __all__ = [
     "snap_bbox",
     "stitch_tiles",
     "tile",
+    "tile_count",
     "tile_transform",
     "tiles",
     "write_geotiffs",
@@ -136,6 +139,9 @@ def tile(lng: float, lat: float, zoom: int) -> TileIndex: ...
 def tiles(
     west: float, south: float, east: float, north: float, zooms: Sequence[int]
 ) -> list[TileIndex]: ...
+def tile_count(
+    west: float, south: float, east: float, north: float, zooms: Sequence[int]
+) -> int: ...
 def xy_bounds(x: int, y: int, z: int) -> BBox: ...
 def bounds(x: int, y: int, z: int) -> BBox: ...
 def snap_bbox(west: float, south: float, east: float, north: float, zoom: int) -> BBox: ...

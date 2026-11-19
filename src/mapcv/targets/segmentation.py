@@ -20,7 +20,9 @@ from mapcv.labels import (
     MAX_CLASS_ID,
     ClassMap,
     GeomWithClass,
+    NoUsableLabelsError,
     assign_class_ids,
+    collect_unusable_files,
     label_file_sha256,
     load_vector_labels,
     transform_all_to_mercator,
@@ -56,6 +58,32 @@ def label_buffer(labels: Any) -> tuple[float | None, float | None] | None:
 
 
 def load_labels(labels: LabelsConfig, points: bool = False) -> tuple[list[GeomWithClass], ClassMap]:
+    """Read the label files as :func:`_load_labels` does, and fail when no label is left
+    because the features were skipped for coordinates that cannot be placed.
+
+    A label file with no feature at all is not an error (a dataset of background only can
+    be intended), nor is one whose features are skipped for their kind (points for
+    segmentation) or label, nor one of which only some features are skipped: they warn.
+
+    Raises:
+        NoUsableLabelsError: The label files have features, none is kept, and some were
+            skipped for a NaN or infinite coordinate, a latitude beyond +/-90 (projected
+            coordinates in a GeoJSON are the usual cause) or a longitude that cannot be placed.
+    """
+    with collect_unusable_files() as unusable:
+        geometries, class_map = _load_labels(labels, points)
+    if unusable and not geometries:
+        raise NoUsableLabelsError(
+            " ".join(unusable)
+            + " No label is left, so the dataset would have no labels. Fix the label file, "
+            "labels.label_field or labels.classes."
+        )
+    return geometries, class_map
+
+
+def _load_labels(
+    labels: LabelsConfig, points: bool = False
+) -> tuple[list[GeomWithClass], ClassMap]:
     """Every label file's features in WGS-84 lon/lat with class IDs, and the class map.
 
     One ``labels.path`` is read as :func:`mapcv.labels.load_vector_labels` reads it. With

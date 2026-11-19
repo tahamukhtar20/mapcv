@@ -287,7 +287,30 @@ def assign_class_ids(
     return ids, class_map
 
 
-def _warn_skipped(
+class NoUsableLabelsError(ValueError):
+    """A label file has features, but every one was skipped, so no label is left."""
+
+
+#: Set by :func:`collect_unusable_files`: the vector readers add a message for each file
+#: whose features were all skipped.
+_unusable_files: ContextVar[list[str] | None] = ContextVar("_unusable_files", default=None)
+
+
+@contextmanager
+def collect_unusable_files() -> Iterator[list[str]]:
+    """A list to which the vector readers called in the block append a message for each
+    file that has features of which every one was skipped (see :func:`_with_class_ids`).
+    The readers still return an empty list for such a file; the caller decides whether
+    that is an error (a file with no feature at all is not reported here)."""
+    messages: list[str] = []
+    token = _unusable_files.set(messages)
+    try:
+        yield messages
+    finally:
+        _unusable_files.reset(token)
+
+
+def _skip_reasons(
     source: str,
     unlabeled: int,
     unmapped: int,
@@ -295,9 +318,23 @@ def _warn_skipped(
     points: bool = False,
     invalid: int = 0,
     unplaced: int = 0,
-) -> None:
+    projected: bool = False,
+) -> list[str]:
     reasons = []
-    if invalid:
+    if invalid and projected:
+        if source in ("GeoJSON", "KML"):
+            fix = (
+                f"{source} must hold WGS-84 longitude/latitude (RFC 7946), so reproject the "
+                "file to EPSG:4326, or use a GeoPackage, Shapefile or GeoParquet, which "
+                "record their CRS"
+            )
+        else:
+            fix = "check that the file's CRS is the one its coordinates are in"
+        reasons.append(
+            f"{invalid} with invalid coordinates (beyond ±180 longitude / ±90 latitude: they "
+            f"look like projected coordinates (metres), not degrees; {fix})"
+        )
+    elif invalid:
         reasons.append(
             f"{invalid} with invalid coordinates (not a finite number, or a latitude beyond "
             "±90: the file must hold longitude, latitude)"
@@ -314,8 +351,7 @@ def _warn_skipped(
         reasons.append(f"{unlabeled} without a label value")
     if unmapped:
         reasons.append(f"{unmapped} with a label not in labels.classes")
-    if reasons:
-        warnings.warn(f"{source}: skipped {', '.join(reasons)}.", UserWarning, stacklevel=4)
+    return reasons
 
 
 def _with_class_ids(
@@ -329,13 +365,41 @@ def _with_class_ids(
     invalid: int = 0,
     max_classes: int | None = MAX_CLASS_ID,
     unplaced: int = 0,
+    projected: bool = False,
 ) -> tuple[list[GeomWithClass], ClassMap]:
     ids, class_map = assign_class_ids(labels, label_field, classes, max_classes)
     result = [(geom, class_id) for geom, class_id in zip(geometries, ids) if class_id != 0]
     unlabeled = sum(1 for label in labels if label is None) if label_field is not None else 0
     unmapped = sum(1 for label, class_id in zip(labels, ids) if label is not None and class_id == 0)
-    _warn_skipped(source, unlabeled, unmapped, non_polygon, points, invalid, unplaced)
+    reasons = _skip_reasons(
+        source, unlabeled, unmapped, non_polygon, points, invalid, unplaced, projected
+    )
+    if reasons:
+        warnings.warn(f"{source}: skipped {', '.join(reasons)}.", UserWarning, stacklevel=4)
+        sink = _unusable_files.get()
+        if sink is not None and not result and (invalid or unplaced):
+            # No feature is kept and some were dropped for coordinates that cannot be
+            # placed: the file is broken, not merely without labels. Features skipped for
+            # their kind (points for segmentation) or label are not enough: a file of
+            # points can be meant to give background, and a file with no feature, or only
+            # features without a geometry, has no reason to report at all.
+            sink.append(
+                f"{source}: every feature in the label file was skipped, {', '.join(reasons)}."
+            )
     return result, class_map
+
+
+def _beyond_degrees(geometries: Sequence[BaseGeometry | None], indices: set[int]) -> bool:
+    """Whether a finite vertex of the geometries at ``indices`` lies beyond ±180° longitude
+    or ±90° latitude: the file holds projected coordinates (metres), not degrees."""
+    chosen = [geometries[index] for index in sorted(indices) if geometries[index] is not None]
+    if not chosen:
+        return False
+    array = np.empty(len(chosen), dtype=object)
+    array[:] = chosen
+    coords = shapely.get_coordinates(array)
+    finite = coords[np.isfinite(coords).all(axis=1)]
+    return bool(np.any(np.abs(finite[:, 0]) > 180.0) or np.any(np.abs(finite[:, 1]) > 90.0))
 
 
 def _invalid_coordinates(geometries: Sequence[BaseGeometry | None]) -> set[int]:
@@ -455,14 +519,19 @@ def _wrap_longitudes(
 
 def _drop_invalid(
     geometries: list[BaseGeometry], labels: list[str | None]
-) -> tuple[list[BaseGeometry], list[str | None], int]:
-    """The geometries (and their labels) without :func:`_invalid_coordinates`, and how
-    many were dropped."""
+) -> tuple[list[BaseGeometry], list[str | None], int, bool]:
+    """The geometries (and their labels) without :func:`_invalid_coordinates`, how many
+    were dropped, and whether the dropped ones look like projected coordinates."""
     bad = _invalid_coordinates(geometries)
     if not bad:
-        return geometries, labels, 0
+        return geometries, labels, 0, False
     kept = [index for index in range(len(geometries)) if index not in bad]
-    return [geometries[i] for i in kept], [labels[i] for i in kept], len(bad)
+    return (
+        [geometries[i] for i in kept],
+        [labels[i] for i in kept],
+        len(bad),
+        _beyond_degrees(geometries, bad),
+    )
 
 
 _KML_DECLARATION = re.compile(rb"\A(?:\xef\xbb\xbf)?\s*<\?xml\b[^>]*\?>")
@@ -608,7 +677,7 @@ def parse_kml(
     placed = [index for index, geometry in enumerate(wrapped) if geometry is not None]
     geometries = [cast(BaseGeometry, wrapped[index]) for index in placed]
     labels = [labels[index] for index in placed]
-    geometries, labels, invalid = _drop_invalid(geometries, labels)
+    geometries, labels, invalid, projected = _drop_invalid(geometries, labels)
     return _with_class_ids(
         "KML",
         geometries,
@@ -619,6 +688,7 @@ def parse_kml(
         invalid=invalid,
         max_classes=max_classes,
         unplaced=unplaced,
+        projected=projected,
     )
 
 
@@ -828,6 +898,7 @@ def _polygon_features(
     non_polygon = 0
     geometries, unplaced = _wrap_longitudes(geometries)
     invalid = _invalid_coordinates(geometries)
+    projected = bool(invalid) and _beyond_degrees(geometries, invalid)
     for index, parsed in enumerate(geometries):
         if parsed is None:
             if unreadable is not None and index in unreadable:
@@ -859,6 +930,7 @@ def _polygon_features(
         len(invalid),
         max_classes,
         unplaced,
+        projected,
     )
 
 

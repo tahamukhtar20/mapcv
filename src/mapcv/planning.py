@@ -28,7 +28,7 @@ from mapcv.config import (
 from mapcv.imagery import open_geotiff_source
 from mapcv.pipeline import _max_window_width
 from mapcv.sampler import grid_patch_count, random_patch_capacity, too_many_patches_message
-from mapcv.targets.segmentation import check_ignore_index, load_labels
+from mapcv.targets.segmentation import check_ignore_index, labels_empty_message, load_labels
 
 # Earth radius used by Web Mercator; ground resolution at zoom z is
 # 2 * pi * R * cos(lat) / (256 * 2**z) metres per pixel.
@@ -339,11 +339,8 @@ def _summarize_vector(
         else:
             what, outcome = "polygon", "every mask would be background"
         if not geometries:
-            messages.append(
-                f"no usable label {what} in {where}, so {outcome}. Check labels.path, "
-                "labels.label_field and labels.classes (and labels.layer for a GeoPackage "
-                "with several layers)."
-            )
+            # The words generate uses, so a run shows the warning once, not twice.
+            messages.append(labels_empty_message(what, outcome.replace(" would ", " will ")))
         else:
             messages.append(
                 f"no label {what} intersects the region, so {outcome}. Check that the "

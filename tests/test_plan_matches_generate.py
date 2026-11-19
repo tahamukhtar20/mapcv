@@ -7,6 +7,7 @@ end with "Looks right?" for any of them.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,9 @@ def test_a_cover_at_the_tile_limit_is_not_refused(tmp_path: Path) -> None:
     assert estimate.blocking == []
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="the subprocess is watched through /proc"
+)
 def test_the_plan_for_a_cover_just_over_the_limit_lists_no_tiles(tmp_path: Path) -> None:
     # 17,014,784 tiles at zoom 13: 1.4 % over the limit. The message comes from a count; a
     # list of that many tiles would take over a gigabyte, so the plan runs in bounded memory.

@@ -64,6 +64,7 @@ env PATH=$PWD/.venv/bin:$PATH UV_NO_SYNC=1 PYO3_PYTHON=$PWD/.venv/bin/python git
 | Reading a dataset for training (`MapcvDataset`), tiled inference | `src/mapcv/data.py`, `src/mapcv/infer.py` |
 | Rust: rasterizer (a port of GDAL), tile fetch/decode, GeoTIFF read/write, KML, patch writer | `src/*.rs`, `src/geotiff/` |
 | Benchmarks and correctness at scale | `benchmarks/` |
+| JOSS paper (draft PDF built by `.github/workflows/paper.yml`) | `paper/` |
 
 Read the docstrings of the protocol in `targets/base.py` and `writers/base.py` before adding a task or
 an output format.
@@ -94,7 +95,8 @@ an output format.
   The PR title must match `^(feat|fix|perf|refactor|docs|ci|chore|test)(\([a-z0-9-]+\))?!?: .+`.
   The body has a short summary and a `## Test plan` with the numbers you measured.
 - **What not to touch.** Don't edit `CHANGELOG.md`; it is written at release time.
-  Don't add planning, roadmap or paper documents to the repo.
+  Don't add planning, roadmap or paper documents to the repo. The one exception is the JOSS
+  paper in `paper/` (`paper.md`, `paper.bib`, `figures/`), which the journal reads from the repository.
 - **Docs.** Docs live in `website/` (Astro Starlight). Update the pages your change affects.
   `cd website && npm ci && npm run build` must pass, including its link check.
 - **Temporary files.** Keep large ones (venvs, datasets, benchmark output) inside your checkout,

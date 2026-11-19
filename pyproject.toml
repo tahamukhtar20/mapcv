@@ -136,6 +136,8 @@ exclude = [
     { path = "examples/**/*", format = "sdist" },
     { path = "benchmarks/**/*", format = "sdist" },
     { path = "fuzz/**/*", format = "sdist" },
+    # The JOSS paper lives in the repository only.
+    { path = "paper/**/*", format = "sdist" },
     { path = ".github/**/*", format = "sdist" },
     { path = "uv.lock", format = "sdist" },
     { path = ".pre-commit-config.yaml", format = "sdist" },

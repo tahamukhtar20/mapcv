@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 import yaml
+from test_crafted_inputs import _bounded
 from typer.testing import CliRunner
 
-from mapcv import pipeline, planning
+from mapcv import _confine, pipeline, planning
+from mapcv._mapcv_rs import tile_count, tiles
 from mapcv.cli import app
 from mapcv.config import MapcvConfig
 from mapcv.locking import StagingDirError
@@ -91,6 +93,54 @@ def test_a_cover_at_the_tile_limit_is_not_refused(tmp_path: Path) -> None:
     estimate = plan(config)
     assert estimate.tiles == 16_777_216
     assert estimate.blocking == []
+
+
+def test_the_plan_for_a_cover_just_over_the_limit_lists_no_tiles(tmp_path: Path) -> None:
+    # 17,014,784 tiles at zoom 13: 1.4 % over the limit. The message comes from a count; a
+    # list of that many tiles would take over a gigabyte, so the plan runs in bounded memory.
+    (tmp_path / "mapcv.yaml").write_text(
+        "region: {west: -90, south: -67, east: 90, north: 67}\n"
+        f'imagery: {{type: xyz, zoom: 13, url_template: "{_NOWHERE}"}}\n'
+        "sampler: {patch_size: 256, mode: random, random_count: 10}\n"
+        f"writer: {{staging_dir: {tmp_path / 'dataset'}}}\n"
+    )
+    result = _bounded(
+        f"""
+        import sys
+
+        import mapcv._mapcv_rs as rs
+        from mapcv import planning
+        from mapcv.config import MapcvConfig
+
+        original = rs.tiles
+
+        def no_list(*args):
+            raise AssertionError("the plan listed the tile cover")
+
+        # Every name mapcv bound to the call that lists tiles.
+        for module in list(sys.modules.values()):
+            for name, value in list(vars(module).items()) if hasattr(module, "__dict__") else []:
+                if value is original and module.__name__.startswith("mapcv"):
+                    setattr(module, name, no_list)
+        estimate = planning.plan(MapcvConfig.from_yaml({str(tmp_path / "mapcv.yaml")!r}))
+        print(estimate.tiles, "|", estimate.blocking[0])
+        """,
+        600 << 20,
+    )
+    assert result.returncode == 0, result.stderr[-1500:]
+    count, message = result.stdout.strip().split(" | ")
+    assert count == "17014784"
+    assert "covers 17014784 tiles at zoom [13], more than the limit of 16777216" in message
+
+
+def test_the_plan_and_the_tile_cover_refuse_with_one_message(tmp_path: Path) -> None:
+    region = _world(tmp_path).region
+    box = (region.west, region.south, region.east, region.north)
+    with pytest.raises(ValueError) as counted:
+        tile_count(*box, [22])
+    with pytest.raises(ValueError) as listed:
+        tiles(*box, [22])
+    assert str(counted.value) == str(listed.value)
 
 
 # ── 2. The patch limit of one chunk ──────────────────────────────────────────
@@ -182,3 +232,72 @@ def test_a_staging_dir_with_a_manifest_or_nothing_else_is_fine(tmp_path: Path) -
     config.writer.staging_dir.mkdir()
     (config.writer.staging_dir / ".gitkeep").write_text("")
     assert plan(config).blocking == []
+
+
+# ── 4. A link out of the output folder ───────────────────────────────────────
+
+
+def test_the_plan_lists_a_link_out_of_the_staging_dir_in_the_words_of_generate(
+    tmp_path: Path,
+) -> None:
+    config = _xyz_config(tmp_path)
+    staging = config.writer.staging_dir
+    staging.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not in the dataset\n")
+    (staging / "train.txt").symlink_to(outside)
+    estimate = plan(config)
+    assert len(estimate.blocking) == 1
+    assert estimate.blocking[0].startswith("Unsafe link: ")
+
+    with pytest.raises(_confine.LinkEscapeError) as raised:
+        run_generate(config)
+    assert estimate.blocking[0] == f"Unsafe link: {raised.value}"
+    assert outside.read_text() == "not in the dataset\n"
+
+    code, output = _cli_plan(tmp_path, config)
+    assert code == 1
+    assert "Unsafe link" in output and "Looks right?" not in output
+
+
+# ── 5. What a refused run leaves in the output folder ────────────────────────
+
+
+def _fail_after_making(monkeypatch: pytest.MonkeyPatch, *names: str) -> None:
+    """Make ``generate`` stop, after it made these files (folders end in a slash)."""
+
+    def run(config: MapcvConfig, *args: Any) -> None:
+        for name in names:
+            path = config.writer.staging_dir / name
+            if name.endswith("/"):
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("data\n")
+        raise RuntimeError("stopped")
+
+    monkeypatch.setattr(pipeline, "_generate_locked", run)
+
+
+def test_a_refused_run_removes_the_empty_folder_it_made_and_its_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _xyz_config(tmp_path)
+    _fail_after_making(monkeypatch, "images/train/")
+    with pytest.raises(RuntimeError):
+        run_generate(config)
+    # The lock file is removed before the cleanup; otherwise the folder could not be.
+    assert not config.writer.staging_dir.exists()
+
+
+def test_a_refused_run_never_removes_a_folder_holding_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _xyz_config(tmp_path)
+    _fail_after_making(monkeypatch, "images/a.png", "empty/")
+    with pytest.raises(RuntimeError):
+        run_generate(config)
+    staging = config.writer.staging_dir
+    assert (staging / "images" / "a.png").read_text() == "data\n"
+    assert not (staging / "empty").exists()
+    assert not (staging / ".mapcv.lock").exists()

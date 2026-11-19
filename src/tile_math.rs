@@ -321,23 +321,20 @@ fn split_bbox(west: f64, south: f64, east: f64, north: f64) -> Vec<(f64, f64, f6
     }
 }
 
-/// All tiles overlapping a geographic bounding box, at each zoom in `zooms`.
-///
-/// Matches `mercantile.tiles`, including reading `west > east` as a box that
-/// crosses the antimeridian, except that a point or line yields the tiles
-/// containing it where mercantile can yield none (see [`check_bbox`]).
+/// A cover as tile ranges: zoom, then x0, y0, x1, y1.
+type CoverRange = (u8, (u32, u32, u32, u32));
+
+/// The tile ranges of a cover and how many tiles they hold.
 ///
 /// # Errors
-/// Returns an error for a NaN coordinate, for `south > north`, for a zoom above 32,
-/// and when the cover would exceed [`MAX_TILES`] tiles; the count is checked before
-/// any tile is allocated.
-pub fn tiles(
+/// As [`tiles`]: nothing is allocated beyond the ranges before the limit is checked.
+fn cover_ranges(
     west: f64,
     south: f64,
     east: f64,
     north: f64,
     zooms: &[u8],
-) -> Result<Vec<TileIndex>, String> {
+) -> Result<(Vec<CoverRange>, u64), String> {
     check_bbox(west, south, east, north)?;
     for &z in zooms {
         check_zoom(z)?;
@@ -356,12 +353,47 @@ pub fn tiles(
             (u128::from(x1) - u128::from(x0) + 1) * (u128::from(y1) - u128::from(y0) + 1)
         })
         .sum();
-    if count > u128::from(MAX_TILES) {
-        return Err(format!(
+    match u64::try_from(count) {
+        Ok(count) if count <= MAX_TILES => Ok((ranges, count)),
+        _ => Err(format!(
             "bbox ({west}, {south}, {east}, {north}) covers {count} tiles at zoom {zooms:?}, \
              more than the limit of {MAX_TILES}; use a lower zoom or a smaller region"
-        ));
+        )),
     }
+}
+
+/// How many tiles [`tiles`] returns for the same arguments, without building them.
+///
+/// # Errors
+/// The errors of [`tiles`], including the one for a cover above [`MAX_TILES`] tiles.
+pub fn tile_count(
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    zooms: &[u8],
+) -> Result<u64, String> {
+    cover_ranges(west, south, east, north, zooms).map(|(_, count)| count)
+}
+
+/// All tiles overlapping a geographic bounding box, at each zoom in `zooms`.
+///
+/// Matches `mercantile.tiles`, including reading `west > east` as a box that
+/// crosses the antimeridian, except that a point or line yields the tiles
+/// containing it where mercantile can yield none (see [`check_bbox`]).
+///
+/// # Errors
+/// Returns an error for a NaN coordinate, for `south > north`, for a zoom above 32,
+/// and when the cover would exceed [`MAX_TILES`] tiles; the count is checked before
+/// any tile is allocated.
+pub fn tiles(
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    zooms: &[u8],
+) -> Result<Vec<TileIndex>, String> {
+    let (ranges, count) = cover_ranges(west, south, east, north, zooms)?;
 
     // `count` fits in usize: it is at most MAX_TILES.
     let mut result = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
@@ -427,6 +459,16 @@ mod tests {
             .iter()
             .map(|&x| TileIndex { x, y: 0, z: zoom })
             .collect()
+    }
+
+    #[test]
+    fn tile_count_matches_the_cover_and_refuses_with_its_message() {
+        for (w, s, e, n) in [(10.0, 50.0, 10.05, 50.05), (170.0, -10.0, -170.0, 10.0)] {
+            let listed = tiles(w, s, e, n, &[5, 8]).unwrap();
+            assert_eq!(tile_count(w, s, e, n, &[5, 8]), Ok(listed.len() as u64));
+        }
+        let over = tile_count(-180.0, -85.0, 180.0, 85.0, &[22]).unwrap_err();
+        assert_eq!(Err(over), tiles(-180.0, -85.0, 180.0, 85.0, &[22]));
     }
 
     #[test]

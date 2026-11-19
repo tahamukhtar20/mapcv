@@ -517,7 +517,7 @@ def test_a_symlink_inside_an_existing_output_folder_is_refused(
 
     async def scenario(client: Client) -> None:
         result = await call(client, "generate", config="mapcv.yaml")
-        assert result.is_error and "outside the folder" in text_of(result)
+        assert result.is_error and "Unsafe link" in text_of(result)
         assert (await call(client, "split", dataset="dataset")).is_error
 
     run_client(project, scenario)

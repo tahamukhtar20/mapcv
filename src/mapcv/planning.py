@@ -13,8 +13,7 @@ import shapely
 from shapely.geometry import box
 
 from mapcv._confine import LinkEscapeError, check_folder_links
-from mapcv._mapcv_rs import MAX_TILES, snap_bbox, tile
-from mapcv._mapcv_rs import tiles as tile_cover
+from mapcv._mapcv_rs import snap_bbox, tile, tile_count
 from mapcv._warnings import capture as capture_warnings
 from mapcv.config import (
     ContinuousLabelsConfig,
@@ -153,33 +152,31 @@ def _xyz_raster(config: MapcvConfig, imagery: XYZImageryConfig) -> tuple[int, in
     return rows * _TILE_PX, cols * _TILE_PX, rows * cols
 
 
-def _staging_dir_problem(staging: Path) -> str | None:
-    """Why ``generate`` refuses ``writer.staging_dir`` for holding other files, or ``None``.
+def _staging_dir_problems(staging: Path) -> list[str]:
+    """What ``generate`` refuses ``writer.staging_dir`` for, in its own words, or nothing.
 
-    A folder that also holds a link out of it is left to ``generate``, which reports the
-    link first (as an unsafe link); only a folder already refused is walked for links,
-    so planning into a large dataset stays quick."""
+    It checks the links first and stops at one, then whether the folder holds other files."""
     try:
+        check_folder_links(staging, "writer.staging_dir")
         check_staging_dir(staging)
+    except LinkEscapeError as exc:
+        return [f"Unsafe link: {exc}"]
     except StagingDirError as exc:
-        try:
-            check_folder_links(staging, "writer.staging_dir")
-        except LinkEscapeError:
-            return None
-        return str(exc)
-    return None
+        return [str(exc)]
+    return []
 
 
 def _too_many_tiles_message(config: MapcvConfig, imagery: XYZImageryConfig) -> str | None:
     """Why ``generate`` refuses the tile cover of ``imagery`` (more than ``MAX_TILES``
     tiles), in its own words, or ``None``.
 
-    The cover is listed by the same call the XYZ source makes, which counts the tiles
-    and refuses before it builds any."""
+    Only the cover's tiles are counted, by the same Rust function that makes the XYZ
+    source's list and refuses above the limit, so the message comes from a count and
+    never from a list of tiles."""
     region = config.region
     snapped = snap_bbox(region.west, region.south, region.east, region.north, imagery.zoom)
     try:
-        tile_cover(snapped.west, snapped.south, snapped.east, snapped.north, [imagery.zoom])
+        tile_count(snapped.west, snapped.south, snapped.east, snapped.north, [imagery.zoom])
     except ValueError as exc:
         return str(exc)
     return None
@@ -513,9 +510,7 @@ def _plan(config: MapcvConfig) -> Plan:
 
     blocking: list[str] = []
     # generate checks the output folder before it opens any imagery.
-    staging_problem = _staging_dir_problem(config.writer.staging_dir)
-    if staging_problem is not None:
-        blocking.append(staging_problem)
+    blocking.extend(_staging_dir_problems(config.writer.staging_dir))
     sizes = [_source_size(config, imagery, plan_warnings) for imagery in config.sources]
     primary = sizes[0]
     # Opening an XYZ source lists its tiles; generate stops there above the limit, so
@@ -524,7 +519,6 @@ def _plan(config: MapcvConfig) -> Plan:
         message
         for imagery, size in zip(config.sources, sizes)
         if isinstance(imagery, XYZImageryConfig)
-        and (size.tiles or 0) > MAX_TILES
         and (message := _too_many_tiles_message(config, imagery)) is not None
     ]
     blocking.extend(too_many_tiles)

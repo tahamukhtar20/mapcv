@@ -247,6 +247,25 @@ fn tiles(
     Ok(result.into_iter().map(Into::into).collect())
 }
 
+/// Return how many XYZ tiles `tiles` returns for the same arguments, without building them.
+///
+/// # Errors
+/// Raises `ValueError` for what `tiles` refuses, including a box covering more than 2^24
+/// tiles (with the same message).
+#[pyfunction]
+#[allow(clippy::needless_pass_by_value)]
+fn tile_count(
+    py: Python<'_>,
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+    zooms: Vec<u8>,
+) -> PyResult<u64> {
+    py.detach(|| tile_math::tile_count(west, south, east, north, &zooms))
+        .map_err(PyValueError::new_err)
+}
+
 /// Return the Web Mercator bounding box (EPSG:3857, meters) for an XYZ tile.
 ///
 /// # Errors
@@ -1022,6 +1041,7 @@ fn _mapcv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(xy, m)?)?;
     m.add_function(wrap_pyfunction!(tile, m)?)?;
     m.add_function(wrap_pyfunction!(tiles, m)?)?;
+    m.add_function(wrap_pyfunction!(tile_count, m)?)?;
     m.add_function(wrap_pyfunction!(xy_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(bounds, m)?)?;
     m.add_function(wrap_pyfunction!(snap_bbox, m)?)?;

@@ -202,6 +202,16 @@ pub fn decode_window(
     rows: (usize, usize),
     cols: (usize, usize),
 ) -> Result<Window, String> {
+    crate::parallel::install(|| decode_window_on_pool(tiles, origin, rows, cols))?
+}
+
+/// [`decode_window`], run on the crate's thread pool.
+fn decode_window_on_pool(
+    tiles: &[Tile<'_>],
+    origin: (u32, u32),
+    rows: (usize, usize),
+    cols: (usize, usize),
+) -> Result<Window, String> {
     let height = rows.1.saturating_sub(rows.0);
     let width = cols.1.saturating_sub(cols.0);
     let window_bytes = height

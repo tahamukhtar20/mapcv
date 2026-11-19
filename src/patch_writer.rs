@@ -173,58 +173,61 @@ pub fn write_patches(
     let msk_patch_bytes = patch_size * patch_size;
     let ext = if image_format == "jpg" { "jpg" } else { "png" };
 
-    (0..n_patches)
-        .into_par_iter()
-        .map(|local_i| {
-            let global_idx = start_idx + local_i;
-            let (row, col, padded) = meta[local_i];
+    crate::parallel::install(|| {
+        (0..n_patches)
+            .into_par_iter()
+            .map(|local_i| {
+                let global_idx = start_idx + local_i;
+                let (row, col, padded) = meta[local_i];
 
-            let img_fname = format!("patch_{global_idx:07}.{ext}");
-            let img_path = images_dir.join(&img_fname);
+                let img_fname = format!("patch_{global_idx:07}.{ext}");
+                let img_path = images_dir.join(&img_fname);
 
-            let img_slice = &image_data[local_i * img_patch_bytes..(local_i + 1) * img_patch_bytes];
+                let img_slice =
+                    &image_data[local_i * img_patch_bytes..(local_i + 1) * img_patch_bytes];
 
-            encode_image(
-                img_slice,
-                patch_size,
-                &img_path,
-                image_format,
-                jpg_quality,
-                subsampling,
-            )?;
+                encode_image(
+                    img_slice,
+                    patch_size,
+                    &img_path,
+                    image_format,
+                    jpg_quality,
+                    subsampling,
+                )?;
 
-            let mask_filename = if has_mask {
-                let msk_fname = format!("patch_{global_idx:07}.png");
-                let msk_path: PathBuf = masks_dir.join(&msk_fname);
-                let msk_slice =
-                    &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
-                encode_mask(msk_slice, patch_size, mask_settings, &msk_path)?;
-                Some(msk_fname)
-            } else {
-                None
-            };
+                let mask_filename = if has_mask {
+                    let msk_fname = format!("patch_{global_idx:07}.png");
+                    let msk_path: PathBuf = masks_dir.join(&msk_fname);
+                    let msk_slice =
+                        &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
+                    encode_mask(msk_slice, patch_size, mask_settings, &msk_path)?;
+                    Some(msk_fname)
+                } else {
+                    None
+                };
 
-            let class_counts = if has_mask {
-                let msk_slice =
-                    &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
-                compute_class_counts(msk_slice)
-            } else {
-                Vec::new()
-            };
-            let empty_ratio = compute_empty_ratio(img_slice, patch_size);
+                let class_counts = if has_mask {
+                    let msk_slice =
+                        &mask_data[local_i * msk_patch_bytes..(local_i + 1) * msk_patch_bytes];
+                    compute_class_counts(msk_slice)
+                } else {
+                    Vec::new()
+                };
+                let empty_ratio = compute_empty_ratio(img_slice, patch_size);
 
-            Ok(PatchResult {
-                filename: img_fname,
-                mask_filename,
-                row,
-                col,
-                padded,
-                strip_index,
-                class_counts,
-                empty_ratio,
+                Ok(PatchResult {
+                    filename: img_fname,
+                    mask_filename,
+                    row,
+                    col,
+                    padded,
+                    strip_index,
+                    class_counts,
+                    empty_ratio,
+                })
             })
-        })
-        .collect()
+            .collect()
+    })?
 }
 
 /// Encode *data* (raw RGB bytes) as PNG or JPEG and write to *path*.

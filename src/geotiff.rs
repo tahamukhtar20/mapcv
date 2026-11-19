@@ -53,6 +53,11 @@ const MAX_WINDOW_BYTES: usize = 8 << 30;
 /// Default bound on the block cache of a remote file.
 pub const DEFAULT_CACHE_BYTES: usize = 64 << 20;
 
+/// Windows of one chunk and at most this many bytes are decoded and copied on the
+/// calling thread: a patch file (one strip) is read faster without handing it to the
+/// thread pool and back.
+const SERIAL_WINDOW_BYTES: usize = 1 << 20;
+
 /// Sample data type of a raster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DType {
@@ -699,29 +704,36 @@ impl GeoTiff {
             data.valid[row..row + (inside.cb - inside.ca)].fill(true);
         }
         let plan = Plan::new(level, &inside, bands)?;
-        let decoded = self.decode(level, &plan)?;
-        copy_chunks(
-            level,
-            &plan,
-            &decoded,
-            bands,
-            &inside,
-            width,
-            data.samples.as_bytes_mut(),
-        );
+        let raw = self.fetch(&plan)?;
+        let format = self.chunk_format(level);
+        let out = data.samples.as_bytes_mut();
+        let read = |out: &mut [u8], parallel: bool| -> Result<()> {
+            let decoded = decode_chunks(&format, &plan, &raw, parallel)?;
+            copy_chunks(level, &plan, &decoded, bands, &inside, width, out, parallel);
+            Ok(())
+        };
+        if plan.requests.len() <= 1 && out.len() <= SERIAL_WINDOW_BYTES {
+            read(out, false)?;
+        } else {
+            crate::parallel::install(|| read(out, true)).map_err(GeoTiffError::Io)??;
+        }
         Ok(data)
     }
 
-    /// Fetch and decode (in parallel) the chunks of `plan`; sparse chunks are `None`.
-    fn decode(&self, level: &Level, plan: &Plan) -> Result<Vec<Option<Vec<u8>>>> {
+    /// The encoded bytes of each chunk of `plan`; sparse chunks are `None`.
+    fn fetch(&self, plan: &Plan) -> Result<Vec<Option<Vec<u8>>>> {
         let ranges: Vec<(u64, usize)> = plan.requests.iter().filter_map(|r| r.range).collect();
         let mut fetched = self.source.read_ranges(&ranges)?.into_iter();
-        let raw: Vec<Option<Vec<u8>>> = plan
+        Ok(plan
             .requests
             .iter()
             .map(|r| r.range.and_then(|_| fetched.next()))
-            .collect();
-        let format = codec::ChunkFormat {
+            .collect())
+    }
+
+    /// How the chunks of `level` are encoded.
+    fn chunk_format<'a>(&self, level: &'a Level) -> codec::ChunkFormat<'a> {
+        codec::ChunkFormat {
             compression: level.compression,
             predictor: level.predictor,
             order: self.order,
@@ -731,19 +743,34 @@ impl GeoTiff {
             height: level.chunk_height,
             photometric: level.photometric,
             jpeg_tables: level.jpeg_tables.as_deref(),
-        };
+        }
+    }
+}
+
+/// Decode the fetched chunks `raw` of `plan`; sparse chunks stay `None`. With
+/// `parallel`, call it inside [`crate::parallel::install`].
+fn decode_chunks(
+    format: &codec::ChunkFormat<'_>,
+    plan: &Plan,
+    raw: &[Option<Vec<u8>>],
+    parallel: bool,
+) -> Result<Vec<Option<Vec<u8>>>> {
+    let decode = |(request, data): (&ChunkRequest, &Option<Vec<u8>>)| {
+        let Some(data) = data else { return Ok(None) };
+        let mut format = *format;
+        if request.partial_strip {
+            format.compression = codec::compression::NONE;
+        }
+        codec::decode_chunk(&format, data, request.rows).map(Some)
+    };
+    if parallel {
         plan.requests
             .par_iter()
             .zip(raw.par_iter())
-            .map(|(request, data)| {
-                let Some(data) = data else { return Ok(None) };
-                let mut format = format;
-                if request.partial_strip {
-                    format.compression = codec::compression::NONE;
-                }
-                codec::decode_chunk(&format, data, request.rows).map(Some)
-            })
+            .map(decode)
             .collect()
+    } else {
+        plan.requests.iter().zip(raw).map(decode).collect()
     }
 }
 
@@ -947,8 +974,10 @@ impl Plan {
     }
 }
 
-/// Copy decoded chunks into the window's `(rows, cols, bands)` sample bytes,
-/// one output row per parallel task.
+/// Copy decoded chunks into the window's `(rows, cols, bands)` sample bytes, one
+/// output row per parallel task when `parallel` (call it inside
+/// [`crate::parallel::install`] then).
+#[allow(clippy::too_many_arguments)]
 fn copy_chunks(
     level: &Level,
     plan: &Plan,
@@ -957,6 +986,7 @@ fn copy_chunks(
     inside: &Inside,
     out_width: usize,
     out: &mut [u8],
+    parallel: bool,
 ) {
     let sample_bytes = level.dtype.size();
     let chunk_samples = level.chunk_samples();
@@ -966,45 +996,56 @@ fn copy_chunks(
     // Pixel-interleaved data with all bands in order is copied span by span.
     let identity =
         !level.planar && n_bands == level.samples && bands.iter().enumerate().all(|(i, &b)| i == b);
-    out.par_chunks_mut(out_width * n_bands * sample_bytes)
-        .enumerate()
-        .skip(inside.dr)
-        .take(inside.rb - inside.ra)
-        .for_each(|(r, out_row)| {
-            let image_row = inside.ra + (r - inside.dr);
-            let cy = image_row / ch;
-            for cx in plan.cx0..=plan.cx1 {
-                let c_lo = inside.ca.max(cx * cw);
-                let c_hi = inside.cb.min((cx + 1) * cw);
-                let (src_x, dst_x, n) = (c_lo - cx * cw, c_lo - inside.ca + inside.dc, c_hi - c_lo);
-                for (slot, &plane) in plan.planes.iter().enumerate() {
-                    let index = (slot * plan.ny + (cy - plan.cy0)) * plan.nx + (cx - plan.cx0);
-                    let Some(chunk) = &decoded[index] else {
-                        continue;
+    let copy_row = |(r, out_row): (usize, &mut [u8])| {
+        let image_row = inside.ra + (r - inside.dr);
+        let cy = image_row / ch;
+        for cx in plan.cx0..=plan.cx1 {
+            let c_lo = inside.ca.max(cx * cw);
+            let c_hi = inside.cb.min((cx + 1) * cw);
+            let (src_x, dst_x, n) = (c_lo - cx * cw, c_lo - inside.ca + inside.dc, c_hi - c_lo);
+            for (slot, &plane) in plan.planes.iter().enumerate() {
+                let index = (slot * plan.ny + (cy - plan.cy0)) * plan.nx + (cx - plan.cx0);
+                let Some(chunk) = &decoded[index] else {
+                    continue;
+                };
+                let local_row = image_row - plan.requests[index].first_row;
+                let src = &chunk[local_row * chunk_row_bytes..][..chunk_row_bytes];
+                if identity {
+                    let px = chunk_samples * sample_bytes;
+                    out_row[dst_x * px..(dst_x + n) * px]
+                        .copy_from_slice(&src[src_x * px..(src_x + n) * px]);
+                    continue;
+                }
+                for (k, &band) in bands.iter().enumerate() {
+                    let sample = match (level.planar, band == plane) {
+                        (false, _) => band,
+                        (true, true) => 0,
+                        (true, false) => continue,
                     };
-                    let local_row = image_row - plan.requests[index].first_row;
-                    let src = &chunk[local_row * chunk_row_bytes..][..chunk_row_bytes];
-                    if identity {
-                        let px = chunk_samples * sample_bytes;
-                        out_row[dst_x * px..(dst_x + n) * px]
-                            .copy_from_slice(&src[src_x * px..(src_x + n) * px]);
-                        continue;
-                    }
-                    for (k, &band) in bands.iter().enumerate() {
-                        let sample = match (level.planar, band == plane) {
-                            (false, _) => band,
-                            (true, true) => 0,
-                            (true, false) => continue,
-                        };
-                        for i in 0..n {
-                            let s = ((src_x + i) * chunk_samples + sample) * sample_bytes;
-                            let d = ((dst_x + i) * n_bands + k) * sample_bytes;
-                            out_row[d..d + sample_bytes].copy_from_slice(&src[s..s + sample_bytes]);
-                        }
+                    for i in 0..n {
+                        let s = ((src_x + i) * chunk_samples + sample) * sample_bytes;
+                        let d = ((dst_x + i) * n_bands + k) * sample_bytes;
+                        out_row[d..d + sample_bytes].copy_from_slice(&src[s..s + sample_bytes]);
                     }
                 }
             }
-        });
+        }
+    };
+    let row_bytes = out_width * n_bands * sample_bytes;
+    let rows = inside.rb - inside.ra;
+    if parallel {
+        out.par_chunks_mut(row_bytes)
+            .enumerate()
+            .skip(inside.dr)
+            .take(rows)
+            .for_each(copy_row);
+    } else {
+        out.chunks_mut(row_bytes)
+            .enumerate()
+            .skip(inside.dr)
+            .take(rows)
+            .for_each(copy_row);
+    }
 }
 
 #[cfg(test)]

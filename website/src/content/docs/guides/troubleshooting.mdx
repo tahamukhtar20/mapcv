@@ -144,7 +144,9 @@ Fix the fields above, or start from a working config with mapcv init.
 
 **`Earth Engine imagery needs the gee extra: pip install "mapcv[gee]"`** Install it: `pip install "mapcv[gee]"`.
 
-**`Earth Engine could not render '…': … Log in once with earthengine authenticate …`** Earth Engine refused the request. Run `earthengine authenticate` once, set `imagery.earth_engine.project` to a Cloud project registered for Earth Engine, and check the asset ID in the [Earth Engine catalog](https://developers.google.com/earth-engine/datasets). Earth Engine's own message follows the asset name.
+**`Earth Engine could not render '…': … Log in once with earthengine authenticate …`** Earth Engine refused your login or Cloud project. Run `earthengine authenticate` once and set `imagery.earth_engine.project` to a Cloud project registered for Earth Engine. Earth Engine's own message follows the asset name.
+
+**`Earth Engine could not render '…': Image.visualize: No band named …`** or **`… Image asset '…' not found …`** The login worked, but the config names a band or an asset Earth Engine doesn't have. The message lists the bands the image has; fix `imagery.earth_engine.vis.bands`, or check the asset ID in the [Earth Engine catalog](https://developers.google.com/earth-engine/datasets).
 
 ## Sentinel-2 / EOPF
 

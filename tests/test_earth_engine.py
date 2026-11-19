@@ -74,13 +74,18 @@ class FakeEE:
         fail: str | None = None,
         *,
         per_image: bool = False,
+        initialize_error: Exception | None = None,
+        map_error: Exception | None = None,
     ) -> None:
         self.base, self.map_id, self.fail = base, map_id, fail
+        self.initialize_error, self.map_error = initialize_error, map_error
         # Like Earth Engine, give each image (its scenes and steps) a map ID of its own.
         self.per_image = per_image
         self.calls: list[Any] = []
 
     def Initialize(self, project: str | None = None) -> None:
+        if self.initialize_error:
+            raise self.initialize_error
         if self.fail:
             raise RuntimeError(self.fail)
         self.calls.append(("Initialize", project))
@@ -90,6 +95,8 @@ class FakeEE:
 
         class Image:
             def getMapId(self, vis: dict[str, Any]) -> dict[str, Any]:
+                if fake.map_error:
+                    raise fake.map_error
                 fake.calls.append(("getMapId", description, vis))
                 map_id = fake.map_id
                 if fake.per_image:
@@ -358,6 +365,94 @@ def test_a_refusal_says_how_to_log_in(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match="earthengine authenticate") as raised:
         earth_engine.tile_url(config)
     assert "Please authorize access" in str(raised.value)
+
+
+class EEException(Exception):
+    """Stands in for ``ee.EEException``, which carries only Earth Engine's message."""
+
+
+_LOGIN_HINT_START = "Log in once with `earthengine authenticate`"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Image.visualize: No band named 'nope'. Available band names: [elevation].",
+        (
+            "Image.load: Image asset 'NOT/A/REAL_ASSET' not found (does not exist or caller "
+            "does not have access)."
+        ),
+    ],
+)
+def test_an_error_about_the_image_has_no_login_hint(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    fake = FakeEE("http://x", map_error=EEException(message))
+    monkeypatch.setitem(sys.modules, "ee", fake)
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    with pytest.raises(RuntimeError) as raised:
+        earth_engine.tile_url(config)
+    text = str(raised.value)
+    assert text == f"Earth Engine could not render {config.image!r}: {message.rstrip('.')}."
+    assert ".." not in text
+    assert _LOGIN_HINT_START not in text
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        (
+            "Please authorize access to your Earth Engine account by running\n\n"
+            "earthengine authenticate\n\nin your command line, or ee.Authenticate() in "
+            "Python, and then retry."
+        ),
+        "ee.Initialize: no project found. Call with project= or see http://goo.gle/ee-auth.",
+        (
+            "Not signed up for Earth Engine or project is not registered. Visit "
+            "https://developers.google.com/earth-engine/guides/access"
+        ),
+        (
+            "Caller does not have required permission to use project nonexistent-project-1. "
+            "Grant the caller the roles/serviceusage.serviceUsageConsumer role."
+        ),
+        "Permission denied on resource project nonexistent-project-1.",
+    ],
+)
+def test_a_login_or_project_error_keeps_the_hint(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    for fake in (
+        FakeEE("http://x", initialize_error=EEException(message)),
+        FakeEE("http://x", map_error=EEException(message)),
+    ):
+        monkeypatch.setitem(sys.modules, "ee", fake)
+        with pytest.raises(RuntimeError) as raised:
+            earth_engine.tile_url(config)
+        text = str(raised.value)
+        assert _LOGIN_HINT_START in text
+        assert text.endswith("registered for Earth Engine.")
+        assert ".." not in text
+
+
+def test_an_unrecognised_error_before_logging_in_keeps_the_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeEE("http://x", initialize_error=EEException("Something unexpected."))
+    monkeypatch.setitem(sys.modules, "ee", fake)
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    with pytest.raises(RuntimeError, match="earthengine authenticate"):
+        earth_engine.tile_url(config)
+
+
+def test_an_error_of_another_kind_after_logging_in_keeps_the_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeEE("http://x", map_error=ConnectionError("Connection reset"))
+    monkeypatch.setitem(sys.modules, "ee", fake)
+    config = EarthEngineImageryConfig.model_validate(_engine())
+    with pytest.raises(RuntimeError, match="earthengine authenticate"):
+        earth_engine.tile_url(config)
 
 
 def test_without_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:

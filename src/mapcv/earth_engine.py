@@ -14,6 +14,7 @@ project: mapcv only makes the requests the user asks for. Needs the ``gee`` extr
 from __future__ import annotations
 
 import importlib
+import re
 from typing import Any
 
 from mapcv.config import EarthEngineImageryConfig
@@ -23,6 +24,34 @@ _LOGIN_HINT = (
     "Log in once with `earthengine authenticate` (or ee.Authenticate() in Python) and set "
     "imagery.earth_engine.project to a Cloud project registered for Earth Engine"
 )
+
+# Earth Engine reports everything as an ``ee.EEException`` that carries only a message, so
+# the kind of failure is read from the text. These are the texts of login and project
+# errors (``ee.data.get_persistent_credentials``, ``ee.Initialize`` and the Cloud API): no
+# stored or expired credentials, no project, an unknown or unregistered project, a project
+# without the Earth Engine API, or no permission to use the project.
+_LOGIN_ERRORS = re.compile(
+    r"authori[sz]e access|authenticat|credential|reauth|invalid_grant|oauth|refresh token"
+    r"|no project found|not initialized|not registered|not signed up|signed up for earth engine"
+    r"|api has not been used|api .{0,40}is disabled|serviceusage|quota project"
+    r"|permission[^.]{0,80}\bproject|project[^.]{0,80}(not found|does not exist|is invalid|deleted)"
+    r"|permission denied[^.]{0,40}(project|resource)|status code 40[13]",
+    re.IGNORECASE,
+)
+
+
+def _is_login_problem(exc: BaseException, *, initialized: bool) -> bool:
+    """Whether ``exc`` is about logging in or the Cloud project, not about the image.
+
+    Before ``ee.Initialize`` succeeds anything may be a login problem, so it is assumed
+    to be (the hint stays when unsure). After it, Earth Engine's own ``EEException`` about
+    the image (a wrong band, an unknown asset, a timeout) is shown as it is, unless its
+    text says the login or the project is the trouble. An error of another kind there
+    (a lost connection, a Google auth error) keeps the hint.
+    """
+    if _LOGIN_ERRORS.search(str(exc)) or not initialized:
+        return True
+    return not any(cls.__name__ == "EEException" for cls in type(exc).__mro__)
 
 
 def _ee() -> Any:
@@ -75,17 +104,22 @@ def tile_url(
 
     Raises:
         RuntimeError: The ``gee`` extra is missing, or Earth Engine refused (not logged
-            in, no project, an unknown asset): the message says what to do.
+            in, no project, an unknown asset): the message says what to do, with the login hint
+            only when logging in or the project is the problem.
     """
     ee = _ee()
+    initialized = False
     try:
         ee.Initialize(project=config.project)
+        initialized = True
         map_id = _image(ee, config, bounds).getMapId(config.vis.params())
     except Exception as exc:
         what = config.image or config.collection
-        raise RuntimeError(
-            f"Earth Engine could not render {what!r}: {exc}. {_LOGIN_HINT}."
-        ) from exc
+        # Earth Engine's messages often end in a period already.
+        message = f"Earth Engine could not render {what!r}: {str(exc).strip().rstrip('.')}."
+        if _is_login_problem(exc, initialized=initialized):
+            message += f" {_LOGIN_HINT}."
+        raise RuntimeError(message) from exc
     template = str(map_id["tile_fetcher"].url_format)
     for placeholder in ("{z}", "{x}", "{y}"):
         if placeholder not in template:

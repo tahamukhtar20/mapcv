@@ -125,7 +125,7 @@ def test_an_empty_label_file_is_flagged(tmp_path: Path) -> None:
     labels.write_text('{"type":"FeatureCollection","features":[]}')
     estimate = plan(_config(labels={"path": str(labels)}))
     assert any(
-        f"no usable label polygon in {labels}, so every mask would be background" in w
+        "no usable label polygon in the label file, so every mask will be background" in w
         for w in estimate.warnings
     )
     assert not any("intersects the region" in w for w in estimate.warnings)

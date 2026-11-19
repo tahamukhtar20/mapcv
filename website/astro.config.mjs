@@ -139,6 +139,7 @@ export default defineConfig({
             { label: 'Contributing', slug: 'project/contributing' },
             { label: 'Citing mapcv', slug: 'project/citing' },
             { label: 'FAQ', slug: 'project/faq' },
+            { label: 'Getting help', slug: 'project/help' },
           ],
         },
       ],

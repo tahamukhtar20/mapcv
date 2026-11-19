@@ -133,6 +133,12 @@ Full documentation including configuration reference, CLI reference, and API ref
 
 Contributions are welcome. Please review the [Contributing Guide](https://github.com/tahamukhtar20/mapcv/blob/main/CONTRIBUTING.md) and [Code of Conduct](https://github.com/tahamukhtar20/mapcv/blob/main/CODE_OF_CONDUCT.md) before opening a pull request.
 
+## Getting help
+
+- **Questions and ideas:** ask in [GitHub Discussions](https://github.com/tahamukhtar20/mapcv/discussions).
+- **Bugs and feature requests:** open an [issue](https://github.com/tahamukhtar20/mapcv/issues/new/choose) and fill in the template; it asks for the version, your config and the command you ran.
+- **Security problems:** report them privately as described in [SECURITY.md](https://github.com/tahamukhtar20/mapcv/blob/main/SECURITY.md), not in a public issue.
+
 ## Citation
 
 If mapcv helped your work, please cite it. The DOI [10.5281/zenodo.23149438](https://doi.org/10.5281/zenodo.23149438) covers every release and always resolves to the latest one:

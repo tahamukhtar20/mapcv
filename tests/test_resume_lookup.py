@@ -7,7 +7,7 @@ millions of patches written spent most of its restart on it before writing anyth
 
 from __future__ import annotations
 
-import time
+import tracemalloc
 
 import numpy as np
 import numpy.typing as npt
@@ -94,25 +94,36 @@ def test_a_chunk_that_is_all_written_has_nothing_left() -> None:
 
 @pytest.mark.parametrize("shape", ["bands", "scattered"])
 def test_the_lookup_does_not_grow_with_what_is_written(shape: str) -> None:
-    """1,000,000 written patches over 1,000 chunks of 5,000 anchors take seconds at most.
+    """Looking up a chunk among 1,000,000 written patches touches memory for the chunk only.
 
-    Sorting all of them again for every chunk (the old lookup) took about 5 s for this on a
-    laptop, and 30 s with 5,000,000 written; the bisection takes 0.1 to 1 s."""
+    The old lookup (``np.isin``) built and sorted a copy of all the written positions for every
+    chunk, 8 MB each here. Memory, unlike time, does not depend on how fast the machine is, so
+    the peak allocation of one lookup is bounded by a fraction of the written positions."""
     rng = np.random.default_rng(0)
     written = np.arange(1_000_000, dtype=np.uint64) * np.uint64(2)
     span = int(written[-1]) + 1
-    edges = np.linspace(0, span * 1.2, 1_001).astype(np.uint64)
-    chunks = []
-    for index in range(1_000):
-        if shape == "bands":  # a chunk is a band of rows
-            values = np.sort(rng.integers(edges[index], edges[index + 1], 5_000, dtype=np.uint64))
-        else:  # random anchors can land anywhere
-            values = rng.integers(0, int(span * 1.2), 5_000, dtype=np.uint64)
-        chunks.append(_Positions(values, WIDTH))
     done = np.unique(written)  # built once, as run_generate does
-    started = time.perf_counter()
-    kept = sum(len(_remaining(chunk, done)) for chunk in chunks)
-    seconds = time.perf_counter() - started
-    assert seconds < 5, f"{seconds:.1f} s for 1,000 chunks"
+    chunks = 50
+    edges = np.linspace(0, span * 1.2, chunks + 1).astype(np.uint64)
+    kept = 0
+    peak = 0
+    tracemalloc.start()
+    try:
+        for index in range(chunks):
+            if shape == "bands":  # a chunk is a band of rows
+                values = np.sort(
+                    rng.integers(edges[index], edges[index + 1], 5_000, dtype=np.uint64)
+                )
+            else:  # random anchors can land anywhere
+                values = rng.integers(0, int(span * 1.2), 5_000, dtype=np.uint64)
+            chunk = _Positions(values, WIDTH)
+            tracemalloc.reset_peak()
+            before = tracemalloc.get_traced_memory()[0]
+            kept += len(_remaining(chunk, done))
+            peak = max(peak, tracemalloc.get_traced_memory()[1] - before)
+    finally:
+        tracemalloc.stop()
+    # A few arrays of 5,000 positions (40 kB each) are needed; a copy of all 1,000,000 is 8 MB.
+    assert peak < done.nbytes // 8, f"one lookup allocated {peak:,} bytes at its peak"
     # Even positions are written, so about half the anchors are left.
-    assert 0.4 < kept / 5_000_000 < 0.6
+    assert 0.4 < kept / (chunks * 5_000) < 0.6

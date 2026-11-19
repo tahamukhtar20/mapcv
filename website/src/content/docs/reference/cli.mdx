@@ -139,6 +139,8 @@ $ mapcv -q generate mapcv.yaml --yes      # CI: no prompts, no progress bars
 
 Reads `manifest.json` (version 1, 2 or 3) and `splits/` and prints the task, the source and product, bands, patch count and shape, CRS, the mask's ignore value, how many patches are padded, split sizes, manifest version and per-class pixel shares. An older manifest is shown with its version, for example `version 2 (mapcv 0.2; read as version 3)`, and is not modified.
 
+With overlapping patches (`sampler.stride` below the patch size) and a `spatial` or `region` split, patches that straddle two splits are left out of every split, and the Splits line ends with the count, for example `· 22 overlapping patches left out`, the same wording `mapcv generate` and `mapcv split` use. It is read from `splits/split.json`. Patches left out by `--sample-limit` are not counted there.
+
 ```console
 $ mapcv info dataset
 ╭─ dataset ────────────────────────────────────────────────────────────────────────────╮

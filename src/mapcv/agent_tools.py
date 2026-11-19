@@ -81,7 +81,7 @@ from mapcv.manifest import Manifest, ManifestMismatchError, SourceRecord, patch_
 from mapcv.pipeline import GenerateResult, run_generate, run_split
 from mapcv.planning import Plan, human_bytes
 from mapcv.planning import plan as make_plan
-from mapcv.splitter import SplitterConfig
+from mapcv.splitter import SplitterConfig, recorded_left_out
 from mapcv.stac import local_paths_checked
 from mapcv.stats import dataset_stats, write_stats
 from mapcv.vector_files import read_geoparquet, read_gpkg, read_shapefile, shapefile_files
@@ -1845,6 +1845,8 @@ def info(state: ToolState, dataset: str) -> ToolResult:
         "classes": manifest.class_map,
         "class_balance": _class_rows(manifest),
         "splits": splits,
+        # Overlapping patches the spatial split left out of every split (0 without splits).
+        "dropped_overlapping": recorded_left_out(folder / "splits") if splits is not None else 0,
         "manifest_version": manifest.loaded_version,
         "mapcv_version": manifest.mapcv_version,
     }
@@ -1853,6 +1855,11 @@ def info(state: ToolState, dataset: str) -> ToolResult:
         if splits is not None
         else "no splits"
     )
+    left_out = data["dropped_overlapping"]
+    if left_out:
+        split_text += (
+            f"; {left_out:,} overlapping {'patch' if left_out == 1 else 'patches'} left out"
+        )
     unfinished = (
         " Incomplete: generate stopped before it finished; call generate again with the same "
         "config to finish it."

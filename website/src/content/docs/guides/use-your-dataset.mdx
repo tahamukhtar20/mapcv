@@ -34,6 +34,7 @@ files_of = {Path(p["files"]["image"]).name: p["files"] for p in manifest["patche
 
 train = (root / "splits" / "train.txt").read_text().split()
 pairs = [(root / files_of[name]["image"], root / files_of[name]["mask"]) for name in train]
+files = files_of[train[0]]   # the first patch's {"image": ..., "mask": ...} paths, used below
 ```
 
 <Aside>
@@ -142,6 +143,8 @@ Run against the [Buildings tutorial](/mapcv/tutorials/buildings-from-aerial-imag
 Masks mark pixels that have no imagery under them with **`255`**, mapcv's default `labels.ignore_index`: padding from `edge_strategy: pad`, failed tiles, provider NoData (all-black XYZ pixels) and Sentinel-2 pixels where any selected band is `NaN`. Background is `0` only where there is real imagery and no polygon. Pass the same value to your loss so those pixels don't count:
 
 ```python
+import torch
+
 loss_fn = torch.nn.CrossEntropyLoss(ignore_index=255)
 ```
 
@@ -175,7 +178,7 @@ Every manifest entry's `summary` carries `class_pixels`, the mask's pixel count 
 ```python
 from collections import Counter
 
-train_names = set(train)
+train_names = set((root / "splits" / "train.txt").read_text().split())
 counts = Counter()
 for p in manifest["patches"]:
     if Path(p["files"]["image"]).name in train_names:
